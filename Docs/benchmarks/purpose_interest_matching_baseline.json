@@ -1,0 +1,415 @@
+{
+  "challenge" : {
+    "disagreementCaseIDs" : [
+      "challenge.work-post-share-vs-feedback-burst"
+    ],
+    "methods" : [
+      {
+        "caseResults" : [
+          {
+            "caseID" : "challenge.work-post-share-vs-feedback-burst",
+            "confidentTopPurposeID" : "purpose.share",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.share",
+            "matchedInterestRefs" : [
+              "interest.documentation",
+              "interest.feedback",
+              "interest.onboarding"
+            ],
+            "method" : "weightedRaw",
+            "passed" : true,
+            "topPurposeID" : "purpose.share",
+            "topScore" : 2.05
+          },
+          {
+            "caseID" : "challenge.conference-post-project-followup",
+            "confidentTopPurposeID" : "purpose.collaborate",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.collaborate",
+            "matchedInterestRefs" : [
+              "interest.shared-projects",
+              "interest.problem-solving",
+              "interest.followup"
+            ],
+            "method" : "weightedRaw",
+            "passed" : true,
+            "topPurposeID" : "purpose.collaborate",
+            "topScore" : 2.7
+          },
+          {
+            "caseID" : "challenge.family-coordination-over-dinner",
+            "confidentTopPurposeID" : "purpose.family.coordinate-care",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.family.coordinate-care",
+            "matchedInterestRefs" : [
+              "interest.calendar-coordination",
+              "interest.children",
+              "interest.health"
+            ],
+            "method" : "weightedRaw",
+            "passed" : true,
+            "topPurposeID" : "purpose.family.coordinate-care",
+            "topScore" : 2.5
+          },
+          {
+            "caseID" : "challenge.negative.cross-domain-noise",
+            "expectedConfidentMatch" : false,
+            "matchedInterestRefs" : [
+              "interest.health"
+            ],
+            "method" : "weightedRaw",
+            "passed" : true,
+            "topPurposeID" : "purpose.home.recover-and-recreate",
+            "topScore" : 0.85
+          },
+          {
+            "caseID" : "challenge.negative.out-of-distribution",
+            "expectedConfidentMatch" : false,
+            "matchedInterestRefs" : [
+
+            ],
+            "method" : "weightedRaw",
+            "passed" : true,
+            "topPurposeID" : "purpose.buy",
+            "topScore" : 0
+          }
+        ],
+        "confidenceFloor" : 1.7550000000000001,
+        "method" : "weightedRaw"
+      },
+      {
+        "caseResults" : [
+          {
+            "caseID" : "challenge.work-post-share-vs-feedback-burst",
+            "confidentTopPurposeID" : "purpose.feedback-burst",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.feedback-burst",
+            "matchedInterestRefs" : [
+              "interest.documentation",
+              "interest.feedback"
+            ],
+            "method" : "cosine",
+            "passed" : true,
+            "topPurposeID" : "purpose.feedback-burst",
+            "topScore" : 0.8164965809277259
+          },
+          {
+            "caseID" : "challenge.conference-post-project-followup",
+            "confidentTopPurposeID" : "purpose.collaborate",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.collaborate",
+            "matchedInterestRefs" : [
+              "interest.followup",
+              "interest.problem-solving",
+              "interest.shared-projects"
+            ],
+            "method" : "cosine",
+            "passed" : true,
+            "topPurposeID" : "purpose.collaborate",
+            "topScore" : 0.7642869980476021
+          },
+          {
+            "caseID" : "challenge.family-coordination-over-dinner",
+            "confidentTopPurposeID" : "purpose.family.coordinate-care",
+            "expectedConfidentMatch" : true,
+            "expectedPurposeID" : "purpose.family.coordinate-care",
+            "matchedInterestRefs" : [
+              "interest.calendar-coordination",
+              "interest.children",
+              "interest.health"
+            ],
+            "method" : "cosine",
+            "passed" : true,
+            "topPurposeID" : "purpose.family.coordinate-care",
+            "topScore" : 0.7737305757377161
+          },
+          {
+            "caseID" : "challenge.negative.cross-domain-noise",
+            "expectedConfidentMatch" : false,
+            "matchedInterestRefs" : [
+              "interest.team-fit"
+            ],
+            "method" : "cosine",
+            "passed" : true,
+            "topPurposeID" : "purpose.hire",
+            "topScore" : 0.3008177848731781
+          },
+          {
+            "caseID" : "challenge.negative.out-of-distribution",
+            "expectedConfidentMatch" : false,
+            "matchedInterestRefs" : [
+
+            ],
+            "method" : "cosine",
+            "passed" : true,
+            "topPurposeID" : "purpose.buy",
+            "topScore" : 0
+          }
+        ],
+        "confidenceFloor" : 0.5883484054145521,
+        "method" : "cosine"
+      }
+    ]
+  },
+  "curated" : [
+    {
+      "caseResults" : [
+        {
+          "caseID" : "conference-ai-networking.json#pre",
+          "expectedPurposeID" : "purpose.network",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.network",
+          "topScore" : 2.55
+        },
+        {
+          "caseID" : "conference-ai-networking.json#during",
+          "expectedPurposeID" : "purpose.learn",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.learn",
+          "topScore" : 3.1
+        },
+        {
+          "caseID" : "conference-ai-networking.json#post",
+          "expectedPurposeID" : "purpose.collaborate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.collaborate",
+          "topScore" : 2.7
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#pre",
+          "expectedPurposeID" : "purpose.buy",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.buy",
+          "topScore" : 3.15
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#during",
+          "expectedPurposeID" : "purpose.discuss",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.discuss",
+          "topScore" : 2.45
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#post",
+          "expectedPurposeID" : "purpose.share",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.share",
+          "topScore" : 1.9500000000000002
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#pre",
+          "expectedPurposeID" : "purpose.hire",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.hire",
+          "topScore" : 2.95
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#during",
+          "expectedPurposeID" : "purpose.collaborate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.collaborate",
+          "topScore" : 2
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#post",
+          "expectedPurposeID" : "purpose.share",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.share",
+          "topScore" : 2.05
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#pre",
+          "expectedPurposeID" : "purpose.home.recover-and-recreate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.recover-and-recreate",
+          "topScore" : 3.3
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#during",
+          "expectedPurposeID" : "purpose.home.be-present",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.be-present",
+          "topScore" : 2.2
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#post",
+          "expectedPurposeID" : "purpose.home.reflect-and-reset",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.reflect-and-reset",
+          "topScore" : 2.5
+        },
+        {
+          "caseID" : "family-care-coordination.json#pre",
+          "expectedPurposeID" : "purpose.family.coordinate-care",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.coordinate-care",
+          "topScore" : 2.95
+        },
+        {
+          "caseID" : "family-care-coordination.json#during",
+          "expectedPurposeID" : "purpose.family.share-time",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.share-time",
+          "topScore" : 2.55
+        },
+        {
+          "caseID" : "family-care-coordination.json#post",
+          "expectedPurposeID" : "purpose.family.adjust-plan",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.adjust-plan",
+          "topScore" : 2.9499999999999997
+        }
+      ],
+      "meanReciprocalRank" : 1,
+      "method" : "weightedRaw",
+      "top1Correct" : 15,
+      "top3Correct" : 15,
+      "totalCases" : 15
+    },
+    {
+      "caseResults" : [
+        {
+          "caseID" : "conference-ai-networking.json#pre",
+          "expectedPurposeID" : "purpose.network",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.network",
+          "topScore" : 0.8655263974602165
+        },
+        {
+          "caseID" : "conference-ai-networking.json#during",
+          "expectedPurposeID" : "purpose.learn",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.learn",
+          "topScore" : 0.9508128918042038
+        },
+        {
+          "caseID" : "conference-ai-networking.json#post",
+          "expectedPurposeID" : "purpose.collaborate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.collaborate",
+          "topScore" : 0.8825226081218283
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#pre",
+          "expectedPurposeID" : "purpose.buy",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.buy",
+          "topScore" : 0.9877569118027771
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#during",
+          "expectedPurposeID" : "purpose.discuss",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.discuss",
+          "topScore" : 0.9461645957270376
+        },
+        {
+          "caseID" : "restaurant-team-dinner.json#post",
+          "expectedPurposeID" : "purpose.share",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.share",
+          "topScore" : 0.7431605356175384
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#pre",
+          "expectedPurposeID" : "purpose.hire",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.hire",
+          "topScore" : 0.9606521733131084
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#during",
+          "expectedPurposeID" : "purpose.collaborate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.collaborate",
+          "topScore" : 0.6537204504606134
+        },
+        {
+          "caseID" : "work-hiring-and-collaboration.json#post",
+          "expectedPurposeID" : "purpose.share",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.share",
+          "topScore" : 0.7812713323158735
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#pre",
+          "expectedPurposeID" : "purpose.home.recover-and-recreate",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.recover-and-recreate",
+          "topScore" : 0.9940841346624836
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#during",
+          "expectedPurposeID" : "purpose.home.be-present",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.be-present",
+          "topScore" : 0.9208729599257344
+        },
+        {
+          "caseID" : "home-weekend-recovery.json#post",
+          "expectedPurposeID" : "purpose.home.reflect-and-reset",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.home.reflect-and-reset",
+          "topScore" : 0.972019739199674
+        },
+        {
+          "caseID" : "family-care-coordination.json#pre",
+          "expectedPurposeID" : "purpose.family.coordinate-care",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.coordinate-care",
+          "topScore" : 0.9130020793705049
+        },
+        {
+          "caseID" : "family-care-coordination.json#during",
+          "expectedPurposeID" : "purpose.family.share-time",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.share-time",
+          "topScore" : 0.9954180744075039
+        },
+        {
+          "caseID" : "family-care-coordination.json#post",
+          "expectedPurposeID" : "purpose.family.adjust-plan",
+          "reciprocalRank" : 1,
+          "top3ContainsExpected" : true,
+          "topPurposeID" : "purpose.family.adjust-plan",
+          "topScore" : 0.9893982445856679
+        }
+      ],
+      "meanReciprocalRank" : 1,
+      "method" : "cosine",
+      "top1Correct" : 15,
+      "top3Correct" : 15,
+      "totalCases" : 15
+    }
+  ],
+  "schemaVersion" : "1.0"
+}

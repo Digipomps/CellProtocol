@@ -1,0 +1,971 @@
+{
+  "namespace": "haven.sdg",
+  "version": "0.1.0",
+  "depends_on": [
+    "haven.core"
+  ],
+  "terms": [
+    {
+      "term_id": "purpose.sdg.basic-living-conditions",
+      "labels": {
+        "nb-NO": "Grunnleggende levekår",
+        "en-US": "Basic Living Conditions"
+      },
+      "definition": "Protect and improve the minimum conditions required for people to live with dignity, safety and material security.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.net-positive-contribution"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "translation_layer": "meta-purpose",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.human-capability-and-equity",
+      "labels": {
+        "nb-NO": "Menneskelig kapasitet og rettferdighet",
+        "en-US": "Human Capability and Equity"
+      },
+      "definition": "Expand people’s ability to learn, participate, work and flourish on fair terms.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.net-positive-contribution"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "translation_layer": "meta-purpose",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.regenerative-resource-stewardship",
+      "labels": {
+        "nb-NO": "Regenerativ ressursforvaltning",
+        "en-US": "Regenerative Resource Stewardship"
+      },
+      "definition": "Use, restore and govern natural resources in ways that remain viable over time.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.net-positive-contribution"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "translation_layer": "meta-purpose",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.resilient-communities-and-infrastructure",
+      "labels": {
+        "nb-NO": "Robuste samfunn og infrastrukturer",
+        "en-US": "Resilient Communities and Infrastructure"
+      },
+      "definition": "Build and maintain systems, places and infrastructure that remain inclusive, safe and reliable under change.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.net-positive-contribution"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "translation_layer": "meta-purpose",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.just-coordination-and-partnership",
+      "labels": {
+        "nb-NO": "Rettferdig koordinering og partnerskap",
+        "en-US": "Just Coordination and Partnership"
+      },
+      "definition": "Coordinate, govern and cooperate across actors in ways that are accountable, inclusive and effective.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.net-positive-contribution"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "translation_layer": "meta-purpose",
+        "translation_role": "enabling"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.no-poverty",
+      "labels": {
+        "nb-NO": "Utrydde fattigdom",
+        "en-US": "No Poverty"
+      },
+      "definition": "Reduce poverty exposure by improving access to basic needs, income security and resilience against shocks.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.basic-living-conditions"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "1",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.food-security-and-nutrition",
+      "labels": {
+        "nb-NO": "Matsikkerhet og ernæring",
+        "en-US": "Food Security and Nutrition"
+      },
+      "definition": "Ensure reliable access to nutritious food and promote food systems that remain productive over time.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.basic-living-conditions"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "2",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.health-and-wellbeing",
+      "labels": {
+        "nb-NO": "Helse og livskvalitet",
+        "en-US": "Health and Well-being"
+      },
+      "definition": "Improve physical and mental health outcomes through prevention, access, treatment and sustained wellbeing.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.basic-living-conditions"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "3",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.quality-learning",
+      "labels": {
+        "nb-NO": "Kvalitetslæring",
+        "en-US": "Quality Learning"
+      },
+      "definition": "Expand access to inclusive, equitable and effective learning across the life course.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.human-capability-and-equity"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "4",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.gender-equity-and-agency",
+      "labels": {
+        "nb-NO": "Likestilling og handlingsrom",
+        "en-US": "Gender Equity and Agency"
+      },
+      "definition": "Reduce gender-based exclusion, violence and power imbalances while expanding equal participation and agency.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.human-capability-and-equity"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "5",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.water-and-sanitation",
+      "labels": {
+        "nb-NO": "Vann og sanitær",
+        "en-US": "Water and Sanitation"
+      },
+      "definition": "Ensure access to safe water, sanitation and hygiene while managing water resources sustainably.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.basic-living-conditions"
+        },
+        {
+          "kind": "related",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "6",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.clean-energy-transition",
+      "labels": {
+        "nb-NO": "Ren energiomstilling",
+        "en-US": "Clean Energy Transition"
+      },
+      "definition": "Expand access to affordable clean energy while improving energy efficiency and reducing long-term harm.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "7",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.dignified-livelihoods",
+      "labels": {
+        "nb-NO": "Verdige livsgrunnlag",
+        "en-US": "Dignified Livelihoods"
+      },
+      "definition": "Promote decent work, productive opportunity and sustainable livelihoods without treating growth as a purpose in itself.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.human-capability-and-equity"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "8",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.infrastructure-and-innovation",
+      "labels": {
+        "nb-NO": "Infrastruktur og innovasjon",
+        "en-US": "Infrastructure and Innovation"
+      },
+      "definition": "Build resilient infrastructure and practical innovation capacity that improve access, reliability and inclusion.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.resilient-communities-and-infrastructure"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "9",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "enabling"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.reduced-inequality-and-inclusion",
+      "labels": {
+        "nb-NO": "Mindre ulikhet og mer inkludering",
+        "en-US": "Reduced Inequality and Inclusion"
+      },
+      "definition": "Reduce unjust gaps in access, representation and outcomes across people and groups.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.human-capability-and-equity"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "10",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.sustainable-settlements",
+      "labels": {
+        "nb-NO": "Bærekraftige lokalsamfunn",
+        "en-US": "Sustainable Settlements"
+      },
+      "definition": "Make settlements and shared environments inclusive, safe, resilient and usable for everyday life.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.resilient-communities-and-infrastructure"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "11",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.responsible-production-and-consumption",
+      "labels": {
+        "nb-NO": "Ansvarlig produksjon og forbruk",
+        "en-US": "Responsible Production and Consumption"
+      },
+      "definition": "Reduce waste, harmful throughput and hidden externalities across production and consumption systems.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "12",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.climate-stability-and-adaptation",
+      "labels": {
+        "nb-NO": "Klimastabilitet og tilpasning",
+        "en-US": "Climate Stability and Adaptation"
+      },
+      "definition": "Reduce climate harm and improve adaptive capacity in the face of changing conditions.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "13",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.marine-ecosystems",
+      "labels": {
+        "nb-NO": "Marine økosystemer",
+        "en-US": "Marine Ecosystems"
+      },
+      "definition": "Protect and restore marine ecosystems while reducing pollution and unsustainable extraction.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "14",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.terrestrial-ecosystems",
+      "labels": {
+        "nb-NO": "Terrestriske økosystemer",
+        "en-US": "Terrestrial Ecosystems"
+      },
+      "definition": "Protect, restore and sustainably use land, forests, habitats and biodiversity.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.regenerative-resource-stewardship"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "15",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "outcome"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.justice-and-accountable-institutions",
+      "labels": {
+        "nb-NO": "Rettferdighet og ansvarlige institusjoner",
+        "en-US": "Justice and Accountable Institutions"
+      },
+      "definition": "Strengthen safety, justice, participation and institutional accountability across decisions and operations.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.just-coordination-and-partnership"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "16",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "enabling"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.partnerships-and-capacity",
+      "labels": {
+        "nb-NO": "Partnerskap og kapasitet",
+        "en-US": "Partnerships and Capacity"
+      },
+      "definition": "Build the shared capacity, financing, data, partnerships and execution support required to sustain broader goals.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.just-coordination-and-partnership"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "17",
+        "translation_layer": "sdg-purpose-family",
+        "translation_role": "enabling"
+      }
+    },
+    {
+      "term_id": "goal.sdg.no-poverty.basic-needs-coverage",
+      "labels": {
+        "nb-NO": "Dekning av grunnleggende behov",
+        "en-US": "Basic Needs Coverage"
+      },
+      "definition": "Increase the share of the target population that meets a locally defined basic-needs threshold within a bounded period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.no-poverty"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "1",
+        "measurement_class": "coverage",
+        "metric_hint": "share_of_target_group_above_basic_needs_threshold"
+      }
+    },
+    {
+      "term_id": "goal.sdg.food-security.nutritious-meal-coverage",
+      "labels": {
+        "nb-NO": "Dekning av næringsrike måltider",
+        "en-US": "Nutritious Meal Coverage"
+      },
+      "definition": "Increase the share of the target group with reliable access to adequate, nutritious meals over the chosen measurement window.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.food-security-and-nutrition"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "2",
+        "measurement_class": "coverage",
+        "metric_hint": "share_of_target_group_with_reliable_access_to_nutritious_meals"
+      }
+    },
+    {
+      "term_id": "goal.sdg.health.preventable-harm-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av forebyggbar skade",
+        "en-US": "Preventable Harm Reduction"
+      },
+      "definition": "Reduce the rate of preventable illness, injury or other health harm in the relevant population during a bounded period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.health-and-wellbeing"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "3",
+        "measurement_class": "rate_reduction",
+        "metric_hint": "preventable_harm_rate"
+      }
+    },
+    {
+      "term_id": "goal.sdg.learning.completion-and-access",
+      "labels": {
+        "nb-NO": "Tilgang og fullføring i læring",
+        "en-US": "Learning Access and Completion"
+      },
+      "definition": "Increase access to learning and improve completion or demonstrated competency rates for the target group within a defined timeframe.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.quality-learning"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "4",
+        "measurement_class": "completion",
+        "metric_hint": "completion_or_competency_rate"
+      }
+    },
+    {
+      "term_id": "goal.sdg.gender-equity.representation-gap-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av representasjonsgap",
+        "en-US": "Representation Gap Reduction"
+      },
+      "definition": "Reduce measurable gaps in representation, participation, safety or access between gendered groups over a defined period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.gender-equity-and-agency"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "5",
+        "measurement_class": "equity_gap",
+        "metric_hint": "participation_or_safety_gap_between_groups"
+      }
+    },
+    {
+      "term_id": "goal.sdg.water.safe-service-coverage",
+      "labels": {
+        "nb-NO": "Dekning av trygge vann- og sanitærtjenester",
+        "en-US": "Safe Water and Sanitation Coverage"
+      },
+      "definition": "Increase the share of the relevant population or facilities with verified access to safe water, sanitation and hygiene services.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.water-and-sanitation"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "6",
+        "measurement_class": "coverage",
+        "metric_hint": "share_with_safe_water_and_sanitation_access"
+      }
+    },
+    {
+      "term_id": "goal.sdg.energy.clean-energy-share",
+      "labels": {
+        "nb-NO": "Andel ren energi",
+        "en-US": "Clean Energy Share"
+      },
+      "definition": "Increase the share of energy use or provision that comes from clean or lower-harm sources within a bounded period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.clean-energy-transition"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "7",
+        "measurement_class": "share",
+        "metric_hint": "clean_energy_share"
+      }
+    },
+    {
+      "term_id": "goal.sdg.livelihoods.decent-work-retention",
+      "labels": {
+        "nb-NO": "Bevaring av verdige arbeidsforhold",
+        "en-US": "Decent Work Retention"
+      },
+      "definition": "Increase the share of people in stable, dignified and safe work or livelihood arrangements over the target period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.dignified-livelihoods"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "8",
+        "measurement_class": "retention",
+        "metric_hint": "share_in_safe_and_dignified_work"
+      }
+    },
+    {
+      "term_id": "goal.sdg.infrastructure.service-availability",
+      "labels": {
+        "nb-NO": "Tilgjengelighet av robust tjenesteinfrastruktur",
+        "en-US": "Resilient Service Availability"
+      },
+      "definition": "Improve the availability, reliability or recovery performance of essential infrastructure and service systems within the target scope.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.infrastructure-and-innovation"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "9",
+        "measurement_class": "availability",
+        "metric_hint": "service_uptime_or_recovery_time"
+      }
+    },
+    {
+      "term_id": "goal.sdg.inequality.access-gap-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av tilgangsgap",
+        "en-US": "Access Gap Reduction"
+      },
+      "definition": "Reduce measurable differences in access, participation or outcomes across defined groups over the target period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.reduced-inequality-and-inclusion"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "10",
+        "measurement_class": "equity_gap",
+        "metric_hint": "difference_in_access_or_outcome_between_groups"
+      }
+    },
+    {
+      "term_id": "goal.sdg.settlements.safe-access-coverage",
+      "labels": {
+        "nb-NO": "Dekning av trygg og inkluderende tilgang",
+        "en-US": "Safe and Inclusive Access Coverage"
+      },
+      "definition": "Increase the share of people with safe, reliable and inclusive access to essential places, services or mobility options.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.sustainable-settlements"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "11",
+        "measurement_class": "coverage",
+        "metric_hint": "share_with_safe_and_inclusive_access_to_essential_services"
+      }
+    },
+    {
+      "term_id": "goal.sdg.production.material-intensity-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av materialintensitet",
+        "en-US": "Material Intensity Reduction"
+      },
+      "definition": "Reduce material, waste or other harmful throughput intensity per unit of useful output during the target period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.responsible-production-and-consumption"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "12",
+        "measurement_class": "intensity_reduction",
+        "metric_hint": "material_or_waste_intensity_per_unit_output"
+      }
+    },
+    {
+      "term_id": "goal.sdg.climate.emissions-intensity-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av utslippsintensitet",
+        "en-US": "Emissions Intensity Reduction"
+      },
+      "definition": "Reduce climate-impact intensity per relevant activity, participant or output unit within a bounded period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.climate-stability-and-adaptation"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "13",
+        "measurement_class": "intensity_reduction",
+        "metric_hint": "co2e_per_activity_or_output_unit"
+      }
+    },
+    {
+      "term_id": "goal.sdg.oceans.pollution-reduction",
+      "labels": {
+        "nb-NO": "Reduksjon av marin forurensning",
+        "en-US": "Marine Pollution Reduction"
+      },
+      "definition": "Reduce the rate or volume of harmful discharge, waste or ecosystem stress affecting marine environments during the target period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.marine-ecosystems"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "14",
+        "measurement_class": "rate_reduction",
+        "metric_hint": "marine_pollution_or_ecosystem_stress_rate"
+      }
+    },
+    {
+      "term_id": "goal.sdg.land.habitat-restoration-coverage",
+      "labels": {
+        "nb-NO": "Dekning av restaurert habitat",
+        "en-US": "Habitat Restoration Coverage"
+      },
+      "definition": "Increase the share or area of land, forest or habitat under verified protection, restoration or sustainable stewardship.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.terrestrial-ecosystems"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "15",
+        "measurement_class": "coverage",
+        "metric_hint": "share_or_area_under_restoration_or_protection"
+      }
+    },
+    {
+      "term_id": "goal.sdg.justice.decision-transparency-rate",
+      "labels": {
+        "nb-NO": "Rate for transparent beslutningsgrunnlag",
+        "en-US": "Decision Transparency Rate"
+      },
+      "definition": "Increase the share of relevant decisions, processes or cases that are documented, reviewable and open to justified scrutiny.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.justice-and-accountable-institutions"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "16",
+        "measurement_class": "process_accountability",
+        "metric_hint": "share_of_decisions_with_documented_rationale_and_review_path"
+      }
+    },
+    {
+      "term_id": "goal.sdg.partnerships.cross-sector-activation",
+      "labels": {
+        "nb-NO": "Aktivering av tverrsektorielle partnerskap",
+        "en-US": "Cross-sector Partnership Activation"
+      },
+      "definition": "Increase the number or share of active collaborations that have defined roles, shared evidence and sustained contribution over the target period.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.partnerships-and-capacity"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "17",
+        "measurement_class": "activation",
+        "metric_hint": "active_partnerships_with_defined_roles_and_evidence"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.climate.member-mobility-decarbonization",
+      "labels": {
+        "nb-NO": "Avkarbonisere medlemsmobilitet",
+        "en-US": "Decarbonize Member Mobility"
+      },
+      "definition": "Reduce the climate impact intensity of member and participant travel without unfairly restricting access.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.climate-stability-and-adaptation"
+        },
+        {
+          "kind": "related",
+          "target": "purpose.sdg.reduced-inequality-and-inclusion"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "13",
+        "pilot_domain": "climate",
+        "pilot_status": "seed",
+        "helper_bundle": "sdg-pilot:climate-mobility"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.local-child-participation-and-belonging",
+      "labels": {
+        "nb-NO": "Lokal barnedeltakelse og tilhorighet",
+        "en-US": "Local Child Participation and Belonging"
+      },
+      "definition": "Increase sustained, inclusive participation and belonging for children in local activities such as clubs, teams and community programs.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.reduced-inequality-and-inclusion"
+        },
+        {
+          "kind": "related",
+          "target": "purpose.sdg.quality-learning"
+        },
+        {
+          "kind": "related",
+          "target": "purpose.sdg.sustainable-settlements"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "10",
+        "pilot_domain": "local-child-participation",
+        "pilot_status": "seed",
+        "helper_bundle": "sdg-pilot:child-participation"
+      }
+    },
+    {
+      "term_id": "purpose.sdg.institutional-decision-transparency-and-remedy",
+      "labels": {
+        "nb-NO": "Institusjonell beslutningstransparens og oppretting",
+        "en-US": "Institutional Decision Transparency and Remedy"
+      },
+      "definition": "Improve trust and accountability by making decisions reviewable, explainable and open to correction within a defined window.",
+      "kind": "purpose",
+      "relations": [
+        {
+          "kind": "broader",
+          "target": "purpose.sdg.justice-and-accountable-institutions"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "16",
+        "pilot_domain": "institutional-accountability",
+        "pilot_status": "seed",
+        "helper_bundle": "sdg-pilot:institutional-accountability"
+      }
+    },
+    {
+      "term_id": "goal.sdg.climate.member-mobility-emissions-intensity",
+      "labels": {
+        "nb-NO": "Utslippsintensitet for medlemsmobilitet",
+        "en-US": "Member Mobility Emissions Intensity"
+      },
+      "definition": "Reduce average emissions intensity for member and participant travel while maintaining equitable access for the target group.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.climate.member-mobility-decarbonization"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "13",
+        "measurement_class": "intensity_reduction",
+        "metric_hint": "kgCO2e_per_member_km",
+        "pilot_domain": "climate"
+      }
+    },
+    {
+      "term_id": "goal.sdg.local-child-participation.active-retention-rate",
+      "labels": {
+        "nb-NO": "Aktiv deltakelse og beholdningsrate for barn",
+        "en-US": "Active Child Participation and Retention Rate"
+      },
+      "definition": "Increase active participation and season-to-season retention for children in the target activity without widening access gaps between groups.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.local-child-participation-and-belonging"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "10",
+        "measurement_class": "retention",
+        "metric_hint": "active_children_count_and_retention_rate",
+        "pilot_domain": "local-child-participation"
+      }
+    },
+    {
+      "term_id": "goal.sdg.institutional.decision-rationale-publication-latency",
+      "labels": {
+        "nb-NO": "Publiseringstid for beslutningsbegrunnelse",
+        "en-US": "Decision Rationale Publication Latency"
+      },
+      "definition": "Increase the share of decisions that are published with rationale, responsible actor and review path within the agreed publication window.",
+      "kind": "goal",
+      "relations": [
+        {
+          "kind": "used_with",
+          "target": "purpose.sdg.institutional-decision-transparency-and-remedy"
+        }
+      ],
+      "deprecated": false,
+      "mappings": {
+        "sdg_goal": "16",
+        "measurement_class": "process_accountability",
+        "metric_hint": "share_of_decisions_published_with_rationale_within_window",
+        "pilot_domain": "institutional-accountability"
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HAVEN KeyPathSpec",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["path", "type_ref", "owner", "visibility_class", "aliases", "deprecated"],
+    "properties": {
+      "path": {"type": "string"},
+      "type_ref": {"type": "string"},
+      "owner": {"type": "string"},
+      "visibility_class": {"type": "string", "enum": ["public", "private", "consent", "aggregated"]},
+      "aliases": {
+        "type": "array",
+        "items": {"type": "string"}
+      },
+      "deprecated": {"type": "boolean"},
+      "replaced_by": {"type": "string"},
+      "storage_domain": {"type": "string"}
+    }
+  }
+}

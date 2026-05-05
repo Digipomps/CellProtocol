@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HAVEN PathRoute",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["prefix", "cell_type", "resolution", "local_prefix"],
+    "properties": {
+      "prefix": {"type": "string"},
+      "cell_type": {"type": "string"},
+      "resolution": {"type": "string", "enum": ["linked", "absorbed", "external"]},
+      "local_prefix": {"type": "string"}
+    }
+  }
+}

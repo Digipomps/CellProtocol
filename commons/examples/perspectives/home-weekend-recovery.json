@@ -1,0 +1,101 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.home.recover-and-recreate"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.home-protect-recovery-window",
+        "purpose_id": "purpose.home.recover-and-recreate",
+        "description": "Shape the weekend so it restores energy instead of draining it.",
+        "metric": "protected_recovery_blocks",
+        "baseline": "0",
+        "target": ">=2",
+        "timeframe": "weekend",
+        "data_source": "#/perspective/pre/interests",
+        "evidence_rule": "protected_recovery_blocks >= 2",
+        "indicator_refs": [
+          "purpose.sdg.health-and-wellbeing"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.health",
+      "interest.rest",
+      "interest.outdoors",
+      "interest.low-effort-planning"
+    ],
+    "constraints": [
+      "must_avoid_overcommitting",
+      "must_leave_margin_for_rest"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.home.be-present"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.home-make-space-for-presence",
+        "purpose_id": "purpose.home.be-present",
+        "description": "Stay present with the people and activities already chosen for the day.",
+        "metric": "interruptions_reduced",
+        "baseline": "unknown",
+        "target": "improved",
+        "timeframe": "same_day",
+        "data_source": "#/perspective/during/interests",
+        "evidence_rule": "interruptions_reduced == true",
+        "indicator_refs": [
+          "purpose.share"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.family-time",
+      "interest.meal-at-home",
+      "interest.outdoors"
+    ],
+    "constraints": [
+      "must_reduce_context_switching",
+      "must_keep_the_day_lightweight"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.home.reflect-and-reset"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.home-close-weekend-cleanly",
+        "purpose_id": "purpose.home.reflect-and-reset",
+        "description": "Close the weekend with enough reflection and reset to enter the week calmly.",
+        "metric": "next_week_ready_score",
+        "baseline": "low",
+        "target": "stable",
+        "timeframe": "sunday_evening",
+        "data_source": "#/perspective/post/interests",
+        "evidence_rule": "next_week_ready_score == stable",
+        "indicator_refs": [
+          "purpose.sdg.health-and-wellbeing"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.household-rhythm",
+      "interest.next-week-planning",
+      "interest.health"
+    ],
+    "constraints": [
+      "must_finish_with_low_stress",
+      "must_capture_only_the_next_real_steps"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

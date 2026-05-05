@@ -1,0 +1,25 @@
+# Commons Docs Index
+
+- `ARCHITECTURE.md`: design og resolver-flyt
+- `API.md`: local service API
+- `CLI.md`: bygg/kjøring av CLI (inkl. `validate purposes`)
+- `CELLS.md`: CellScaffold-endpoints (`cell:///CommonsResolver`, `cell:///CommonsTaxonomy`, `cell:///EntityAtlas`)
+- `LOCALIZATION.md`: deterministisk språkstøtte med taxonomy refs, labels og fallback-regler
+- `SEED_DATA.md`: seed-taxonomy og keypaths
+- `TESTING.md`: testoppsett og dekning
+- `architecture/entity-atlas-phase1.md`: atlas-projeksjon, kontrollstatus og query-modell
+- `architecture/agreement-admission-remediation-plan.md`: plan for `signContract`, conditions, helpers, retry og signed-agreement audit
+- `architecture/assistant-profiles-prompts-context.md`: typed Vault-dokumenter og prompt-resolusjon
+- `architecture/sdg-purpose-translation.md`: oversettelse av FNs baerekraftsmaal til HAVEN purpose/goals
+- `architecture/sdg-pilot-domains.md`: operational SDG pilot domains and helper-cell bundles
+- `../examples/perspectives/*.json`: concrete perspective documents for the first three SDG pilot domains
+- `security/credential-vault.md`: metadata vs secure secret storage
+- `dev/entity-atlas-authoring.md`: nar config holder, og nar eksplisitt descriptor trengs
+- `iterations/ITERATION-1-cell-wrappers.md`: første iterasjon
+- `iterations/ITERATION-2-refinement-testdata.md`: forfining med batch/testdata/helper cells
+- `iterations/ITERATION-4-purpose-tree-governance.md`: governance-validering for mandatory purpose tree
+- `iterations/ITERATION-5-entity-atlas-phase1.md`: atlas, typed Vault docs og credential foundation
+- `iterations/ITERATION-6-atlas-inspection-surface.md`: query-cell og CellScaffold-inspeksjonsflate
+- `iterations/ITERATION-7-sdg-purpose-translation.md`: SDG-oversettelse og maalebare goal-felt
+- `iterations/ITERATION-8-sdg-pilot-domains-and-helper-cells.md`: pilot domains and runtime helper-cell bundles
+- `iterations/ITERATION-9-sdg-perspective-examples.md`: typed perspective examples for the three SDG pilot domains

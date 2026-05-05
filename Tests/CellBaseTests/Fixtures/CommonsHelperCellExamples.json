@@ -1,0 +1,129 @@
+[
+  {
+    "name": "Auto Climate Remediator",
+    "description": "Runs automated climate impact calculations and applies predefined adjustments.",
+    "cellReferences": [
+      {
+        "endpoint": "cell:///CommonsResolver",
+        "subscribeFeed": true,
+        "label": "resolver",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "commons.resolve.keypath",
+            "value": {
+              "entity_id": "entity-climate",
+              "path": "#/custom/climate/initiative",
+              "context": {"role": "owner", "consent_tokens": []}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Community Guidance Helper",
+    "description": "Shows a user-facing guide with next steps for increasing child participation in local football.",
+    "cellReferences": [
+      {
+        "endpoint": "cell:///CommonsTaxonomy",
+        "subscribeFeed": true,
+        "label": "taxonomy",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "taxonomy.resolve.term",
+            "value": {
+              "term_id": "goal.increase-child-participation",
+              "lang": "nb-NO",
+              "namespace": "haven.core"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Climate Pilot Baseline Helper",
+    "description": "Prepares a baseline note for the member mobility decarbonization pilot.",
+    "cellReferences": [
+      {
+        "endpoint": "cell:///Vault",
+        "subscribeFeed": true,
+        "label": "vault",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "vault.note.create",
+            "value": {
+              "id": "sdg.pilot.climate-mobility.baseline",
+              "title": "Decarbonize member mobility baseline",
+              "content": "Record baseline, scope, exclusions and assumptions for goal.sdg.climate.member-mobility-emissions-intensity.",
+              "tags": ["sdg", "pilot", "climate-mobility", "baseline"],
+              "createdAtEpochMs": 0,
+              "updatedAtEpochMs": 0
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Child Participation Pilot Evidence Router",
+    "description": "Normalizes the recommended perspective path before collecting youth participation evidence.",
+    "cellReferences": [
+      {
+        "endpoint": "cell:///CommonsResolver",
+        "subscribeFeed": true,
+        "label": "resolver",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "commons.resolve.keypath",
+            "value": {
+              "entity_id": "self",
+              "path": "#/perspective/pre/goals",
+              "context": {"role": "owner", "consent_tokens": []}
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Accountability Pilot Fairness Guardrail",
+    "description": "Reviews the pilot against root guardrails and current atlas coverage before claiming success.",
+    "cellReferences": [
+      {
+        "endpoint": "cell:///CommonsTaxonomy",
+        "subscribeFeed": true,
+        "label": "taxonomy",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "taxonomy.resolve.batchTerms",
+            "value": [
+              {"term_id": "purpose.human-equal-worth", "lang": "en-US", "namespace": "haven.core"},
+              {"term_id": "purpose.net-positive-contribution", "lang": "en-US", "namespace": "haven.core"},
+              {"term_id": "purpose.sdg.institutional-decision-transparency-and-remedy", "lang": "en-US", "namespace": "haven.sdg"}
+            ]
+          }
+        ]
+      },
+      {
+        "endpoint": "cell:///EntityAtlas",
+        "subscribeFeed": true,
+        "label": "atlas",
+        "subscriptions": [],
+        "setKeysAndValues": [
+          {
+            "key": "atlas.query.coverage",
+            "value": {
+              "purpose_ref": "purpose.sdg.institutional-decision-transparency-and-remedy"
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

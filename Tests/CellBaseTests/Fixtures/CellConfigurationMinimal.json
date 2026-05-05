@@ -1,0 +1,17 @@
+{
+  "name": "Test Config",
+  "cellReferences": [
+    {
+      "endpoint": "cell:///Example",
+      "label": "example",
+      "subscribeFeed": true,
+      "subscriptions": [],
+      "setKeysAndValues": [
+        { "key": "example.set", "value": "hello" }
+      ]
+    }
+  ],
+  "skeleton": {
+    "Text": { "text": "Hello" }
+  }
+}

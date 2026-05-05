@@ -1,0 +1,38 @@
+[
+  {
+    "prefix": "#/identity",
+    "cell_type": "IdentityCell",
+    "resolution": "absorbed",
+    "local_prefix": "#/"
+  },
+  {
+    "prefix": "#/credentials",
+    "cell_type": "CredentialsCell",
+    "resolution": "linked",
+    "local_prefix": "#/"
+  },
+  {
+    "prefix": "#/proofs",
+    "cell_type": "CredentialsCell",
+    "resolution": "linked",
+    "local_prefix": "#/"
+  },
+  {
+    "prefix": "#/representations",
+    "cell_type": "EntityAnchorCell",
+    "resolution": "absorbed",
+    "local_prefix": "#/representations"
+  },
+  {
+    "prefix": "#/perspective",
+    "cell_type": "PerspectiveCell",
+    "resolution": "linked",
+    "local_prefix": "#/"
+  },
+  {
+    "prefix": "#/chronicle",
+    "cell_type": "ChronicleCell",
+    "resolution": "external",
+    "local_prefix": "#/"
+  }
+]

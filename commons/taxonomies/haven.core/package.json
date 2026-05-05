@@ -1,0 +1,424 @@
+{
+  "namespace": "haven.core",
+  "version": "0.1.0",
+  "depends_on": [],
+  "guidance": {
+    "root_purpose_term_id": "purpose.human-equal-worth",
+    "contribution_purpose_term_id": "purpose.net-positive-contribution",
+    "article_reference": "UDHR Article 1",
+    "incentive_only": true,
+    "mandatory_inherited_purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution"
+    ],
+    "forbidden_relations_to_mandatory": [
+      "opposes"
+    ],
+    "goal_policy": {
+      "mode": "encouraged",
+      "description": "Purposes should be followed by concrete goals, as incentives rather than hard rules."
+    }
+  },
+  "terms": [
+    {
+      "term_id": "purpose.human-equal-worth",
+      "labels": {"nb-NO": "Likeverd", "en-US": "Equal Human Worth"},
+      "definition": "All people have equal dignity and worth as a root purpose (UDHR Article 1).",
+      "kind": "purpose",
+      "relations": [{"kind": "narrower", "target": "purpose.net-positive-contribution"}],
+      "deprecated": false,
+      "mappings": {"principle": "root"}
+    },
+    {
+      "term_id": "purpose.net-positive-contribution",
+      "labels": {"nb-NO": "Netto positivt bidrag", "en-US": "Net Positive Contribution"},
+      "definition": "Contribute net positive value to systems we interact with, from local communities to global climate.",
+      "kind": "purpose",
+      "relations": [{"kind": "broader", "target": "purpose.human-equal-worth"}],
+      "deprecated": false,
+      "mappings": {"principle": "incentive"}
+    },
+    {
+      "term_id": "purpose.learn",
+      "labels": {"nb-NO": "Lære", "en-US": "Learn"},
+      "definition": "Acquire knowledge and skills from interactions.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.research"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.network",
+      "labels": {"nb-NO": "Nettverke", "en-US": "Network"},
+      "definition": "Create and maintain professional relationships.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.collaborate"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.collaborate",
+      "labels": {"nb-NO": "Samarbeide", "en-US": "Collaborate"},
+      "definition": "Work together on shared outcomes.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.network"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.sell",
+      "labels": {"nb-NO": "Selge", "en-US": "Sell"},
+      "definition": "Offer products or services to buyers.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "opposes", "target": "purpose.buy"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.buy",
+      "labels": {"nb-NO": "Kjøpe", "en-US": "Buy"},
+      "definition": "Procure products or services.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "opposes", "target": "purpose.sell"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.hire",
+      "labels": {"nb-NO": "Ansette", "en-US": "Hire"},
+      "definition": "Recruit people for roles.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "role.recruiter"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.invest",
+      "labels": {"nb-NO": "Investere", "en-US": "Invest"},
+      "definition": "Deploy capital into opportunities.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "role.investor"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.present",
+      "labels": {"nb-NO": "Presentere", "en-US": "Present"},
+      "definition": "Share insights formally in sessions.",
+      "kind": "purpose",
+      "relations": [{"kind": "related", "target": "purpose.share"}],
+      "deprecated": true,
+      "replaced_by": "purpose.share",
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.share",
+      "labels": {"nb-NO": "Dele", "en-US": "Share"},
+      "definition": "Share knowledge, assets, or updates.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.discuss"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.discuss",
+      "labels": {"nb-NO": "Diskutere", "en-US": "Discuss"},
+      "definition": "Participate in a collaborative discussion.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.share"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "purpose.research",
+      "labels": {"nb-NO": "Utforske", "en-US": "Research"},
+      "definition": "Investigate topics with evidence and analysis.",
+      "kind": "purpose",
+      "relations": [
+        {"kind": "related", "target": "purpose.learn"},
+        {"kind": "broader", "target": "purpose.net-positive-contribution"}
+      ],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "goal.reduce-emissions",
+      "labels": {"nb-NO": "Redusere utslipp", "en-US": "Reduce Emissions"},
+      "definition": "Pursue measurable reductions in climate impact.",
+      "kind": "goal",
+      "relations": [{"kind": "used_with", "target": "purpose.net-positive-contribution"}],
+      "deprecated": false,
+      "mappings": {"goal_scope": "climate"}
+    },
+    {
+      "term_id": "goal.support-local-community",
+      "labels": {"nb-NO": "Styrke lokalsamfunn", "en-US": "Support Local Community"},
+      "definition": "Improve outcomes for a local club or community through measurable support.",
+      "kind": "goal",
+      "relations": [{"kind": "used_with", "target": "purpose.net-positive-contribution"}],
+      "deprecated": false,
+      "mappings": {"goal_scope": "community"}
+    },
+    {
+      "term_id": "goal.increase-child-participation",
+      "labels": {"nb-NO": "Øke barne-deltakelse", "en-US": "Increase Child Participation"},
+      "definition": "Increase and sustain participation for children in local activities.",
+      "kind": "goal",
+      "relations": [{"kind": "used_with", "target": "purpose.net-positive-contribution"}],
+      "deprecated": false,
+      "mappings": {"goal_scope": "youth"}
+    },
+    {
+      "term_id": "goal.uphold-equal-human-worth",
+      "labels": {"nb-NO": "Sikre likeverd i praksis", "en-US": "Uphold Equal Human Worth"},
+      "definition": "Document and improve equal dignity treatment in interactions and outcomes.",
+      "kind": "goal",
+      "relations": [{"kind": "used_with", "target": "purpose.human-equal-worth"}],
+      "deprecated": false,
+      "mappings": {"goal_scope": "governance"}
+    },
+    {
+      "term_id": "interest.ai",
+      "labels": {"nb-NO": "Kunstig intelligens", "en-US": "Artificial Intelligence"},
+      "definition": "Interest in AI systems and applications.",
+      "kind": "interest",
+      "relations": [{"kind": "related", "target": "topic.interoperability"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.sustainability",
+      "labels": {"nb-NO": "Bærekraft", "en-US": "Sustainability"},
+      "definition": "Interest in environmental and social sustainability.",
+      "kind": "interest",
+      "relations": [{"kind": "related", "target": "value.transparency"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.health",
+      "labels": {"nb-NO": "Helse", "en-US": "Health"},
+      "definition": "Interest in healthcare and wellbeing.",
+      "kind": "interest",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.mobility",
+      "labels": {"nb-NO": "Mobilitet", "en-US": "Mobility"},
+      "definition": "Interest in transportation and movement systems.",
+      "kind": "interest",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.finance",
+      "labels": {"nb-NO": "Finans", "en-US": "Finance"},
+      "definition": "Interest in financial systems and strategy.",
+      "kind": "interest",
+      "relations": [{"kind": "related", "target": "purpose.invest"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.design",
+      "labels": {"nb-NO": "Design", "en-US": "Design"},
+      "definition": "Interest in product and service design.",
+      "kind": "interest",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.security",
+      "labels": {"nb-NO": "Sikkerhet", "en-US": "Security"},
+      "definition": "Interest in digital or physical security.",
+      "kind": "interest",
+      "relations": [{"kind": "related", "target": "topic.identity"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.energy",
+      "labels": {"nb-NO": "Energi", "en-US": "Energy"},
+      "definition": "Interest in energy systems and transition.",
+      "kind": "interest",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "interest.education",
+      "labels": {"nb-NO": "Utdanning", "en-US": "Education"},
+      "definition": "Interest in education and learning systems.",
+      "kind": "interest",
+      "relations": [{"kind": "related", "target": "purpose.learn"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "topic.identity",
+      "labels": {"nb-NO": "Identitet", "en-US": "Identity"},
+      "definition": "Topic related to digital identity and identity management.",
+      "kind": "topic",
+      "relations": [{"kind": "narrower", "target": "topic.credentials"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "topic.credentials",
+      "labels": {"nb-NO": "Legitimasjon", "en-US": "Credentials"},
+      "definition": "Topic related to credentials and attestations.",
+      "kind": "topic",
+      "relations": [{"kind": "broader", "target": "topic.identity"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "topic.interoperability",
+      "labels": {"nb-NO": "Interoperabilitet", "en-US": "Interoperability"},
+      "definition": "Topic related to system interoperability.",
+      "kind": "topic",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "topic.analytics",
+      "labels": {"nb-NO": "Analyse", "en-US": "Analytics"},
+      "definition": "Topic related to analysis and insight extraction.",
+      "kind": "topic",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "role.attendee",
+      "labels": {"nb-NO": "Deltaker", "en-US": "Attendee"},
+      "definition": "Participant in an event or ecosystem.",
+      "kind": "role",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "role.organizer",
+      "labels": {"nb-NO": "Arrangør", "en-US": "Organizer"},
+      "definition": "Responsible for planning and coordination.",
+      "kind": "role",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "role.speaker",
+      "labels": {"nb-NO": "Foredragsholder", "en-US": "Speaker"},
+      "definition": "Presents content to an audience.",
+      "kind": "role",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "role.investor",
+      "labels": {"nb-NO": "Investor", "en-US": "Investor"},
+      "definition": "Provides financial backing or capital.",
+      "kind": "role",
+      "relations": [{"kind": "used_with", "target": "purpose.invest"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "role.recruiter",
+      "labels": {"nb-NO": "Rekrutterer", "en-US": "Recruiter"},
+      "definition": "Sources and evaluates talent.",
+      "kind": "role",
+      "relations": [{"kind": "used_with", "target": "purpose.hire"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "value.trust",
+      "labels": {"nb-NO": "Tillit", "en-US": "Trust"},
+      "definition": "Value emphasizing reliability and confidence.",
+      "kind": "value",
+      "relations": [{"kind": "related", "target": "value.transparency"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "value.transparency",
+      "labels": {"nb-NO": "Åpenhet", "en-US": "Transparency"},
+      "definition": "Value emphasizing openness and traceability.",
+      "kind": "value",
+      "relations": [{"kind": "related", "target": "value.trust"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "value.privacy",
+      "labels": {"nb-NO": "Personvern", "en-US": "Privacy"},
+      "definition": "Value emphasizing data protection and autonomy.",
+      "kind": "value",
+      "relations": [],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "skill.negotiation",
+      "labels": {"nb-NO": "Forhandling", "en-US": "Negotiation"},
+      "definition": "Skill in finding mutually beneficial agreements.",
+      "kind": "skill",
+      "relations": [{"kind": "used_with", "target": "purpose.sell"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "skill.pitching",
+      "labels": {"nb-NO": "Pitching", "en-US": "Pitching"},
+      "definition": "Skill in presenting concise value propositions.",
+      "kind": "skill",
+      "relations": [{"kind": "used_with", "target": "purpose.invest"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "skill.facilitation",
+      "labels": {"nb-NO": "Fasilitering", "en-US": "Facilitation"},
+      "definition": "Skill in guiding productive group processes.",
+      "kind": "skill",
+      "relations": [{"kind": "used_with", "target": "purpose.collaborate"}],
+      "deprecated": false,
+      "mappings": {}
+    }
+  ]
+}

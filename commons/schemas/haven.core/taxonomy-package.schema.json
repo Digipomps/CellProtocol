@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HAVEN TaxonomyPackage",
+  "description": "Stable term_id values define semantic meaning. labels are deterministic localized presentation strings; agents must not rely on runtime AI translation for taxonomy labels.",
+  "type": "object",
+  "required": ["namespace", "version", "depends_on", "terms"],
+  "properties": {
+    "namespace": {"type": "string"},
+    "version": {"type": "string"},
+    "depends_on": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["term_id", "labels", "definition", "kind", "relations", "deprecated", "mappings"],
+        "properties": {
+          "term_id": {"type": "string"},
+          "labels": {
+            "type": "object",
+            "description": "Map of BCP-47 locale identifiers to localized labels, for example nb-NO and en-US. The resolver falls back exact locale, base language, nb-NO, nb, en-US, en, first available label, then term_id.",
+            "minProperties": 1,
+            "additionalProperties": {"type": "string"}
+          },
+          "definition": {"type": "string"},
+          "kind": {"type": "string", "enum": ["purpose", "goal", "interest", "topic", "role", "value", "skill"]},
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind", "target"],
+              "properties": {
+                "kind": {"type": "string", "enum": ["broader", "narrower", "related", "used_with", "opposes"]},
+                "target": {"type": "string"}
+              }
+            }
+          },
+          "deprecated": {"type": "boolean"},
+          "replaced_by": {"type": "string"},
+          "mappings": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        }
+      }
+    },
+    "guidance": {
+      "type": "object",
+      "required": ["root_purpose_term_id", "contribution_purpose_term_id", "article_reference", "incentive_only", "goal_policy"],
+      "properties": {
+        "root_purpose_term_id": {"type": "string"},
+        "contribution_purpose_term_id": {"type": "string"},
+        "article_reference": {"type": "string"},
+        "incentive_only": {"type": "boolean"},
+        "mandatory_inherited_purposes": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "forbidden_relations_to_mandatory": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["broader", "narrower", "related", "used_with", "opposes"]}
+        },
+        "goal_policy": {
+          "type": "object",
+          "required": ["mode", "description"],
+          "properties": {
+            "mode": {"type": "string", "enum": ["encouraged", "optional"]},
+            "description": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

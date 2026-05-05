@@ -1,0 +1,79 @@
+{
+  "namespace": "haven.conference",
+  "version": "0.1.0",
+  "depends_on": ["haven.core"],
+  "terms": [
+    {
+      "term_id": "conference.session",
+      "labels": {"nb-NO": "Sesjon", "en-US": "Session"},
+      "definition": "A scheduled content session in a conference program.",
+      "kind": "topic",
+      "relations": [{"kind": "related", "target": "purpose.learn"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.track",
+      "labels": {"nb-NO": "Spor", "en-US": "Track"},
+      "definition": "A thematic stream of sessions.",
+      "kind": "topic",
+      "relations": [{"kind": "broader", "target": "conference.session"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.workshop",
+      "labels": {"nb-NO": "Workshop", "en-US": "Workshop"},
+      "definition": "A hands-on collaborative conference format.",
+      "kind": "topic",
+      "relations": [{"kind": "related", "target": "purpose.collaborate"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.expo",
+      "labels": {"nb-NO": "Expo", "en-US": "Expo"},
+      "definition": "Exhibition area for showcasing products and services.",
+      "kind": "topic",
+      "relations": [{"kind": "related", "target": "purpose.sell"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.sponsor",
+      "labels": {"nb-NO": "Sponsor", "en-US": "Sponsor"},
+      "definition": "Organization funding or backing the event.",
+      "kind": "role",
+      "relations": [{"kind": "related", "target": "purpose.network"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.exhibitor",
+      "labels": {"nb-NO": "Utstiller", "en-US": "Exhibitor"},
+      "definition": "Organization exhibiting products or services.",
+      "kind": "role",
+      "relations": [{"kind": "used_with", "target": "purpose.sell"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.hosted-buyer",
+      "labels": {"nb-NO": "Hosted buyer", "en-US": "Hosted buyer"},
+      "definition": "Invited buyer with curated meetings.",
+      "kind": "role",
+      "relations": [{"kind": "used_with", "target": "purpose.buy"}],
+      "deprecated": false,
+      "mappings": {}
+    },
+    {
+      "term_id": "conference.lead",
+      "labels": {"nb-NO": "Lead", "en-US": "Lead"},
+      "definition": "Qualified opportunity emerging from event interaction.",
+      "kind": "topic",
+      "relations": [{"kind": "related", "target": "purpose.sell"}],
+      "deprecated": false,
+      "mappings": {}
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.hire"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.work-identify-strong-candidates",
+        "purpose_id": "purpose.hire",
+        "description": "Find candidates with strong fit for the role and team.",
+        "metric": "candidates_to_onsite",
+        "baseline": "0",
+        "target": ">=2",
+        "timeframe": "current_hiring_loop",
+        "data_source": "#/perspective/pre/interests",
+        "evidence_rule": "candidates_to_onsite >= 2",
+        "indicator_refs": [
+          "purpose.hire"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.design",
+      "interest.security",
+      "interest.team-fit",
+      "interest.portfolio-review"
+    ],
+    "constraints": [
+      "must_avoid_rush_decisions",
+      "must_capture_signal_consistently"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.collaborate"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.work-test-real-collaboration",
+        "purpose_id": "purpose.collaborate",
+        "description": "Use live exercises to understand how the candidate collaborates on actual problems.",
+        "metric": "shared_problem_solving_sessions",
+        "baseline": "0",
+        "target": ">=1",
+        "timeframe": "interview_loop",
+        "data_source": "#/perspective/during/interests",
+        "evidence_rule": "shared_problem_solving_sessions >= 1",
+        "indicator_refs": [
+          "purpose.collaborate"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.design",
+      "interest.team-fit",
+      "interest.problem-solving"
+    ],
+    "constraints": [
+      "must_use_realistic_tasks",
+      "must_leave_space_for_candidate_questions"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.share"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.work-close-loop-with-team",
+        "purpose_id": "purpose.share",
+        "description": "Share the hiring signal clearly enough that the team can decide with confidence.",
+        "metric": "decision_ready_feedback_packets",
+        "baseline": "0",
+        "target": ">=1",
+        "timeframe": "48_hours",
+        "data_source": "#/perspective/post/interests",
+        "evidence_rule": "decision_ready_feedback_packets >= 1",
+        "indicator_refs": [
+          "purpose.share"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.feedback",
+      "interest.onboarding",
+      "interest.documentation"
+    ],
+    "constraints": [
+      "must_separate_observation_from_opinion",
+      "must_keep_feedback_actionable"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

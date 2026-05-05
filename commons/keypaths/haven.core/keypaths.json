@@ -1,0 +1,166 @@
+[
+  {
+    "path": "#/identity/names",
+    "type_ref": "haven.core#/IdentityNames",
+    "owner": "IdentityCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/identity/addresses",
+    "type_ref": "haven.core#/IdentityAddresses",
+    "owner": "IdentityCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/identity/contacts",
+    "type_ref": "haven.core#/IdentityContacts",
+    "owner": "IdentityCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/credentials/verifiable",
+    "type_ref": "haven.core#/VerifiableCredentialsContainer",
+    "owner": "CredentialsCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/credentials/presentations",
+    "type_ref": "haven.core#/VerifiablePresentationsContainer",
+    "owner": "CredentialsCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/proofs",
+    "type_ref": "haven.core#/ProofContainer",
+    "owner": "CredentialsCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/proofs/keypaths",
+    "type_ref": "haven.core#/ProofKeyPathBindings",
+    "owner": "CredentialsCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/representations/entities",
+    "type_ref": "haven.core#/EntityRepresentations",
+    "owner": "EntityAnchorCell",
+    "visibility_class": "aggregated",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective",
+    "type_ref": "haven.perspective#/PerspectiveDocument",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/pre",
+    "type_ref": "haven.perspective#/PerspectiveSnapshot",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/during",
+    "type_ref": "haven.perspective#/PerspectiveSnapshot",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/post",
+    "type_ref": "haven.perspective#/PerspectiveSnapshot",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/pre/goals",
+    "type_ref": "haven.perspective#/PerspectiveGoals",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/during/goals",
+    "type_ref": "haven.perspective#/PerspectiveGoals",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/post/goals",
+    "type_ref": "haven.perspective#/PerspectiveGoals",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/perspective/*",
+    "type_ref": "haven.perspective#/PerspectiveField",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": false
+  },
+  {
+    "path": "#/purposes",
+    "type_ref": "haven.perspective#/PerspectiveDocument",
+    "owner": "PerspectiveCell",
+    "visibility_class": "consent",
+    "aliases": [],
+    "deprecated": true,
+    "replaced_by": "#/perspective"
+  },
+  {
+    "path": "#/chronicle",
+    "type_ref": "haven.core#/ChronicleRoot",
+    "owner": "ChronicleCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false,
+    "storage_domain": "chronicle-store"
+  },
+  {
+    "path": "#/chronicle/events",
+    "type_ref": "haven.core#/ChronicleEvents",
+    "owner": "ChronicleCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false,
+    "storage_domain": "chronicle-store"
+  },
+  {
+    "path": "#/chronicle/graph",
+    "type_ref": "haven.core#/ChronicleGraph",
+    "owner": "ChronicleCell",
+    "visibility_class": "private",
+    "aliases": [],
+    "deprecated": false,
+    "storage_domain": "chronicle-store"
+  }
+]

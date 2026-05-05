@@ -1,0 +1,9 @@
+{
+  "List": {
+    "flowElementSkeleton": {
+      "VStack": [
+        { "Text": { "text": "Item" } }
+      ]
+    }
+  }
+}

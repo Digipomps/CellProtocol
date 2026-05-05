@@ -1,0 +1,13 @@
+{
+  "tuningId": "local.feedback-burst-example",
+  "description": "Example local overlay that treats onboarding as strong evidence for the feedback-burst purpose without changing the shared HAVEN benchmark profiles.",
+  "adjustments": [
+    {
+      "purposeId": "purpose.feedback-burst",
+      "interestId": "interest.onboarding",
+      "operation": "set",
+      "value": 0.8,
+      "reason": "Local community considers onboarding feedback a first-class signal."
+    }
+  ]
+}

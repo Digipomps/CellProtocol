@@ -1,0 +1,102 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.family.coordinate-care"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.family-align-the-week",
+        "purpose_id": "purpose.family.coordinate-care",
+        "description": "Coordinate the most important care and logistics decisions for the week ahead.",
+        "metric": "critical_conflicts_resolved",
+        "baseline": "unknown",
+        "target": ">=3",
+        "timeframe": "weekly_review",
+        "data_source": "#/perspective/pre/interests",
+        "evidence_rule": "critical_conflicts_resolved >= 3",
+        "indicator_refs": [
+          "goal.uphold-equal-human-worth"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.family-time",
+      "interest.calendar-coordination",
+      "interest.health",
+      "interest.children"
+    ],
+    "constraints": [
+      "must_keep_load_distribution_visible",
+      "must_surface_health_constraints_early"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.family.share-time"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.family-make-the-time-count",
+        "purpose_id": "purpose.family.share-time",
+        "description": "Protect actual shared time instead of letting logistics take over everything.",
+        "metric": "shared_time_blocks",
+        "baseline": "0",
+        "target": ">=1",
+        "timeframe": "same_day",
+        "data_source": "#/perspective/during/interests",
+        "evidence_rule": "shared_time_blocks >= 1",
+        "indicator_refs": [
+          "goal.uphold-equal-human-worth"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.family-time",
+      "interest.children",
+      "interest.meal-at-home"
+    ],
+    "constraints": [
+      "must_keep_devices_out_of_focus",
+      "must_reduce_schedule_pressure"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.family.adjust-plan"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.family-adjust-for-reality",
+        "purpose_id": "purpose.family.adjust-plan",
+        "description": "Adjust the family plan after seeing what actually worked and what changed.",
+        "metric": "next_adjustments_captured",
+        "baseline": "0",
+        "target": ">=2",
+        "timeframe": "24_hours",
+        "data_source": "#/perspective/post/interests",
+        "evidence_rule": "next_adjustments_captured >= 2",
+        "indicator_refs": [
+          "goal.uphold-equal-human-worth"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.calendar-coordination",
+      "interest.school-followup",
+      "interest.health",
+      "interest.next-week-planning"
+    ],
+    "constraints": [
+      "must_turn_observation_into_small_changes",
+      "must_not_overload_any_one_person"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.buy"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.restaurant.choose-safe-and-affordable-place",
+        "purpose_id": "purpose.buy",
+        "description": "Choose a restaurant that fits allergies, budget and location constraints.",
+        "metric": "restaurant_options_remaining",
+        "baseline": "12",
+        "target": "<=2",
+        "timeframe": "same_day",
+        "data_source": "#/perspective/pre/interests",
+        "evidence_rule": "restaurant_options_remaining <= 2",
+        "indicator_refs": [
+          "goal.support-local-community"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.local-food",
+      "interest.budget",
+      "interest.dietary-safety",
+      "interest.reservation-timing"
+    ],
+    "constraints": [
+      "must_fit_group_budget",
+      "must_respect_allergy_constraints"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.discuss"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.restaurant.make-space-for-conversation",
+        "purpose_id": "purpose.discuss",
+        "description": "Use the dinner as a space for shared conversation and alignment.",
+        "metric": "balanced_turn_taking",
+        "baseline": "unknown",
+        "target": "improved",
+        "timeframe": "meal_duration",
+        "data_source": "#/perspective/during/interests",
+        "evidence_rule": "conversation_remains_balanced == true",
+        "indicator_refs": [
+          "purpose.discuss"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.conversation",
+      "interest.hospitality",
+      "interest.team-bonding"
+    ],
+    "constraints": [
+      "must_keep_noise_level_manageable",
+      "must_leave_space_for_everyone"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.share"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.restaurant-capture-what-worked",
+        "purpose_id": "purpose.share",
+        "description": "Share recommendations and remember what made the dinner work well.",
+        "metric": "useful_recommendations_captured",
+        "baseline": "0",
+        "target": ">=3",
+        "timeframe": "24_hours",
+        "data_source": "#/perspective/post/interests",
+        "evidence_rule": "useful_recommendations_captured >= 3",
+        "indicator_refs": [
+          "goal.support-local-community"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.recommendation",
+      "interest.feedback",
+      "interest.local-food"
+    ],
+    "constraints": [
+      "must_record_dietary_fit_notes",
+      "must_keep_recommendations_practical"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

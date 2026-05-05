@@ -1,0 +1,93 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.sdg.institutional-decision-transparency-and-remedy"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.institutional.decision-rationale-publication-latency",
+        "purpose_id": "purpose.sdg.institutional-decision-transparency-and-remedy",
+        "description": "Ensure relevant decisions are published with rationale, responsible actor and review path within seven days.",
+        "metric": "share_of_decisions_published_with_rationale_within_7_days",
+        "baseline": "share=0.61",
+        "target": "share >= 1.0",
+        "timeframe": "rolling_90_days",
+        "data_source": "#/chronicle/graph",
+        "evidence_rule": "rolling_90_day_share >= 1.0 && remedy_path_present == true",
+        "indicator_refs": [
+          "16.6.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.governance",
+      "interest.accountability"
+    ],
+    "constraints": [
+      "must_include_review_path",
+      "must_not_exclude_affected_parties_from_remedy"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "during": {
+    "purposes": [
+      "purpose.sdg.institutional-decision-transparency-and-remedy"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.institutional.decision-rationale-publication-latency",
+        "purpose_id": "purpose.sdg.institutional-decision-transparency-and-remedy",
+        "description": "Track publication latency and remedy completeness for current decision flows.",
+        "metric": "share_of_decisions_published_with_rationale_within_7_days",
+        "baseline": "share=0.61",
+        "target": "share >= 1.0",
+        "timeframe": "rolling_90_days",
+        "data_source": "#/chronicle/graph",
+        "evidence_rule": "rolling_90_day_share >= 1.0 && remedy_path_present == true",
+        "indicator_refs": [
+          "16.6.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.governance"
+    ],
+    "constraints": [
+      "review_publication_latency_weekly"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.sdg.institutional-decision-transparency-and-remedy"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.institutional.decision-rationale-publication-latency",
+        "purpose_id": "purpose.sdg.institutional-decision-transparency-and-remedy",
+        "description": "Summarize whether publication discipline and remedy access held across the review window.",
+        "metric": "share_of_decisions_published_with_rationale_within_7_days",
+        "baseline": "share=0.61",
+        "target": "share >= 1.0",
+        "timeframe": "rolling_90_days",
+        "data_source": "#/chronicle/graph",
+        "evidence_rule": "rolling_90_day_share >= 1.0 && remedy_path_present == true",
+        "indicator_refs": [
+          "16.6.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.accountability"
+    ],
+    "constraints": [
+      "publish_remediation_when_window_is_missed"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

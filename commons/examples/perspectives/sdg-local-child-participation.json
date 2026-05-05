@@ -1,0 +1,97 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.sdg.local-child-participation-and-belonging"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.local-child-participation.active-retention-rate",
+        "purpose_id": "purpose.sdg.local-child-participation-and-belonging",
+        "description": "Increase active participation and retention for children in local activities without widening access gaps across neighborhoods or backgrounds.",
+        "metric": "active_children_count_and_retention_rate",
+        "baseline": "active_children=42; retention_rate=0.74",
+        "target": "active_children >= 55 && retention_rate >= 0.82",
+        "timeframe": "2026-season",
+        "data_source": "#/perspective/pre/goals",
+        "evidence_rule": "season_end.active_children >= 55 && season_end.retention_rate >= 0.82 && subgroup_gap_delta <= 0.00",
+        "indicator_refs": [
+          "4.5.1",
+          "10.2.1"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.children",
+      "interest.community"
+    ],
+    "constraints": [
+      "must_monitor_neighborhood_gap",
+      "must_monitor_background_gap"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.sdg.local-child-participation-and-belonging"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.local-child-participation.active-retention-rate",
+        "purpose_id": "purpose.sdg.local-child-participation-and-belonging",
+        "description": "Track participation, retention and belonging signals across the current activity season.",
+        "metric": "active_children_count_and_retention_rate",
+        "baseline": "active_children=42; retention_rate=0.74",
+        "target": "active_children >= 55 && retention_rate >= 0.82",
+        "timeframe": "2026-season",
+        "data_source": "#/perspective/pre/goals",
+        "evidence_rule": "midseason_gap_delta <= 0.00",
+        "indicator_refs": [
+          "4.5.1",
+          "10.2.1"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.children",
+      "interest.community"
+    ],
+    "constraints": [
+      "review_dropout_reasons_monthly"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.sdg.local-child-participation-and-belonging"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.local-child-participation.active-retention-rate",
+        "purpose_id": "purpose.sdg.local-child-participation-and-belonging",
+        "description": "Close the season with a documented participation and retention review across groups.",
+        "metric": "active_children_count_and_retention_rate",
+        "baseline": "active_children=42; retention_rate=0.74",
+        "target": "active_children >= 55 && retention_rate >= 0.82",
+        "timeframe": "2026-season",
+        "data_source": "#/perspective/post/goals",
+        "evidence_rule": "season_end.active_children >= 55 && season_end.retention_rate >= 0.82 && subgroup_gap_delta <= 0.00",
+        "indicator_refs": [
+          "4.5.1",
+          "10.2.1"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.children"
+    ],
+    "constraints": [
+      "publish_remediation_if_gap_widens"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

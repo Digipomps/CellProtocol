@@ -1,0 +1,22 @@
+[
+  {"term_id":"purpose.human-equal-worth","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"purpose.human-equal-worth","lang":"en-US","namespace":"haven.conference"},
+  {"term_id":"purpose.net-positive-contribution","lang":"nb-NO","namespace":"haven.conference"},
+  {"term_id":"purpose.learn","lang":"nb-NO","namespace":"haven.conference"},
+  {"term_id":"purpose.network","lang":"en-US","namespace":"haven.core"},
+  {"term_id":"purpose.collaborate","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"purpose.sell","lang":"en-US","namespace":"haven.core"},
+  {"term_id":"purpose.buy","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"purpose.hire","lang":"en-US","namespace":"haven.core"},
+  {"term_id":"purpose.invest","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"purpose.present","lang":"en-US","namespace":"haven.core"},
+  {"term_id":"purpose.share","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"purpose.discuss","lang":"en-US","namespace":"haven.core"},
+  {"term_id":"purpose.research","lang":"nb-NO","namespace":"haven.core"},
+  {"term_id":"goal.reduce-emissions","lang":"en-US","namespace":"haven.conference"},
+  {"term_id":"goal.support-local-community","lang":"nb-NO","namespace":"haven.conference"},
+  {"term_id":"goal.increase-child-participation","lang":"en-US","namespace":"haven.conference"},
+  {"term_id":"conference.session","lang":"nb-NO","namespace":"haven.conference"},
+  {"term_id":"conference.workshop","lang":"en-US","namespace":"haven.conference"},
+  {"term_id":"conference.exhibitor","lang":"nb-NO","namespace":"haven.conference"}
+]

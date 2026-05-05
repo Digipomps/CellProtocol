@@ -1,0 +1,93 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.sdg.climate.member-mobility-decarbonization"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.climate.member-mobility-emissions-intensity",
+        "purpose_id": "purpose.sdg.climate.member-mobility-decarbonization",
+        "description": "Reduce the emissions intensity of member travel while keeping participation accessible across income groups and locations.",
+        "metric": "kgCO2e_per_member_km",
+        "baseline": "0.42",
+        "target": "monthly_average <= 0.34",
+        "timeframe": "2026-01-01/2026-12-31",
+        "data_source": "#/chronicle/events",
+        "evidence_rule": "monthly_average <= 0.34 && access_gap_delta <= 0.00",
+        "indicator_refs": [
+          "13.2.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.sustainability",
+      "interest.mobility"
+    ],
+    "constraints": [
+      "must_not_reduce_access_for_low_income_members",
+      "must_review_remote_participation_impact"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.sdg.climate.member-mobility-decarbonization"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.climate.member-mobility-emissions-intensity",
+        "purpose_id": "purpose.sdg.climate.member-mobility-decarbonization",
+        "description": "Track monthly travel intensity and equity guardrails during the intervention period.",
+        "metric": "kgCO2e_per_member_km",
+        "baseline": "0.42",
+        "target": "monthly_average <= 0.34",
+        "timeframe": "2026-01-01/2026-12-31",
+        "data_source": "#/chronicle/events",
+        "evidence_rule": "monthly_average <= 0.34 && access_gap_delta <= 0.00",
+        "indicator_refs": [
+          "13.2.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.sustainability"
+    ],
+    "constraints": [
+      "review_equity_each_month"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.sdg.climate.member-mobility-decarbonization"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.sdg.climate.member-mobility-emissions-intensity",
+        "purpose_id": "purpose.sdg.climate.member-mobility-decarbonization",
+        "description": "Summarize final climate and accessibility outcomes for the completed mobility cycle.",
+        "metric": "kgCO2e_per_member_km",
+        "baseline": "0.42",
+        "target": "monthly_average <= 0.34",
+        "timeframe": "2026-01-01/2026-12-31",
+        "data_source": "#/chronicle/events",
+        "evidence_rule": "final_monthly_average <= 0.34 && access_gap_delta <= 0.00",
+        "indicator_refs": [
+          "13.2.2"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.sustainability"
+    ],
+    "constraints": [
+      "publish_lessons_learned_before_scaling"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}

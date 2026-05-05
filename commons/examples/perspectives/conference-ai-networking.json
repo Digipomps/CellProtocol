@@ -1,0 +1,102 @@
+{
+  "pre": {
+    "purposes": [
+      "purpose.human-equal-worth",
+      "purpose.net-positive-contribution",
+      "purpose.network"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.conference.build-high-trust-intros",
+        "purpose_id": "purpose.network",
+        "description": "Identify people worth following up with after the conference.",
+        "metric": "qualified_introductions",
+        "baseline": "0",
+        "target": ">=3",
+        "timeframe": "conference_week",
+        "data_source": "#/perspective/pre/interests",
+        "evidence_rule": "qualified_introductions >= 3",
+        "indicator_refs": [
+          "conference.lead"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.ai",
+      "interest.design",
+      "interest.peer-meetings",
+      "interest.hallway-conversations"
+    ],
+    "constraints": [
+      "must_prioritize_high-trust_conversations",
+      "must_leave_time_for_scheduled_sessions"
+    ],
+    "visibility_policy_ref": "policy://private"
+  },
+  "during": {
+    "purposes": [
+      "purpose.learn"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.conference.extract-practical-insights",
+        "purpose_id": "purpose.learn",
+        "description": "Capture useful techniques and implementation notes from workshops and talks.",
+        "metric": "actionable_notes",
+        "baseline": "0",
+        "target": ">=5",
+        "timeframe": "conference_days",
+        "data_source": "#/perspective/during/interests",
+        "evidence_rule": "actionable_notes >= 5",
+        "indicator_refs": [
+          "conference.workshop"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.ai",
+      "interest.education",
+      "interest.workshop-participation",
+      "interest.note-taking"
+    ],
+    "constraints": [
+      "must_stay_present_in_sessions",
+      "must_tag_notes_for_followup"
+    ],
+    "visibility_policy_ref": "policy://team"
+  },
+  "post": {
+    "purposes": [
+      "purpose.collaborate"
+    ],
+    "goals": [
+      {
+        "goal_id": "goal.conference.start-followup-work",
+        "purpose_id": "purpose.collaborate",
+        "description": "Turn the strongest conference contacts into concrete followup work.",
+        "metric": "followup_threads_with_next_step",
+        "baseline": "0",
+        "target": ">=2",
+        "timeframe": "14_days",
+        "data_source": "#/perspective/post/interests",
+        "evidence_rule": "followup_threads_with_next_step >= 2",
+        "indicator_refs": [
+          "conference.lead"
+        ],
+        "incentive_only": true
+      }
+    ],
+    "interests": [
+      "interest.followup",
+      "interest.shared-projects",
+      "interest.problem-solving"
+    ],
+    "constraints": [
+      "must_close_loop_with_people_met",
+      "must_capture_open_questions"
+    ],
+    "visibility_policy_ref": "policy://team"
+  }
+}
