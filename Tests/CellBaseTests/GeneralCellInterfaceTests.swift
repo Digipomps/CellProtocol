@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
+import Foundation
 import XCTest
 @testable import CellBase
 
@@ -132,6 +133,59 @@ final class GeneralCellInterfaceTests: XCTestCase {
 
         let value = try await cell.get(keypath: "shared", requester: other)
         XCTAssertEqual(value, .string("shared-ok"))
+    }
+
+    func testOwnerAccessRequiresPersistedPublicKeyProof() async throws {
+        let ownerVault = ProofIdentityVault(namespace: "owner")
+        CellBase.defaultIdentityVault = ownerVault
+        let owner = await ownerVault.identity(for: "owner", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        let encodedCell = try JSONEncoder().encode(cell)
+
+        CellBase.defaultIdentityVault = ProofIdentityVault(namespace: "server")
+        let restoredCell = try JSONDecoder().decode(GeneralCell.self, from: encodedCell)
+
+        let forgedVault = ProofIdentityVault(namespace: "forged-owner")
+        var forgedOwner = Identity(owner.uuid, displayName: "Forged Owner", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedOwner, for: "forged-owner")
+
+        let ownerCanRead = await restoredCell.validateAccess("r---", at: "state", for: owner)
+        let forgedOwnerCanRead = await restoredCell.validateAccess("r---", at: "state", for: forgedOwner)
+        XCTAssertNotEqual(owner.publicSecureKey?.compressedKey, forgedOwner.publicSecureKey?.compressedKey)
+        XCTAssertTrue(ownerCanRead)
+        XCTAssertFalse(forgedOwnerCanRead)
+    }
+
+    func testContractAccessRequiresPersistedSignatoryPublicKeyProof() async throws {
+        let vault = ProofIdentityVault(namespace: "contract")
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let reader = await vault.identity(for: "reader", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.addInterceptForGet(requester: owner, key: "sharedByContract") { _, _ in
+            return .string("contract-ok")
+        }
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r--", for: "sharedByContract")
+        agreement.signatories.append(reader)
+
+        let state = await cell.addAgreement(agreement, for: reader)
+        XCTAssertEqual(state, .signed)
+
+        let forgedVault = ProofIdentityVault(namespace: "forged-reader")
+        var forgedReader = Identity(reader.uuid, displayName: "Forged Reader", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedReader, for: "forged-reader")
+
+        let readerCanRead = await cell.validateAccess("r---", at: "sharedByContract", for: reader)
+        let forgedReaderCanRead = await cell.validateAccess("r---", at: "sharedByContract", for: forgedReader)
+        XCTAssertNotEqual(reader.publicSecureKey?.compressedKey, forgedReader.publicSecureKey?.compressedKey)
+        XCTAssertTrue(readerCanRead)
+        XCTAssertFalse(forgedReaderCanRead)
+
+        let value = try await cell.get(keypath: "sharedByContract", requester: reader)
+        XCTAssertEqual(value, .string("contract-ok"))
     }
 
     func testExplicitSchemaRegistrationForGetAndSet() async throws {
@@ -535,5 +589,93 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertEqual(retriedState, .connected)
 
         cancellable.cancel()
+    }
+}
+
+private actor ProofIdentityVault: IdentityVaultProtocol {
+    private let namespace: String
+    private var identitiesByContext: [String: Identity] = [:]
+    private var signingKeysByUUID: [String: Data] = [:]
+    private var idCounter = 1
+
+    init(namespace: String) {
+        self.namespace = namespace
+    }
+
+    func initialize() async -> IdentityVaultProtocol {
+        self
+    }
+
+    func addIdentity(identity: inout Identity, for identityContext: String) async {
+        identity.identityVault = self
+        assignSigningKey(to: &identity, identityContext: identityContext)
+        identitiesByContext[identityContext] = identity
+    }
+
+    func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
+        if let existing = identitiesByContext[identityContext] {
+            return existing
+        }
+        guard makeNewIfNotFound else { return nil }
+
+        let suffix = String(format: "%012d", idCounter)
+        idCounter += 1
+        let uuidString = "10000000-0000-0000-0000-\(suffix)"
+        var identity = Identity(uuidString, displayName: identityContext, identityVault: self)
+        assignSigningKey(to: &identity, identityContext: identityContext)
+        identitiesByContext[identityContext] = identity
+        return identity
+    }
+
+    func saveIdentity(_ identity: Identity) async {
+        identitiesByContext[identity.displayName] = identity
+    }
+
+    func identityExistInVault(_ identity: Identity) async -> Bool {
+        signingKeysByUUID[identity.uuid] != nil
+    }
+
+    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        guard let signingKey = signingKeysByUUID[identity.uuid] else {
+            throw IdentityVaultError.noVaultIdentity
+        }
+        return messageData + signingKey
+    }
+
+    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
+        guard let publicKey = identity.publicSecureKey?.compressedKey else {
+            throw IdentityVaultError.noKey
+        }
+        return signature == messageData + publicKey
+    }
+
+    func randomBytes64() async -> Data? {
+        Data(repeating: 0xCD, count: 64)
+    }
+
+    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) {
+        ("proof-key-\(tag)", "proof-iv-\(tag)")
+    }
+
+    private func assignSigningKey(to identity: inout Identity, identityContext: String) {
+        let signingKey: Data
+        if let existingKey = signingKeysByUUID[identity.uuid] {
+            signingKey = existingKey
+        } else {
+            signingKey = Data("\(namespace):\(identity.uuid):\(identityContext)".utf8)
+            signingKeysByUUID[identity.uuid] = signingKey
+        }
+
+        identity.publicSecureKey = SecureKey(
+            date: Date(),
+            privateKey: false,
+            use: .signature,
+            algorithm: .EdDSA,
+            size: signingKey.count * 8,
+            curveType: .Curve25519,
+            x: nil,
+            y: nil,
+            compressedKey: signingKey
+        )
     }
 }

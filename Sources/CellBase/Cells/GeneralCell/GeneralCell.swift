@@ -1087,7 +1087,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         var accessGranted = false
         let grant = Grant(keypath: keypath, permission: requestedAccess)
         if owner == identity {
-            let ownerCheck = await checkIdentityOrigin(identity)
+            let ownerCheck = await checkIdentityOrigin(identity, against: owner)
             if ownerCheck {
                 return true
             } else {
@@ -1109,7 +1109,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     func contractsForIdentity(_ identity: Identity) async -> [Agreement] {
         var relevantContracts = [Agreement]()
         for currentContract in await auditor.loadContracts() {
-            if currentContract.signatories.contains(identity) {
+            guard let signatory = currentContract.signatories.first(where: { $0 == identity }) else {
+                continue
+            }
+            if await checkIdentityOrigin(identity, against: signatory) {
                 relevantContracts.append(currentContract)
             }
         }
@@ -1133,6 +1136,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     func checkIdentityOrigin(_ identity: Identity) async -> Bool {
+        return await checkIdentityOrigin(identity, against: identity)
+    }
+
+    func checkIdentityOrigin(_ identity: Identity, against expectedIdentity: Identity) async -> Bool {
         if CellBase.debugValidateAccessForEverything {return true}
         guard let identityVault = identity.identityVault else {
             print("Identity: \(identity.uuid) had no identity vault!")
@@ -1147,7 +1154,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
             print("Got no signed data!")
             return false
         }
-        return await identity.verify(signature: signedData, for: signData)
+        do {
+            return try await identityVault.verifySignature(signature: signedData, messageData: signData, for: expectedIdentity)
+        } catch {
+            print("Verifing signature for \(identity.uuid) against \(expectedIdentity.uuid) failed with error: \(error)")
+            return false
+        }
     }
     
     func defaultIdentity() async throws -> Identity {
