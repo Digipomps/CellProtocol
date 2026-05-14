@@ -349,6 +349,16 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
        }
         return nil
     }
+
+    public func identity(forUUID uuid: String) async -> Identity? {
+        guard let currentVaultIdentity = identitiesUUIDDictionary[uuid] else {
+            return nil
+        }
+        let healedVaultIdentity = await healedVaultIdentityIfNeeded(currentVaultIdentity)
+        let identity = healedVaultIdentity.identity
+        identity.identityVault = self
+        return identity
+    }
     
     private func vaultIdentityWithUUID(_ uuid: String) -> VaultIdentity? {
         if let currentVaultIdentity = identitiesUUIDDictionary[uuid] {

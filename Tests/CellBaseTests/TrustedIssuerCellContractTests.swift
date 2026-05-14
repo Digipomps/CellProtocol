@@ -6,8 +6,12 @@ import XCTest
 
 final class TrustedIssuerCellContractTests: XCTestCase {
     func testTrustedIssuerContractsAdvertiseStateAndEvaluationSchemas() async throws {
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
-        let outsider = TestFixtures.makeIdentity(displayName: "outsider", uuid: TestFixtures.fixedUUID2)
+        let previousVault = CellBase.defaultIdentityVault
+        defer { CellBase.defaultIdentityVault = previousVault }
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
         let cell = await TrustedIssuerCell(owner: owner)
 
         try await CellContractHarness.assertAdvertisedKey(

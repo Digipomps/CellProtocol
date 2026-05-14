@@ -6,9 +6,13 @@ import XCTest
 
 final class IdentitiesCellContractTests: XCTestCase {
     func testIdentitiesCellAdvertisesIdentityListAndEnforcesReadAccess() async throws {
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
-        let outsider = TestFixtures.makeIdentity(displayName: "outsider", uuid: TestFixtures.fixedUUID2)
-        let visitor = TestFixtures.makeIdentity(displayName: "visitor", uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!)
+        let previousVault = CellBase.defaultIdentityVault
+        defer { CellBase.defaultIdentityVault = previousVault }
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+        let visitor = await vault.identity(for: "visitor", makeNewIfNotFound: true)!
         let cell = await IdentitiesCell(owner: owner)
         cell.visitingIdentities[visitor.uuid] = visitor
 

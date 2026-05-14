@@ -7,6 +7,7 @@ public protocol IdentityVaultProtocol: Sendable {
     func initialize() async -> IdentityVaultProtocol
     func addIdentity(identity: inout Identity, for identityContext: String) async
     func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity?
+    func identity(forUUID uuid: String) async -> Identity?
     func identityExistInVault(_ identity: Identity) async -> Bool
     func saveIdentity(_ identity: Identity) async
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data
@@ -17,6 +18,10 @@ public protocol IdentityVaultProtocol: Sendable {
 }
 
 public extension IdentityVaultProtocol {
+    func identity(forUUID uuid: String) async -> Identity? {
+        nil
+    }
+
     func identityExistInVault(_ identity: Identity) async -> Bool {
         false
     }

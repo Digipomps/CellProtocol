@@ -779,7 +779,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     
-    public func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
+    open func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
         if await validateAccess("r--", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
             return feedPublisher.eraseToAnyPublisher()
@@ -787,7 +787,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         throw StreamState.denied
     }
     
-    public func admit(context: ConnectContext) async -> ConnectState {
+    open func admit(context: ConnectContext) async -> ConnectState {
 //        let connectStatePublisher = PassthroughSubject<ConnectState, Error>()
         var connectState = ConnectState.notConnected
        if let identity = context.identity {
@@ -795,19 +795,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
                
                switch identityState {
                case .owner:
-                   if await self.checkIdentityOrigin(identity) {
-                       connectState = .connected
-                   } else {
-                       print("Identity could not prove ownership of private key!")
-                   }
+                   connectState = .connected
                    
                case .member:
-                   // Test
-                   if await self.checkIdentityOrigin(identity) {
-                       connectState = .connected
-                   } else {
-                       print("Identity could not prove ownership of private key!")
-                   }
+                   connectState = .connected
                case .other:
                    connectState = .signContract
                }
@@ -887,7 +878,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     
-    public func get(keypath: String, requester: Identity) async throws -> ValueType {
+    open func get(keypath: String, requester: Identity) async throws -> ValueType {
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
         
@@ -991,7 +982,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         return try wrapper.get(keypath: normalizedPath)
     }
     
-    public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+    open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         
         
         var response: ValueType?
@@ -1080,13 +1071,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     // Utility methods
-    public func validateAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+    open func validateAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
         if CellBase.debugValidateAccessForEverything {
             return true
         }
         var accessGranted = false
         let grant = Grant(keypath: keypath, permission: requestedAccess)
-        if owner == identity {
+        if identitiesReferenceSame(owner, identity) {
             let ownerCheck = await checkIdentityOrigin(identity, against: owner)
             if ownerCheck {
                 return true
@@ -1103,16 +1094,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
                 break
             }
         }
-        return accessGranted
+        if accessGranted {
+            return true
+        }
+        return await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
+    }
+
+    open func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        false
     }
     
     func contractsForIdentity(_ identity: Identity) async -> [Agreement] {
         var relevantContracts = [Agreement]()
         for currentContract in await auditor.loadContracts() {
-            guard let signatory = currentContract.signatories.first(where: { $0 == identity }) else {
+            guard
+                let trustedSignatory = currentContract.signatories.first(where: { identitiesReferenceSame($0, identity) }),
+                await checkIdentityOrigin(identity, against: trustedSignatory)
+            else {
                 continue
             }
-            if await checkIdentityOrigin(identity, against: signatory) {
+            if currentContract.signatories.contains(where: { identitiesReferenceSame($0, trustedSignatory) }) {
                 relevantContracts.append(currentContract)
             }
         }
@@ -1121,14 +1122,17 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     
     func determineIdentityState(identity: Identity) async -> IdentityState {
         var identityState = IdentityState.other
-        if identity == owner {
+        if identitiesReferenceSame(owner, identity),
+           await checkIdentityOrigin(identity, against: owner) {
             identityState = IdentityState.owner
         } else {
             
             let contained = await auditor.loadMembers().contains { subMemberIdentity in
-                return subMemberIdentity.uuid == identity.uuid
+                return identitiesReferenceSame(subMemberIdentity, identity)
             }
-            if contained {
+            if contained,
+               let trustedMember = await auditor.loadMembers().first(where: { identitiesReferenceSame($0, identity) }),
+               await checkIdentityOrigin(identity, against: trustedMember) {
                 identityState = .member
             }
         }
@@ -1136,13 +1140,17 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     func checkIdentityOrigin(_ identity: Identity) async -> Bool {
-        return await checkIdentityOrigin(identity, against: identity)
+        await checkIdentityOrigin(identity, against: identity)
     }
 
-    func checkIdentityOrigin(_ identity: Identity, against expectedIdentity: Identity) async -> Bool {
+    func checkIdentityOrigin(_ identity: Identity, against trustedIdentity: Identity) async -> Bool {
         if CellBase.debugValidateAccessForEverything {return true}
         guard let identityVault = identity.identityVault else {
             print("Identity: \(identity.uuid) had no identity vault!")
+            return false
+        }
+        guard trustedIdentity.publicSecureKey?.compressedKey?.isEmpty == false else {
+            print("Trusted identity: \(trustedIdentity.uuid) had no public signing key!")
             return false
         }
         guard let signData = await identityVault.randomBytes64() else {
@@ -1154,12 +1162,23 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
             print("Got no signed data!")
             return false
         }
-        do {
-            return try await identityVault.verifySignature(signature: signedData, messageData: signData, for: expectedIdentity)
-        } catch {
-            print("Verifing signature for \(identity.uuid) against \(expectedIdentity.uuid) failed with error: \(error)")
+        guard let verificationVault = trustedIdentity.identityVault ?? identity.identityVault ?? CellBase.defaultIdentityVault else {
+            print("No vault available to verify identity: \(trustedIdentity.uuid)")
             return false
         }
+        return (try? await verificationVault.verifySignature(signature: signedData, messageData: signData, for: trustedIdentity)) ?? false
+    }
+
+    func identitiesReferenceSame(_ trustedIdentity: Identity, _ presentedIdentity: Identity) -> Bool {
+        if let trustedPublicKey = trustedIdentity.publicSecureKey?.compressedKey,
+           trustedPublicKey.isEmpty == false,
+           let presentedPublicKey = presentedIdentity.publicSecureKey?.compressedKey,
+           presentedPublicKey.isEmpty == false,
+           trustedIdentity.publicSecureKey?.algorithm == presentedIdentity.publicSecureKey?.algorithm,
+           trustedIdentity.publicSecureKey?.curveType == presentedIdentity.publicSecureKey?.curveType {
+            return trustedPublicKey == presentedPublicKey
+        }
+        return trustedIdentity.uuid == presentedIdentity.uuid
     }
     
     func defaultIdentity() async throws -> Identity {
@@ -1184,13 +1203,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     }
     
     private func isAllowedToSetupIntercepts(requester: Identity) async -> Bool { // TODO: change permission chack to something more meaningful
-        guard requester == owner else {
+        guard identitiesReferenceSame(owner, requester) else {
             return false
         }
-        if !initialized { // hack to allow init CS from persistance on demand
-            return true
-        }
-        return await checkIdentityOrigin(requester)
+        return await checkIdentityOrigin(requester, against: owner)
     }
     
     

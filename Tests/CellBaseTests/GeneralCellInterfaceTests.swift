@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
-import Foundation
 import XCTest
 @testable import CellBase
 
@@ -135,57 +134,129 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertEqual(value, .string("shared-ok"))
     }
 
-    func testOwnerAccessRequiresPersistedPublicKeyProof() async throws {
-        let ownerVault = ProofIdentityVault(namespace: "owner")
+    func testPersistedOwnerProofUsesStoredPublicKeyNotUUID() async throws {
+        let ownerVault = MockIdentityVault()
         CellBase.defaultIdentityVault = ownerVault
-        let owner = await ownerVault.identity(for: "owner", makeNewIfNotFound: true)!
+        let owner = await ownerVault.identity(for: "private", makeNewIfNotFound: true)!
         let cell = await GeneralCell(owner: owner)
         let encodedCell = try JSONEncoder().encode(cell)
 
-        CellBase.defaultIdentityVault = ProofIdentityVault(namespace: "server")
+        let restoredVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = restoredVault
         let restoredCell = try JSONDecoder().decode(GeneralCell.self, from: encodedCell)
 
-        let forgedVault = ProofIdentityVault(namespace: "forged-owner")
-        var forgedOwner = Identity(owner.uuid, displayName: "Forged Owner", identityVault: forgedVault)
+        let forgedVault = MockIdentityVault()
+        var forgedOwner = Identity(owner.uuid, displayName: "forged-owner", identityVault: forgedVault)
         await forgedVault.addIdentity(identity: &forgedOwner, for: "forged-owner")
 
         let ownerCanRead = await restoredCell.validateAccess("r---", at: "state", for: owner)
+        XCTAssertTrue(
+            ownerCanRead,
+            "The real owner should still prove control after the cell is decoded with a fresh default vault."
+        )
+        let ownerAdmission = await restoredCell.admit(context: ConnectContext(source: nil, target: restoredCell, identity: owner))
+        XCTAssertEqual(
+            ownerAdmission,
+            .connected
+        )
         let forgedOwnerCanRead = await restoredCell.validateAccess("r---", at: "state", for: forgedOwner)
-        XCTAssertNotEqual(owner.publicSecureKey?.compressedKey, forgedOwner.publicSecureKey?.compressedKey)
-        XCTAssertTrue(ownerCanRead)
-        XCTAssertFalse(forgedOwnerCanRead)
+        XCTAssertFalse(
+            forgedOwnerCanRead,
+            "Same UUID with a different signing key must never authenticate as owner."
+        )
+        let forgedOwnerAdmission = await restoredCell.admit(context: ConnectContext(source: nil, target: restoredCell, identity: forgedOwner))
+        XCTAssertEqual(
+            forgedOwnerAdmission,
+            .signContract
+        )
     }
 
-    func testContractAccessRequiresPersistedSignatoryPublicKeyProof() async throws {
-        let vault = ProofIdentityVault(namespace: "contract")
-        CellBase.defaultIdentityVault = vault
-        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
-        let reader = await vault.identity(for: "reader", makeNewIfNotFound: true)!
-        let cell = await GeneralCell(owner: owner)
+    func testUninitializedInterceptSetupRejectsForgedOwnerUUID() async throws {
+        let ownerVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = ownerVault
+        let owner = await ownerVault.identity(for: "private", makeNewIfNotFound: true)!
 
-        await cell.addInterceptForGet(requester: owner, key: "sharedByContract") { _, _ in
-            return .string("contract-ok")
+        let forgedVault = MockIdentityVault()
+        var forgedOwner = Identity(owner.uuid, displayName: "forged-owner", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedOwner, for: "forged-owner")
+
+        let cell = await GeneralCell(owner: owner)
+        await cell.addInterceptForGet(requester: forgedOwner, key: "pwned") { _, _ in
+            .string("forged")
+        }
+        await cell.addInterceptForGet(requester: owner, key: "safe") { _, _ in
+            .string("owner")
+        }
+
+        let keys = try await cell.keys(requester: owner)
+        XCTAssertFalse(keys.contains("pwned"))
+        XCTAssertTrue(keys.contains("safe"))
+    }
+
+    func testSignedContractAccessUsesStoredSignatoryPublicKeyNotUUID() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+
+        let forgedVault = MockIdentityVault()
+        var forgedMember = Identity(member.uuid, displayName: "forged-member", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedMember, for: "forged-member")
+
+        let cell = await GeneralCell(owner: owner)
+        await cell.addInterceptForGet(requester: owner, key: "shared") { _, _ in
+            .string("shared-ok")
         }
 
         let agreement = Agreement(owner: owner)
-        agreement.addGrant("r--", for: "sharedByContract")
-        agreement.signatories.append(reader)
+        agreement.addGrant("r--", for: "shared")
+        agreement.signatories.append(member)
 
-        let state = await cell.addAgreement(agreement, for: reader)
+        let state = await cell.addAgreement(agreement, for: member)
         XCTAssertEqual(state, .signed)
 
-        let forgedVault = ProofIdentityVault(namespace: "forged-reader")
-        var forgedReader = Identity(reader.uuid, displayName: "Forged Reader", identityVault: forgedVault)
-        await forgedVault.addIdentity(identity: &forgedReader, for: "forged-reader")
+        let memberCanRead = await cell.validateAccess("r---", at: "shared", for: member)
+        XCTAssertTrue(memberCanRead)
+        let forgedMemberCanRead = await cell.validateAccess("r---", at: "shared", for: forgedMember)
+        XCTAssertFalse(
+            forgedMemberCanRead,
+            "Contract membership must be proven against the persisted signatory public key, not UUID equality."
+        )
+        let memberAdmission = await cell.admit(context: ConnectContext(source: nil, target: cell, identity: member))
+        XCTAssertEqual(
+            memberAdmission,
+            .connected
+        )
+        let forgedMemberAdmission = await cell.admit(context: ConnectContext(source: nil, target: cell, identity: forgedMember))
+        XCTAssertEqual(
+            forgedMemberAdmission,
+            .signContract
+        )
 
-        let readerCanRead = await cell.validateAccess("r---", at: "sharedByContract", for: reader)
-        let forgedReaderCanRead = await cell.validateAccess("r---", at: "sharedByContract", for: forgedReader)
-        XCTAssertNotEqual(reader.publicSecureKey?.compressedKey, forgedReader.publicSecureKey?.compressedKey)
-        XCTAssertTrue(readerCanRead)
-        XCTAssertFalse(forgedReaderCanRead)
+        let value = try await cell.get(keypath: "shared", requester: member)
+        XCTAssertEqual(value, .string("shared-ok"))
+        try await CellContractHarness.assertGetDenied(on: cell, key: "shared", requester: forgedMember)
+    }
 
-        let value = try await cell.get(keypath: "sharedByContract", requester: reader)
-        XCTAssertEqual(value, .string("contract-ok"))
+    func testCellSpecificAccessHookAllowsSubclassManagedReadWithoutContract() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let other = await vault.identity(for: "other", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+        let cell = await CellSpecificAccessHarnessCell(owner: owner)
+
+        await cell.addInterceptForGet(requester: owner, key: "sharedByCell") { _, _ in
+            .string("cell-specific-ok")
+        }
+        cell.allow(identity: other, access: "r---", keypath: "sharedByCell")
+
+        let value = try await cell.get(keypath: "sharedByCell", requester: other)
+        XCTAssertEqual(value, .string("cell-specific-ok"))
+        let outsiderCanRead = await cell.validateAccess("r---", at: "sharedByCell", for: outsider)
+        let otherCanWrite = await cell.validateAccess("rw--", at: "sharedByCell", for: other)
+        XCTAssertFalse(outsiderCanRead)
+        XCTAssertFalse(otherCanWrite)
     }
 
     func testExplicitSchemaRegistrationForGetAndSet() async throws {
@@ -592,90 +663,26 @@ final class GeneralCellInterfaceTests: XCTestCase {
     }
 }
 
-private actor ProofIdentityVault: IdentityVaultProtocol {
-    private let namespace: String
-    private var identitiesByContext: [String: Identity] = [:]
-    private var signingKeysByUUID: [String: Data] = [:]
-    private var idCounter = 1
+private final class CellSpecificAccessHarnessCell: GeneralCell {
+    private var allowedAccess = Set<String>()
 
-    init(namespace: String) {
-        self.namespace = namespace
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
     }
 
-    func initialize() async -> IdentityVaultProtocol {
-        self
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
     }
 
-    func addIdentity(identity: inout Identity, for identityContext: String) async {
-        identity.identityVault = self
-        assignSigningKey(to: &identity, identityContext: identityContext)
-        identitiesByContext[identityContext] = identity
+    func allow(identity: Identity, access: String, keypath: String) {
+        allowedAccess.insert(Self.accessKey(identity: identity, access: access, keypath: keypath))
     }
 
-    func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
-        if let existing = identitiesByContext[identityContext] {
-            return existing
-        }
-        guard makeNewIfNotFound else { return nil }
-
-        let suffix = String(format: "%012d", idCounter)
-        idCounter += 1
-        let uuidString = "10000000-0000-0000-0000-\(suffix)"
-        var identity = Identity(uuidString, displayName: identityContext, identityVault: self)
-        assignSigningKey(to: &identity, identityContext: identityContext)
-        identitiesByContext[identityContext] = identity
-        return identity
+    override func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        allowedAccess.contains(Self.accessKey(identity: identity, access: requestedAccess, keypath: keypath))
     }
 
-    func saveIdentity(_ identity: Identity) async {
-        identitiesByContext[identity.displayName] = identity
-    }
-
-    func identityExistInVault(_ identity: Identity) async -> Bool {
-        signingKeysByUUID[identity.uuid] != nil
-    }
-
-    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
-        guard let signingKey = signingKeysByUUID[identity.uuid] else {
-            throw IdentityVaultError.noVaultIdentity
-        }
-        return messageData + signingKey
-    }
-
-    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
-        guard let publicKey = identity.publicSecureKey?.compressedKey else {
-            throw IdentityVaultError.noKey
-        }
-        return signature == messageData + publicKey
-    }
-
-    func randomBytes64() async -> Data? {
-        Data(repeating: 0xCD, count: 64)
-    }
-
-    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) {
-        ("proof-key-\(tag)", "proof-iv-\(tag)")
-    }
-
-    private func assignSigningKey(to identity: inout Identity, identityContext: String) {
-        let signingKey: Data
-        if let existingKey = signingKeysByUUID[identity.uuid] {
-            signingKey = existingKey
-        } else {
-            signingKey = Data("\(namespace):\(identity.uuid):\(identityContext)".utf8)
-            signingKeysByUUID[identity.uuid] = signingKey
-        }
-
-        identity.publicSecureKey = SecureKey(
-            date: Date(),
-            privateKey: false,
-            use: .signature,
-            algorithm: .EdDSA,
-            size: signingKey.count * 8,
-            curveType: .Curve25519,
-            x: nil,
-            y: nil,
-            compressedKey: signingKey
-        )
+    private static func accessKey(identity: Identity, access: String, keypath: String) -> String {
+        "\(identity.uuid)|\(access)|\(keypath)"
     }
 }
