@@ -131,6 +131,7 @@ public enum PersonalChatHubContract {
     public static let queryResourceKeypath = "assistant.queryResource"
     public static let setCandidateQueryKeypath = "assistant.setCandidateQuery"
     public static let selectCandidateKeypath = "assistant.selectCandidate"
+    public static let dropReceiveKeypath = "drop.receive"
     public static let pollSetQuestionKeypath = "poll.setQuestion"
     public static let pollSetOptionsKeypath = "poll.setOptions"
     public static let pollCreateKeypath = "poll.create"

@@ -585,10 +585,102 @@ final class SkeletonTests: XCTestCase {
         var modifiers = SkeletonModifiers()
         modifiers.styleRole = "chatComposer"
         modifiers.styleClasses = ["chat", "composer", "elevated"]
+        modifiers.motionHint = .expand
+        modifiers.motionSourceRole = "suggestion-card"
         let data = try JSONEncoder().encode(modifiers)
         let json = decodeJSONObject(data)
         XCTAssertEqual(json["styleRole"] as? String, "chatComposer")
         XCTAssertEqual(json["styleClasses"] as? [String], ["chat", "composer", "elevated"])
+        XCTAssertEqual(json["motionHint"] as? String, "expand")
+        XCTAssertEqual(json["motionSourceRole"] as? String, "suggestion-card")
+    }
+
+    func testModifiersDecodeMotionMetadataAndStayBackwardCompatible() throws {
+        let motionJSON = """
+        {
+          "styleRole": "suggestion-card",
+          "motionHint": "appear",
+          "motionSourceRole": "chat-composer"
+        }
+        """
+        let motion = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(motionJSON.utf8))
+        XCTAssertEqual(motion.styleRole, "suggestion-card")
+        XCTAssertEqual(motion.motionHint, .appear)
+        XCTAssertEqual(motion.motionSourceRole, "chat-composer")
+
+        let oldJSON = """
+        {
+          "styleRole": "legacy-card",
+          "styleClasses": ["compact"]
+        }
+        """
+        let legacy = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(oldJSON.utf8))
+        XCTAssertEqual(legacy.styleRole, "legacy-card")
+        XCTAssertEqual(legacy.styleClasses, ["compact"])
+        XCTAssertNil(legacy.motionHint)
+        XCTAssertNil(legacy.motionSourceRole)
+    }
+
+    func testModifiersEncodeDragSourceMetadata() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.draggableRole = "person"
+        modifiers.dragPayloadKeypath = "directory.state.selected.publicSafeDragPayload"
+        modifiers.dragPreviewRole = "person-chip"
+        modifiers.accessibilityDragLabel = "Dra person inn i chat"
+
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+
+        XCTAssertEqual(json["draggableRole"] as? String, "person")
+        XCTAssertEqual(json["dragPayloadKeypath"] as? String, "directory.state.selected.publicSafeDragPayload")
+        XCTAssertEqual(json["dragPreviewRole"] as? String, "person-chip")
+        XCTAssertEqual(json["accessibilityDragLabel"] as? String, "Dra person inn i chat")
+        XCTAssertNil(json["dropTargetRole"])
+    }
+
+    func testModifiersEncodeDropTargetMetadata() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.dropTargetRole = "chat-invite-slot"
+        modifiers.acceptedDragRoles = ["person"]
+        modifiers.dropActionKeypath = "chatHub.drop.receive"
+        modifiers.dropIntents = ["add"]
+        modifiers.dropValidationStateKeypath = "chatHub.state.drop.validationState"
+        modifiers.dropDeniedReasonKeypath = "chatHub.state.drop.deniedReason"
+        modifiers.accessibilityDropLabel = "Slipp her for å invitere til chat"
+
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+
+        XCTAssertEqual(json["dropTargetRole"] as? String, "chat-invite-slot")
+        XCTAssertEqual(json["acceptedDragRoles"] as? [String], ["person"])
+        XCTAssertEqual(json["dropActionKeypath"] as? String, "chatHub.drop.receive")
+        XCTAssertEqual(json["dropIntents"] as? [String], ["add"])
+        XCTAssertEqual(json["dropValidationStateKeypath"] as? String, "chatHub.state.drop.validationState")
+        XCTAssertEqual(json["dropDeniedReasonKeypath"] as? String, "chatHub.state.drop.deniedReason")
+        XCTAssertEqual(json["accessibilityDropLabel"] as? String, "Slipp her for å invitere til chat")
+    }
+
+    func testModifiersDecodeDragDropMetadataAndStayBackwardCompatible() throws {
+        let json = """
+        {
+          "draggableRole": "component",
+          "dragPayloadKeypath": "workspace.state.selected.publicSafeDragPayload",
+          "dropTargetRole": "workspace-attach-slot",
+          "acceptedDragRoles": ["component", "cell"],
+          "dropActionKeypath": "workspace.drop.receive",
+          "dropIntents": ["attach"]
+        }
+        """
+
+        let modifiers = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(json.utf8))
+
+        XCTAssertEqual(modifiers.draggableRole, "component")
+        XCTAssertEqual(modifiers.dragPayloadKeypath, "workspace.state.selected.publicSafeDragPayload")
+        XCTAssertEqual(modifiers.dropTargetRole, "workspace-attach-slot")
+        XCTAssertEqual(modifiers.acceptedDragRoles, ["component", "cell"])
+        XCTAssertEqual(modifiers.dropActionKeypath, "workspace.drop.receive")
+        XCTAssertEqual(modifiers.dropIntents, ["attach"])
+        XCTAssertNil(modifiers.motionHint)
     }
 
     func testObjectEncodesWrapped() throws {

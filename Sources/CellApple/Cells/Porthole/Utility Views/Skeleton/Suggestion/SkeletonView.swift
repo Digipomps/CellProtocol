@@ -6,6 +6,9 @@ import CellBase
 #if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
 #endif
+#if canImport(UIKit)
+import UIKit
+#endif
 #if os(macOS)
 import AppKit
 #endif
@@ -59,6 +62,40 @@ private func splitCellURLLocal(_ cellURL: URL) -> (URL, String?) {
         url = cellURL.deletingLastPathComponent()
     }
     return (url, keypath)
+}
+
+private func dismissSkeletonKeyboardIfNeeded() {
+    #if os(iOS)
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    #endif
+}
+
+private extension View {
+    @ViewBuilder
+    func applySkeletonKeyboardDismissBehavior() -> some View {
+        #if os(iOS)
+        self
+            .scrollDismissesKeyboard(.interactively)
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func applySkeletonKeyboardToolbar() -> some View {
+        #if os(iOS)
+        self.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Ferdig") {
+                    dismissSkeletonKeyboardIfNeeded()
+                }
+            }
+        }
+        #else
+        self
+        #endif
+    }
 }
 
 private func skeletonStringValue(_ value: ValueType?) -> String? {
@@ -115,6 +152,54 @@ private func applyStyleMetadata(to view: AnyView, modifiers: SkeletonModifiers?)
     return AnyView(
         view.accessibilityIdentifier("style-role-\(rolePart)|style-classes-\(classesPart)")
     )
+}
+
+private struct SkeletonMotionHost: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var mounted = false
+    let hint: SkeletonMotionHint
+
+    private var initialYOffset: CGFloat {
+        switch hint {
+        case .collapse, .minimize:
+            return -4
+        case .appear, .expand, .restore, .replace:
+            return 8
+        case .emphasize:
+            return 0
+        }
+    }
+
+    private var initialOpacity: Double {
+        switch hint {
+        case .collapse, .minimize:
+            return 0.92
+        case .emphasize:
+            return 1
+        case .appear, .expand, .restore, .replace:
+            return 0
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(reduceMotion ? 1 : (mounted ? 1 : initialOpacity))
+            .offset(y: reduceMotion || mounted ? 0 : initialYOffset)
+            .overlay(emphasisOverlay)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.19), value: mounted)
+            .onAppear {
+                mounted = true
+            }
+    }
+
+    @ViewBuilder
+    private var emphasisOverlay: some View {
+        if hint == .emphasize && !reduceMotion {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor.opacity(mounted ? 0 : 0.28), lineWidth: mounted ? 0 : 2)
+                .animation(.easeOut(duration: 0.21), value: mounted)
+        }
+    }
 }
 
 private func resolvedImage(_ image: SkeletonImage) -> Image {
@@ -600,6 +685,9 @@ private extension View {
         // hidden
         if let hidden = modifiers?.hidden, hidden { view = AnyView(view.hidden()) }
         view = applyStyleMetadata(to: view, modifiers: modifiers)
+        if let motionHint = modifiers?.motionHint {
+            view = AnyView(view.modifier(SkeletonMotionHost(hint: motionHint)))
+        }
         return view
     }
 }
@@ -745,6 +833,7 @@ public struct SkeletonView: View {
                             }
                         }
                     }
+                    .applySkeletonKeyboardDismissBehavior()
                     .applySkeletonModifiers(sc.modifiers)
                 )
             } else {
@@ -756,6 +845,7 @@ public struct SkeletonView: View {
                             }
                         }
                     }
+                    .applySkeletonKeyboardDismissBehavior()
                     .applySkeletonModifiers(sc.modifiers)
                 )
             }
@@ -2582,6 +2672,7 @@ private struct CellTextFieldView: View {
         VStack(alignment: .leading, spacing: 4) {
             SwiftUI.TextField(skeletonTextField.placeholder ?? "", text: binding())
                 .focused($isFocused)
+                .applySkeletonKeyboardToolbar()
                 .applyIf(skeletonTextField.modifiers?.foregroundColor != nil && Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "")!)
                 }
@@ -3052,6 +3143,7 @@ private struct CellTextAreaView: View {
             }
 
             TextEditor(text: binding())
+                .applySkeletonKeyboardToolbar()
                 .applyIf(skeletonTextArea.modifiers?.foregroundColor != nil && Color(hex: skeletonTextArea.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextArea.modifiers?.foregroundColor ?? "")!)
                 }

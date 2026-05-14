@@ -12,6 +12,16 @@ import Foundation
 public typealias SkeletonElementList = [SkeletonElement]
 public typealias SkeletonElementObject = [String: SkeletonElement]
 
+public enum SkeletonMotionHint: String, Codable, CaseIterable {
+    case appear
+    case expand
+    case collapse
+    case minimize
+    case restore
+    case replace
+    case emphasize
+}
+
 public struct SkeletonModifiers: Codable {
     public var padding: Double?
     public var maxWidthInfinity: Bool?
@@ -40,6 +50,19 @@ public struct SkeletonModifiers: Codable {
     public var minimumScaleFactor: Double?
     public var styleRole: String?
     public var styleClasses: [String]?
+    public var motionHint: SkeletonMotionHint?
+    public var motionSourceRole: String?
+    public var draggableRole: String?
+    public var dragPayloadKeypath: String?
+    public var dragPreviewRole: String?
+    public var accessibilityDragLabel: String?
+    public var dropTargetRole: String?
+    public var acceptedDragRoles: [String]?
+    public var dropActionKeypath: String?
+    public var dropIntents: [String]?
+    public var dropValidationStateKeypath: String?
+    public var dropDeniedReasonKeypath: String?
+    public var accessibilityDropLabel: String?
 
     public init() {}
 }
