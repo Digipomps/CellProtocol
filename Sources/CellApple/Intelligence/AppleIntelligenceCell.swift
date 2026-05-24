@@ -76,11 +76,9 @@ public class AppleIntelligenceCell: GeneralCell {
         try super.init(from: decoder)
 //        registerBindings()
         Task {
-            if let vault = CellBase.defaultIdentityVault,
-               let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
-                await setupPermissions(owner: requester)
-                await setupKeys(owner: requester)
-            }
+            let decodedOwner = self.storedOwnerIdentity
+            await setupPermissions(owner: decodedOwner)
+            await setupKeys(owner: decodedOwner)
         }
     }
 

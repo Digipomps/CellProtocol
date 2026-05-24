@@ -74,11 +74,9 @@ public class PerspectiveCell: GeneralCell {
         // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
         Task {
             try? await loadPerspective() // Consider decoding this in this method
-            if let vault = CellBase.defaultIdentityVault,
-               let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) { // Mayby fetch the Identity from json - or does that pose a security issue -> yes! Look into that...
-                await setupPermissions(owner: requester)
-                await setupKeys(owner: requester)
-            }
+            let decodedOwner = self.storedOwnerIdentity
+            await setupPermissions(owner: decodedOwner)
+            await setupKeys(owner: decodedOwner)
         }
     }
     

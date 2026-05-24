@@ -106,14 +106,18 @@ actor GeneralAuditor {
     
     
 
-    private var contracts = [Agreement]()
-    func loadContracts() -> [Agreement] {
+    private var contracts = [Contract]()
+    func loadContracts() -> [Contract] {
         return contracts
     }
-    func addContract(_ contract: Agreement) {
+    func addContract(_ contract: Contract) {
+        contracts.removeAll(where: { $0.uuid == contract.uuid })
         contracts.append(contract)
     }
-    func removeContract(contract: Agreement) {
+    func replaceContracts(_ contracts: [Contract]) {
+        self.contracts = contracts
+    }
+    func removeContract(contract: Contract) {
         contracts.removeAll(where: { storedContract in
             storedContract.uuid == contract.uuid
         })
@@ -125,7 +129,13 @@ actor GeneralAuditor {
         return members
     }
     func addMember(_ member: Identity) {
+        members.removeAll(where: { storedMember in
+            storedMember.uuid == member.uuid
+        })
         members.append(member)
+    }
+    func replaceMembers(_ members: [Identity]) {
+        self.members = members
     }
     func removeMember(_ member: Identity) {
         members.removeAll(where: { storedMember in

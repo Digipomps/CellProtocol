@@ -5,7 +5,7 @@ import XCTest
 @testable import CellBase
 
 final class AgreementCodingTests: XCTestCase {
-    func testAgreementDecodesLegacyPayloadWithoutUUIDStateOrDuration() throws {
+    func testAgreementDecodesLegacyPayloadWithoutUUIDStateOrDurationAsTemplate() throws {
         let owner = Identity("agreement-owner", displayName: "Agreement Owner", identityVault: nil)
         let agreement = Agreement(owner: owner)
         let legacyData = try removingKeys(["uuid", "state", "duration"], from: agreement)
@@ -14,15 +14,15 @@ final class AgreementCodingTests: XCTestCase {
 
         XCTAssertFalse(decoded.uuid.isEmpty)
         XCTAssertEqual(decoded.name, agreement.name)
-        XCTAssertEqual(decoded.state, .signed)
+        XCTAssertEqual(decoded.state, .template)
         XCTAssertEqual(decoded.duration, 60 * 60 * 24 * 365)
 
         let canonicalObject = try jsonObject(from: JSONEncoder().encode(decoded))
-        XCTAssertEqual(canonicalObject["state"] as? String, "signed")
+        XCTAssertEqual(canonicalObject["state"] as? String, "template")
         XCTAssertEqual(canonicalObject["duration"] as? Int, 60 * 60 * 24 * 365)
     }
 
-    func testAgreementDecodesUnknownLegacyStateAsSigned() throws {
+    func testAgreementDecodesUnknownLegacyStateAsTemplate() throws {
         let owner = Identity("agreement-owner-unknown-state", displayName: "Agreement Owner", identityVault: nil)
         let agreement = Agreement(owner: owner)
         var object = try jsonObject(from: JSONEncoder().encode(agreement))
@@ -31,7 +31,7 @@ final class AgreementCodingTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         let decoded = try JSONDecoder().decode(Agreement.self, from: data)
 
-        XCTAssertEqual(decoded.state, .signed)
+        XCTAssertEqual(decoded.state, .template)
     }
 
     func testGrantDecodesLegacyPayloadWithoutUUID() throws {
@@ -44,6 +44,33 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertEqual(decoded.name, grant.name)
         XCTAssertEqual(decoded.keypath, grant.keypath)
         XCTAssertEqual(decoded.permission.permissionString, grant.permission.permissionString)
+    }
+
+    func testLegacyFourCharacterPermissionsNormalizeAndStaySeparated() throws {
+        let read = Grant(keypath: "person", permission: "r---")
+        let write = Grant(keypath: "person", permission: "-w--")
+        let readWrite = Grant(keypath: "person", permission: "rw--")
+        let execute = Grant(keypath: "person", permission: "--x-")
+
+        XCTAssertEqual(read.permission.permissionString, "r--")
+        XCTAssertEqual(write.permission.permissionString, "-w-")
+        XCTAssertEqual(readWrite.permission.permissionString, "rw-")
+        XCTAssertEqual(execute.permission.permissionString, "--x")
+
+        XCTAssertTrue(readWrite.granted(read))
+        XCTAssertTrue(readWrite.granted(write))
+        XCTAssertFalse(read.granted(write))
+        XCTAssertFalse(write.granted(read))
+        XCTAssertFalse(readWrite.granted(execute))
+    }
+
+    func testInvalidPermissionRequestsDenyInsteadOfMatchingEverything() throws {
+        let grant = Grant(keypath: "person", permission: "r---")
+        let invalidRequest = Grant(keypath: "person", permission: "invalid")
+
+        XCTAssertEqual(invalidRequest.permission.permissionString, "---")
+        XCTAssertFalse(grant.granted(invalidRequest))
+        XCTAssertFalse(Permission.matchPermission(permissionRequested: "invalid", permissionGranted: "r---"))
     }
 
     func testAgreementSetAddsConditionWhenExistingConditionsAreEmpty() throws {
@@ -59,6 +86,33 @@ final class AgreementCodingTests: XCTestCase {
 
         XCTAssertEqual(agreement.conditions.count, 1)
         XCTAssertEqual(agreement.conditions.first?.uuid, condition.uuid)
+    }
+
+    func testContractSignsAgreementSnapshotAndDetectsTampering() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let subject = await vault.identity(for: "subject", makeNewIfNotFound: true)!
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "state")
+        agreement.signatories.append(subject)
+        agreement.state = .signed
+
+        let contract = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private"
+        )
+
+        let validSignature = await contract.verifySignature()
+        XCTAssertTrue(validSignature)
+        contract.agreement.addGrant("r---", for: "tampered")
+        let tamperedSignature = await contract.verifySignature()
+        XCTAssertFalse(tamperedSignature)
     }
 
     private func removingKeys<T: Encodable>(_ keys: [String], from value: T) throws -> Data {

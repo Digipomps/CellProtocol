@@ -900,6 +900,12 @@ public class CellResolver: CellResolverProtocol {
             // throw something
             return nil
         }
+        try await authorizeMeddleIfAvailable(
+            target: target,
+            keypath: keypath,
+            requestedAccess: "r---",
+            requester: requester
+        )
         let resultValue = try await target.get(keypath: keypath, requester: requester)
         
         let resultDescription = (try? resultValue.jsonString()) ?? "No result"
@@ -925,6 +931,12 @@ public class CellResolver: CellResolverProtocol {
             // throw something
             return nil
         }
+        try await authorizeMeddleIfAvailable(
+            target: target,
+            keypath: keypath,
+            requestedAccess: "-w--",
+            requester: requester
+        )
         let resultValue = try await target.set(keypath: keypath, value: value, requester: requester)
         let resultDescription: String
         if let resultValue {
@@ -937,6 +949,29 @@ public class CellResolver: CellResolverProtocol {
             domain: .resolver
         )
         return resultValue
+    }
+
+    private func authorizeMeddleIfAvailable(
+        target: Meddle,
+        keypath: String,
+        requestedAccess: String,
+        requester: Identity
+    ) async throws {
+        guard let authorizer = target as? CellAuthorizationDeciding else {
+            return
+        }
+        let decision = await authorizer.authorizationDecision(
+            requestedAccess: requestedAccess,
+            at: keypath,
+            for: requester
+        )
+        CellBase.diagnosticLog(
+            "Resolver authorization keypath=\(keypath) access=\(requestedAccess) allowed=\(decision.allowed) path=\(decision.path.rawValue)",
+            domain: .resolver
+        )
+        if !decision.allowed {
+            throw CellAuthorizationError.denied(decision)
+        }
     }
     
     private func splitCellURL(cellURL: URL) -> (URL, String?) {

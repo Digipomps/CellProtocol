@@ -67,6 +67,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
     }
     
     public func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        try IdentitySigningChallenge.validateSigningData(messageData, for: identity)
         guard let signaturePublisher = cloudBridge?.signMessageForIdentity(messageData: messageData, identity: identity) else {
             throw IdentityVaultError.publisherGone
         }
@@ -82,6 +83,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
         var signedData: Data?
         var signingError: Error?
         
+        try IdentitySigningChallenge.validateSigningData(messageData, for: identity)
         guard let signaturePublisher = cloudBridge?.signMessageForIdentity(messageData: messageData, identity: identity) else {
             throw IdentityVaultError.publisherGone
         }
@@ -119,6 +121,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
 
     public func signMessageForIdentity(messageData: Data, identity: Identity) throws -> AnyPublisher<Data, Error> {
         CellBase.diagnosticLog("BridgeIdentityVault.signMessage publisher uuid=\(identity.uuid)", domain: .identity)
+        try IdentitySigningChallenge.validateSigningData(messageData, for: identity)
         guard let signaturePublisher = cloudBridge?.signMessageForIdentity(messageData: messageData, identity: identity) else {
             throw IdentityVaultError.publisherGone
         }

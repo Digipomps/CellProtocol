@@ -193,6 +193,58 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertTrue(keys.contains("safe"))
     }
 
+    func testVaultRefusesToSignWhenPresentedIdentityKeyDiffersFromStoredKey() async throws {
+        let ownerVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = ownerVault
+        let owner = await ownerVault.identity(for: "private", makeNewIfNotFound: true)!
+
+        let forgedVault = MockIdentityVault()
+        var forgedOwner = Identity(owner.uuid, displayName: "forged-owner", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedOwner, for: "forged-owner")
+        forgedOwner.identityVault = ownerVault
+
+        let challenge = try IdentitySigningChallenge.signingData(
+            for: forgedOwner,
+            trustedIdentity: owner,
+            domain: "private",
+            resource: "test-cell",
+            action: "checkIdentityOrigin",
+            audience: "GeneralCellInterfaceTests",
+            nonce: Data("nonce".utf8)
+        )
+
+        do {
+            _ = try await ownerVault.signMessageForIdentity(messageData: challenge, identity: forgedOwner)
+            XCTFail("A vault must not sign with a stored private key for a presented Identity carrying a different public key.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("publicKeyMismatch"))
+        }
+    }
+
+    func testVaultRefusesToSignWhenPresentedIdentityKeyIsMissing() async throws {
+        let ownerVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = ownerVault
+        let owner = await ownerVault.identity(for: "private", makeNewIfNotFound: true)!
+        let strippedOwner = Identity(owner.uuid, displayName: "stripped-owner", identityVault: ownerVault)
+
+        let challenge = try IdentitySigningChallenge.signingData(
+            for: strippedOwner,
+            trustedIdentity: owner,
+            domain: "private",
+            resource: "test-cell",
+            action: "checkIdentityOrigin",
+            audience: "GeneralCellInterfaceTests",
+            nonce: Data("nonce".utf8)
+        )
+
+        do {
+            _ = try await ownerVault.signMessageForIdentity(messageData: challenge, identity: strippedOwner)
+            XCTFail("A vault must not sign for a presented Identity that lacks the stored public signing key.")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("publicKeyMismatch"))
+        }
+    }
+
     func testSignedContractAccessUsesStoredSignatoryPublicKeyNotUUID() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
@@ -236,6 +288,65 @@ final class GeneralCellInterfaceTests: XCTestCase {
         let value = try await cell.get(keypath: "shared", requester: member)
         XCTAssertEqual(value, .string("shared-ok"))
         try await CellContractHarness.assertGetDenied(on: cell, key: "shared", requester: forgedMember)
+    }
+
+    func testSignedContractsPersistAcrossGeneralCellDecode() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r--", for: "shared")
+        agreement.signatories.append(member)
+
+        let state = await cell.addAgreement(agreement, for: member)
+        XCTAssertEqual(state, .signed)
+
+        let encoded = try JSONEncoder().encode(cell)
+        let restored = try JSONDecoder().decode(GeneralCell.self, from: encoded)
+
+        let memberCanRead = await restored.validateAccess("r---", at: "shared", for: member)
+        XCTAssertTrue(memberCanRead)
+    }
+
+    func testResolverUsesCentralAuthorizationDecisionBeforeMeddle() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let resolver = CellResolver.sharedInstance
+        CellBase.defaultCellResolver = resolver
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await AuthorizationSpyCell(owner: owner)
+        let endpoint = "AuthSpy-\(UUID().uuidString)"
+
+        await cell.addInterceptForGet(requester: owner, key: "state") { _, _ in
+            .string("ok")
+        }
+        try await resolver.registerNamedEmitCell(
+            name: endpoint,
+            emitCell: cell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer {
+            Task {
+                await resolver.unregisterEmitCell(uuid: cell.uuid)
+            }
+        }
+
+        let value = try await resolver.get(
+            from: try XCTUnwrap(URL(string: "cell:///\(endpoint)/state")),
+            requester: owner
+        )
+
+        XCTAssertEqual(value, .string("ok"))
+        let authorizationDecisionCount = await cell.authorizationDecisionCount()
+        XCTAssertGreaterThanOrEqual(
+            authorizationDecisionCount,
+            2,
+            "Resolver should preflight through the same central authorization decision used by GeneralCell.get."
+        )
     }
 
     func testCellSpecificAccessHookAllowsSubclassManagedReadWithoutContract() async throws {
@@ -684,5 +795,46 @@ private final class CellSpecificAccessHarnessCell: GeneralCell {
 
     private static func accessKey(identity: Identity, access: String, keypath: String) -> String {
         "\(identity.uuid)|\(access)|\(keypath)"
+    }
+}
+
+private final class AuthorizationSpyCell: GeneralCell {
+    private let counter = AuthorizationDecisionCounter()
+
+    func authorizationDecisionCount() async -> Int {
+        await counter.value()
+    }
+
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    override func authorizationDecision(
+        requestedAccess: String,
+        at keypath: String,
+        for identity: Identity
+    ) async -> CellAuthorizationDecision {
+        await counter.increment()
+        return await super.authorizationDecision(
+            requestedAccess: requestedAccess,
+            at: keypath,
+            for: identity
+        )
+    }
+}
+
+private actor AuthorizationDecisionCounter {
+    private var count = 0
+
+    func increment() {
+        count += 1
+    }
+
+    func value() -> Int {
+        count
     }
 }

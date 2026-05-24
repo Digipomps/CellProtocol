@@ -11,14 +11,14 @@ public struct Permission : Codable, Equatable {
     static let w = 0b00000010 // write 2
     static let x = 0b00000001 // execute 4
 
-    static let rw = 0b00000011
+    static let rw = Permission.r | Permission.w
     static let rwx = 0b00000111
 //    static let rwxs = 0b00001111
     
     
 //    let user: Int
-    let group: Int
-    let other: Int
+    var group: Int
+    var other: Int
     
     
     public var permissionString: String {
@@ -76,29 +76,12 @@ public struct Permission : Codable, Equatable {
     }
     
     init(_ permissionDescription: String) {
-        
-        if permissionDescription.count == 3 {
-            
-            group = Permission.stringToPermissionInt(permissionDescription)
-            other = 0
-        } else if permissionDescription.count == 6 {
-            let groupIndex = permissionDescription.index(permissionDescription.startIndex, offsetBy: 3)
-//            let otherIndex = permissionDescription.index(permissionDescription.endIndex, offsetBy: -3)
-            
-            
-            let ownerStringDescription = permissionDescription.prefix(upTo: groupIndex)
-            group = Permission.stringToPermissionInt(ownerStringDescription)
-            
-//            let groupStringDescription = permissionDescription[groupRange]
-//            group = Permission.stringToPermissionInt(groupStringDescription)
-            
-            let otherStringDescription = permissionDescription[groupIndex...]
-            other = Permission.stringToPermissionInt( otherStringDescription )
-            
+        if let parsed = Permission.parse(permissionDescription) {
+            group = parsed.group
+            other = parsed.other
         } else {
             group = 0
             other = 0
-            
         }
         uuid = UUID.init().uuidString
     }
@@ -112,49 +95,77 @@ public struct Permission : Codable, Equatable {
         try container.encode(other, forKey: .other)
         
     }
+
+    static func parse(_ permissionDescription: String) -> (group: Int, other: Int)? {
+        let trimmed = permissionDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count == 3 {
+            guard let group = permissionTripletToInt(trimmed) else { return nil }
+            return (group, 0)
+        }
+
+        if trimmed.count == 4,
+           trimmed.last == "-",
+           let group = permissionTripletToInt(String(trimmed.prefix(3))) {
+            return (group, 0)
+        }
+
+        if trimmed.count == 6 {
+            let groupIndex = trimmed.index(trimmed.startIndex, offsetBy: 3)
+            guard
+                let group = permissionTripletToInt(String(trimmed.prefix(upTo: groupIndex))),
+                let other = permissionTripletToInt(String(trimmed[groupIndex...]))
+            else {
+                return nil
+            }
+            return (group, other)
+        }
+
+        return nil
+    }
+
     static func stringToPermissionInt(_ permissionString: String) -> Int {
-        var permission = 0
-        
-        let firstIndex = permissionString.index(permissionString.startIndex, offsetBy: 0)
-        let secondIndex = permissionString.index(permissionString.startIndex, offsetBy: 1)
-        let thirdIndex = permissionString.index(permissionString.startIndex, offsetBy: 2)
-//        let endIndex = permissionString.index(permissionString.endIndex, offsetBy: -1)
-        
-        if (permissionString[firstIndex] == "r") {
-            permission += Permission.r
-        }
-        
-        if (permissionString[secondIndex] == "w") {
-            permission += Permission.w
-        }
-        if (permissionString[thirdIndex] == "x") {
-            permission += Permission.x
-        }
-        
-//        print("permissionString: \(permissionString) gave permission: \(permission)")
-        return permission
+        return parse(permissionString)?.group ?? 0
     }
     
     static func stringToPermissionInt(_ permissionString: String.SubSequence) -> Int {
+        return stringToPermissionInt(String(permissionString))
+    }
+
+    private static func permissionTripletToInt(_ permissionString: String) -> Int? {
+        guard permissionString.count == 3 else { return nil }
         var permission = 0
-        
+
         let firstIndex = permissionString.index(permissionString.startIndex, offsetBy: 0)
         let secondIndex = permissionString.index(permissionString.startIndex, offsetBy: 1)
         let thirdIndex = permissionString.index(permissionString.startIndex, offsetBy: 2)
-//        let endIndex = permissionString.index(permissionString.endIndex, offsetBy: -1)
-        
-        if (permissionString[firstIndex] == "r") {
+
+        switch permissionString[firstIndex] {
+        case "r":
             permission += Permission.r
+        case "-":
+            break
+        default:
+            return nil
         }
-        
-        if (permissionString[secondIndex] == "w") {
+
+        switch permissionString[secondIndex] {
+        case "w":
             permission += Permission.w
+        case "-":
+            break
+        default:
+            return nil
         }
-        if (permissionString[thirdIndex] == "x") {
+
+        switch permissionString[thirdIndex] {
+        case "x":
             permission += Permission.x
+        case "-":
+            break
+        default:
+            return nil
         }
-        
-//        print("permissionString: \(permissionString) gave permission: \(permission)")
+
         return permission
     }
     
@@ -165,23 +176,38 @@ public struct Permission : Codable, Equatable {
          = 011
          */
         
+        guard permission != 0 else { return false }
         return group & permission == permission
     }
     
     func matchOtherPermission(permission: Int) -> Bool {
+        guard permission != 0 else { return false }
         return other & permission == permission
     }
     
     static func matchPermission(permissionRequested: String, permissionGranted: String) -> Bool {
-        return matchPermission(permissionRequested: stringToPermissionInt(permissionRequested), permissionGranted: stringToPermissionInt(permissionGranted))
+        guard
+            let requested = parse(permissionRequested),
+            let granted = parse(permissionGranted)
+        else {
+            return false
+        }
+        return matchPermission(permissionRequested: requested.group, permissionGranted: granted.group)
     }
     
     static func matchPermission(permissionRequested: Int, permissionGranted: Int) -> Bool {
+        guard permissionRequested != 0 else { return false }
         return permissionGranted & permissionRequested == permissionRequested
     }
     
-    func setPermissions(permissionString: String) {
-        let other = Permission.stringToPermissionInt(permissionString)
+    mutating func setPermissions(permissionString: String) {
+        if let parsed = Permission.parse(permissionString) {
+            group = parsed.group
+            other = parsed.other
+        } else {
+            group = 0
+            other = 0
+        }
     }
     
     mutating func isGrantedForIdentity(identity: Identity, group: GroupProtocol, requestedAccess: String) -> Bool {

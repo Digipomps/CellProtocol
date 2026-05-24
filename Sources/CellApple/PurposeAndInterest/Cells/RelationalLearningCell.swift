@@ -24,11 +24,9 @@ public final class RelationalLearningCell: GeneralCell {
         try super.init(from: decoder)
 
         Task {
-            if let vault = CellBase.defaultIdentityVault,
-               let owner = await vault.identity(for: "private", makeNewIfNotFound: true) {
-                await setupPermissions(owner: owner)
-                await setupKeys(owner: owner)
-            }
+            let decodedOwner = self.storedOwnerIdentity
+            await setupPermissions(owner: decodedOwner)
+            await setupKeys(owner: decodedOwner)
         }
     }
 

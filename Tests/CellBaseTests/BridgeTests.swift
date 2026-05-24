@@ -217,18 +217,22 @@ final class BridgeTests: XCTestCase {
 
     func testBridgeBaseSignMessageRoutesResponsesByCommandID() async throws {
         let transport = MockBridgeTransport()
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
         let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: owner)
+        let firstChallenge = try identityChallengeData(for: owner, nonce: "first")
+        let secondChallenge = try identityChallengeData(for: owner, nonce: "second")
 
         let firstPublisher = bridge.signMessageForIdentity(
-            messageData: Data("first".utf8),
+            messageData: firstChallenge,
             identity: owner
         )
         let secondPublisher = bridge.signMessageForIdentity(
-            messageData: Data("second".utf8),
+            messageData: secondChallenge,
             identity: owner
         )
 
@@ -239,7 +243,7 @@ final class BridgeTests: XCTestCase {
         let firstCommand = try XCTUnwrap(
             sentCommands.first(where: { command in
                 if case let .signData(data) = command.payload {
-                    return data == Data("first".utf8)
+                    return data == firstChallenge
                 }
                 return false
             })
@@ -247,14 +251,14 @@ final class BridgeTests: XCTestCase {
         let secondCommand = try XCTUnwrap(
             sentCommands.first(where: { command in
                 if case let .signData(data) = command.payload {
-                    return data == Data("second".utf8)
+                    return data == secondChallenge
                 }
                 return false
             })
         )
 
-        let firstExpected = Data("signature-one".utf8)
-        let secondExpected = Data("signature-two".utf8)
+        let firstExpected = try await vault.signMessageForIdentity(messageData: firstChallenge, identity: owner)
+        let secondExpected = try await vault.signMessageForIdentity(messageData: secondChallenge, identity: owner)
 
         try await bridge.consumeResponse(
             command: BridgeCommand(
@@ -281,19 +285,22 @@ final class BridgeTests: XCTestCase {
 
     func testBridgeIdentityVaultAsyncSigningReturnsResponseSignature() async throws {
         let transport = MockBridgeTransport()
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let localVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = localVault
+        let owner = await localVault.identity(for: "owner", makeNewIfNotFound: true)!
         let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: owner)
         let vault = BridgeIdentityVault(cloudBridge: bridge)
+        let challenge = try identityChallengeData(for: owner, nonce: "bridge-vault")
 
-        async let signature = vault.signMessageForIdentity(messageData: Data("payload".utf8), identity: owner)
+        async let signature = vault.signMessageForIdentity(messageData: challenge, identity: owner)
         let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let request = try XCTUnwrap(sentCommands.first)
-        let expectedSignature = Data("bridge-signature".utf8)
+        let expectedSignature = try await localVault.signMessageForIdentity(messageData: challenge, identity: owner)
         try await bridge.consumeResponse(
             command: BridgeCommand(
                 cmd: Command.response.rawValue,
@@ -305,6 +312,173 @@ final class BridgeTests: XCTestCase {
 
         let resolvedSignature = try await signature
         XCTAssertEqual(resolvedSignature, expectedSignature)
+    }
+
+    func testBridgeBaseSignMessageRequiresReadyBeforeSending() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        let challenge = try identityChallengeData(for: owner, nonce: "not-ready")
+
+        let publisher = bridge.signMessageForIdentity(
+            messageData: challenge,
+            identity: owner
+        )
+
+        do {
+            _ = try await publisher.getOneWithTimeout(1)
+            XCTFail("Expected bridge signing to require a ready session")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("denied"))
+        }
+        XCTAssertTrue(transport.sentData.isEmpty)
+    }
+
+    func testBridgeBaseSignMessageRejectsUnverifiedSignatureResponse() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "forged-response")
+
+        let publisher = bridge.signMessageForIdentity(
+            messageData: challenge,
+            identity: owner
+        )
+        async let signature = publisher.getOneWithTimeout(1)
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let request = try XCTUnwrap(sentCommands.first)
+
+        try await bridge.consumeResponse(
+            command: BridgeCommand(
+                cmd: Command.response.rawValue,
+                identity: owner,
+                payload: .signature(Data("forged-signature".utf8)),
+                cid: request.cid
+            )
+        )
+
+        do {
+            _ = try await signature
+            XCTFail("Expected unverified bridge signature response to be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("signingFailed"))
+        }
+    }
+
+    func testBridgeBaseSignMessageRejectsRawPayloadBeforeSending() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+
+        let publisher = bridge.signMessageForIdentity(
+            messageData: Data("raw bytes must not be bridge-signed".utf8),
+            identity: owner
+        )
+
+        do {
+            _ = try await publisher.getOneWithTimeout(1)
+            XCTFail("Expected raw bridge signing request to be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("invalidPayload"))
+        }
+        XCTAssertTrue(transport.sentData.isEmpty)
+    }
+
+    func testBridgeBaseSignMessageRejectsWrongPurposeChallengeBeforeSending() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+
+        let challenge = IdentitySigningChallenge(
+            purpose: "not-identity-origin-proof",
+            identityUUID: owner.uuid,
+            publicKeyFingerprint: owner.signingPublicKeyFingerprint,
+            domain: "bridge-test",
+            resource: "bridge",
+            action: "sign",
+            audience: "BridgeTests",
+            nonce: Data("wrong-purpose".utf8)
+        )
+        let publisher = bridge.signMessageForIdentity(
+            messageData: try JSONEncoder().encode(challenge),
+            identity: owner
+        )
+
+        do {
+            _ = try await publisher.getOneWithTimeout(1)
+            XCTFail("Expected wrong-purpose bridge signing request to be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("wrongPurpose"))
+        }
+        XCTAssertTrue(transport.sentData.isEmpty)
+    }
+
+    func testInboundBridgeSignCommandRejectsRawPayload() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+
+        let command = BridgeCommand(
+            cmd: Command.sign.rawValue,
+            identity: owner,
+            payload: .signData(Data("raw inbound sign".utf8)),
+            cid: 99
+        )
+        try await bridge.consumeCommand(command: command)
+
+        XCTAssertEqual(transport.sentData.count, 1)
+        let response = try JSONDecoder().decode(BridgeCommand.self, from: transport.sentData[0])
+        XCTAssertEqual(response.command, .response)
+        if case let .string(message) = response.payload {
+            XCTAssertTrue(message.contains("signing denied"))
+        } else {
+            XCTFail("Expected signing denied string response")
+        }
+    }
+
+    func testInboundBridgeSignCommandRejectsValidChallengeBeforeReady() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        let challenge = try identityChallengeData(for: owner, nonce: "inbound-not-ready")
+
+        let command = BridgeCommand(
+            cmd: Command.sign.rawValue,
+            identity: owner,
+            payload: .signData(challenge),
+            cid: 100
+        )
+        try await bridge.consumeCommand(command: command)
+
+        XCTAssertEqual(transport.sentData.count, 1)
+        let response = try JSONDecoder().decode(BridgeCommand.self, from: transport.sentData[0])
+        XCTAssertEqual(response.command, .response)
+        if case let .string(message) = response.payload {
+            XCTAssertTrue(message.contains("not ready"))
+        } else {
+            XCTFail("Expected signing denied string response")
+        }
     }
 
     func testBridgeBaseAdmitRoutesConcurrentResponsesByCommandID() async throws {
@@ -522,6 +696,18 @@ final class BridgeTests: XCTestCase {
         let data = try JSONEncoder().encode(command)
         let object = try JSONSerialization.jsonObject(with: data)
         return try XCTUnwrap(object as? [String: Any])
+    }
+
+    private func identityChallengeData(for identity: Identity, nonce: String) throws -> Data {
+        try IdentitySigningChallenge.signingData(
+            for: identity,
+            trustedIdentity: identity,
+            domain: "bridge-test",
+            resource: "bridge",
+            action: "sign",
+            audience: "BridgeTests",
+            nonce: Data(nonce.utf8)
+        )
     }
 }
 

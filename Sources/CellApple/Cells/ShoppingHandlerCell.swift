@@ -48,11 +48,9 @@ public class ShoppingHandlerCell: GeneralCell {
         
         // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
         Task {
-                if let vault = CellBase.defaultIdentityVault,
-                   let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
-                    await setupPermissions(owner: requester)
-                    await setupKeys(owner: requester)
-                }
+            let decodedOwner = self.storedOwnerIdentity
+            await setupPermissions(owner: decodedOwner)
+            await setupKeys(owner: decodedOwner)
         }
         
     }

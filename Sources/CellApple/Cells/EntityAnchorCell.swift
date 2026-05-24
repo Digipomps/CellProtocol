@@ -423,13 +423,28 @@ public class EntityAnchorCell: GeneralCell {
         // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
         Task {
             await initialLoading()
-            if let vault = CellBase.defaultIdentityVault,
-               let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) { // Mayby fetch the Identity from json - or does that pose a security issue -> yes! Look into that...
-                await setupPermissions(owner: requester)
-                await setupKeys(owner: requester)
-            }
+            let requester = await restoredOwnerForDecodedCell()
+            await setupPermissions(owner: requester)
+            await setupKeys(owner: requester)
         }
         
+    }
+
+    private func restoredOwnerForDecodedCell() async -> Identity {
+        let decodedOwner = storedOwnerIdentity
+        guard
+            let vault = CellBase.defaultIdentityVault,
+            let vaultOwner = await vault.identity(forUUID: decodedOwner.uuid)
+        else {
+            return decodedOwner
+        }
+        guard let decodedFingerprint = decodedOwner.signingPublicKeyFingerprint else {
+            return vaultOwner
+        }
+        if decodedFingerprint == vaultOwner.signingPublicKeyFingerprint {
+            return vaultOwner
+        }
+        return decodedOwner
     }
     
     public override func encode(to encoder: Encoder) throws {

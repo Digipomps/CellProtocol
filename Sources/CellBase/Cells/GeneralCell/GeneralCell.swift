@@ -15,7 +15,7 @@ enum GeneralCellErrors: Error {
 }
 
 
-open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
+open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizationDeciding {
     var ttl = 7776000 // 90 days
     var schemaDict = Object()
     var schemaDescriptionDict = Object()
@@ -104,6 +104,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     
     private var intercepts = Intercepts()
     private var auditor = GeneralAuditor()
+    private var persistedContracts = [Contract]()
+    private var persistedMembers = [Identity]()
     
     
     
@@ -123,6 +125,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     public func getOwner(requester: Identity) async throws  -> Identity {
         // test access throw denied
         return owner
+    }
+
+    public var storedOwnerIdentity: Identity {
+        owner
     }
     
     public init() async { // This should only be used while we are developing
@@ -161,6 +167,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         case cellScope
         case persistancy
         case name
+        case contracts
+        case members
     }
     
     public required init(from decoder: Decoder) throws {
@@ -182,6 +190,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         identityDomain = try values.decode(String.self, forKey: .identityDomain)
         self.cellScopeInternal = try values.decode(CellUsageScope.self, forKey: .cellScope)
         self.persistancy = try values.decode(Persistancy.self, forKey: .persistancy)
+        self.persistedContracts = (try? values.decodeIfPresent([Contract].self, forKey: .contracts)) ?? []
+        self.persistedMembers = (try? values.decodeIfPresent([Identity].self, forKey: .members)) ?? []
         
         if let tmpName = try values.decodeIfPresent(String.self, forKey: .name) {
             name = tmpName
@@ -201,6 +211,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         try container.encode(self.owner, forKey: .owner)
         try container.encode(cellScopeInternal, forKey: .cellScope)
         try container.encode(persistancy, forKey: .persistancy)
+        try container.encode(persistedContracts, forKey: .contracts)
+        try container.encode(persistedMembers, forKey: .members)
         
             }
     
@@ -826,14 +838,27 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         }
         
         if await allConditionsResolved(agreement.conditions, context: context) {
-            
-            await self.auditor.addContract(agreement)
-            await self.auditor.addMember(identity)
-            
-        
-            // sign contract
             agreement.state = .signed
-            // cache grants?
+            if !agreement.signatories.contains(where: { identitiesReferenceSame($0, identity) }) {
+                agreement.signatories.append(identity)
+            }
+            do {
+                let contract = try await Contract.signed(
+                    agreement: agreement,
+                    issuer: owner,
+                    subject: identity,
+                    domain: identityDomain
+                )
+                await self.auditor.addContract(contract)
+                await self.auditor.addMember(identity)
+                persistedContracts.removeAll(where: { $0.uuid == contract.uuid })
+                persistedContracts.append(contract)
+                persistedMembers.removeAll(where: { $0.uuid == identity.uuid })
+                persistedMembers.append(identity)
+            } catch {
+                CellBase.diagnosticLog("Signing contract failed: \(error)", domain: .contracts)
+                agreement.state = .rejected
+            }
         } else {
             agreement.state = .rejected
             
@@ -1046,7 +1071,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
         var isMember = false
         if await validateAccess("r---", at: "isMember", for: requester) {
             
-            isMember = await auditor.loadMembers().contains(where: { $0.uuid == uuid })
+            isMember = await authorizationMembers().contains(where: { $0.uuid == uuid })
             CellBase.diagnosticLog("isMember uuid=\(uuid) result=\(isMember)", domain: .flow)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access for isMember"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
@@ -1057,6 +1082,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     public func removeMember(member: Identity, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
             await self.auditor.removeMember(member)
+            persistedMembers.removeAll(where: { $0.uuid == member.uuid })
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
         }
@@ -1065,6 +1091,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     public func removeMember(uuid: String, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
             await self.auditor.removeMember(uuid)
+            persistedMembers.removeAll(where: { $0.uuid == uuid })
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
         }
@@ -1072,49 +1099,84 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
     
     // Utility methods
     open func validateAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
-        if CellBase.debugValidateAccessForEverything {
-            return true
+        await authorizationDecision(
+            requestedAccess: requestedAccess,
+            at: keypath,
+            for: identity
+        ).allowed
+    }
+
+    open func authorizationDecision(
+        requestedAccess: String,
+        at keypath: String,
+        for identity: Identity
+    ) async -> CellAuthorizationDecision {
+        let request = CellAuthorizationRequest(
+            cellUUID: uuid,
+            identityDomain: identityDomain,
+            keypath: keypath,
+            requestedAccess: requestedAccess,
+            requester: identity
+        )
+        let ownerReferenceMatches = identitiesReferenceSame(owner, identity)
+        let ownerProofValid = ownerReferenceMatches
+            ? await checkIdentityOrigin(identity, against: owner)
+            : false
+        if ownerReferenceMatches && !ownerProofValid {
+            print("General. Got owner identity but it failed to prove ownership!")
         }
-        var accessGranted = false
-        let grant = Grant(keypath: keypath, permission: requestedAccess)
-        if identitiesReferenceSame(owner, identity) {
-            let ownerCheck = await checkIdentityOrigin(identity, against: owner)
-            if ownerCheck {
-                return true
-            } else {
-                print("General. Got owner identity but it failed to prove ownership!")
-                return false
-            }
-            
-        }
-        let contracts = await contractsForIdentity(identity)
-        for currentContract in contracts { // usually only one contract
-            if currentContract.checkGrant(requestedGrant: grant) {
-                accessGranted = true
-                break
-            }
-        }
-        if accessGranted {
-            return true
-        }
-        return await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
+        let contracts = ownerReferenceMatches ? [] : await contractsForIdentity(identity)
+        let cellSpecificAllowed = ownerReferenceMatches
+            ? false
+            : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
+
+        return CellAuthorizationPolicy.decide(
+            request: request,
+            ownerReferenceMatches: ownerReferenceMatches,
+            ownerProofValid: ownerProofValid,
+            contracts: contracts,
+            cellSpecificAllowed: cellSpecificAllowed
+        )
     }
 
     open func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
         false
     }
+
+    private func authorizationContracts() async -> [Contract] {
+        let contracts = await auditor.loadContracts()
+        if contracts.isEmpty && !persistedContracts.isEmpty {
+            await auditor.replaceContracts(persistedContracts)
+            return persistedContracts
+        }
+        return contracts
+    }
+
+    private func authorizationMembers() async -> [Identity] {
+        let members = await auditor.loadMembers()
+        if members.isEmpty && !persistedMembers.isEmpty {
+            await auditor.replaceMembers(persistedMembers)
+            return persistedMembers
+        }
+        return members
+    }
     
     func contractsForIdentity(_ identity: Identity) async -> [Agreement] {
         var relevantContracts = [Agreement]()
-        for currentContract in await auditor.loadContracts() {
+        for currentContract in await authorizationContracts() {
+            guard await currentContract.verifySignature() else {
+                continue
+            }
             guard
-                let trustedSignatory = currentContract.signatories.first(where: { identitiesReferenceSame($0, identity) }),
+                identitiesReferenceSame(currentContract.subject, identity),
+                await checkIdentityOrigin(identity, against: currentContract.subject),
+                let trustedSignatory = currentContract.agreement.signatories.first(where: { identitiesReferenceSame($0, identity) }),
                 await checkIdentityOrigin(identity, against: trustedSignatory)
             else {
                 continue
             }
-            if currentContract.signatories.contains(where: { identitiesReferenceSame($0, trustedSignatory) }) {
-                relevantContracts.append(currentContract)
+            if currentContract.agreement.signatories.contains(where: { identitiesReferenceSame($0, trustedSignatory) }) {
+                relevantContracts.append(currentContract.agreement)
             }
         }
         return relevantContracts
@@ -1127,11 +1189,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
             identityState = IdentityState.owner
         } else {
             
-            let contained = await auditor.loadMembers().contains { subMemberIdentity in
+            let members = await authorizationMembers()
+            let contained = members.contains { subMemberIdentity in
                 return identitiesReferenceSame(subMemberIdentity, identity)
             }
             if contained,
-               let trustedMember = await auditor.loadMembers().first(where: { identitiesReferenceSame($0, identity) }),
+               let trustedMember = members.first(where: { identitiesReferenceSame($0, identity) }),
                await checkIdentityOrigin(identity, against: trustedMember) {
                 identityState = .member
             }
@@ -1157,8 +1220,24 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
             print("Get random bytes failed")
             return false
         }
-        
-        guard let signedData = try? await identity.sign(data: signData) else {
+
+        let challengeData: Data
+        do {
+            challengeData = try IdentitySigningChallenge.signingData(
+                for: identity,
+                trustedIdentity: trustedIdentity,
+                domain: identityDomain,
+                resource: uuid,
+                action: "checkIdentityOrigin",
+                audience: "GeneralCell",
+                nonce: signData
+            )
+        } catch {
+            print("Could not create identity signing challenge: \(error)")
+            return false
+        }
+
+        guard let signedData = try? await identity.sign(data: challengeData) else {
             print("Got no signed data!")
             return false
         }
@@ -1166,19 +1245,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable {
             print("No vault available to verify identity: \(trustedIdentity.uuid)")
             return false
         }
-        return (try? await verificationVault.verifySignature(signature: signedData, messageData: signData, for: trustedIdentity)) ?? false
+        return (try? await verificationVault.verifySignature(signature: signedData, messageData: challengeData, for: trustedIdentity)) ?? false
     }
 
     func identitiesReferenceSame(_ trustedIdentity: Identity, _ presentedIdentity: Identity) -> Bool {
-        if let trustedPublicKey = trustedIdentity.publicSecureKey?.compressedKey,
-           trustedPublicKey.isEmpty == false,
-           let presentedPublicKey = presentedIdentity.publicSecureKey?.compressedKey,
-           presentedPublicKey.isEmpty == false,
-           trustedIdentity.publicSecureKey?.algorithm == presentedIdentity.publicSecureKey?.algorithm,
-           trustedIdentity.publicSecureKey?.curveType == presentedIdentity.publicSecureKey?.curveType {
-            return trustedPublicKey == presentedPublicKey
+        guard
+            trustedIdentity.uuid == presentedIdentity.uuid,
+            let trustedFingerprint = trustedIdentity.signingPublicKeyFingerprint,
+            let presentedFingerprint = presentedIdentity.signingPublicKeyFingerprint
+        else {
+            return false
         }
-        return trustedIdentity.uuid == presentedIdentity.uuid
+        return trustedFingerprint == presentedFingerprint
     }
     
     func defaultIdentity() async throws -> Identity {

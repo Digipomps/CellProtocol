@@ -187,6 +187,62 @@ final class AppleIdentityVaultKeyStorageTests: XCTestCase {
         XCTAssertTrue(verified)
     }
 
+    func testSignMessageForIdentityRequiresPresentedPublicKeyToMatchStoredIdentity() async throws {
+        let ownerContext = "apple-vault-owner-\(UUID().uuidString)"
+        let forgedContext = "apple-vault-forged-\(UUID().uuidString)"
+        let vault = IdentityVault.shared
+
+        guard let owner = await vault.identity(for: ownerContext, makeNewIfNotFound: true),
+              let forgedSource = await vault.identity(for: forgedContext, makeNewIfNotFound: true) else {
+            XCTFail("Expected vault identities")
+            return
+        }
+        defer {
+            deletePrivateKeyIfPresent(for: owner.uuid)
+            deletePrivateKeyIfPresent(for: forgedSource.uuid)
+        }
+        if owner.signingPublicKeyFingerprint == nil || forgedSource.signingPublicKeyFingerprint == nil {
+            throw XCTSkip("Keychain-backed key generation is unavailable in this test environment")
+        }
+
+        let strippedOwner = Identity(owner.uuid, displayName: "Stripped owner", identityVault: vault)
+        let strippedChallenge = try IdentitySigningChallenge.signingData(
+            for: strippedOwner,
+            trustedIdentity: owner,
+            domain: "apple-vault",
+            resource: "identity",
+            action: "sign",
+            audience: "AppleIdentityVaultKeyStorageTests",
+            nonce: Data("stripped".utf8)
+        )
+
+        do {
+            _ = try await vault.signMessageForIdentity(messageData: strippedChallenge, identity: strippedOwner)
+            XCTFail("Expected signing to fail when the presented public signing key is missing")
+        } catch {
+            XCTAssertEqual(String(describing: error), "signingFailed")
+        }
+
+        let forgedOwner = Identity(owner.uuid, displayName: "Forged owner", identityVault: vault)
+        forgedOwner.publicSecureKey = forgedSource.publicSecureKey
+        let forgedChallenge = try IdentitySigningChallenge.signingData(
+            for: forgedOwner,
+            trustedIdentity: owner,
+            domain: "apple-vault",
+            resource: "identity",
+            action: "sign",
+            audience: "AppleIdentityVaultKeyStorageTests",
+            nonce: Data("forged".utf8)
+        )
+
+        do {
+            _ = try await vault.signMessageForIdentity(messageData: forgedChallenge, identity: forgedOwner)
+            XCTFail("Expected signing to fail when the presented public signing key differs from the stored identity")
+        } catch {
+            XCTAssertEqual(String(describing: error), "signingFailed")
+        }
+    }
+
     func testVerifySignatureFailsWhenIdentityHasNoPublicSigningKey() async throws {
         let uuid = UUID().uuidString
         defer { deletePrivateKeyIfPresent(for: uuid) }

@@ -48,10 +48,17 @@ actor MockIdentityVault: IdentityVaultProtocol {
     }
 
     func identityExistInVault(_ identity: Identity) async -> Bool {
-        identitiesByContext.values.contains { $0.uuid == identity.uuid }
+        identitiesByContext.values.contains { storedIdentity in
+            guard storedIdentity.uuid == identity.uuid else { return false }
+            return publicSigningKeyMatches(requested: identity, stored: storedIdentity)
+        }
     }
 
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        if let storedIdentity = await self.identity(forUUID: identity.uuid),
+           !publicSigningKeyMatches(requested: identity, stored: storedIdentity) {
+            throw MockIdentityVaultError.publicKeyMismatch
+        }
         guard let privateKey = privateKeysByUUID[identity.uuid] else {
             throw MockIdentityVaultError.noPrivateKey
         }
@@ -92,7 +99,18 @@ actor MockIdentityVault: IdentityVaultProtocol {
         }
     }
 
+    private func publicSigningKeyMatches(requested: Identity, stored: Identity) -> Bool {
+        guard
+            let requestedFingerprint = requested.signingPublicKeyFingerprint,
+            let storedFingerprint = stored.signingPublicKeyFingerprint
+        else {
+            return false
+        }
+        return requestedFingerprint == storedFingerprint
+    }
+
     enum MockIdentityVaultError: Error {
         case noPrivateKey
+        case publicKeyMismatch
     }
 }

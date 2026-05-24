@@ -78,22 +78,22 @@ public class Agreement: Codable, Grantable {
 
         if let rawState = try? values.decodeIfPresent(String.self, forKey: .state) {
             CellBase.diagnosticLog(
-                "Agreement decoded legacy/unknown state '\(rawState)'; defaulting to signed",
+                "Agreement decoded legacy/unknown state '\(rawState)'; defaulting to template",
                 domain: .agreement
             )
         } else if values.contains(.state) {
             CellBase.diagnosticLog(
-                "Agreement decoded unreadable legacy state; defaulting to signed",
+                "Agreement decoded unreadable legacy state; defaulting to template",
                 domain: .agreement
             )
         } else {
             CellBase.diagnosticLog(
-                "Agreement decoded legacy payload without state; defaulting to signed",
+                "Agreement decoded legacy payload without state; defaulting to template",
                 domain: .agreement
             )
         }
 
-        return .signed
+        return .template
     }
     
     public init(owner: Identity) {

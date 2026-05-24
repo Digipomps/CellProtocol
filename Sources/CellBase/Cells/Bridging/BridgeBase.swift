@@ -23,6 +23,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private typealias ConnectPromise = (Result<ConnectState, Error>) -> Void
     private typealias ContractPromise = (Result<AgreementState, Error>) -> Void
     private typealias SignPromise = (Result<Data, Error>) -> Void
+    private struct SignRequest {
+        var promise: SignPromise
+        var identity: Identity
+        var messageData: Data
+    }
     
     
     
@@ -88,7 +93,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var keysCallbackDataPublishers = [String: PassthroughSubject<ValueType, Error>]()
     private var keysCallbackCancellables = [String : AnyCancellable]()
     
-    private var signCallbackPromises = [Int: SignPromise]()
+    private var signCallbackRequests = [Int: SignRequest]()
     private var signCallbackDataPublisher: PassthroughSubject<Data, Error>?
     private var signCallbackCancellable: AnyCancellable?
     
@@ -218,12 +223,18 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func storeSignPromise(
+    private func storeSignRequest(
         _ promise: @escaping SignPromise,
+        identity: Identity,
+        messageData: Data,
         for commandID: Int
     ) {
         withCallbackStateLock {
-            signCallbackPromises[commandID] = promise
+            signCallbackRequests[commandID] = SignRequest(
+                promise: promise,
+                identity: identity,
+                messageData: messageData
+            )
         }
     }
 
@@ -323,11 +334,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func takeSignPromise(for commandID: Int) -> SignPromise? {
+    private func takeSignRequest(for commandID: Int) -> SignRequest? {
         withCallbackStateLock {
-            let promise = signCallbackPromises[commandID]
-            signCallbackPromises[commandID] = nil
-            return promise
+            let request = signCallbackRequests[commandID]
+            signCallbackRequests[commandID] = nil
+            return request
         }
     }
 
@@ -808,8 +819,19 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func signMessageForIdentity(messageData: Data, identity: Identity) -> AnyPublisher<Data, Error> {
         Deferred { [weak self] () -> Future<Data, Error> in
             Future { promise in
+                do {
+                    try IdentitySigningChallenge.validateSigningData(messageData, for: identity)
+                } catch {
+                    promise(.failure(error))
+                    return
+                }
+
                 guard let self else {
                     promise(.failure(BridgeError.someError))
+                    return
+                }
+                guard self.ready else {
+                    promise(.failure(BridgeError.denied))
                     return
                 }
 
@@ -821,19 +843,24 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         payload: .signData(messageData),
                         cid: commandID
                     )
-                    self.storeSignPromise(promise, for: commandID)
+                    self.storeSignRequest(
+                        promise,
+                        identity: identity,
+                        messageData: messageData,
+                        for: commandID
+                    )
                     await self.auditor.storeBridgeCommand(bridgeCommand, for: commandID)
 
                     guard let bridgeCommandJSON = try? JSONEncoder().encode(bridgeCommand),
                           let transport = self.transport else {
-                        self.takeSignPromise(for: commandID)?(.failure(BridgeError.someError))
+                        self.takeSignRequest(for: commandID)?.promise(.failure(BridgeError.someError))
                         return
                     }
 
                     do {
                         try await transport.sendData(bridgeCommandJSON)
                     } catch {
-                        self.takeSignPromise(for: commandID)?(.failure(error))
+                        self.takeSignRequest(for: commandID)?.promise(.failure(error))
                     }
                 }
             }
@@ -1032,6 +1059,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                    case let .signData(value) = sentPayload,
                    let identity = command.identity
                 {
+                    do {
+                        try IdentitySigningChallenge.validateSigningData(value, for: identity)
+                    } catch {
+                        bridgeLog("Rejected bridge signing request: \(error)")
+                        let response = BridgeCommand(cmd: "response", payload: .string("signing denied: \(error)"), cid: command.cid)
+                        if let responseJSONData = try? JSONEncoder().encode(response),
+                           let transport = transport {
+                            try? await transport.sendData(responseJSONData)
+                        }
+                        return
+                    }
+                    guard ready else {
+                        bridgeLog("Rejected bridge signing request before ready session")
+                        let response = BridgeCommand(cmd: "response", payload: .string("signing denied: bridge session is not ready"), cid: command.cid)
+                        if let responseJSONData = try? JSONEncoder().encode(response),
+                           let transport = transport {
+                            try? await transport.sendData(responseJSONData)
+                        }
+                        return
+                    }
                     
                     Task {
                         do {
@@ -1276,15 +1323,30 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 
             case .sign:
                 bridgeLog("Got sign response")
-                let promise = takeSignPromise(for: command.cid)
+                let signRequest = takeSignRequest(for: command.cid)
                 switch command.payload {
                 case let .signature(value):
-                    promise?(.success(value))
+                    guard let signRequest else {
+                        bridgeLog("No pending sign request for response cid=\(command.cid)")
+                        return
+                    }
+                    let verifier = signRequest.identity.identityVault ?? CellBase.defaultIdentityVault ?? BridgeIdentityVault()
+                    let verified = (try? await verifier.verifySignature(
+                        signature: value,
+                        messageData: signRequest.messageData,
+                        for: signRequest.identity
+                    )) ?? false
+                    guard verified else {
+                        bridgeLog("Bridge sign response failed verification for cid=\(command.cid)")
+                        signRequest.promise(.failure(IdentityVaultError.signingFailed))
+                        return
+                    }
+                    signRequest.promise(.success(value))
                     
                     
                 default:
                     bridgeLog("Did not get signature as payload")
-                    promise?(.failure(ValueTypeError.unexpectedValueType))
+                    signRequest?.promise(.failure(ValueTypeError.unexpectedValueType))
                 }
             
              

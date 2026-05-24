@@ -498,10 +498,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     
     // This may have to change - should we just check on identityContext?
     public func identityExistInVault(_ identity: Identity) async -> Bool {
-        if identitiesUUIDDictionary[identity.uuid] != nil {
-            return true
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid] else {
+            return false
         }
-        return false
+        return signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity)
     }
 
     func identityExistsInVault(uuid: String) async -> Bool {
@@ -514,8 +514,21 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             print("Did not find vault identity for \(identity.uuid)")
             throw IdentityVaultError.noVaultIdentity
         }
+        guard signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity) else {
+            throw IdentityVaultError.signingFailed
+        }
         let signatureData = try self.signMessageForVaultIdentity(messageData: messageData, vaultIdentity: vaultIdentity)
         return signatureData
+    }
+
+    private func signingPublicKeyMatches(requested: Identity, stored: Identity) -> Bool {
+        guard
+            let requestedFingerprint = requested.signingPublicKeyFingerprint,
+            let storedFingerprint = stored.signingPublicKeyFingerprint
+        else {
+            return false
+        }
+        return requestedFingerprint == storedFingerprint
     }
     
     
