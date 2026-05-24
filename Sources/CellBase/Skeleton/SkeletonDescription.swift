@@ -58,6 +58,7 @@ public struct SkeletonModifiers: Codable {
     public var accessibilityDragLabel: String?
     public var dropTargetRole: String?
     public var acceptedDragRoles: [String]?
+    public var dropTargetPayloadKeypath: String?
     public var dropActionKeypath: String?
     public var dropIntents: [String]?
     public var dropValidationStateKeypath: String?

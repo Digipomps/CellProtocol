@@ -642,6 +642,7 @@ final class SkeletonTests: XCTestCase {
         var modifiers = SkeletonModifiers()
         modifiers.dropTargetRole = "chat-invite-slot"
         modifiers.acceptedDragRoles = ["person"]
+        modifiers.dropTargetPayloadKeypath = "directory.state.selectedSlot"
         modifiers.dropActionKeypath = "chatHub.drop.receive"
         modifiers.dropIntents = ["add"]
         modifiers.dropValidationStateKeypath = "chatHub.state.drop.validationState"
@@ -653,6 +654,7 @@ final class SkeletonTests: XCTestCase {
 
         XCTAssertEqual(json["dropTargetRole"] as? String, "chat-invite-slot")
         XCTAssertEqual(json["acceptedDragRoles"] as? [String], ["person"])
+        XCTAssertEqual(json["dropTargetPayloadKeypath"] as? String, "directory.state.selectedSlot")
         XCTAssertEqual(json["dropActionKeypath"] as? String, "chatHub.drop.receive")
         XCTAssertEqual(json["dropIntents"] as? [String], ["add"])
         XCTAssertEqual(json["dropValidationStateKeypath"] as? String, "chatHub.state.drop.validationState")
@@ -667,6 +669,7 @@ final class SkeletonTests: XCTestCase {
           "dragPayloadKeypath": "workspace.state.selected.publicSafeDragPayload",
           "dropTargetRole": "workspace-attach-slot",
           "acceptedDragRoles": ["component", "cell"],
+          "dropTargetPayloadKeypath": "workspace.state.target",
           "dropActionKeypath": "workspace.drop.receive",
           "dropIntents": ["attach"]
         }
@@ -678,6 +681,7 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(modifiers.dragPayloadKeypath, "workspace.state.selected.publicSafeDragPayload")
         XCTAssertEqual(modifiers.dropTargetRole, "workspace-attach-slot")
         XCTAssertEqual(modifiers.acceptedDragRoles, ["component", "cell"])
+        XCTAssertEqual(modifiers.dropTargetPayloadKeypath, "workspace.state.target")
         XCTAssertEqual(modifiers.dropActionKeypath, "workspace.drop.receive")
         XCTAssertEqual(modifiers.dropIntents, ["attach"])
         XCTAssertNil(modifiers.motionHint)
