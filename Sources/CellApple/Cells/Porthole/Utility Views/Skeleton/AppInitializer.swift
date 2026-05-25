@@ -23,6 +23,7 @@ public enum AppInitializer {
     /// Call this from your App's init or the first scene's task.
     @MainActor
     public static func prepareLocalRuntime() async {
+        await ensureLocalRuntimeIdentityVault()
         if didPrepareLocalRuntime { return }
         if let localPreparationTask {
             await localPreparationTask.value
@@ -61,7 +62,7 @@ public enum AppInitializer {
                 if CellBase.hostname != "localhost", CellBase.hostname != "" {
                     resolver.registerRemoteCellHost(
                         CellBase.hostname,
-                        route: RemoteCellHostRoute(websocketEndpoint: "publishersws", schemePreference: .automatic)
+                        route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .automatic)
                     )
                 }
 
@@ -79,6 +80,12 @@ public enum AppInitializer {
         }
         localPreparationTask = task
         await task.value
+    }
+
+    private static func ensureLocalRuntimeIdentityVault() async {
+        if CellBase.defaultIdentityVault == nil {
+            CellBase.defaultIdentityVault = await EphemeralIdentityVault().initialize()
+        }
     }
 
     @MainActor
@@ -132,16 +139,29 @@ public enum AppInitializer {
             return true
         }
 
-        guard environment["XCTestConfigurationFilePath"] != nil,
-              let mode = environment["BINDING_VERIFIER_IDENTITY_MODE"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(),
-              !mode.isEmpty else {
+        let isRunningTests = environment["XCTestConfigurationFilePath"] != nil
+            || Bundle.main.bundlePath.hasSuffix(".xctest")
+            || ProcessInfo.processInfo.arguments.contains { argument in
+                argument.hasSuffix(".xctest") || argument.contains(".xctest/")
+            }
+        guard isRunningTests else {
             return false
         }
 
+        let configuredMode = environment["BINDING_VERIFIER_IDENTITY_MODE"]
+            ?? environment["HAVEN_APP_INITIALIZER_IDENTITY_MODE"]
+
+        guard let mode = configuredMode?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+              !mode.isEmpty else {
+            return true
+        }
+
         switch mode {
-        case "startup", "local", "test", "deterministic":
+        case "apple", "keychain", "production":
+            return false
+        case "startup", "local", "test", "deterministic", "ephemeral":
             return true
         default:
             return false

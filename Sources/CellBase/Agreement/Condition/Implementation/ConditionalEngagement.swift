@@ -28,7 +28,7 @@ public struct ConditionalEngagement: Codable, Condition, ConnectChallengeProvidi
         self.uuid = UUID().uuidString
         self.name = "Conditional Engagement Condition"
         self.condition = GrantCondition(requestedGrant: "identity.accessToken", requestedPermission: "r---")// Change to something useful or drop this initializer?
-        self.engagement = CellConfiguration(name: "Login Experience", cellReferences: [CellReference(endpoint: "ws://127.0.0.1:8081/publishersws/LoginCell", label: "login")] )
+        self.engagement = CellConfiguration(name: "Login Experience", cellReferences: [CellReference(endpoint: "ws://127.0.0.1:8081/bridgehead/LoginCell", label: "login")] )
     }
     
     

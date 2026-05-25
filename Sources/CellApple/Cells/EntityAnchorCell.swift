@@ -216,6 +216,7 @@ public class EntityAnchorCell: GeneralCell {
                             
                         default:
                             print("relations unknown subkey: \(subkey)")
+                            try await self.storage.set(keypath: keypath, setValue: value)
                         }
                         
                     }

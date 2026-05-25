@@ -1045,6 +1045,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 } else if await self.validateAccess("-w--", at: contextKey, for: requester) { // We need to look at this...
                             if let intercept = await self.intercepts.loadInterceptSet(keypath: keypath) {
                                 response = try await intercept(keypath, value, requester)
+                            } else if let intercept = await self.intercepts.loadInterceptSet(keypath: contextKey) {
+                                response = try await intercept(keypath, value, requester)
                             } else if let intercept = await self.intercepts.loadInterceptSetValueForKey(key: contextKey) {
                                 await intercept(value, requester) // Should this throw so we can send failure?
                             } else {

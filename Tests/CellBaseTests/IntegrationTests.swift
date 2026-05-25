@@ -17,6 +17,7 @@ final class IntegrationTests: XCTestCase {
         previousResolver = CellBase.defaultCellResolver
         previousDocumentRoot = CellBase.documentRootPath
         previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.defaultIdentityVault = nil
         CellBase.debugValidateAccessForEverything = true
     }
 
@@ -30,7 +31,7 @@ final class IntegrationTests: XCTestCase {
 
     func testAppInitializerBootstrapsResolverAndVault() async throws {
         await AppInitializer.initialize()
-        XCTAssertNotNil(CellBase.defaultIdentityVault)
+        XCTAssertTrue(CellBase.defaultIdentityVault is EphemeralIdentityVault)
         XCTAssertNotNil(CellBase.defaultCellResolver)
     }
 

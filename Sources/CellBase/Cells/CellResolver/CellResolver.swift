@@ -58,7 +58,7 @@ public struct RemoteCellHostRoute: Sendable {
     public var pathLayout: PathLayout
 
     public init(
-        websocketEndpoint: String = "publishersws",
+        websocketEndpoint: String = "bridgehead",
         schemePreference: SchemePreference = .automatic,
         pathLayout: PathLayout = .endpointThenPublisherUUID
     ) {

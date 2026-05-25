@@ -100,10 +100,14 @@ final class TrustedIssuerCellTests: XCTestCase {
     func testTrustedIssuerCellEvaluateReturnsTrustedForValidCredential() async throws {
         CellBase.debugValidateAccessForEverything = true
 
+        let ownerVault = EphemeralIdentityVault()
+        CellBase.defaultIdentityVault = ownerVault
         let issuerVault = Curve25519TestIdentityVault()
         let issuerIdentity = await issuerVault.makeIdentity(displayName: "issuer")
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
-        let subject = TestFixtures.makeIdentity(displayName: "subject", uuid: UUID())
+        let ownerIdentity = await ownerVault.identity(for: "owner", makeNewIfNotFound: true)
+        let subjectIdentity = await ownerVault.identity(for: "subject", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerIdentity)
+        let subject = try XCTUnwrap(subjectIdentity)
 
         let credentialSubject: Object = [
             "id": .string("did:key:z6MkhvN4subject"),
@@ -184,8 +188,10 @@ final class TrustedIssuerCellTests: XCTestCase {
 
         let issuerVault = Curve25519TestIdentityVault()
         let issuerIdentity = await issuerVault.makeIdentity(displayName: "issuer")
-        let requester = TestFixtures.makeIdentity(displayName: "requester", uuid: UUID())
-        let targetOwner = TestFixtures.makeIdentity(displayName: "target-owner", uuid: UUID())
+        let requesterIdentity = await issuerVault.identity(for: "requester", makeNewIfNotFound: true)
+        let targetOwnerIdentity = await issuerVault.identity(for: "target-owner", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterIdentity)
+        let targetOwner = try XCTUnwrap(targetOwnerIdentity)
 
         var claim = try await VCClaim(
             type: "AgeCredential",

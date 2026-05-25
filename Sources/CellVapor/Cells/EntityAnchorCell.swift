@@ -157,6 +157,51 @@ public class EntityAnchorCell: GeneralCell {
 	        return nil
 	    })
 
+        await addInterceptForSet(requester: owner, key: "relations", setValueIntercept: { [weak self] keypath, value, requester in
+            guard let self = self else { return nil }
+            do {
+                let keypathArray = keypath.split(separator: ".")
+                if keypathArray.count > 1 {
+                    let subkey = String(keypathArray[1])
+                    switch subkey {
+                    case "identities":
+                        do {
+                            _ = try self.storage.get(keypath: keypath)
+                            try await self.storage.set(keypath: keypath, setValue: value)
+                        } catch {
+                            if case KeyPathError.notFound = error {
+                                let identityUuid = String(keypathArray[keypathArray.count - 1])
+                                let entityUuid = UUID().uuidString
+                                try await self.storage.set(keypath: keypath, setValue: .string(entityUuid))
+                                let entityKeypath = "relations.entities.\(entityUuid).identities.\(identityUuid)"
+                                try await self.storage.set(keypath: entityKeypath, setValue: value)
+                            } else {
+                                throw error
+                            }
+                        }
+                    default:
+                        try await self.storage.set(keypath: keypath, setValue: value)
+                    }
+                } else {
+                    try await self.storage.set(keypath: keypath, setValue: value)
+                }
+
+                try await self.saveKeypathStorage(entity: self.storage)
+                let payloadObject: Object = ["keypath": .string(keypath), "data": value]
+                var flowElement = FlowElement(
+                    title: "PDS update",
+                    content: .object(payloadObject),
+                    properties: FlowElement.Properties(type: .content, contentType: .object)
+                )
+                flowElement.origin = self.uuid
+                flowElement.topic = "entity"
+                self.pushFlowElement(flowElement, requester: requester)
+            } catch {
+                print("Set \(keypath) failed with error: \(error)")
+            }
+            return nil
+        })
+
         await addInterceptForSet(requester: owner, key: "identityLinks", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return nil }
             return await self.handleIdentityLinksSet(keypath: keypath, value: value, requester: requester)

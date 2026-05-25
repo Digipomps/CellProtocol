@@ -5,15 +5,18 @@ import XCTest
 @testable import CellBase
 
 final class CommonsCellsTests: XCTestCase {
+    private var previousVault: IdentityVaultProtocol?
     private var previousDebugFlag = false
 
     override func setUp() {
         super.setUp()
+        previousVault = CellBase.defaultIdentityVault
         previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true
     }
 
     override func tearDown() {
+        CellBase.defaultIdentityVault = previousVault
         CellBase.debugValidateAccessForEverything = previousDebugFlag
         super.tearDown()
     }
@@ -22,6 +25,13 @@ final class CommonsCellsTests: XCTestCase {
         URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
             .appendingPathComponent("commons", isDirectory: true)
             .path
+    }
+
+    private func ownerIdentity(_ context: String) async throws -> Identity {
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let identity = await vault.identity(for: context, makeNewIfNotFound: true)
+        return try XCTUnwrap(identity)
     }
 
     private func object(_ value: ValueType, file: StaticString = #filePath, line: UInt = #line) -> Object {
@@ -69,7 +79,7 @@ final class CommonsCellsTests: XCTestCase {
     }
 
     func testCommonsResolverCellResolvesKnownAndCustomPath() async throws {
-        let owner = Identity()
+        let owner = try await ownerIdentity("commons-resolver-owner")
         let cell = await CommonsResolverCell(owner: owner)
 
         _ = try await cell.set(
@@ -118,7 +128,7 @@ final class CommonsCellsTests: XCTestCase {
     }
 
     func testCommonsResolverCellBatchDataset() async throws {
-        let owner = Identity()
+        let owner = try await ownerIdentity("commons-batch-owner")
         let cell = await CommonsResolverCell(owner: owner)
 
         _ = try await cell.set(
@@ -145,7 +155,7 @@ final class CommonsCellsTests: XCTestCase {
     }
 
     func testCommonsTaxonomyCellGuidanceAndBatchDataset() async throws {
-        let owner = Identity()
+        let owner = try await ownerIdentity("commons-taxonomy-owner")
         let cell = await CommonsTaxonomyCell(owner: owner)
 
         _ = try await cell.set(
