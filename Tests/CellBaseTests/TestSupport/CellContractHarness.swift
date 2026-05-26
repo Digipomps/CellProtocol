@@ -136,6 +136,11 @@ enum CellContractHarness {
                 XCTFail("Expected denied error, got \(error)", file: file, line: line)
                 return
             }
+        } catch let error as CellAuthorizationError {
+            guard case .denied = error else {
+                XCTFail("Expected denied authorization error, got \(error)", file: file, line: line)
+                return
+            }
         }
     }
 
@@ -154,6 +159,11 @@ enum CellContractHarness {
         } catch let error as GeneralCell.KeyValueErrors {
             guard case .denied = error else {
                 XCTFail("Expected denied error, got \(error)", file: file, line: line)
+                return
+            }
+        } catch let error as CellAuthorizationError {
+            guard case .denied = error else {
+                XCTFail("Expected denied authorization error, got \(error)", file: file, line: line)
                 return
             }
         }

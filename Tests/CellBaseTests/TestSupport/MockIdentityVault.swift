@@ -55,8 +55,10 @@ actor MockIdentityVault: IdentityVaultProtocol {
     }
 
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
-        if let storedIdentity = await self.identity(forUUID: identity.uuid),
-           !publicSigningKeyMatches(requested: identity, stored: storedIdentity) {
+        guard let storedIdentity = await self.identity(forUUID: identity.uuid) else {
+            throw MockIdentityVaultError.noPrivateKey
+        }
+        if !publicSigningKeyMatches(requested: identity, stored: storedIdentity) {
             throw MockIdentityVaultError.publicKeyMismatch
         }
         guard let privateKey = privateKeysByUUID[identity.uuid] else {

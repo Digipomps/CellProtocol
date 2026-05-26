@@ -55,10 +55,11 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
         
     }
     
-    // This have to be reconsidered - not meaningful in multiuser server environment ... or?
+    // A bridge vault is a signing proxy, not an authority that can mint or
+    // recover local identities.
     public func identity(for identityContext: String, makeNewIfNotFound: Bool = true) -> Identity? {
         CellBase.diagnosticLog("BridgeIdentityVault.identity context=\(identityContext)", domain: .identity)
-        return Identity(identityContext, displayName: "Not meaningful", identityVault: CellBase.defaultIdentityVault)
+        return nil
     }
     
     public func saveIdentity(_ identity: Identity) {

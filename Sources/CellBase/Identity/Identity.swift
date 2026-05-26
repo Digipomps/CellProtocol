@@ -38,7 +38,19 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     let dispatchQueue = DispatchQueue.init(label: "Identity dispatch queue")
     
     public static func ==(lhs: Identity, rhs: Identity) -> Bool {
-        return (lhs.uuid == rhs.uuid)
+        guard lhs.uuid == rhs.uuid else {
+            return false
+        }
+        if lhs === rhs {
+            return true
+        }
+        guard
+            let lhsFingerprint = lhs.signingPublicKeyFingerprint,
+            let rhsFingerprint = rhs.signingPublicKeyFingerprint
+        else {
+            return false
+        }
+        return lhsFingerprint == rhsFingerprint
     }
 
     

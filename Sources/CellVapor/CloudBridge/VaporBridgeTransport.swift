@@ -207,7 +207,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         let delegate = currentDelegate(),
         let bridgeProtocol = delegate as? BridgeProtocol {
             let identitySnapshot = VaporBridgeIdentitySnapshot(identity)
-            if await VaporIdentityVault.shared.identityExistsInVault(uuid: identitySnapshot.uuid) == false {
+            if await VaporIdentityVault.shared.identityExistInVault(identity) == false {
                 await VaporIdentityVault.shared.addVisitingIdentity(snapshot: identitySnapshot) // This has to be reflected in conditions..
                 return BridgeIdentityVault(cloudBridge: (bridgeProtocol))
             }

@@ -57,6 +57,8 @@ public enum OrganizerAccessDecisionStatus: String, Codable, Equatable, Sendable 
 }
 
 public enum OrganizerAccessIssueCode: String, Codable, Equatable, Sendable {
+    case ownerIdentityProofRequired
+    case stableIdentityProofRequired
     case missingSameEntityCredential
     case missingRoleGrantCredential
     case invalidSameEntityCredential
@@ -147,13 +149,31 @@ public enum ConferenceOrganizerAccessVerifier {
     public static func evaluateFromIdentityProofs(
         requester: Identity,
         ownerUUID: String,
+        ownerIdentity: IdentityPublicKeyDescriptor? = nil,
         stableOrganizerUUID: String? = nil,
+        stableOrganizerIdentity: IdentityPublicKeyDescriptor? = nil,
         conferenceID: String,
         requiredRole: ConferenceOrganizerAccessRole = .admin,
         sameEntityProofKeypaths: [String]? = nil,
         roleGrantProofKeypaths: [String]? = nil
     ) async -> OrganizerAccessDecision {
         if requester.uuid == ownerUUID {
+            guard let ownerIdentity else {
+                return denied(
+                    conferenceID: conferenceID,
+                    requiredRole: requiredRole,
+                    code: .ownerIdentityProofRequired,
+                    message: "Direct owner access requires the stored owner public key or an owner-origin proof. UUID-only owner access is not accepted."
+                )
+            }
+            guard requesterMatchesDescriptor(ownerIdentity, requester: requester) else {
+                return denied(
+                    conferenceID: conferenceID,
+                    requiredRole: requiredRole,
+                    code: .requesterBindingMismatch,
+                    message: "Requester UUID matches the owner, but the public signing key does not match the stored owner identity."
+                )
+            }
             return OrganizerAccessDecision(
                 status: .granted,
                 evidenceSource: .directOwner,
@@ -163,6 +183,22 @@ public enum ConferenceOrganizerAccessVerifier {
         }
 
         if let stableOrganizerUUID, requester.uuid == stableOrganizerUUID {
+            guard let stableOrganizerIdentity else {
+                return denied(
+                    conferenceID: conferenceID,
+                    requiredRole: requiredRole,
+                    code: .stableIdentityProofRequired,
+                    message: "Stable organizer identity access requires the stored public key descriptor. UUID-only stable organizer access is not accepted."
+                )
+            }
+            guard requesterMatchesDescriptor(stableOrganizerIdentity, requester: requester) else {
+                return denied(
+                    conferenceID: conferenceID,
+                    requiredRole: requiredRole,
+                    code: .requesterBindingMismatch,
+                    message: "Requester UUID matches the stable organizer identity, but the public signing key does not match the stored descriptor."
+                )
+            }
             return OrganizerAccessDecision(
                 status: .granted,
                 evidenceSource: .stableOrganizerIdentity,
@@ -395,12 +431,32 @@ public enum ConferenceOrganizerAccessVerifier {
             return true
         }
 
-        if let compressedKey = requester.publicSecureKey?.compressedKey,
-           compressedKey == linkedIdentity.publicKey {
+        if let secureKey = requester.publicSecureKey,
+           let compressedKey = secureKey.compressedKey,
+           compressedKey == linkedIdentity.publicKey,
+           secureKey.algorithm == linkedIdentity.algorithm,
+           secureKey.curveType == linkedIdentity.curveType {
             return true
         }
 
         return false
+    }
+
+    private static func requesterMatchesDescriptor(
+        _ descriptor: IdentityPublicKeyDescriptor,
+        requester: Identity
+    ) -> Bool {
+        guard descriptor.uuid == requester.uuid else {
+            return false
+        }
+        guard let secureKey = requester.publicSecureKey,
+              let compressedKey = secureKey.compressedKey,
+              compressedKey == descriptor.publicKey,
+              secureKey.algorithm == descriptor.algorithm,
+              secureKey.curveType == descriptor.curveType else {
+            return false
+        }
+        return true
     }
 
     private static func issuerDid(from issuer: IssuerType) -> String? {

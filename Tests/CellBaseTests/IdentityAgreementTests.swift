@@ -36,6 +36,23 @@ final class IdentityAgreementTests: XCTestCase {
         XCTAssertTrue(verified)
     }
 
+    func testIdentityEqualityRequiresMatchingPublicSigningKeyWhenUUIDsMatch() async throws {
+        let ownerVault = MockIdentityVault()
+        CellBase.defaultIdentityVault = ownerVault
+        let owner = await ownerVault.identity(for: "private", makeNewIfNotFound: true)!
+        let decodedOwner = try JSONDecoder().decode(
+            Identity.self,
+            from: JSONEncoder().encode(owner)
+        )
+
+        let forgedVault = MockIdentityVault()
+        var forgedOwner = Identity(owner.uuid, displayName: "forged-owner", identityVault: forgedVault)
+        await forgedVault.addIdentity(identity: &forgedOwner, for: "forged-owner")
+
+        XCTAssertEqual(owner, decodedOwner)
+        XCTAssertNotEqual(owner, forgedOwner)
+    }
+
     func testAgreementEncodesAndDecodesConditions() throws {
         let owner = TestFixtures.makeIdentity(displayName: "owner")
         let agreement = Agreement(owner: owner)
@@ -77,6 +94,23 @@ final class IdentityAgreementTests: XCTestCase {
         XCTAssertEqual(descriptor?.reasonCode, "conditional_engagement_unresolved")
         XCTAssertEqual(descriptor?.requiredAction, "open_helper_configuration")
         XCTAssertNotNil(descriptor?.helperCellConfiguration)
+    }
+
+    func testProvedClaimConditionProvidesProofChallengeDescriptor() async {
+        let identity = TestFixtures.makeIdentity(displayName: "user")
+        let condition = ProvedClaimCondition(
+            name: "age_over_18",
+            statement: "identity.claims.ageProof > 18"
+        )
+        let context = ConnectContext(source: nil, target: nil, identity: identity)
+
+        let descriptor = await condition.connectChallengeDescriptor(context: context)
+
+        XCTAssertEqual(descriptor?.reasonCode, "proof_required")
+        XCTAssertEqual(descriptor?.requiredAction, "present_verifiable_credential")
+        XCTAssertEqual(descriptor?.canAutoResolve, false)
+        XCTAssertTrue(descriptor?.userMessage.contains("identity.claims.ageProof > 18") == true)
+        XCTAssertEqual(descriptor?.helperCellConfiguration?.discovery?.sourceCellEndpoint, "cell:///AgreementWorkbench")
     }
 
     func testLookupConditionMetViaIdentityGet() async throws {

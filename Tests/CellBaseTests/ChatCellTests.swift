@@ -1082,6 +1082,46 @@ final class ChatCellTests: XCTestCase {
         XCTAssertTrue(recipientIDs.contains(invitee.uuid))
     }
 
+    func testInvitationAcceptanceRejectsSameUUIDDifferentInviteeKey() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        let artifact = try await ChatInvitationProofUtility.generateInvitationArtifact(
+            chatCellUUID: "chat-cell",
+            topic: "general",
+            audienceMode: "invited",
+            suiteID: "suite",
+            persistenceMode: "local",
+            inviter: owner,
+            invited: invitee,
+            invitationID: "invitation-1",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2999-01-01T00:00:00Z",
+            nonce: Data("invitation-nonce".utf8)
+        )
+
+        let forgedVault = ChatCellTestIdentityVault()
+        let forgedTemplate = await forgedVault.identity(for: "forged-invitee", makeNewIfNotFound: true)!
+        var forgedInvitee = Identity(invitee.uuid, displayName: "forged-invitee", identityVault: forgedVault)
+        forgedInvitee.publicSecureKey = forgedTemplate.publicSecureKey
+        await forgedVault.addIdentity(identity: &forgedInvitee, for: "forged-invitee")
+
+        do {
+            _ = try await ChatInvitationProofUtility.generateAcceptance(
+                for: artifact,
+                invitee: forgedInvitee,
+                acceptanceID: "acceptance-1",
+                createdAt: "2026-01-01T00:00:01Z",
+                nonce: Data("acceptance-nonce".utf8)
+            )
+            XCTFail("Expected invitation acceptance to reject same UUID with a different invitee key.")
+        } catch ChatInvitationProofUtilityError.inviteeMismatch {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testInvitationAcceptanceRejectsWrongRequester() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true

@@ -937,8 +937,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         }
         
-        if
-            await self.validateAccess("r---", at: contextKey, for: requester) {
+        let authorizationDecision = await self.authorizationDecision(
+            requestedAccess: "r---",
+            at: contextKey,
+            for: requester
+        )
+        if authorizationDecision.allowed {
             
             if let intercept = await self.intercepts.loadInterceptGet(keypath: keypath) {
                 CellBase.diagnosticLog("get intercept key=\(contextKey) keypath=\(keypath)", domain: .flow)
@@ -956,7 +960,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             
             
         }
-        throw KeyValueErrors.denied
+        throw CellAuthorizationError.denied(authorizationDecision)
         
     }
 
@@ -1042,7 +1046,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     response = try await keypathLookup.set(keypath: childKeypath, value: value, requester: requester)
                     
                   
-                } else if await self.validateAccess("-w--", at: contextKey, for: requester) { // We need to look at this...
+                } else {
+                    let authorizationDecision = await self.authorizationDecision(
+                        requestedAccess: "-w--",
+                        at: contextKey,
+                        for: requester
+                    )
+                    if authorizationDecision.allowed { // We need to look at this...
                             if let intercept = await self.intercepts.loadInterceptSet(keypath: keypath) {
                                 response = try await intercept(keypath, value, requester)
                             } else if let intercept = await self.intercepts.loadInterceptSet(keypath: contextKey) {
@@ -1056,8 +1066,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                         
                     } else {
                         
-                        throw KeyValueErrors.denied
+                        throw CellAuthorizationError.denied(authorizationDecision)
                     }
+                }
                 
             }
         
@@ -1135,6 +1146,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return CellAuthorizationPolicy.decide(
             request: request,
             ownerReferenceMatches: ownerReferenceMatches,
+            ownerUUIDMatches: owner.uuid == identity.uuid,
             ownerProofValid: ownerProofValid,
             contracts: contracts,
             cellSpecificAllowed: cellSpecificAllowed

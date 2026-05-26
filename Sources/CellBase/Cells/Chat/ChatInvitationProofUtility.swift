@@ -272,7 +272,9 @@ public enum ChatInvitationProofUtility {
               let signature = proof.signature else {
             throw ChatInvitationProofUtilityError.missingSignature
         }
-        guard proof.byIdentityUUID == artifact.inviterIdentity.uuid else {
+        guard proof.byIdentityUUID == artifact.inviterIdentity.uuid,
+              proof.algorithm == artifact.inviterIdentity.algorithm,
+              proof.curveType == artifact.inviterIdentity.curveType else {
             throw ChatInvitationProofUtilityError.inviterMismatch
         }
 
@@ -296,13 +298,13 @@ public enum ChatInvitationProofUtility {
         createdAt: String,
         nonce: Data? = nil
     ) async throws -> ChatInvitationAcceptance {
-        guard artifact.invitedIdentity.uuid == invitee.uuid else {
+        let inviteeDescriptor = try signingDescriptor(for: invitee)
+        guard descriptor(inviteeDescriptor, matches: artifact.invitedIdentity) else {
             throw ChatInvitationProofUtilityError.inviteeMismatch
         }
         _ = try await verifyInvitationArtifact(artifact, identityVault: invitee.identityVault ?? CellBase.defaultIdentityVault)
 
         let vault = try identityVault(for: invitee)
-        let inviteeDescriptor = try signingDescriptor(for: invitee)
         let acceptanceNonce: Data
         if let nonce {
             acceptanceNonce = nonce
@@ -354,7 +356,7 @@ public enum ChatInvitationProofUtility {
         guard acceptance.chatCellUUID == artifact.chatCellUUID else {
             throw ChatInvitationProofUtilityError.chatCellMismatch
         }
-        guard acceptance.inviteeIdentity.uuid == artifact.invitedIdentity.uuid else {
+        guard descriptor(acceptance.inviteeIdentity, matches: artifact.invitedIdentity) else {
             throw ChatInvitationProofUtilityError.inviteeMismatch
         }
         let expectedInvitationHash = try invitationHash(for: artifact)
@@ -365,7 +367,9 @@ public enum ChatInvitationProofUtility {
               let signature = proof.signature else {
             throw ChatInvitationProofUtilityError.missingSignature
         }
-        guard proof.byIdentityUUID == acceptance.inviteeIdentity.uuid else {
+        guard proof.byIdentityUUID == acceptance.inviteeIdentity.uuid,
+              proof.algorithm == acceptance.inviteeIdentity.algorithm,
+              proof.curveType == acceptance.inviteeIdentity.curveType else {
             throw ChatInvitationProofUtilityError.inviteeMismatch
         }
 
@@ -421,5 +425,15 @@ public enum ChatInvitationProofUtility {
 
     private static func hash(data: Data) -> Data {
         Data(SHA256.hash(data: data))
+    }
+
+    private static func descriptor(
+        _ lhs: IdentityPublicKeyDescriptor,
+        matches rhs: IdentityPublicKeyDescriptor
+    ) -> Bool {
+        lhs.uuid == rhs.uuid
+            && lhs.publicKey == rhs.publicKey
+            && lhs.algorithm == rhs.algorithm
+            && lhs.curveType == rhs.curveType
     }
 }

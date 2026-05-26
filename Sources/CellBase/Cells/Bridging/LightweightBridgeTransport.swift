@@ -822,7 +822,8 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
         if let identity {
             if let localIdentityUUID,
                identity.uuid == localIdentityUUID,
-               let localIdentityVault {
+               let localIdentityVault,
+               await localIdentityVault.identityExistInVault(identity) {
                 return localIdentityVault
             }
             if let defaultVault = CellBase.defaultIdentityVault {

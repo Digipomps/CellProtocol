@@ -99,7 +99,24 @@ final class ConferenceOrganizerAccessModelsTests: XCTestCase {
     }
 
     func testOrganizerAccessVerifierGrantsDirectOwner() async throws {
-        let owner = Identity("organizer-owner", displayName: "Organizer Owner", identityVault: nil)
+        let vault = OrganizerAccessTestIdentityVault()
+        let owner = await vault.makeIdentity(displayName: "Organizer Owner")
+
+        let decision = await ConferenceOrganizerAccessVerifier.evaluateFromIdentityProofs(
+            requester: owner,
+            ownerUUID: owner.uuid,
+            ownerIdentity: try IdentityLinkProtocolService.descriptor(for: owner),
+            stableOrganizerUUID: "conference-organizer",
+            conferenceID: "conference-dimy-2026"
+        )
+
+        XCTAssertTrue(decision.granted)
+        XCTAssertEqual(decision.evidenceSource, .directOwner)
+    }
+
+    func testOrganizerAccessVerifierRejectsUUIDOnlyDirectOwner() async throws {
+        let vault = OrganizerAccessTestIdentityVault()
+        let owner = await vault.makeIdentity(displayName: "Organizer Owner")
 
         let decision = await ConferenceOrganizerAccessVerifier.evaluateFromIdentityProofs(
             requester: owner,
@@ -108,8 +125,29 @@ final class ConferenceOrganizerAccessModelsTests: XCTestCase {
             conferenceID: "conference-dimy-2026"
         )
 
-        XCTAssertTrue(decision.granted)
-        XCTAssertEqual(decision.evidenceSource, .directOwner)
+        XCTAssertFalse(decision.granted)
+        XCTAssertEqual(decision.issues.first?.code, .ownerIdentityProofRequired)
+    }
+
+    func testOrganizerAccessVerifierRejectsDirectOwnerWithWrongKey() async throws {
+        let ownerVault = OrganizerAccessTestIdentityVault()
+        let owner = await ownerVault.makeIdentity(displayName: "Organizer Owner")
+        let forgedVault = OrganizerAccessTestIdentityVault()
+        let forgedTemplate = await forgedVault.makeIdentity(displayName: "Forged Owner")
+        var forgedOwner = Identity(owner.uuid, displayName: forgedTemplate.displayName, identityVault: forgedVault)
+        forgedOwner.publicSecureKey = forgedTemplate.publicSecureKey
+        await forgedVault.addIdentity(identity: &forgedOwner, for: "Forged Owner")
+
+        let decision = await ConferenceOrganizerAccessVerifier.evaluateFromIdentityProofs(
+            requester: forgedOwner,
+            ownerUUID: owner.uuid,
+            ownerIdentity: try IdentityLinkProtocolService.descriptor(for: owner),
+            stableOrganizerUUID: "conference-organizer",
+            conferenceID: "conference-dimy-2026"
+        )
+
+        XCTAssertFalse(decision.granted)
+        XCTAssertEqual(decision.issues.first?.code, .requesterBindingMismatch)
     }
 
     func testOrganizerAccessVerifierGrantsCredentialBackedRequester() async throws {

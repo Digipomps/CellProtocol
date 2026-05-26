@@ -8,7 +8,7 @@ import Combine
 import OpenCombine
 #endif
 
-public struct ProvedClaimCondition : Equatable, Codable, Condition {
+public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChallengeProvidingCondition {
     public var uuid: String
     /*
      The Prove condition embeds a statement that has to resolve to true
@@ -318,6 +318,43 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition {
     }
     
     // Transfor this method into getting hints of how to resolve an unresolved condition?
+    public func connectChallengeDescriptor(context: ConnectContext) async -> ConnectChallengeDescriptor? {
+        let trimmedStatement = statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = trimmedStatement.isEmpty
+            ? "Access requires a verifiable proof for '\(name)'."
+            : "Access requires a verifiable proof satisfying: \(trimmedStatement)."
+        return ConnectChallengeDescriptor(
+            reasonCode: "proof_required",
+            userMessage: message,
+            requiredAction: "present_verifiable_credential",
+            canAutoResolve: false,
+            helperCellConfiguration: proofChallengeHelperConfiguration(message: message),
+            developerHint: "Provide a verifiable credential or presentation at the identity/source/target keypath referenced by ProvedClaimCondition.statement, and make sure issuer trust policy accepts the issuer."
+        )
+    }
+
+    private func proofChallengeHelperConfiguration(message: String) -> CellConfiguration {
+        var configuration = CellConfiguration(name: "Proof Review")
+        configuration.description = "Shows the proof requirement and opens AgreementWorkbench so policy can guide the user to present the required credential."
+        configuration.discovery = CellConfigurationDiscovery(
+            sourceCellEndpoint: "cell:///AgreementWorkbench",
+            sourceCellName: "AgreementWorkbenchCell",
+            purpose: "Resolve proof requirement",
+            purposeDescription: "Help the user present a concrete proof or credential before retrying admission.",
+            interests: ["agreement", "access", "proofs", "credentials", "retry"],
+            menuSlots: ["upperMid"]
+        )
+        configuration.addReference(CellReference(endpoint: "cell:///AgreementWorkbench", subscribeFeed: false, label: "agreementWorkbench"))
+        configuration.skeleton = .VStack(SkeletonVStack(elements: [
+            .Text(SkeletonText(text: "Proof required")),
+            .Text(SkeletonText(text: message)),
+            .Text(SkeletonText(keypath: "agreementWorkbench.state.headline")),
+            .Text(SkeletonText(keypath: "agreementWorkbench.state.friendlySummary")),
+            .Text(SkeletonText(keypath: "agreementWorkbench.state.saveResult"))
+        ]))
+        return configuration
+    }
+
     public func resolve(context: ConnectContext) async {
         var state = ConditionState.unresolved
         CellBase.diagnosticLog("ProvedClaimCondition.resolve statement=\(statement)", domain: .agreement)

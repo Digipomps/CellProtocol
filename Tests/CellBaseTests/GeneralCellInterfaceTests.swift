@@ -107,6 +107,12 @@ final class GeneralCellInterfaceTests: XCTestCase {
         do {
             _ = try await cell.get(keypath: "secret", requester: other)
             XCTFail("Expected denied error")
+        } catch let error as CellAuthorizationError {
+            guard case .denied(let decision) = error else {
+                XCTFail("Expected denied authorization error, got \(error)")
+                return
+            }
+            XCTAssertEqual(decision.reasonCode, "agreement_or_proof_required")
         } catch {
             XCTAssertTrue(error is GeneralCell.KeyValueErrors)
         }
@@ -164,6 +170,15 @@ final class GeneralCellInterfaceTests: XCTestCase {
             forgedOwnerCanRead,
             "Same UUID with a different signing key must never authenticate as owner."
         )
+        let forgedOwnerDecision = await restoredCell.authorizationDecision(
+            requestedAccess: "r---",
+            at: "state",
+            for: forgedOwner
+        )
+        XCTAssertFalse(forgedOwnerDecision.allowed)
+        XCTAssertEqual(forgedOwnerDecision.path, .deniedIdentityReferenceMismatch)
+        XCTAssertEqual(forgedOwnerDecision.reasonCode, "identity_public_key_mismatch")
+        XCTAssertEqual(forgedOwnerDecision.requiredAction, "restore_owner_identity_or_link_scaffold")
         let forgedOwnerAdmission = await restoredCell.admit(context: ConnectContext(source: nil, target: restoredCell, identity: forgedOwner))
         XCTAssertEqual(
             forgedOwnerAdmission,

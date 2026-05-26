@@ -880,6 +880,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
+    private func sendSigningDenied(_ message: String, cid: Int) async {
+        bridgeLog("Rejected bridge signing request: \(message)")
+        let response = BridgeCommand(cmd: "response", payload: .string("signing denied: \(message)"), cid: cid)
+        if let responseJSONData = try? JSONEncoder().encode(response),
+           let transport {
+            try? await transport.sendData(responseJSONData)
+        }
+    }
+
     @discardableResult
     private func sendCommandChecked(
         command: Command,
@@ -1062,31 +1071,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     do {
                         try IdentitySigningChallenge.validateSigningData(value, for: identity)
                     } catch {
-                        bridgeLog("Rejected bridge signing request: \(error)")
-                        let response = BridgeCommand(cmd: "response", payload: .string("signing denied: \(error)"), cid: command.cid)
-                        if let responseJSONData = try? JSONEncoder().encode(response),
-                           let transport = transport {
-                            try? await transport.sendData(responseJSONData)
-                        }
+                        await sendSigningDenied(String(describing: error), cid: command.cid)
                         return
                     }
                     guard ready else {
-                        bridgeLog("Rejected bridge signing request before ready session")
-                        let response = BridgeCommand(cmd: "response", payload: .string("signing denied: bridge session is not ready"), cid: command.cid)
-                        if let responseJSONData = try? JSONEncoder().encode(response),
-                           let transport = transport {
-                            try? await transport.sendData(responseJSONData)
-                        }
+                        await sendSigningDenied("bridge session is not ready", cid: command.cid)
+                        return
+                    }
+                    guard let signingVault = identity.identityVault ?? CellBase.defaultIdentityVault,
+                          await signingVault.identityExistInVault(identity) else {
+                        await sendSigningDenied("identity is not available in the local signing vault", cid: command.cid)
                         return
                     }
                     
                     Task {
                         do {
-                            if let signatureData = try await identity.sign(data: value) {
-                                await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid)
-                            }
+                            let signatureData = try await signingVault.signMessageForIdentity(messageData: value, identity: identity)
+                            await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid)
                         } catch {
                             bridgeLog("Consume command signing data failed with error: \(error)")
+                            await self.sendSigningDenied(String(describing: error), cid: command.cid)
                         }
                     }
                     

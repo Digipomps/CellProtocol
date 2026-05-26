@@ -141,10 +141,11 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
         if let identity {
-            if identity.uuid == currentLocalIdentityUUID() {
+            if identity.uuid == currentLocalIdentityUUID(),
+               await IdentityVault.shared.identityExistInVault(identity) {
                 return IdentityVault.shared
             }
-            if await IdentityVault.shared.identityExistsInVault(uuid: identity.uuid) {
+            if await IdentityVault.shared.identityExistInVault(identity) {
                 return IdentityVault.shared
             }
         }

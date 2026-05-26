@@ -257,6 +257,39 @@ final class LightweightBridgeTransportTests: XCTestCase {
         XCTAssertTrue(returnedVault is MockIdentityVault)
     }
 
+    func testSameUUIDDifferentKeyDoesNotUseLocalVault() async throws {
+        let socket = MockLightweightWebSocketClient()
+        let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
+        let bridgeOwner = TestFixtures.makeIdentity(displayName: "bridge-owner")
+        let bridge = try await BridgeBase(
+            BridgeBase.Config(
+                owner: bridgeOwner,
+                transport: transport,
+                connection: .outbound
+            )
+        )
+        transport.setDelegate(bridge)
+
+        let localVault = try XCTUnwrap(CellBase.defaultIdentityVault)
+        guard let localIdentity = await localVault.identity(for: "local-owner", makeNewIfNotFound: true) else {
+            XCTFail("Expected local owner identity")
+            return
+        }
+        try await transport.setup(URL(string: "wss://bridge.example/cell")!, identity: localIdentity)
+
+        let forgedVault = MockIdentityVault()
+        var forgedIdentity = Identity(
+            localIdentity.uuid,
+            displayName: "same-uuid-different-key",
+            identityVault: forgedVault
+        )
+        await forgedVault.addIdentity(identity: &forgedIdentity, for: "same-uuid-different-key")
+
+        let returnedVault = await transport.identityVault(for: forgedIdentity)
+
+        XCTAssertTrue(returnedVault is BridgeIdentityVault)
+    }
+
     func testLifecycleReactivationReconnectsAfterWakeFailure() async throws {
         let pingError = URLError(.networkConnectionLost)
         let firstSocket = MockLightweightWebSocketClient(pingResults: [.success(()), .failure(pingError)])

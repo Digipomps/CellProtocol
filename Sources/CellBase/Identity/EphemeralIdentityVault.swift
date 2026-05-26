@@ -56,8 +56,10 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     }
 
     public func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
-        if let storedIdentity = await self.identity(forUUID: identity.uuid),
-           !publicSigningKeyMatches(requested: identity, stored: storedIdentity) {
+        guard let storedIdentity = await self.identity(forUUID: identity.uuid) else {
+            throw EphemeralIdentityVaultError.noPrivateKey
+        }
+        guard publicSigningKeyMatches(requested: identity, stored: storedIdentity) else {
             throw EphemeralIdentityVaultError.publicKeyMismatch
         }
         guard let privateKey = privateKeysByUUID[identity.uuid] else {
@@ -75,8 +77,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     }
 
     public func randomBytes64() async -> Data? {
-        let bytes = (0..<64).map { _ in UInt8.random(in: UInt8.min...UInt8.max) }
-        return Data(bytes)
+        try? SecureRandom.data(count: 64)
     }
 
     public func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) {

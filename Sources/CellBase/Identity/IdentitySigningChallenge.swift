@@ -9,10 +9,12 @@ public enum IdentitySigningChallengeError: Error {
     case unsupportedVersion
     case wrongPurpose
     case identityMismatch
+    case missingPublicKeyFingerprint
     case publicKeyMismatch
     case expired
     case issuedInFuture
     case missingNonce
+    case missingChallengeScope
 }
 
 public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
@@ -71,9 +73,13 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
         nonce: Data,
         issuedAt: Date = Date()
     ) throws -> Data {
+        guard let trustedFingerprint = trustedIdentity.signingPublicKeyFingerprint,
+              !trustedFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw IdentitySigningChallengeError.missingPublicKeyFingerprint
+        }
         let challenge = IdentitySigningChallenge(
             identityUUID: identity.uuid,
-            publicKeyFingerprint: trustedIdentity.signingPublicKeyFingerprint,
+            publicKeyFingerprint: trustedFingerprint,
             domain: domain,
             resource: resource,
             action: action,
@@ -109,18 +115,23 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
         guard challenge.identityUUID == identity.uuid else {
             throw IdentitySigningChallengeError.identityMismatch
         }
-        if let expectedFingerprint = challenge.publicKeyFingerprint,
-           let presentedFingerprint = identity.signingPublicKeyFingerprint,
-           expectedFingerprint != presentedFingerprint {
-            throw IdentitySigningChallengeError.publicKeyMismatch
+        guard let expectedFingerprint = challenge.publicKeyFingerprint?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !expectedFingerprint.isEmpty else {
+            throw IdentitySigningChallengeError.missingPublicKeyFingerprint
         }
-        if let expectedFingerprint = challenge.publicKeyFingerprint,
-           identity.signingPublicKeyFingerprint == nil,
-           !expectedFingerprint.isEmpty {
+        guard let presentedFingerprint = identity.signingPublicKeyFingerprint,
+              expectedFingerprint == presentedFingerprint else {
             throw IdentitySigningChallengeError.publicKeyMismatch
         }
         guard challenge.nonce.isEmpty == false else {
             throw IdentitySigningChallengeError.missingNonce
+        }
+        guard !challenge.domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !challenge.resource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !challenge.action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !challenge.audience.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw IdentitySigningChallengeError.missingChallengeScope
         }
 
         let nowInterval = now.timeIntervalSince1970
