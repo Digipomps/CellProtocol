@@ -29,6 +29,7 @@ struct TrackedPersistedCellRecord {
     var fundedUntilTick: UInt64?
     var fundingEnforced: Bool
     var persistedDataTTL: TimeInterval
+    var persistedDataExpiryAction: CellPersistedDataExpiryAction
     var lastAccessAt: Date
     var ttlExtension: TimeInterval = 0
     var expiryEmitted = false
@@ -81,6 +82,7 @@ actor ResolverLifecycleTracker {
                 fundedUntilTick: fundedUntilTick,
                 fundingEnforced: fundingEnforced,
                 persistedDataTTL: persistedDataTTL,
+                persistedDataExpiryAction: policy.persistedDataExpiryAction,
                 lastAccessAt: now
             )
         }
@@ -118,7 +120,12 @@ actor ResolverLifecycleTracker {
         trackedPersistedCells[uuid] = record
     }
 
-    func setPersistedTTL(uuid: String, ttl: TimeInterval, at date: Date = Date()) {
+    func setPersistedTTL(
+        uuid: String,
+        ttl: TimeInterval,
+        expiryAction: CellPersistedDataExpiryAction = .notifyOnly,
+        at date: Date = Date()
+    ) {
         guard ttl > 0 else {
             trackedPersistedCells[uuid] = nil
             return
@@ -126,6 +133,7 @@ actor ResolverLifecycleTracker {
 
         if var record = trackedPersistedCells[uuid] {
             record.persistedDataTTL = ttl
+            record.persistedDataExpiryAction = expiryAction
             record.lastAccessAt = date
             record.ttlExtension = 0
             record.expiryEmitted = false
@@ -140,6 +148,7 @@ actor ResolverLifecycleTracker {
                 fundedUntilTick: nil,
                 fundingEnforced: false,
                 persistedDataTTL: ttl,
+                persistedDataExpiryAction: expiryAction,
                 lastAccessAt: date
             )
         }

@@ -16,10 +16,15 @@ private actor LifecycleEventRecorder {
     private var events: [CellLifecycleEvent] = []
     private var memoryExpiryExtensionSeconds: TimeInterval?
     private var usedMemoryExpiryExtension = false
+    private var deletePersistedDataOnExpiry = false
 
     func setMemoryExpiryExtension(_ seconds: TimeInterval?) {
         memoryExpiryExtensionSeconds = seconds
         usedMemoryExpiryExtension = false
+    }
+
+    func setDeletePersistedDataOnExpiry(_ enabled: Bool) {
+        deletePersistedDataOnExpiry = enabled
     }
 
     func handle(event: CellLifecycleEvent) -> CellLifecycleEventResponse {
@@ -31,6 +36,9 @@ private actor LifecycleEventRecorder {
             usedMemoryExpiryExtension = true
             return .extendMemoryTTL(seconds)
         }
+        if event.type == .persistedDataTTLExpired, deletePersistedDataOnExpiry {
+            return .deletePersistedData
+        }
         return .useDefaultAction
     }
 
@@ -40,6 +48,17 @@ private actor LifecycleEventRecorder {
 
     func eventCount(type: CellLifecycleEventType, uuid: String) -> Int {
         events.filter { $0.type == type && $0.uuid == uuid }.count
+    }
+
+    func hasActionRequiredEvent(type: CellLifecycleEventType, uuid: String) -> Bool {
+        events.contains {
+            $0.type == type &&
+            $0.uuid == uuid &&
+            $0.requiresAction == true &&
+            $0.availableResponses?.contains("extendPersistedDataTTL") == true &&
+            $0.availableResponses?.contains("deletePersistedData") == true &&
+            $0.availableResponses?.contains("ignore") == true
+        }
     }
 }
 
@@ -222,7 +241,7 @@ final class CellLifecycleTests: XCTestCase {
         }
     }
 
-    func testPersistedDataTTLDeletesUnusedPersistedData() async throws {
+    func testPersistedDataTTLExpiryNotifiesAndRequiresExplicitActionByDefault() async throws {
         let resolver = CellResolver.sharedInstance
         let responder = LifecycleResponder()
         resolver.setCellLifecycleEventResponder(responder)
@@ -232,6 +251,48 @@ final class CellLifecycleTests: XCTestCase {
                 memoryTTL: 0.10,
                 warningLeadTime: 0,
                 persistedDataTTL: 0.25,
+                memoryExpiryAction: .persistAndUnload
+            )
+
+            let name = "TTL-Persist-Action-\(UUID().uuidString)"
+            try await resolver.addCellResolve(
+                name: name,
+                cellScope: .scaffoldUnique,
+                persistency: .persistant,
+                identityDomain: "private",
+                lifecyclePolicy: policy,
+                type: GeneralCell.self
+            )
+
+            let identity = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true)
+            let cell = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity!)
+
+            let persistedDirectory = URL(fileURLWithPath: rootPath)
+                .appendingPathComponent("CellsContainer")
+                .appendingPathComponent(cell.uuid)
+            let requiresAction = await waitUntil(timeout: 3.0) {
+                await responder.recorder.hasActionRequiredEvent(type: .persistedDataTTLExpired, uuid: cell.uuid)
+            }
+            XCTAssertTrue(requiresAction)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: persistedDirectory.path))
+
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await resolver.performLifecycleSweepNow()
+            XCTAssertTrue(FileManager.default.fileExists(atPath: persistedDirectory.path))
+        }
+    }
+
+    func testPersistedDataTTLDeletesOnlyWhenPolicyRequestsDeletion() async throws {
+        let resolver = CellResolver.sharedInstance
+        let responder = LifecycleResponder()
+        resolver.setCellLifecycleEventResponder(responder)
+
+        try await withTempPersistenceContext { rootPath in
+            let policy = CellLifecyclePolicy(
+                memoryTTL: 0.10,
+                warningLeadTime: 0,
+                persistedDataTTL: 0.25,
+                persistedDataExpiryAction: .deletePersistedData,
                 memoryExpiryAction: .persistAndUnload
             )
 
@@ -257,6 +318,62 @@ final class CellLifecycleTests: XCTestCase {
             XCTAssertTrue(deleted)
             XCTAssertFalse(FileManager.default.fileExists(atPath: persistedDirectory.path))
         }
+    }
+
+    func testPersistedDataTTLDeletesWhenResponderRequestsDeletion() async throws {
+        let resolver = CellResolver.sharedInstance
+        let responder = LifecycleResponder()
+        await responder.recorder.setDeletePersistedDataOnExpiry(true)
+        resolver.setCellLifecycleEventResponder(responder)
+
+        try await withTempPersistenceContext { rootPath in
+            let policy = CellLifecyclePolicy(
+                memoryTTL: 0.10,
+                warningLeadTime: 0,
+                persistedDataTTL: 0.25,
+                memoryExpiryAction: .persistAndUnload
+            )
+
+            let name = "TTL-Persist-Responder-Delete-\(UUID().uuidString)"
+            try await resolver.addCellResolve(
+                name: name,
+                cellScope: .scaffoldUnique,
+                persistency: .persistant,
+                identityDomain: "private",
+                lifecyclePolicy: policy,
+                type: GeneralCell.self
+            )
+
+            let identity = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true)
+            let cell = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity!)
+
+            let persistedDirectory = URL(fileURLWithPath: rootPath)
+                .appendingPathComponent("CellsContainer")
+                .appendingPathComponent(cell.uuid)
+            let deleted = await waitUntil(timeout: 3.0) {
+                !FileManager.default.fileExists(atPath: persistedDirectory.path)
+            }
+            XCTAssertTrue(deleted)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: persistedDirectory.path))
+        }
+    }
+
+    func testLifecyclePolicyDecodesLegacyPayloadAsNotifyOnlyPersistedExpiry() throws {
+        let data = Data("""
+        {
+          "memoryTTL": 1.0,
+          "warningLeadTime": 0.0,
+          "persistedDataTTL": 2.0,
+          "memoryExpiryAction": "persistAndUnload"
+        }
+        """.utf8)
+
+        let policy = try JSONDecoder().decode(CellLifecyclePolicy.self, from: data)
+
+        XCTAssertEqual(policy.memoryTTL, 1.0)
+        XCTAssertEqual(policy.persistedDataTTL, 2.0)
+        XCTAssertEqual(policy.memoryExpiryAction, .persistAndUnload)
+        XCTAssertEqual(policy.persistedDataExpiryAction, .notifyOnly)
     }
 
     func testLifecycleAlarmRoutesOnlyToOwnerAndAllowedIdentities() async throws {

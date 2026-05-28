@@ -299,7 +299,13 @@ public class CellResolver: CellResolverProtocol {
                 identityUUID: record.identityUUID,
                 recipientIdentityUUIDs: record.alertRecipientIdentityUUIDs,
                 secondsRemaining: 0,
-                persistedDataTTL: record.persistedDataTTL
+                persistedDataTTL: record.persistedDataTTL,
+                requiresAction: true,
+                availableResponses: [
+                    "extendPersistedDataTTL",
+                    "deletePersistedData",
+                    "ignore"
+                ]
             )
             let response = await resolveLifecycleResponse(for: event)
             let shouldDelete: Bool
@@ -309,8 +315,10 @@ public class CellResolver: CellResolverProtocol {
                 shouldDelete = false
             case .ignore:
                 shouldDelete = false
-            case .useDefaultAction, .deletePersistedData:
+            case .deletePersistedData:
                 shouldDelete = true
+            case .useDefaultAction:
+                shouldDelete = record.persistedDataExpiryAction == .deletePersistedData
             default:
                 shouldDelete = false
             }
@@ -365,6 +373,12 @@ public class CellResolver: CellResolverProtocol {
         }
         if let persistedDataTTL = event.persistedDataTTL {
             payload["persistedDataTTL"] = .float(persistedDataTTL)
+        }
+        if let requiresAction = event.requiresAction {
+            payload["requiresAction"] = .bool(requiresAction)
+        }
+        if let availableResponses = event.availableResponses {
+            payload["availableResponses"] = .list(availableResponses.map { .string($0) })
         }
         if let recipientIdentityUUIDs = event.recipientIdentityUUIDs {
             payload["recipientIdentityUUIDs"] = .list(recipientIdentityUUIDs.map { .string($0) })
@@ -1787,10 +1801,14 @@ public class CellResolver: CellResolverProtocol {
         try await auditor.registerReference(emitCell, endpoint: reference)
         let endpoint = isUUID(reference) ? await auditor.cellname(for: uuid) : reference
         if let endpoint,
-           let resolve = await auditor.loadNamedResolve(endpoint),
-           let persistedTTL = resolve.lifecyclePolicy?.persistedDataTTL,
+           let policy = (await auditor.loadNamedResolve(endpoint))?.lifecyclePolicy,
+           let persistedTTL = policy.persistedDataTTL,
            persistedTTL > 0 {
-            await lifecycleTracker.setPersistedTTL(uuid: uuid, ttl: persistedTTL)
+            await lifecycleTracker.setPersistedTTL(
+                uuid: uuid,
+                ttl: persistedTTL,
+                expiryAction: policy.persistedDataExpiryAction
+            )
         }
         await lifecycleTracker.touchPersistedCell(uuid: uuid)
         return emitCell
@@ -1807,10 +1825,14 @@ public class CellResolver: CellResolverProtocol {
             return nil
         }
         try await auditor.registerReference(emitCell, endpoint: uuid)
-        if let resolve = await auditor.loadNamedResolve(name),
-           let persistedTTL = resolve.lifecyclePolicy?.persistedDataTTL,
+        if let policy = (await auditor.loadNamedResolve(name))?.lifecyclePolicy,
+           let persistedTTL = policy.persistedDataTTL,
            persistedTTL > 0 {
-            await lifecycleTracker.setPersistedTTL(uuid: uuid, ttl: persistedTTL)
+            await lifecycleTracker.setPersistedTTL(
+                uuid: uuid,
+                ttl: persistedTTL,
+                expiryAction: policy.persistedDataExpiryAction
+            )
         }
         await lifecycleTracker.touchPersistedCell(uuid: uuid)
         return emitCell
