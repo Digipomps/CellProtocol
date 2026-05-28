@@ -183,11 +183,16 @@ public class OrchestratorCell: GeneralCell {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "addConfiguration", for: requester) {
                 print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
-                
-                
-                let cellConfig = try JSONDecoder().decode(CellConfiguration.self, fromString: value.jsonString())
-                
-                try await self.addCellConfiguration(cellConfig)
+
+                guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
+                    from: value,
+                    requester: requester,
+                    candidates: self.availableCellConfigurationCandidates()
+                ) else {
+                    return .string("error: invalid payload for addConfiguration")
+                }
+
+                try await self.loadCellConfiguration(cellConfig, requester: requester)
                 
                 var flowElement = FlowElement(title: "Orchestrator update", content: .string("refresh"), properties: FlowElement.Properties(type: .event, contentType: .string))
                 flowElement.topic = "porthole"
@@ -324,6 +329,18 @@ public class OrchestratorCell: GeneralCell {
     // Also unsafe
     func getCellConfiguration() -> CellConfiguration? {
         return self.cellConfiguration
+    }
+
+    private func availableCellConfigurationCandidates() -> [CellConfiguration] {
+        var candidates = [CellConfiguration]()
+        if let cellConfiguration {
+            candidates.append(cellConfiguration)
+        }
+        candidates.append(contentsOf: cellConfigurationHistory)
+        candidates.append(contentsOf: outwardMenuCellConfigurations.values.compactMap {
+            CellConfigurationPayloadSupport.decodeCellConfiguration(from: $0)
+        })
+        return candidates
     }
     
 

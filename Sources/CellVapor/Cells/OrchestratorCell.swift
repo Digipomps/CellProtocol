@@ -180,14 +180,15 @@ class OrchestratorCell: GeneralCell {
             if await self.validateAccess("r---", at: "addConfiguration", for: requester) {
                 print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
                 
-   
-//                guard case let .cellConfiguration(cellConfig) = value else {
-//                    throw SetValueError.paramErr
-//                }
-//                
-                let cellConfig = try JSONDecoder().decode(CellConfiguration.self, fromString: value.jsonString())
-                
-                try await self.addCellConfiguration(cellConfig, requester: requester)
+                guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
+                    from: value,
+                    requester: requester,
+                    candidates: self.availableCellConfigurationCandidates()
+                ) else {
+                    return .string("error: invalid payload for addConfiguration")
+                }
+
+                try await self.loadCellConfiguration(cellConfig, requester: requester)
                 
                 var flowElement = FlowElement(title: "Orchestrator update", content: .string("refresh"), properties: FlowElement.Properties(type: .event, contentType: .string))
                 flowElement.topic = "porthole"
@@ -303,6 +304,18 @@ class OrchestratorCell: GeneralCell {
     func getCellConfiguration() -> CellConfiguration? {
         return self.cellConfiguration
     }
+
+    private func availableCellConfigurationCandidates() -> [CellConfiguration] {
+        var candidates = [CellConfiguration]()
+        if let cellConfiguration {
+            candidates.append(cellConfiguration)
+        }
+        candidates.append(contentsOf: cellConfigurationHistory)
+        candidates.append(contentsOf: outwardMenuCellConfigurations.values.compactMap {
+            CellConfigurationPayloadSupport.decodeCellConfiguration(from: $0)
+        })
+        return candidates
+    }
     
 
     func executeCellConfiguration(requester: Identity) async throws {
@@ -313,6 +326,29 @@ class OrchestratorCell: GeneralCell {
             throw OrchestratorError.noConfiguration
         }
         _ = try await resolver.loadCell(from: cellConfiguration, into: self, requester: requester)
+    }
+
+    public func loadCellConfiguration(_ configuration: CellConfiguration, requester: Identity) async throws {
+        let previousConfiguration = self.cellConfiguration
+        self.detachAll(requester: requester)
+
+        do {
+            guard let resolver = CellBase.defaultCellResolver else {
+                throw CellBaseError.noResolver
+            }
+            _ = try await resolver.loadCell(from: configuration, into: self, requester: requester)
+            self.cellConfiguration = configuration
+            try await self.saveCellConfiguration()
+        } catch {
+            self.detachAll(requester: requester)
+            if let previousConfiguration {
+                self.cellConfiguration = previousConfiguration
+                try? await self.executeCellConfiguration(requester: requester)
+            } else {
+                self.cellConfiguration = nil
+            }
+            throw error
+        }
     }
     
     func addCellReference(_ reference: CellReference, requester: Identity) async throws {
@@ -530,4 +566,3 @@ class OrchestratorCell: GeneralCell {
         try await self.writeFileDataInCellDirectory(fileData: identityNamedCellsData, filename: identityNamedEmittersFilename)
     }
 }
-
