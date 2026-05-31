@@ -20,8 +20,7 @@ public struct LoginCondition : Codable, Condition {
     public var type: Int = 0
     
     public func isMet(context: ConnectContext) -> ConditionState {
-        var state = ConditionState.unresolved
-        return state
+        .unresolved
     }
     public init() {
         uuid = UUID().uuidString

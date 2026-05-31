@@ -46,7 +46,7 @@ public class OrchestratorCell: GeneralCell {
     
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        print("Orchestrator (Porthole apple) cell init")
+        CellBase.diagnosticLog("Orchestrator (Porthole apple) cell init", domain: .lifecycle)
         
 //        self.name = "Porthole"
         
@@ -55,19 +55,19 @@ public class OrchestratorCell: GeneralCell {
         do {
             try await loadNamedEmitters()
         } catch {
-            print("Initial loading of namedEmitters failed with error: \(error) uuid: ")
+            CellBase.diagnosticLog("Initial loading of namedEmitters failed with error: \(error)", domain: .resolver)
             try? await self.saveNamedEmitters()
         }
         do {
             try await loadIdentityNamedEmitters()
                 } catch {
-                    print("Initial loading of identityNamedEmitters failed with error: \(error) uuid: ")
+                    CellBase.diagnosticLog("Initial loading of identityNamedEmitters failed with error: \(error)", domain: .resolver)
                     try? await self.saveIdentityNamedEmitters()
                 }
         do {
             try await loadStoredCellConfiguration()
         } catch {
-            print("Initial loading of cellConfiguration failed with error(1): \(error) uuid: ")
+            CellBase.diagnosticLog("Initial loading of cellConfiguration failed with error: \(error)", domain: .skeleton)
             
         }
         
@@ -89,12 +89,12 @@ public class OrchestratorCell: GeneralCell {
         await addIntercept(requester: owner, intercept: { [weak self] flowElement, requester in
             
             guard let self = self else { return nil }
-            print("Incoming flowElement to orchestrator cell: \(flowElement.title) label: \(flowElement.topic)")
+            CellBase.diagnosticLog("Incoming flowElement to orchestrator cell: \(flowElement.title) label: \(flowElement.topic)", domain: .flow)
             if let type = flowElement.properties?.type {
                 
                 switch type {
                 case .event:
-                    print("Orchestrator Got event")
+                    CellBase.diagnosticLog("Orchestrator got event topic=\(flowElement.topic)", domain: .flow)
                     switch flowElement.topic {
                     case "register":
                         if case .string(let string) = flowElement.content {
@@ -102,20 +102,20 @@ public class OrchestratorCell: GeneralCell {
                                 do {
                                     try await self.saveNamedEmitters()
                                 } catch {
-                                    print("Saving named emitters failed with error: \(error)")
+                                    CellBase.diagnosticLog("Saving named emitters failed with error: \(error)", domain: .resolver)
                                 }
                             } else if string == "registered_identity_named_cell" {
                                 do {
                                     try await self.saveIdentityNamedEmitters()
                                 } catch {
-                                    print("Saving named emitters failed with error: \(error)")
+                                    CellBase.diagnosticLog("Saving identity named emitters failed with error: \(error)", domain: .resolver)
                                 }
                             }
                         }
                         return flowElement // Should we stop all or forward? hmmmm...
                         
                     case "clean":
-                        print("Orchestrator got event with topic clean")
+                        CellBase.diagnosticLog("Orchestrator got event with topic clean", domain: .flow)
                     default:
                         return flowElement
                     }
@@ -151,7 +151,7 @@ public class OrchestratorCell: GeneralCell {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "addReference", for: requester) {
-                print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("Orchestrator set addReference keypath=\(keypath)", domain: .skeleton)
                 
                 guard case let  .object(paramObject) = value else {
                     throw SetValueError.paramErr
@@ -181,8 +181,8 @@ public class OrchestratorCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "addConfiguration", setValueIntercept:  {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "addConfiguration", for: requester) {
-                print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
+            if await self.validateAccess("-w--", at: "addConfiguration", for: requester) {
+                CellBase.diagnosticLog("Orchestrator set addConfiguration keypath=\(keypath)", domain: .skeleton)
 
                 guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
                     from: value,
@@ -209,16 +209,18 @@ public class OrchestratorCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "setConfiguration", setValueIntercept:  {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
-                print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
-                
-                
-                //                guard case let .cellConfiguration(cellConfig) = value else {
-                //                    throw SetValueError.paramErr
-                //                }
-                //
-                let cellConfig = try JSONDecoder().decode(CellConfiguration.self, fromString: value.jsonString())
-                
-                try await self.setCellConfiguration(cellConfig: cellConfig)
+            if await self.validateAccess("-w--", at: "setConfiguration", for: requester) {
+                CellBase.diagnosticLog("Orchestrator set setConfiguration keypath=\(keypath)", domain: .skeleton)
+
+                guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
+                    from: value,
+                    requester: requester,
+                    candidates: self.availableCellConfigurationCandidates()
+                ) else {
+                    return .string("error: invalid payload for setConfiguration")
+                }
+
+                try await self.loadCellConfiguration(cellConfig, requester: requester)
                 
                 var flowElement = FlowElement(title: "Orchestrator update", content: .string("refresh"), properties: FlowElement.Properties(type: .event, contentType: .string))
                 flowElement.topic = "porthole"
@@ -227,37 +229,36 @@ public class OrchestratorCell: GeneralCell {
                 self.pushFlowElement(flowElement, requester: owner)
                 
                 return .string("ok")
-                
+            }
+            return nil
         })
         
         await addInterceptForGet(requester: owner, key: "outwardMenu", getValueIntercept:  {
             [weak self] keypath, requester  in
             guard let self = self else { return .string("failure")}
-            var resultString = "denied"
             if await self.validateAccess("r---", at: "outwardMenu", for: requester) {
                 do {
                     let configurationValue = try await self.buildOutwardMenu()
                     return configurationValue
                 } catch {
-                    print("Building outward menu failed with error: \(error)")
+                    CellBase.diagnosticLog("Building outward menu failed with error: \(error)", domain: .skeleton)
                 }
             }
-            return .string(resultString)
+            return .string("denied")
         })
         
         await addInterceptForGet(requester: owner, key: "historyMenu", getValueIntercept:  {
             [weak self] keypath, requester  in
             guard let self = self else { return .string("failure")}
-            var resultString = "denied"
             if await self.validateAccess("r---", at: "historyMenu", for: requester) {
                 do {
                     let configurationValue = try await self.buildCellHistoryMenu()
                     return configurationValue
                 } catch {
-                    print("Building history menu failed with error: \(error)")
+                    CellBase.diagnosticLog("Building history menu failed with error: \(error)", domain: .skeleton)
                 }
             }
-            return .string(resultString)
+            return .string("denied")
         })
     }
     
@@ -273,11 +274,10 @@ public class OrchestratorCell: GeneralCell {
     }
     
     deinit {
-        print("############# deiniting orchestrator (\(self.uuid) ################")
+        CellBase.diagnosticLog("Deinitializing orchestrator \(self.uuid)", domain: .lifecycle)
     }
     
     required init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
         try super.init(from: decoder)
         
         Task {
@@ -288,27 +288,26 @@ public class OrchestratorCell: GeneralCell {
             do {
                 try await loadNamedEmitters()
             } catch {
-                print("Initial loading of namedEmitters failed with error: \(error) uuid: ")
+                CellBase.diagnosticLog("Initial loading of namedEmitters failed with error: \(error)", domain: .resolver)
                 try? await self.saveNamedEmitters()
             }
             do {
                 try await loadIdentityNamedEmitters()
                     } catch {
-                        print("Initial loading of identityNamedEmitters failed with error: \(error) uuid: ")
+                        CellBase.diagnosticLog("Initial loading of identityNamedEmitters failed with error: \(error)", domain: .resolver)
                         try? await self.saveIdentityNamedEmitters()
                     }
             do {
                 try await loadStoredCellConfiguration()
             } catch {
-                print("Initial loading of cellConfiguration failed with error (2): \(error) uuid: ")
+                CellBase.diagnosticLog("Initial loading of cellConfiguration failed with error: \(error)", domain: .skeleton)
                 
             }
         }
-        print("Orchestrator")
+        CellBase.diagnosticLog("Decoded Orchestrator", domain: .lifecycle)
     }
     
     public override func encode(to encoder: Encoder) throws {
-      var container = encoder.container(keyedBy: CodingKeys.self)
 //      try container.encode(label, forKey: .label)
       
 //      let baseEncoder = container.superEncoder(forKey: .generalCell) // TODO: Look into where this should reside
@@ -317,16 +316,7 @@ public class OrchestratorCell: GeneralCell {
     }
     
     
-    // This is unsafe - we must check permissions TODO: check permissions
-    func setCellConfiguration(cellConfig: CellConfiguration) async throws {
-        if let cellConfiguration = self.cellConfiguration {
-            self.cellConfigurationHistory.append(cellConfiguration)
-        }
-        self.cellConfiguration = cellConfig
-        try await self.saveCellConfiguration()
-    }
-    
-    // Also unsafe
+    // Local UI snapshot; external access must go through Resolver/Meddle policy.
     func getCellConfiguration() -> CellConfiguration? {
         return self.cellConfiguration
     }
@@ -427,13 +417,13 @@ public class OrchestratorCell: GeneralCell {
     }
     
     private func loadStoredCellConfiguration() async throws {
-        print("++++++++++ Load cell configuration ++++++++++++++")
+        CellBase.diagnosticLog("Load cell configuration", domain: .skeleton)
         var cellConfigurationData = Data()
         do {
             cellConfigurationData = try await self.getFileDataInCellDirectory(filename: cellConfigurationFilename)
 //            print("Cell configuration:\n\(String(describing: String(data:cellConfigurationData, encoding: .utf8 )))")
         } catch {
-            print("Getting cell configuration file data failed with error: \(error)")
+            CellBase.diagnosticLog("Getting cell configuration file data failed with error: \(error)", domain: .skeleton)
             let encoder = JSONEncoder()
 //            var eventEmitterReference = CellReference(endpoint: "cell:///EventEmitter", label: "eventTest") //
 //            eventEmitterReference.addKeyAndValue(KeyValue(key: "start", value: nil))
@@ -447,7 +437,7 @@ public class OrchestratorCell: GeneralCell {
             
             try await self.executeCellConfiguration()
         }
-        print("about to decode cellConfigurationData: \(String(describing: String(data: cellConfigurationData, encoding: .utf8)))")
+        CellBase.diagnosticLog("Decoding stored cell configuration bytes=\(cellConfigurationData.count)", domain: .skeleton)
         let decoder = JSONDecoder()
         var decodedConfiguration = try decoder.decode(CellConfiguration.self, from: cellConfigurationData)
         if migrateLegacyTextToSpeechReferenceIfNeeded(in: &decodedConfiguration) {
@@ -456,7 +446,7 @@ public class OrchestratorCell: GeneralCell {
         } else {
             self.cellConfiguration = decodedConfiguration
         }
-        print("Got configuration: \(String(describing: String(data: cellConfigurationData, encoding: .utf8)))")
+        CellBase.diagnosticLog("Loaded stored cell configuration bytes=\(cellConfigurationData.count)", domain: .skeleton)
     }
 
     private func migrateLegacyTextToSpeechReferenceIfNeeded(in configuration: inout CellConfiguration) -> Bool {
@@ -516,7 +506,7 @@ public class OrchestratorCell: GeneralCell {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(defaults)
             try await self.writeFileDataInCellDirectory(fileData: data, filename: filename)
-            print("Seeded \(filename) with \(defaults.count) configurations")
+            CellBase.diagnosticLog("Seeded \(filename) with \(defaults.count) configurations", domain: .skeleton)
             return defaults
         }
     }
@@ -539,16 +529,16 @@ public class OrchestratorCell: GeneralCell {
     private func buildOutwardMenuCellConfigurations() {
         var menuItems = Object()
         
-        var cellReference1 = CellReference(endpoint: "cell:///TimesWrapper", label: "times")
+        let cellReference1 = CellReference(endpoint: "cell:///TimesWrapper", label: "times")
 //        cellReference1.setKeysAndValues = [KeyValue(key: "start", value: nil)]
         let cellConfiguration1 = CellConfiguration(name: "Times", cellReferences: [cellReference1])
         
         
-        var cellReference2 = CellReference(endpoint: "cell:///EntitiesWrapper", label: "entities")
+        let cellReference2 = CellReference(endpoint: "cell:///EntitiesWrapper", label: "entities")
 //        cellReference2.setKeysAndValues = [KeyValue(key: "start", value: nil)]
         let cellConfiguration2 = CellConfiguration(name: "Entities", cellReferences: [cellReference2])
         
-        var cellReference3 = CellReference(endpoint: "cell:///LocationsWrapper", label: "locations")
+        let cellReference3 = CellReference(endpoint: "cell:///LocationsWrapper", label: "locations")
 //        cellReference3.setKeysAndValues = [KeyValue(key: "start", value: nil)]
         let cellConfiguration3 = CellConfiguration(name: "Locations", cellReferences: [cellReference3])
         
@@ -562,13 +552,13 @@ public class OrchestratorCell: GeneralCell {
     func updateConnectionStatuses(requester: Identity) async throws {
         
          let connectedLabels = await self.connectedLabels(requester: requester)
-        print("Connected labels: \(connectedLabels)")
+        CellBase.diagnosticLog("Connected labels: \(connectedLabels)", domain: .flow)
         self.connectionStatuses.removeAll()
         
         self.connectionStatuses = try await self.attachedStatuses(requester: requester)
         
         
-        print("Connection Statuses (OrchestratorCell): \(self.connectionStatuses)")
+        CellBase.diagnosticLog("Connection statuses count=\(self.connectionStatuses.count)", domain: .flow)
     }
     
     func saveNamedEmitters() async throws {
@@ -583,7 +573,7 @@ public class OrchestratorCell: GeneralCell {
            let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
             let namedCells = await resolver.namedCells(requester: requester)
             let namedCellsData = try encoder.encode(namedCells)
-            print("Saving named cells: \(String(describing: String(data: namedCellsData, encoding: .utf8)))")
+            CellBase.diagnosticLog("Saving named cells count=\(namedCells.count)", domain: .resolver)
             
             try await self.writeFileDataInCellDirectory(fileData: namedCellsData, filename: namedEmittersFilename)
         }
@@ -602,12 +592,12 @@ public class OrchestratorCell: GeneralCell {
         guard let documentRootPath = CellBase.documentRootPath else {
            throw  CellBaseError.noTargetMeddleCell // Change to noDocumentRoot - when its in the lib
         }
-        let docDirURL = URL(fileURLWithPath: CellBase.documentRootPath!)
+        let docDirURL = URL(fileURLWithPath: documentRootPath)
 //        print("@@@@@@@@ CellBase.documentDirectory: \(String(describing: CellBase.documentRootPath)) @@@@@@@@")
         var validatedNamedCells = [String : String]()
         var reversedNamedCells = [String : String]()
         for (name, uuid) in namedEmitters {
-           print("(\(name),\(uuid))")
+            CellBase.diagnosticLog("Validating named cell \(name)=\(uuid)", domain: .resolver)
             let cellDirURL = docDirURL.appending(path: uuid)
             let fileManager = FileManager.default
             if fileManager.fileExists(atPath: cellDirURL.path()) {
@@ -632,10 +622,10 @@ public class OrchestratorCell: GeneralCell {
         do {
             // Prefer configurations from the cell's directory
             configurations = try await loadSkeletonExamples()
-            print("Loaded SkeletonExamples.json with \(configurations.count) configurations")
+            CellBase.diagnosticLog("Loaded SkeletonExamples.json with \(configurations.count) configurations", domain: .skeleton)
         } catch {
             // Fallback to existing hardcoded menu configurations
-            print("Loading SkeletonExamples.json failed with error: \(error). Falling back to SkeletonDescriptions.menuConfigurations().")
+            CellBase.diagnosticLog("Loading SkeletonExamples.json failed with error: \(error). Falling back to SkeletonDescriptions.menuConfigurations().", domain: .skeleton)
             configurations = try await SkeletonDescriptions.menuConfigurations()
         }
         var cellConfigurationValueList = ValueTypeList()
@@ -666,8 +656,7 @@ public class OrchestratorCell: GeneralCell {
         
 //        let docDirURL = CellVapor.getCellsDocumentsDirectory()
 //
-
-        print("Identity Named emitters: \(identityNamedEmitters)")
+        CellBase.diagnosticLog("Loaded identity named emitters identityCount=\(identityNamedEmitters.count)", domain: .resolver)
 
         if let vault = CellBase.defaultIdentityVault,
            let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
@@ -686,7 +675,7 @@ public class OrchestratorCell: GeneralCell {
             let encoder = JSONEncoder()
             let identityNamedCells = await resolver.identityNamedCells(requester: requester)
             let identityNamedCellsData = try encoder.encode(identityNamedCells)
-            print("Saving identity named cells: \(String(describing: String(data: identityNamedCellsData, encoding: .utf8)))")
+            CellBase.diagnosticLog("Saving identity named cells identityCount=\(identityNamedCells.count)", domain: .resolver)
             
             try await self.writeFileDataInCellDirectory(fileData: identityNamedCellsData, filename: identityNamedEmittersFilename)
         }

@@ -73,13 +73,13 @@ struct StackView: View {
                 })
                 .offset(x: /*@START_MENU_TOKEN@*/0.0/*@END_MENU_TOKEN@*/, y: multiplier * CGFloat((index + 1)))
                 .opacity(opacity)
-                .animation(.easeInOut)
+                .animation(.easeInOut, value: expanded)
             }
             
             
             RoundButton(imageName: stackIconName, onClick: toggleExpansion)
                 .offset(iconOffset)
-                .animation(.easeInOut)
+                .animation(.easeInOut, value: expanded)
         }
     }
     

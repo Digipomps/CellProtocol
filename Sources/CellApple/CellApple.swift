@@ -7,11 +7,42 @@ import CellBase
 
 public struct CellApple {
     public private(set) var text = "Hello, World!"
+    private static let testDocumentRootDirectoryName = "CellProtocolTests"
     
     public init() {
     }
+
+    public static var isXCTestOrSwiftPMTestHost: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil {
+            return true
+        }
+
+        if Bundle.main.bundlePath.contains(".xctest") {
+            return true
+        }
+
+        return ProcessInfo.processInfo.arguments.contains { argument in
+            argument.contains(".xctest")
+        }
+    }
     
     public static func getDocumentsDirectory() -> URL {
+        if let documentRootPath = CellBase.documentRootPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           documentRootPath.isEmpty == false {
+            let url = URL(fileURLWithPath: documentRootPath, isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+
+        if isXCTestOrSwiftPMTestHost {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(testDocumentRootDirectoryName, isDirectory: true)
+                .appendingPathComponent("CellApple-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+
         // find all possible documents directories for this user
         let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         
@@ -24,10 +55,6 @@ public struct CellApple {
     }
     
     public static func aquireKeyForTag(tag: String) async throws -> Data {
-        let access = SecAccessControlCreateWithFlags(nil, // Use the default allocator.
-                                                     kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-                                                     .userPresence,
-                                                     nil) // Ignore any error.
         let context = LAContext()
         context.touchIDAuthenticationAllowableReuseDuration = LATouchIDAuthenticationMaximumAllowableReuseDuration
         
@@ -46,13 +73,13 @@ public struct CellApple {
             throw KeychainError.noPassword
         }
         guard searchStatus == errSecSuccess else {
-            print("Got unhandled error when matchin secItem! Status: \(searchStatus)")
+            CellBase.diagnosticLog("Got unhandled error matching secItem. Status: \(searchStatus)", domain: .identity)
             throw KeychainError.unhandledError(status: searchStatus)
         }
         guard let existingItem = item as? [String : Any],
               let keyData = existingItem[kSecValueData as String] as? Data
         else {
-            print("Extracting credentials failed")
+            CellBase.diagnosticLog("Extracting credentials failed", domain: .identity)
             throw KeychainError.unexpectedPasswordData
 
         }
@@ -77,7 +104,7 @@ public struct CellApple {
             
             let query: [String: Any] = [kSecClass as String: kSecClassKey,
                                         kSecAttrApplicationTag as String: tag,
-                                        kSecAttrAccessControl as String: access, // as Any
+                                        kSecAttrAccessControl as String: access as Any,
                                         
                                         kSecUseAuthenticationContext as String: context,
                                         kSecValueData as String: keyData]
@@ -87,17 +114,15 @@ public struct CellApple {
             
             var status = SecItemAdd(query as CFDictionary, nil)
         if status == -25299 { // Sec Item exists
-            print("Trying to update sec item")
+            CellBase.diagnosticLog("Trying to update existing sec item", domain: .identity)
             let updateDict: [String: Any] = [kSecValueData as String: keyData]
             status = SecItemUpdate(query as CFDictionary, updateDict as CFDictionary)
         }
             guard status == errSecSuccess else {
-                print("Adding sec item failed! Status: \(status)")
-                
                 if let errorMessage = SecCopyErrorMessageString(status, nil) {
-                  print("Error message: \(String(errorMessage))")
+                    CellBase.diagnosticLog("Adding sec item failed. Status: \(status) message: \(String(errorMessage))", domain: .identity)
                 } else {
-                  print("Status Code: \(status)")
+                    CellBase.diagnosticLog("Adding sec item failed. Status: \(status)", domain: .identity)
                 }
                 
                 

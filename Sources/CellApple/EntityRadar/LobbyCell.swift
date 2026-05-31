@@ -8,7 +8,6 @@
 //  Created by Kjetil Hustveit on 27/11/2024.
 //
 import CellBase
-import CellApple
 import Foundation
 
 /*

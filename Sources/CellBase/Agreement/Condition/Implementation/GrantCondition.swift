@@ -32,7 +32,7 @@ public struct GrantCondition: Codable, Condition {
                 
             case "source":
                 CellBase.diagnosticLog("GrantCondition checking source", domain: .agreement)
-                if let source = try? await context.source {
+                if (try? await context.source) != nil {
                     if let childGrant = grant.childGrant() {
                         CellBase.diagnosticLog("GrantCondition source childGrant=\(childGrant.keypath)", domain: .agreement)
 //                        if source.granted(childGrant /* for identity */) {
@@ -42,7 +42,7 @@ public struct GrantCondition: Codable, Condition {
                 }
             case "target":
                 CellBase.diagnosticLog("GrantCondition checking target", domain: .agreement)
-                if let target = try? await context.target {
+                if (try? await context.target) != nil {
                     if let childGrant = grant.childGrant() {
                         CellBase.diagnosticLog("GrantCondition target childGrant=\(childGrant.keypath)", domain: .agreement)
                         // For demo purpose

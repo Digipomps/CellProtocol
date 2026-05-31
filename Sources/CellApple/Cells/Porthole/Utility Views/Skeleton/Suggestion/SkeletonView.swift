@@ -123,6 +123,24 @@ private func skeletonStringValue(_ value: ValueType?) -> String? {
     }
 }
 
+private func skeletonBoolValue(_ value: ValueType?) -> Bool? {
+    switch value {
+    case .bool(let bool):
+        return bool
+    case .string(let string):
+        switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes", "1":
+            return true
+        case "false", "no", "0":
+            return false
+        default:
+            return nil
+        }
+    default:
+        return nil
+    }
+}
+
 private func sanitizeStyleToken(_ token: String) -> String {
     let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
@@ -287,7 +305,7 @@ private func toggleBinding(for keypath: String, requester: Identity?) -> Binding
         },
         set: { newValue in
             Task {
-                guard let resolver = CellBase.defaultCellResolver,
+                guard CellBase.defaultCellResolver != nil,
                       let requester else { return }
                 // Determine URL and keypath
                 var url: URL
@@ -313,7 +331,7 @@ private func toggleBinding(for keypath: String, requester: Identity?) -> Binding
     )
     // Initial fetch
     Task {
-        guard let resolver = CellBase.defaultCellResolver,
+        guard CellBase.defaultCellResolver != nil,
               let requester else { return }
         var url: URL
         var kp: String?
@@ -930,7 +948,7 @@ public struct SkeletonView: View {
     }
     
     private func clearCache(url: URL?, requester: Identity) async {
-        guard let url = url else { return }
+        guard url != nil else { return }
 //        await self.viewModel.cache.set(nil, for: url.absoluteString)
     }
     
@@ -1799,6 +1817,38 @@ private struct VisualizationGraphEdge: Identifiable {
     var raw: ValueType
 }
 
+private struct VisualizationCalendarOccurrence: Identifiable {
+    var id: String
+    var itemId: String?
+    var uid: String?
+    var title: String
+    var startAt: String
+    var endAt: String?
+    var timezone: String?
+    var isAllDay: Bool
+    var status: String?
+    var availability: String?
+    var locationSummary: String?
+    var raw: ValueType
+
+    var startDate: Date? {
+        VisualizationCalendarDate.date(from: startAt)
+    }
+
+    var endDate: Date? {
+        VisualizationCalendarDate.date(from: endAt)
+    }
+}
+
+private struct VisualizationCalendarSpec {
+    var view: String
+    var timezone: String
+    var rangeStart: String?
+    var rangeEnd: String?
+    var emptyMessage: String
+    var occurrences: [VisualizationCalendarOccurrence]
+}
+
 private func localVisualizationValue(at keypath: String, from context: ValueType?) -> ValueType? {
     guard keypath.hasPrefix("cell://") == false,
           case let .object(object)? = context else {
@@ -1863,6 +1913,111 @@ private func visualizationRows(from spec: ValueType?) -> [ValueType] {
         }
     }
     return []
+}
+
+private enum VisualizationCalendarDate {
+    private static let isoWithFractions: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoNoFractions: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let dateOnlyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Foundation.Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    static func date(from raw: String?) -> Date? {
+        guard let raw, raw.isEmpty == false else { return nil }
+        return isoWithFractions.date(from: raw)
+            ?? isoNoFractions.date(from: raw)
+            ?? dateOnlyFormatter.date(from: raw)
+    }
+
+    static func dayLabel(_ raw: String?, timezone: String) -> String {
+        guard let date = date(from: raw) else { return raw ?? "" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.timeZone = TimeZone(identifier: timezone) ?? TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: date)
+    }
+
+    static func timeLabel(_ raw: String?, timezone: String) -> String {
+        guard let date = date(from: raw) else { return raw ?? "" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        formatter.timeZone = TimeZone(identifier: timezone) ?? TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: date)
+    }
+}
+
+private func visualizationCalendarSpec(from spec: ValueType?) -> VisualizationCalendarSpec {
+    let object = visualizationObject(spec) ?? [:]
+    let range = visualizationObject(object["range"]) ?? [:]
+    let display = visualizationObject(object["display"]) ?? [:]
+    let fallback = visualizationObject(object["fallback"]) ?? [:]
+    let occurrenceValues: [ValueType]
+    if case let .list(occurrences)? = object["occurrences"] {
+        occurrenceValues = occurrences
+    } else if case let .list(items)? = object["items"] {
+        occurrenceValues = items
+    } else if case let .list(items)? = fallback["items"] {
+        occurrenceValues = items
+    } else {
+        occurrenceValues = visualizationRows(from: spec)
+    }
+    let timezone = visualizationString(object["timezone"]) ?? "UTC"
+    let occurrences = occurrenceValues.enumerated().compactMap { index, value in
+        visualizationCalendarOccurrence(from: value, fallbackIndex: index)
+    }.sorted {
+        ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast)
+    }
+    return VisualizationCalendarSpec(
+        view: (visualizationString(object["view"]) ?? "agenda").lowercased(),
+        timezone: timezone,
+        rangeStart: visualizationString(range["startAt"]) ?? visualizationString(object["startAt"]),
+        rangeEnd: visualizationString(range["endAt"]) ?? visualizationString(object["endAt"]),
+        emptyMessage: visualizationString(display["emptyMessage"]) ?? "Ingen kalenderhendelser tilgjengelig ennå.",
+        occurrences: occurrences
+    )
+}
+
+private func visualizationCalendarOccurrence(from value: ValueType, fallbackIndex: Int) -> VisualizationCalendarOccurrence? {
+    guard let object = visualizationObject(value) else { return nil }
+    let item = visualizationObject(object["item"]) ?? [:]
+    let time = visualizationObject(item["time"]) ?? [:]
+    guard let startAt = visualizationString(object["startAt"]) ?? visualizationString(time["startAt"]) ?? visualizationString(object["startsAt"]) else {
+        return nil
+    }
+    let title = visualizationString(object["title"]) ?? visualizationString(item["title"]) ?? "Untitled"
+    let id = visualizationString(object["id"]) ?? visualizationString(item["id"]) ?? visualizationString(item["uid"]) ?? "occurrence-\(fallbackIndex)"
+    let location = visualizationObject(item["location"])
+    return VisualizationCalendarOccurrence(
+        id: id,
+        itemId: visualizationString(object["itemId"]) ?? visualizationString(item["id"]),
+        uid: visualizationString(object["uid"]) ?? visualizationString(item["uid"]),
+        title: title,
+        startAt: startAt,
+        endAt: visualizationString(object["endAt"]) ?? visualizationString(time["endAt"]) ?? visualizationString(object["endsAt"]),
+        timezone: visualizationString(object["timezone"]) ?? visualizationString(time["timezone"]),
+        isAllDay: skeletonBoolValue(object["isAllDay"]) ?? skeletonBoolValue(time["isAllDay"]) ?? false,
+        status: visualizationString(object["status"]) ?? visualizationString(item["status"]),
+        availability: visualizationString(object["availability"]) ?? visualizationString(item["availability"]),
+        locationSummary: visualizationString(object["locationSummary"]) ?? visualizationString(location?["name"]) ?? visualizationString(location?["address"]),
+        raw: value
+    )
 }
 
 private func visualizationColumns(from spec: ValueType?) -> [VisualizationTableColumn] {
@@ -2041,6 +2196,8 @@ private func visualizationInteractionPayload(
         payload["node"] = item
     case "feature":
         payload["feature"] = item
+    case "occurrence":
+        payload["occurrence"] = item
     default:
         break
     }
@@ -2187,6 +2344,18 @@ private struct CellVisualizationView: View {
                     )
                 } else {
                     visualizationFallback(message: "Kartspesifikasjonen kunne ikke leses.")
+                }
+            case "calendar":
+                let calendarSpec = visualizationCalendarSpec(from: currentSpec)
+                if calendarSpec.occurrences.isEmpty {
+                    visualizationFallback(message: calendarSpec.emptyMessage)
+                } else {
+                    VisualizationCalendarView(
+                        visualizationKind: normalizedKind,
+                        spec: calendarSpec,
+                        selection: selectionState,
+                        activateOccurrence: actionHandler(for: "occurrence")
+                    )
                 }
             default:
                 visualizationFallback(message: "Visualization kind '\(skeletonVisualization.kind)' støttes ikke ennå.")
@@ -2472,6 +2641,122 @@ private struct VisualizationNetworkView: View {
             }
         }
         .frame(height: 260)
+    }
+}
+
+private struct VisualizationCalendarView: View {
+    let visualizationKind: String
+    let spec: VisualizationCalendarSpec
+    let selection: VisualizationSelectionState
+    let activateOccurrence: ((ValueType, Int, String?, String?) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(spec.view.capitalized) Calendar")
+                    .font(.headline)
+                Spacer()
+                Text(rangeLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(groupedOccurrences, id: \.label) { group in
+                if group.label.isEmpty == false {
+                    Text(group.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+                VStack(spacing: 6) {
+                    ForEach(Array(group.occurrences.enumerated()), id: \.element.id) { index, occurrence in
+                        let absoluteIndex = spec.occurrences.firstIndex { $0.id == occurrence.id } ?? index
+                        let isSelected = selection.contains(id: occurrence.id, index: absoluteIndex)
+                        Group {
+                            if let activateOccurrence {
+                                Button {
+                                    activateOccurrence(occurrence.raw, absoluteIndex, occurrence.id, occurrence.title)
+                                } label: {
+                                    occurrenceRow(occurrence, isSelected: isSelected)
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                occurrenceRow(occurrence, isSelected: isSelected)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var rangeLabel: String {
+        guard let start = spec.rangeStart, let end = spec.rangeEnd else {
+            return spec.timezone
+        }
+        return "\(VisualizationCalendarDate.dayLabel(start, timezone: spec.timezone)) - \(VisualizationCalendarDate.dayLabel(end, timezone: spec.timezone))"
+    }
+
+    private var groupedOccurrences: [(label: String, occurrences: [VisualizationCalendarOccurrence])] {
+        if spec.view == "month" {
+            let grouped = Dictionary(grouping: spec.occurrences) { occurrence in
+                VisualizationCalendarDate.dayLabel(occurrence.startAt, timezone: spec.timezone)
+            }
+            return grouped.keys.sorted().map { label in
+                (
+                    label: label,
+                    occurrences: grouped[label]?.sorted { ($0.startDate ?? .distantPast) < ($1.startDate ?? .distantPast) } ?? []
+                )
+            }
+        }
+        return [(label: "", occurrences: spec.occurrences)]
+    }
+
+    private func occurrenceRow(_ occurrence: VisualizationCalendarOccurrence, isSelected: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(timeLabel(for: occurrence))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 76, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(occurrence.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                let metadata = [occurrence.locationSummary, occurrence.status, occurrence.availability]
+                    .compactMap { value in
+                        guard let value, value.isEmpty == false else { return nil }
+                        return value
+                    }
+                    .joined(separator: " · ")
+                if metadata.isEmpty == false {
+                    Text(metadata)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.black.opacity(0.035))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.black.opacity(0.08), lineWidth: 1)
+        )
+        .cornerRadius(8)
+        .contentShape(Rectangle())
+    }
+
+    private func timeLabel(for occurrence: VisualizationCalendarOccurrence) -> String {
+        if occurrence.isAllDay {
+            return "All day"
+        }
+        let start = VisualizationCalendarDate.timeLabel(occurrence.startAt, timezone: occurrence.timezone ?? spec.timezone)
+        guard let endAt = occurrence.endAt else {
+            return start
+        }
+        return "\(start)-\(VisualizationCalendarDate.timeLabel(endAt, timezone: occurrence.timezone ?? spec.timezone))"
     }
 }
 

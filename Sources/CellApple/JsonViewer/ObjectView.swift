@@ -10,16 +10,12 @@
 
 import SwiftUI
 import CellBase
-import Collections
 
 struct ObjectView: View {
     let object: Object
     
     
     var body: some View {
-        let orderedDict = OrderedDictionary(uniqueKeys: object.keys.sorted(), values: object.values)
-        
-        
         let sortedKeys = object.keys.sorted()
         VStack(alignment: .leading) {
                     ForEach(sortedKeys, id: \.self) { key in

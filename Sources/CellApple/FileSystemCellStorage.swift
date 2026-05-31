@@ -7,7 +7,6 @@ import CellBase
 
 public struct FileSystemCellStorage: CellStorage {
     
-    private let rootDirectoryName = "CellsContainer"
     private let dataFilename = "typedCell.json"
     
     public enum StorageError: Error {
@@ -19,10 +18,7 @@ public struct FileSystemCellStorage: CellStorage {
     public init() {}
     
     public func loadEmitCell(with uuid: String, decoder: CellJSONCoder) throws -> Emit {
-        guard let documentRootPath = CellBase.documentRootPath else {
-            throw StorageError.noDocumentRoot
-        }
-        let cellURL = URL(fileURLWithPath: documentRootPath).appendingPathComponent(rootDirectoryName).appendingPathComponent(uuid)
+        let cellURL = CellApple.getCellsDocumentsDirectory().appendingPathComponent(uuid)
         let typedCellURL = cellURL.appendingPathComponent(dataFilename)
         let stored = try Data(contentsOf: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(stored: stored, uuid: uuid)
@@ -36,10 +32,7 @@ public struct FileSystemCellStorage: CellStorage {
     
     // Loads cell relative to documentRootPath
     public func loadEmitCell(at path: String, decoder: CellJSONCoder) throws -> Emit {
-        guard let documentRootPath = CellBase.documentRootPath else {
-            throw StorageError.noDocumentRoot
-        }
-        let cellURL = URL(fileURLWithPath: documentRootPath).appendingPathComponent(path)
+        let cellURL = CellApple.getDocumentsDirectory().appendingPathComponent(path)
         let typedCellURL = cellURL.appendingPathComponent(dataFilename)
         let stored = try Data(contentsOf: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(
@@ -97,7 +90,7 @@ public struct FileSystemCellStorage: CellStorage {
         let directory = directoryURL.path.cString(using: .utf8)
         if !directoryExists(directory) {
             if mkdir_p(directory) != 0 {
-                print("Failed to create directory here: \(directoryURL.path)")
+                CellBase.diagnosticLog("Failed to create cell storage directory: \(directoryURL.path)", domain: .lifecycle)
                 throw StorageError.unableToCreateDirectory
             }
         }
@@ -106,14 +99,10 @@ public struct FileSystemCellStorage: CellStorage {
     }
     
     private func cellDirectoryURL(uuid: String) -> URL {
-        let cellDirectoryURL = getDocumentsDirectory().appendingPathComponent(rootDirectoryName).appendingPathComponent(uuid)
+        let cellDirectoryURL = CellApple.getCellsDocumentsDirectory().appendingPathComponent(uuid)
         return cellDirectoryURL
     }
     func getDocumentsDirectory() -> URL {
-        // find all possible documents directories for this user
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        
-        // just send back the first one, which ought to be the only one
-        return paths[0]
+        CellApple.getDocumentsDirectory()
     }
 }

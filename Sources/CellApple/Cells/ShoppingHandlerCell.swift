@@ -42,8 +42,6 @@ public class ShoppingHandlerCell: GeneralCell {
     }
     
     required init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        
         try super.init(from: decoder)
         
         // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
@@ -56,7 +54,6 @@ public class ShoppingHandlerCell: GeneralCell {
     }
     
     public override func encode(to encoder: Encoder) throws {
-      var container = encoder.container(keyedBy: CodingKeys.self)
       try super.encode(to: encoder)
     }
     
@@ -233,11 +230,6 @@ public class ShoppingHandlerCell: GeneralCell {
          get keypath1 and store it in keypath2
          
          */
-        if let cellReferences = self.cellConfiguration.cellReferences {
-            for cellReference in cellReferences {
-                
-            }
-        }
         return self.cellConfiguration
     }
     

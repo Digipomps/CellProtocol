@@ -4,6 +4,50 @@ on:
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/notify-pycellprotocol.yml"
+      - "Sources/CellApple/AppleBridgeTransport.swift"
+      - "Sources/CellApple/IdentityVault.swift"
+      - "Sources/CellBase/CellConfiguration/**"
+      - "Sources/CellBase/Cells/Bridging/**"
+      - "Sources/CellBase/Cells/CellResolver/**"
+      - "Sources/CellBase/Cells/Vault/**"
+      - "Sources/CellBase/Crypto/VaultLegacyPayloadDecoder.swift"
+      - "Sources/CellBase/Identity/**"
+      - "Sources/CellBase/Protocols/CloudBridgeProtocol.swift"
+      - "Sources/CellVapor/CloudBridge/**"
+      - "Sources/CellVapor/VaporIdentityVault.swift"
+      - "Tests/CellBaseTests/*Bridge*"
+      - "Tests/CellBaseTests/*Resolver*"
+      - "Tests/CellBaseTests/*Vault*"
+      - "Tests/CellBaseTests/*CellConfiguration*"
+      - "Tests/CellBaseTests/SkeletonTests.swift"
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - ".github/workflows/notify-pycellprotocol.yml"
+      - "Sources/CellApple/AppleBridgeTransport.swift"
+      - "Sources/CellApple/IdentityVault.swift"
+      - "Sources/CellBase/CellConfiguration/**"
+      - "Sources/CellBase/Cells/Bridging/**"
+      - "Sources/CellBase/Cells/CellResolver/**"
+      - "Sources/CellBase/Cells/Vault/**"
+      - "Sources/CellBase/Crypto/VaultLegacyPayloadDecoder.swift"
+      - "Sources/CellBase/Identity/**"
+      - "Sources/CellBase/Protocols/CloudBridgeProtocol.swift"
+      - "Sources/CellVapor/CloudBridge/**"
+      - "Sources/CellVapor/VaporIdentityVault.swift"
+      - "Tests/CellBaseTests/*Bridge*"
+      - "Tests/CellBaseTests/*Resolver*"
+      - "Tests/CellBaseTests/*Vault*"
+      - "Tests/CellBaseTests/*CellConfiguration*"
+      - "Tests/CellBaseTests/SkeletonTests.swift"
   workflow_dispatch:
 
 permissions:
@@ -19,8 +63,11 @@ jobs:
           GH_TOKEN: ${{ secrets.PYCELLPROTOCOL_DISPATCH_TOKEN }}
           EVENT_TYPE: cellprotocol-upstream
           UPSTREAM_REPOSITORY: ${{ github.repository }}
-          UPSTREAM_SHA: ${{ github.sha }}
-          UPSTREAM_REF: ${{ github.ref_name }}
+          UPSTREAM_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
+          UPSTREAM_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          UPSTREAM_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}
+          UPSTREAM_EVENT_NAME: ${{ github.event_name == 'pull_request_target' && 'pull_request' || github.event_name }}
+          UPSTREAM_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           UPSTREAM_RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
@@ -31,6 +78,9 @@ jobs:
             --method POST \
             -f event_type="$EVENT_TYPE" \
             -f client_payload[repository]="$UPSTREAM_REPOSITORY" \
+            -f client_payload[head_repository]="$UPSTREAM_HEAD_REPOSITORY" \
             -f client_payload[sha]="$UPSTREAM_SHA" \
             -f client_payload[ref]="$UPSTREAM_REF" \
+            -f client_payload[event_name]="$UPSTREAM_EVENT_NAME" \
+            -f client_payload[pr_number]="$UPSTREAM_PR_NUMBER" \
             -f client_payload[run_id]="$UPSTREAM_RUN_ID"

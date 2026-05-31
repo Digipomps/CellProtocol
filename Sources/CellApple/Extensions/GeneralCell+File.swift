@@ -35,11 +35,7 @@ extension GeneralCell {
     }
     
     public func getDocumentsDirectory() -> URL {
-        // find all possible documents directories for this user
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        
-        // just send back the first one, which ought to be the only one
-        return paths[0]
+        CellApple.getDocumentsDirectory()
     }
     
     func getCellDirectory() throws -> URL {
@@ -51,7 +47,7 @@ extension GeneralCell {
         let fileManager = FileManager.default
         
         if !fileManager.fileExists(atPath:directory) {
-            print("******** Directory does not exist trying to create. path: \(directoryURL.path)")
+            CellBase.diagnosticLog("Creating cell directory: \(directoryURL.path)", domain: .lifecycle)
             
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             

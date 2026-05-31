@@ -10,7 +10,7 @@ public enum InterceptKind {
 
 public extension GeneralCell {
     /// Common registration helper for both GET and SET intercepts.
-    public func registerIntercept(
+    func registerIntercept(
         _ kind: InterceptKind,
         key: String,
         owner: Identity,
@@ -29,7 +29,7 @@ public extension GeneralCell {
     }
 
     /// Convenience wrapper for GET intercept registration.
-    public func registerGet(
+    func registerGet(
         key: String,
         owner: Identity,
         handler: @escaping (_ requester: Identity) async -> ValueType
@@ -40,7 +40,7 @@ public extension GeneralCell {
     }
 
     /// Convenience wrapper for SET intercept registration.
-    public func registerSet(
+    func registerSet(
         key: String,
         owner: Identity,
         handler: @escaping (_ requester: Identity, _ payload: ValueType) async -> ValueType?
@@ -51,7 +51,7 @@ public extension GeneralCell {
     }
 
     /// Strict-mode friendly GET registration that declares the contract before wiring the handler.
-    public func registerGet(
+    func registerGet(
         key: String,
         owner: Identity,
         returns: ValueType,
@@ -78,7 +78,7 @@ public extension GeneralCell {
     }
 
     /// Strict-mode friendly SET registration that declares the contract before wiring the handler.
-    public func registerSet(
+    func registerSet(
         key: String,
         owner: Identity,
         input: ValueType,

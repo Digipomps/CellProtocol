@@ -69,7 +69,7 @@ final class GetConfigurationsTool: Tool {
             obj["naturalLanguageQuery"] = .string(arguments.naturalLanguageQuery)
             _ = try? await cell.set(keypath: "\(AIKeys.root).\(AIKeys.lastToolArguments)", value: .object(obj), requester: requester)
         }
-        let vt = try? await cell.get(keypath: "\(AIKeys.root).\(AIKeys.candidates)", requester: requester)
+        _ = try? await cell.get(keypath: "\(AIKeys.root).\(AIKeys.candidates)", requester: requester)
 //        var configs: [CellConfiguration] = []
 //        if case let .list(list)? = vt {
 //            for item in list {
@@ -125,6 +125,5 @@ extension GetConfigurationsTool {
     }
 }
 #endif
-
 
 

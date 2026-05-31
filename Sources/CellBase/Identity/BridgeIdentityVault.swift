@@ -106,7 +106,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
         let timeout = DispatchTime.now() + .seconds(5)
         if semaphore.wait(timeout: timeout) == .timedOut {
             signCancellable.cancel()
-            print("CloudBridgeIdentityVault sign semaphore timed out! ")
+            CellBase.diagnosticLog("CloudBridgeIdentityVault sign semaphore timed out", domain: .identity)
             throw IdentityVaultError.signingFailed
         }
 
@@ -140,7 +140,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
                     let key = try Curve25519.Signing.PublicKey(rawRepresentation: compressedKey)
                     valid = key.isValidSignature(signature, for: messageData)
                 } else {
-                    print("No compressed key")
+                    CellBase.diagnosticLog("BridgeIdentityVault missing compressed public key", domain: .identity)
                 }
             case .secp256k1, .P256:
                 CellBase.diagnosticLog("BridgeIdentityVault verifying ECDSA P-256-compatible signature", domain: .identity)
@@ -154,7 +154,7 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
             }
             
         } else {
-            print("No public secure key cloud bridge")
+            CellBase.diagnosticLog("BridgeIdentityVault missing public secure key", domain: .identity)
         }
         return valid
     }

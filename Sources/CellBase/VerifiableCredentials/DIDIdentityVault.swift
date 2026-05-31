@@ -39,7 +39,6 @@ actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
     
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
         fatalError("Signing not yet implemented in DIDIdentityVault")
-        return Data()
     }
     
     
@@ -53,7 +52,7 @@ actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
                     let key = try Curve25519.Signing.PublicKey(rawRepresentation: compressedKey)
                     valid = key.isValidSignature(signature, for: messageData)
                 } else {
-                    print("No compressed key")
+                    CellBase.diagnosticLog("DIDIdentityVault missing compressed public key", domain: .credentials)
                 }
             case .secp256k1, .P256:
                 CellBase.diagnosticLog("DIDIdentityVault verifying ECDSA P-256-compatible signature", domain: .credentials)
@@ -67,7 +66,7 @@ actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
             }
             
         } else {
-            print("No public secure key vapor")
+            CellBase.diagnosticLog("DIDIdentityVault missing public secure key", domain: .credentials)
         }
         return valid
         

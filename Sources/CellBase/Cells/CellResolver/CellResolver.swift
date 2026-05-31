@@ -1308,7 +1308,7 @@ public class CellResolver: CellResolverProtocol {
         let resolve = await auditor.loadNamedResolve(reference)
         switch resolve?.cellScope {
         case .template:
-            let cell = try await createCell(reference: reference)
+            let cell = try await createCell(reference: reference, requester: identity)
             await applyLifecycleTrackingIfNeeded(
                 cell: cell,
                 resolve: resolve,
@@ -1467,12 +1467,12 @@ public class CellResolver: CellResolverProtocol {
         return owner.uuid != resolve.owner.uuid
     }
     
-    private func createCell(reference: String) async throws -> Emit {
+    private func createCell(reference: String, requester: Identity) async throws -> Emit {
         guard let resolve = await auditor.loadNamedResolve(reference) else {
             print("Error cell not found for: \(reference) at create cell")
             throw CellResolverError.cellNotFound
         }
-        let instance = try await resolve.new()
+        let instance = try await resolve.new(requester: requester)
         
         guard let emitCell = instance as? Emit else {
             print("Error cell not found for: \(reference) at create cell(2)")

@@ -36,6 +36,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     
     
     static let identitiesFileName = "Identities.crypt"
+    static let keychainGenericPasswordService = "org.haven.cellprotocol.identityvault"
     private static let encryptedVaultMagic = Data("AVLT1".utf8)
     private static let nonceLength = 12
     private static let tagLength = 16
@@ -43,6 +44,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     var context = LAContext()
     var identities: [VaultIdentity]?
     private var mainSecret: Data?
+    private var testHostKeychainFallbackData = [String: Data]()
     private let tag = "me.entity.key"
     
     private var initializer: (() -> ())?
@@ -69,7 +71,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
             //  only if the device supports that kind of authentication.
             //faceIDLabel.isHidden = (state == .loggedin) || (context.biometryType != .faceID)
             
-            print("Didset AuthenticationState: \(state)")
+            CellBase.diagnosticLog("AuthenticationState changed: \(state)", domain: .identity)
         }
     }
     
@@ -99,10 +101,10 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         let task = Task {
             do {
                 try await self.authenticatev2()
-                await self.finishInitialization()
+                self.finishInitialization()
             } catch {
-                print("Authenticate failed with error: \(error)")
-                await self.resetInitializationTask()
+                CellBase.diagnosticLog("Authenticate failed with error: \(error)", domain: .identity)
+                self.resetInitializationTask()
             }
         }
         initializationTask = task
@@ -316,7 +318,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
             
             try await saveIdentities(jsonData: serializedIdentites)
         
-        } catch { print("Serializing identities failed with error: \(error)") }
+        } catch { CellBase.diagnosticLog("Serializing identities failed with error: \(error)", domain: .identity) }
     }
     
     public func identityExistInVault(_ identity: Identity) async -> Bool {
@@ -442,7 +444,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 try await finishAuthentication()
             }
         } else {
-            print(error?.localizedDescription ?? "Can't evaluate policy")
+            CellBase.diagnosticLog(error?.localizedDescription ?? "Can't evaluate policy", domain: .identity)
         }
     }
 
@@ -458,7 +460,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
             }
         } catch {
             identities = nil
-            print("Loading Apple identity vault failed with error: \(error)")
+            CellBase.diagnosticLog("Loading Apple identity vault failed with error: \(error)", domain: .identity)
         }
 
         if let identities = identities {
@@ -467,7 +469,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 identitiesUUIDDictionary[identity.uuid] = identity
             }
 
-            print("Identity Vault identitiesDictionary: \(identitiesDictionary)")
+            CellBase.diagnosticLog("Identity Vault loaded \(identitiesDictionary.count) identities", domain: .identity)
         }
 
         if self.initializer != nil {
@@ -511,14 +513,14 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
 //                        }
 //                    }
                 } else {
-                    print(error?.localizedDescription ?? "Failed to authenticate")
+                    CellBase.diagnosticLog(error?.localizedDescription ?? "Failed to authenticate", domain: .identity)
                     
                     // Fall back to a asking for username and password.
                     // ...
                 }
             }
         } else {
-            print(error?.localizedDescription ?? "Can't evaluate policy")
+            CellBase.diagnosticLog(error?.localizedDescription ?? "Can't evaluate policy", domain: .identity)
             
             // Fall back to a asking for username and password.
             // ...
@@ -526,6 +528,55 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     }
     
     private func keychainData(for applicationTag: String) throws -> Data? {
+        if Self.isXCTestOrSwiftPMTestHost,
+           let fallbackData = testHostKeychainFallbackData[applicationTag] {
+            return fallbackData
+        }
+
+        if let data = try genericPasswordData(for: applicationTag) {
+            return data
+        }
+
+        guard let legacyData = try legacyKeychainData(for: applicationTag) else {
+            return nil
+        }
+
+        try? storeKeychainData(legacyData, for: applicationTag)
+        return legacyData
+    }
+
+    private func genericPasswordBaseQuery(for applicationTag: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: IdentityVault.keychainGenericPasswordService,
+            kSecAttrAccount as String: applicationTag
+        ]
+    }
+
+    private func genericPasswordData(for applicationTag: String) throws -> Data? {
+        var query = genericPasswordBaseQuery(for: applicationTag)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecReturnData as String] = true
+        query[kSecUseAuthenticationContext as String] = context
+
+        var item: CFTypeRef?
+        let searchStatus = SecItemCopyMatching(query as CFDictionary, &item)
+        guard searchStatus != errSecItemNotFound else {
+            return nil
+        }
+        guard searchStatus == errSecSuccess else {
+            if shouldUseTestHostKeychainFallback(for: searchStatus) {
+                return nil
+            }
+            throw KeychainError.unhandledError(status: searchStatus)
+        }
+        guard let data = item as? Data else {
+            throw KeychainError.unexpectedPasswordData
+        }
+        return data
+    }
+
+    private func legacyKeychainData(for applicationTag: String) throws -> Data? {
         let context = self.context
         context.localizedCancelTitle = "Use Passcode"
         context.touchIDAuthenticationAllowableReuseDuration = LATouchIDAuthenticationMaximumAllowableReuseDuration
@@ -545,6 +596,9 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
             return nil
         }
         guard searchStatus == errSecSuccess else {
+            if shouldUseTestHostKeychainFallback(for: searchStatus) {
+                return nil
+            }
             throw KeychainError.unhandledError(status: searchStatus)
         }
         guard let existingItem = item as? [String: Any],
@@ -634,51 +688,80 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         try storeKeychainData(privateKeyData, for: applicationTag)
     }
 
+    private static var isXCTestOrSwiftPMTestHost: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil {
+            return true
+        }
+
+        if Bundle.main.bundlePath.contains(".xctest") {
+            return true
+        }
+
+        return ProcessInfo.processInfo.arguments.contains { argument in
+            argument.contains(".xctest")
+        }
+    }
+
+    private func shouldUseTestHostKeychainFallback(for status: OSStatus) -> Bool {
+        status == errSecMissingEntitlement && Self.isXCTestOrSwiftPMTestHost
+    }
+
     private func storeKeychainData(_ data: Data, for applicationTag: String) throws {
-        let access = SecAccessControlCreateWithFlags(nil, // Use the default allocator.
-                                                     kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-                                                     .userPresence,
-                                                     nil)
-        let context = self.context
-        context.localizedCancelTitle = "Use Passcode"
-        context.touchIDAuthenticationAllowableReuseDuration = LATouchIDAuthenticationMaximumAllowableReuseDuration
-
-#if targetEnvironment(simulator)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecAttrApplicationTag as String: applicationTag,
-            kSecUseAuthenticationContext as String: context,
-            kSecValueData as String: data
-        ]
-#else
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecAttrApplicationTag as String: applicationTag,
-            kSecAttrAccessControl as String: access as Any,
-            kSecUseAuthenticationContext as String: context,
-            kSecValueData as String: data
-        ]
-#endif
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status == errSecDuplicateItem {
-            let lookupQuery: [String: Any] = [
-                kSecClass as String: kSecClassKey,
-                kSecAttrApplicationTag as String: applicationTag,
-                kSecUseAuthenticationContext as String: context
-            ]
-            let updateFields: [String: Any] = [
-                kSecValueData as String: data
-            ]
-            let updateStatus = SecItemUpdate(lookupQuery as CFDictionary, updateFields as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw KeychainError.unhandledError(status: updateStatus)
-            }
+        let status = storeGenericPasswordData(data, for: applicationTag)
+        guard status != errSecSuccess else {
             return
         }
-        guard status == errSecSuccess else {
-            throw KeychainError.unhandledError(status: status)
+
+        if status == errSecDuplicateItem {
+            let updateStatus = updateGenericPasswordData(
+                data,
+                for: applicationTag
+            )
+            guard updateStatus != errSecSuccess else {
+                return
+            }
+            if shouldUseTestHostKeychainFallback(for: updateStatus) {
+                storeTestHostFallbackData(data, for: applicationTag)
+                return
+            }
+            throw KeychainError.unhandledError(status: updateStatus)
         }
+
+        if shouldUseTestHostKeychainFallback(for: status) {
+            storeTestHostFallbackData(data, for: applicationTag)
+            return
+        }
+
+        throw KeychainError.unhandledError(status: status)
+    }
+
+    private func storeGenericPasswordData(_ data: Data, for applicationTag: String) -> OSStatus {
+        var query = genericPasswordBaseQuery(for: applicationTag)
+        query[kSecValueData as String] = data
+        let access = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
+            .userPresence,
+            nil
+        )
+        query[kSecAttrAccessControl as String] = access as Any
+        query[kSecUseAuthenticationContext as String] = context
+
+        return SecItemAdd(query as CFDictionary, nil)
+    }
+
+    private func updateGenericPasswordData(_ data: Data, for applicationTag: String) -> OSStatus {
+        var query = genericPasswordBaseQuery(for: applicationTag)
+        query[kSecUseAuthenticationContext as String] = context
+        let updateFields: [String: Any] = [
+            kSecValueData as String: data
+        ]
+        return SecItemUpdate(query as CFDictionary, updateFields as CFDictionary)
+    }
+
+    private func storeTestHostFallbackData(_ data: Data, for applicationTag: String) {
+        testHostKeychainFallbackData[applicationTag] = data
     }
 
     private func scopedSecretStorageTag(for tag: String) -> String {
@@ -730,11 +813,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     }
     
     func getDocumentsDirectory() -> URL {
-        // find all possible documents directories for this user
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        
-        // just send back the first one, which ought to be the only one
-        return paths[0]
+        CellApple.getDocumentsDirectory()
     }
     
     private func vaultKey(scope: String) throws -> SymmetricKey {
@@ -864,7 +943,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 needsMigration = true
             } catch {
                 // Keep legacy embedded private key material if migration failed.
-                print("Apple vault private-key migration skipped for \(identity.uuid): \(error)")
+                CellBase.diagnosticLog("Apple vault private-key migration skipped for \(identity.uuid): \(error)", domain: .identity)
             }
 
             if let applicationTag = identity.keyAgreementPrivateKeyApplicationTag,
@@ -894,7 +973,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                     migrated[index] = identity
                     needsMigration = true
                 } catch {
-                    print("Apple vault key-agreement migration skipped for \(identity.uuid): \(error)")
+                    CellBase.diagnosticLog("Apple vault key-agreement migration skipped for \(identity.uuid): \(error)", domain: .identity)
                 }
             }
         }
@@ -1000,7 +1079,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
 */
     public func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
         guard let vaultIdentity = self.vaultIdentityWithUUID(identity.uuid) else {
-            print("Did not find vault identity for \(identity.uuid)")
+            CellBase.diagnosticLog("Did not find vault identity for \(identity.uuid)", domain: .identity)
             throw IdentityVaultError.noVaultIdentity
         }
         guard signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity) else {
@@ -1196,23 +1275,13 @@ extension OSStatus {
     }
 }
 
-/// The interface needed for SecKey conversion.
-protocol SecKeyConvertible: CustomStringConvertible {
+/// The local interface needed for SecKey conversion.
+protocol SecKeyConvertible {
     /// Creates a key from an X9.63 representation.
     init<Bytes>(x963Representation: Bytes) throws where Bytes: ContiguousBytes
     
     /// An X9.63 representation of the key.
     var x963Representation: Data { get }
-}
-
-extension SecKeyConvertible {
-    /// A string version of the key for visual inspection.
-    /// IMPORTANT: Never log the actual key data.
-    public var description: String {
-        return self.x963Representation.withUnsafeBytes { bytes in
-            return "Key representation contains \(bytes.count) bytes."
-        }
-    }
 }
 
 // Assert that the NIST keys are convertible.
@@ -1257,7 +1326,7 @@ func createKeyPairForDomainv2(domainString: String) throws -> (publicKey: Data, 
     var error: Unmanaged<CFError>?
     
     guard let privateKey: SecKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error)  else {
-        print("Creating private key failed with error: \(String(describing: error))")
+        CellBase.diagnosticLog("Creating private key failed with error: \(String(describing: error))", domain: .identity)
         throw KeyStoreError("Creating private key failed with error: \(String(describing: error))")
     }
     //kSecAttrKeyTypeECSECPrimeRandom // 
@@ -1280,7 +1349,7 @@ func createKeyPairForDomainv2(domainString: String) throws -> (publicKey: Data, 
             throw KeyStoreError("Getting public key external representation failed.")
     }
     // ANSI X9.63
-    print("******* Generated Public and Private key Pair *********")
+    CellBase.diagnosticLog("Generated public/private key pair", domain: .identity)
     let publicKeyData = publicKeyExRep as Data
     let privateKeyData = privateKeyExRep as Data
     return (publicKey: publicKeyData, privateKey: privateKeyData)
@@ -1623,10 +1692,10 @@ struct VaultIdentity: Codable {
     
     // Not meaningful for VaultIdentity?
     mutating func setValueForKey(key: String, value valuePublisher: AnyPublisher<ValueType, Never>, requester: Identity) {
-        print("Setting value for key: \(key)")
+        CellBase.diagnosticLog("Setting vault identity value for key: \(key)", domain: .identity)
         var localSelf = self
-        let valueCancellable = valuePublisher.sink(receiveCompletion:{
-            print ("Value for key completion: \($0).")
+        _ = valuePublisher.sink(receiveCompletion:{
+            CellBase.diagnosticLog("Vault identity value completion: \($0)", domain: .identity)
         } , receiveValue: { value in
    
             localSelf.addProperty(property: value, for: key)
@@ -1665,7 +1734,7 @@ struct VaultIdentity: Codable {
                     privateSecureKey: privateSecureKey
                 )
             } catch {
-                print("Key generation failed")
+                CellBase.diagnosticLog("Key generation failed", domain: .identity)
                 return (
                     publicKey: Data(),
                     privateKey: Data(),

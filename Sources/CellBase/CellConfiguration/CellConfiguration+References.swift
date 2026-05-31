@@ -5,7 +5,7 @@ import Foundation
 
 public extension CellConfiguration {
     /// Read-only dictionary view of references indexed by `CellReference.id`.
-    public var referencesDict: [String: CellReference] {
+    var referencesDict: [String: CellReference] {
         var dict: [String: CellReference] = [:]
         for ref in cellReferences ?? [] {
             dict[ref.id] = ref
@@ -14,7 +14,7 @@ public extension CellConfiguration {
     }
 
     /// Read, insert/replace, or remove a reference by id.
-    public subscript(referenceId id: String) -> CellReference? {
+    subscript(referenceId id: String) -> CellReference? {
         get {
             cellReferences?.first(where: { $0.id == id })
         }
@@ -35,18 +35,18 @@ public extension CellConfiguration {
     }
 
     /// Returns true when a reference exists for the given id.
-    public func containsReference(withId id: String) -> Bool {
+    func containsReference(withId id: String) -> Bool {
         cellReferences?.contains(where: { $0.id == id }) ?? false
     }
 
     /// Insert or replace a reference based on id.
-    public mutating func addOrReplaceReference(_ ref: CellReference) {
+    mutating func addOrReplaceReference(_ ref: CellReference) {
         self[referenceId: ref.id] = ref
     }
 
     /// Remove a reference by id and return true when an item was removed.
     @discardableResult
-    public mutating func removeReference(withId id: String) -> Bool {
+    mutating func removeReference(withId id: String) -> Bool {
         let before = cellReferences?.count ?? 0
         self[referenceId: id] = nil
         let after = cellReferences?.count ?? 0

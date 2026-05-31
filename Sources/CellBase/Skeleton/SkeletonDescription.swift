@@ -868,7 +868,7 @@ public struct SkeletonList: Codable, Identifiable {
         
             let inititalElements = try await resolver.get(from: cellURL, requester: requester)
             guard case .list(let valueTypeList) = inititalElements else {
-                print("Error. ValueType returned from get \(cellURL) not List")
+                CellBase.diagnosticLog("Skeleton list expected List value from \(cellURL)", domain: .skeleton)
                 return ValueTypeList()
             }
             return valueTypeList
@@ -1204,7 +1204,7 @@ public struct SkeletonButton: Codable, Identifiable {
                 }
             }
         } catch {
-            print("Execute button failed with error: \(error)")
+            CellBase.diagnosticLog("Execute button failed with error: \(error)", domain: .skeleton)
         }
         return nil
     }
@@ -1550,7 +1550,7 @@ public struct SkeletonGrid: Codable, Identifiable {
         {
             let initialItems = try await resolver.get(from: cellURL, requester: requester)
             guard case .list(let valueTypeList) = initialItems else {
-                print("Error. ValueType returned from get \(cellURL) not List")
+                CellBase.diagnosticLog("Skeleton grid expected List value from \(cellURL)", domain: .skeleton)
                 return ValueTypeList()
             }
             return valueTypeList
@@ -1724,7 +1724,7 @@ public struct SkeletonPicker: Codable, Identifiable {
         {
             let initialElements = try await resolver.get(from: cellURL, requester: requester)
             guard case .list(let valueTypeList) = initialElements else {
-                print("Error. ValueType returned from get \(cellURL) not List")
+                CellBase.diagnosticLog("Skeleton picker expected List value from \(cellURL)", domain: .skeleton)
                 return ValueTypeList()
             }
             return valueTypeList

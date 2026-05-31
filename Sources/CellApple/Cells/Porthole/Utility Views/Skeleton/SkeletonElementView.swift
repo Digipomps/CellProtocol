@@ -140,7 +140,7 @@ struct SkeletonElementView: View {
                 }
             }
             
-        case .Spacer(let skeletonSpacer):
+        case .Spacer(_):
             Spacer()
             
         case .Image(let skeletonImage):
@@ -188,7 +188,7 @@ struct SkeletonElementView: View {
         var body: some View {
             Group {
                 if let element = SkeletonDescriptions.skeletonDescriptionFromJson().skeleton {
-                    SkeletonElementView(element: element)
+                    SkeletonView(element: element)
                         .environmentObject(PortholeViewModel())
                 } else {
                     Text("No skeleton available")

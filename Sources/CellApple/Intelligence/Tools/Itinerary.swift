@@ -29,7 +29,7 @@ A Generable structure that defines an Itinerary, along with its nested types: Da
 import Foundation
 import FoundationModels
 
-@available(iOS 27.0, macOS 26.0, tvOS 20.0, watchOS 11.0, visionOS 4.0, *)
+@available(iOS 27.0, macOS 26.0, tvOS 26.0, watchOS 11.0, visionOS 2.0, *)
 @Generable
 struct Itinerary: Equatable {
     @Guide(description: "An exciting name for the trip.")
@@ -50,7 +50,7 @@ struct Itinerary: Equatable {
     let days: [DayPlan]
 }
 
-@available(iOS 20.0, macOS 26.0, tvOS 20.0, watchOS 11.0, visionOS 4.0, *)
+@available(iOS 27.0, macOS 26.0, tvOS 26.0, watchOS 11.0, visionOS 2.0, *)
 @Generable
 struct DayPlan: Equatable {
     @Guide(description: "A unique and exciting title for this day plan.")
@@ -62,7 +62,7 @@ struct DayPlan: Equatable {
     let activities: [Activity]
 }
 
-@available(iOS 20.0, macOS 26.0, tvOS 20.0, watchOS 11.0, visionOS 4.0, *)
+@available(iOS 27.0, macOS 26.0, tvOS 26.0, watchOS 11.0, visionOS 2.0, *)
 @Generable
 struct Activity: Equatable {
     let type: Kind
@@ -70,7 +70,7 @@ struct Activity: Equatable {
     let description: String
 }
 
-@available(iOS 20.0, macOS 26.0, tvOS 20.0, watchOS 11.0, visionOS 4.0, *)
+@available(iOS 27.0, macOS 26.0, tvOS 26.0, watchOS 11.0, visionOS 2.0, *)
 @Generable
 enum Kind {
     case sightseeing
@@ -78,4 +78,3 @@ enum Kind {
     case shopping
     case hotelAndLodging
 }
-

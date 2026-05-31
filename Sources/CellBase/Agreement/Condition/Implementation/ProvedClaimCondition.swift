@@ -77,8 +77,6 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                     throw CellBaseError.noIdentity
                 }
                 
-                let operatorString = keypathExpression.operatorString
-                let keypathValue = keypathExpression.value
                 switch value {
                 case .object( let vCClaimObject):
                     let claim = try convertToClaim( vCClaimObject) // Catch error and report
@@ -233,7 +231,7 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                         print("Operator not relevant for Integer: \(keypathExpression.operatorString)")
                     }
                     
-                case .float(let statementFloat):
+                case .float(_):
                     CellBase.diagnosticLog("ProvedClaimCondition comparing float value", domain: .agreement)
                     
                 default:
@@ -356,7 +354,6 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
     }
 
     public func resolve(context: ConnectContext) async {
-        var state = ConditionState.unresolved
         CellBase.diagnosticLog("ProvedClaimCondition.resolve statement=\(statement)", domain: .agreement)
         
         if let keypathExpression = AnyKeypathExpression.parseStatement(statement),
@@ -403,13 +400,13 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                             // ensure that there's sufficient grants to reach
                             // if user need to be involded send flowItem via ... Identity?
                             
-                            state = .met
+                            CellBase.diagnosticLog("ProvedClaimCondition.resolve state=met", domain: .agreement)
                         } else {
                           // get vc for keypath
-                            print("Value at keypath not valid VC")
+                            CellBase.diagnosticLog("Value at keypath not valid VC", domain: .agreement)
                         }
                     } else {
-                        print("No claim objectValue!")
+                        CellBase.diagnosticLog("No claim objectValue", domain: .agreement)
                         
                         // 1. extrect value
                         // 2. find vc
@@ -419,7 +416,7 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                 } catch ValueTypeError.unexpectedValueType {
                     
                 } catch {
-                    print("ProvedClaim error (resolve): \(error) keypath: \(shortenedKeypath)")
+                    CellBase.diagnosticLog("ProvedClaim error (resolve): \(error) keypath: \(shortenedKeypath)", domain: .agreement)
                 }
                 
                 // check grants in identity
@@ -428,15 +425,13 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                 //                        }
                 
             case "source":
-                let shortenedKeypath = deletePrefix("source.", from: keypath)
-                CellBase.diagnosticLog("ProvedClaimCondition.resolve lookup=source", domain: .agreement)
+                CellBase.diagnosticLog("ProvedClaimCondition.resolve lookup=source keypath=\(deletePrefix("source.", from: keypath))", domain: .agreement)
                 
                 
             case "target":
-                let shortenedKeypath = deletePrefix("target.", from: keypath)
-                CellBase.diagnosticLog("ProvedClaimCondition.resolve lookup=target", domain: .agreement)
+                CellBase.diagnosticLog("ProvedClaimCondition.resolve lookup=target keypath=\(deletePrefix("target.", from: keypath))", domain: .agreement)
             default:
-                print("Unknown lookup key: \(contextKey)")
+                CellBase.diagnosticLog("Unknown lookup key: \(contextKey)", domain: .agreement)
             }
         }
     }

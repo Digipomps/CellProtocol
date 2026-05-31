@@ -35,7 +35,7 @@ public enum AppInitializer {
                 localPreparationTask = nil
                 return
             }
-            print("preparing App local runtime...")
+            CellBase.diagnosticLog("Preparing App local runtime", domain: .lifecycle)
             do {
                 let resolver = CellResolver.sharedInstance
                 CellBase.sendDataAsText = true
@@ -47,7 +47,7 @@ public enum AppInitializer {
                 CellBase.webSocketSecurityPolicy = .requireTLS
 #endif
 
-                CellBase.documentRootPath = documentsDirectoryPath()
+                CellBase.documentRootPath = runtimeDocumentRootPath()
 
                 if resolver.tcUtility == nil {
                     let tcUtility = TypedCellUtility(storage: FileSystemCellStorage())
@@ -71,12 +71,12 @@ public enum AppInitializer {
                 scheduleDeferredPortholeSetupIfNeeded()
 
                 didPrepareLocalRuntime = true
-                print("Finished preparing local CellBase toolchain")
+                CellBase.diagnosticLog("Finished preparing local CellBase toolchain", domain: .lifecycle)
             } catch {
-                print("Error when preparing local toolchain. Error: \(error)")
+                CellBase.diagnosticLog("Error when preparing local toolchain. Error: \(error)", domain: .lifecycle)
             }
             localPreparationTask = nil
-            print("finished preparing App local runtime...")
+            CellBase.diagnosticLog("Finished App local runtime preparation", domain: .lifecycle)
         }
         localPreparationTask = task
         await task.value
@@ -106,27 +106,23 @@ public enum AppInitializer {
                 initializationTask = nil
                 return
             }
-            print("initializing App...")
-            do {
-                // 1) Identity vault
-                let identityVault = IdentityVault.shared
-                _ = await identityVault.initialize()
-                CellBase.defaultIdentityVault = identityVault
-                await prepareLocalRuntime()
-                await CellResolver.sharedInstance.refreshNamedResolveOwnersFromCurrentVault()
+            CellBase.diagnosticLog("Initializing App", domain: .lifecycle)
+            // 1) Identity vault
+            let identityVault = IdentityVault.shared
+            _ = await identityVault.initialize()
+            CellBase.defaultIdentityVault = identityVault
+            await prepareLocalRuntime()
+            await CellResolver.sharedInstance.refreshNamedResolveOwnersFromCurrentVault()
 
-                // 8) Optionally load default CellConfigurations from a folder (adjust to your environment)
-                // if let defaultUrl = URL(string: "file:///Users/Shared/CellsContainer/CellConfigurations/") {
-                //     try? loadCellConfigurations(from: defaultUrl)
-                // }
+            // 8) Optionally load default CellConfigurations from a folder (adjust to your environment)
+            // if let defaultUrl = URL(string: "file:///Users/Shared/CellsContainer/CellConfigurations/") {
+            //     try? loadCellConfigurations(from: defaultUrl)
+            // }
 
-                didInitialize = true
-                print("Finished configuring CellBase toolchain")
-            } catch {
-                print("Error when configuring tool. Error: \(error)")
-            }
+            didInitialize = true
+            CellBase.diagnosticLog("Finished configuring CellBase toolchain", domain: .lifecycle)
             initializationTask = nil
-            print("finished initializing App...")
+            CellBase.diagnosticLog("Finished App initialization", domain: .lifecycle)
         }
         initializationTask = task
         await task.value
@@ -166,6 +162,10 @@ public enum AppInitializer {
         default:
             return false
         }
+    }
+
+    private static var isXCTestOrSwiftPMTestHost: Bool {
+        CellApple.isXCTestOrSwiftPMTestHost
     }
 
     @MainActor
@@ -319,7 +319,7 @@ public enum AppInitializer {
                 type: AppleIntelligenceCell.self
             )
         } else {
-            print("Os not supported for AppleIntelligenceCell")
+            CellBase.diagnosticLog("OS not supported for AppleIntelligenceCell", domain: .lifecycle)
         }
     }
 
@@ -365,7 +365,7 @@ public enum AppInitializer {
             do {
                 try await setupPorthole()
             } catch {
-                print("Deferred Porthole setup failed with error: \(error)")
+                CellBase.diagnosticLog("Deferred Porthole setup failed with error: \(error)", domain: .lifecycle)
             }
         }
     }
@@ -373,6 +373,13 @@ public enum AppInitializer {
     private static func documentsDirectoryPath() -> String {
         let urls = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         return urls.first?.path ?? ""
+    }
+
+    private static func runtimeDocumentRootPath() -> String {
+        if isXCTestOrSwiftPMTestHost {
+            return CellApple.getDocumentsDirectory().path
+        }
+        return documentsDirectoryPath()
     }
     
     static func loadScaffoldCellsDict() throws {
@@ -390,14 +397,10 @@ public enum AppInitializer {
     }
     
     static func getDocumentsDirectory() -> URL {
-        // find all possible documents directories for this user
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        
-        // just send back the first one, which ought to be the only one
-        return paths[0]
+        CellApple.getDocumentsDirectory()
     }
     static func setupPorthole() async throws {
-        print("****** Setup Porthole *****")
+        CellBase.diagnosticLog("Setup Porthole", domain: .lifecycle)
             if let identity = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true) {
                 // Check whether Porthole exists in filesystem
                 let resolver = CellResolver.sharedInstance
@@ -438,10 +441,10 @@ public enum AppInitializer {
                         try await resolver.registerNamedEmitCell(name: "Porthole", emitCell: porthole, scope: .identityUnique, identity: identity)
                         self.scaffoldCellsDict["Porthole"] = porthole.uuid
                         try self.saveScaffoldCellsDict()
-                        print("Porthole loaded as persisted on disk")
+                        CellBase.diagnosticLog("Porthole loaded as persisted on disk", domain: .lifecycle)
                         return porthole
                     } catch {
-                        print("Getting porthole from disk failed with error: \(error)")
+                        CellBase.diagnosticLog("Getting porthole from disk failed with error: \(error)", domain: .lifecycle)
                     }
                 }
             }
@@ -456,7 +459,7 @@ public enum AppInitializer {
             try await resolver.registerNamedEmitCell(name: "Porthole", emitCell: porthole, scope: .identityUnique, identity: identity)
             self.scaffoldCellsDict["Porthole"] = porthole.uuid
             try self.saveScaffoldCellsDict()
-            print("Porthole loaded as new and pristine")
+            CellBase.diagnosticLog("Porthole loaded as new and pristine", domain: .lifecycle)
             return porthole
             
         }

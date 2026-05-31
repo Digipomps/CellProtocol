@@ -237,7 +237,7 @@ private struct KeyPathParser {
 
             // Index? (digits)
             if let ch = peek(), ch.isNumber || ch == "-" {
-                var start = i
+                let start = i
                 advance()
                 while let ch2 = peek(), ch2.isNumber { advance() }
                 let numStr = String(path[start..<i])
@@ -283,7 +283,7 @@ private struct KeyPathParser {
                     return .string(s)
                 } else {
                     // read until ] or whitespace
-                    var start = i
+                    let start = i
                     while let c = peek(), c != "]", !c.isWhitespace { advance() }
                     let raw = String(path[start..<i])
                     if raw == "true" { return .bool(true) }
@@ -462,7 +462,7 @@ private struct Navigator {
                     node = .list(arr)
                 } else {
                     // Opprett nytt objekt med match-feltet, og sett videre nedover pathen
-                    var newObj: Object = [key: desired]
+                    let newObj: Object = [key: desired]
                     var child: ValueType = .object(newObj)
                     try recurseSet(&child, at: idx + 1)
                     // sørg for at matchfeltet fortsatt finnes (kan ha blitt overskrevet)

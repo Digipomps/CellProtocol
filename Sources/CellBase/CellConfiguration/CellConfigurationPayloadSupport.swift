@@ -86,12 +86,23 @@ public enum CellConfigurationPayloadSupport {
     public static func resolveCellConfiguration(
         from value: ValueType,
         requester: Identity,
-        candidates: [CellConfiguration] = []
+        candidates: [CellConfiguration] = [],
+        endpointPolicy: CellSecurityEndpointPolicy = CellSecurityEndpointPolicy()
     ) async -> CellConfiguration? {
+        if let lookup = explicitLookup(from: value), lookup.hasIdentity {
+            return await resolveLookup(
+                lookup,
+                requester: requester,
+                candidates: candidates,
+                endpointPolicy: endpointPolicy
+            )
+        }
+
         if let direct = decodeCellConfiguration(from: value) {
             return retargetingLocalCellEndpointsIfNeeded(
                 in: direct,
-                sourceEndpoint: direct.discovery?.sourceCellEndpoint
+                sourceEndpoint: direct.discovery?.sourceCellEndpoint,
+                endpointPolicy: endpointPolicy
             )
         }
 
@@ -99,36 +110,94 @@ public enum CellConfigurationPayloadSupport {
             return nil
         }
 
+        return await resolveLookup(
+            lookup,
+            requester: requester,
+            candidates: candidates,
+            endpointPolicy: endpointPolicy
+        )
+    }
+
+    private static func resolveLookup(
+        _ lookup: Lookup,
+        requester: Identity,
+        candidates: [CellConfiguration],
+        endpointPolicy: CellSecurityEndpointPolicy
+    ) async -> CellConfiguration? {
+
         if let sourceEndpoint = lookup.sourceCellEndpoint,
            let sourceConfiguration = await resolveSourceBackedOrPublishedConfiguration(
             from: sourceEndpoint,
-            requester: requester
+            requester: requester,
+            endpointPolicy: endpointPolicy
            ) {
             return sourceConfiguration
         }
 
-        guard let matched = resolveCellConfiguration(lookup: lookup, candidates: candidates) else {
+        guard let matched = resolveCellConfiguration(
+            lookup: lookup,
+            candidates: candidates,
+            endpointPolicy: endpointPolicy
+        ) else {
             return nil
         }
         return retargetingLocalCellEndpointsIfNeeded(
             in: matched,
-            sourceEndpoint: matched.discovery?.sourceCellEndpoint
+            sourceEndpoint: matched.discovery?.sourceCellEndpoint,
+            endpointPolicy: endpointPolicy
         )
     }
 
     public static func resolveCellConfiguration(
         from value: ValueType,
-        candidates: [CellConfiguration]
+        candidates: [CellConfiguration],
+        endpointPolicy: CellSecurityEndpointPolicy = CellSecurityEndpointPolicy()
     ) -> CellConfiguration? {
+        if let lookup = explicitLookup(from: value), lookup.hasIdentity {
+            return resolveLookup(
+                lookup,
+                candidates: candidates,
+                endpointPolicy: endpointPolicy
+            )
+        }
+
         if let direct = decodeCellConfiguration(from: value) {
-            return direct
+            return retargetingLocalCellEndpointsIfNeeded(
+                in: direct,
+                sourceEndpoint: direct.discovery?.sourceCellEndpoint,
+                endpointPolicy: endpointPolicy
+            )
         }
 
         guard let lookup = decodeLookup(from: value), lookup.hasIdentity else {
             return nil
         }
 
-        return resolveCellConfiguration(lookup: lookup, candidates: candidates)
+        return resolveLookup(
+            lookup,
+            candidates: candidates,
+            endpointPolicy: endpointPolicy
+        )
+    }
+
+    private static func resolveLookup(
+        _ lookup: Lookup,
+        candidates: [CellConfiguration],
+        endpointPolicy: CellSecurityEndpointPolicy
+    ) -> CellConfiguration? {
+
+        guard let matched = resolveCellConfiguration(
+            lookup: lookup,
+            candidates: candidates,
+            endpointPolicy: endpointPolicy
+        ) else {
+            return nil
+        }
+        return retargetingLocalCellEndpointsIfNeeded(
+            in: matched,
+            sourceEndpoint: matched.discovery?.sourceCellEndpoint,
+            endpointPolicy: endpointPolicy
+        )
     }
 
     public static func decodeConfigurations(from value: ValueType) -> [CellConfiguration] {
@@ -144,9 +213,11 @@ public enum CellConfigurationPayloadSupport {
 
     public static func retargetingLocalCellEndpoints(
         in configuration: CellConfiguration,
-        toScaffoldEndpoint scaffoldEndpoint: String
+        toScaffoldEndpoint scaffoldEndpoint: String,
+        endpointPolicy: CellSecurityEndpointPolicy = CellSecurityEndpointPolicy()
     ) -> CellConfiguration {
-        guard let origin = RetargetOrigin(scaffoldEndpoint: scaffoldEndpoint) else {
+        guard let validation = try? endpointPolicy.validate(scaffoldEndpoint),
+              let origin = RetargetOrigin(scaffoldEndpoint: validation.canonicalEndpoint) else {
             return configuration
         }
 
@@ -157,9 +228,11 @@ public enum CellConfigurationPayloadSupport {
 
     public static func rewriteLocalCellEndpoint(
         _ endpoint: String,
-        toScaffoldEndpoint scaffoldEndpoint: String
+        toScaffoldEndpoint scaffoldEndpoint: String,
+        endpointPolicy: CellSecurityEndpointPolicy = CellSecurityEndpointPolicy()
     ) -> String {
-        guard let origin = RetargetOrigin(scaffoldEndpoint: scaffoldEndpoint) else {
+        guard let validation = try? endpointPolicy.validate(scaffoldEndpoint),
+              let origin = RetargetOrigin(scaffoldEndpoint: validation.canonicalEndpoint) else {
             return endpoint
         }
         return rewriteLocalCellEndpoint(endpoint, to: origin)
@@ -167,11 +240,15 @@ public enum CellConfigurationPayloadSupport {
 
     private static func resolveCellConfiguration(
         lookup: Lookup,
-        candidates: [CellConfiguration]
+        candidates: [CellConfiguration],
+        endpointPolicy: CellSecurityEndpointPolicy
     ) -> CellConfiguration? {
         let normalizedUUID = normalizedLookupToken(lookup.uuid)
         let normalizedName = normalizedLookupToken(lookup.name)
-        let normalizedEndpoint = normalizedLookupToken(lookup.sourceCellEndpoint)
+        let normalizedEndpoint = canonicalEndpointToken(
+            lookup.sourceCellEndpoint,
+            endpointPolicy: endpointPolicy
+        )
 
         return candidates.first { configuration in
             if let normalizedUUID,
@@ -182,7 +259,10 @@ public enum CellConfigurationPayloadSupport {
             if let normalizedName,
                normalizedLookupToken(configuration.name) == normalizedName {
                 if let normalizedEndpoint {
-                    let candidateEndpoint = normalizedLookupToken(configuration.discovery?.sourceCellEndpoint)
+                    let candidateEndpoint = canonicalEndpointToken(
+                        configuration.discovery?.sourceCellEndpoint,
+                        endpointPolicy: endpointPolicy
+                    )
                     return candidateEndpoint == normalizedEndpoint
                 }
                 return true
@@ -194,11 +274,16 @@ public enum CellConfigurationPayloadSupport {
 
     private static func resolveSourceBackedOrPublishedConfiguration(
         from sourceEndpoint: String,
-        requester: Identity
+        requester: Identity,
+        endpointPolicy: CellSecurityEndpointPolicy
     ) async -> CellConfiguration? {
+        guard let validation = try? endpointPolicy.validate(sourceEndpoint) else {
+            return nil
+        }
+
         guard let resolver = CellBase.defaultCellResolver,
               let sourceCell = try? await resolver.cellAtEndpoint(
-                endpoint: sourceEndpoint,
+                endpoint: validation.canonicalEndpoint,
                 requester: requester
               ) as? Meddle
         else {
@@ -211,7 +296,8 @@ public enum CellConfigurationPayloadSupport {
         ), let editableConfiguration = decodeEditableStateConfiguration(from: editableStateValue) {
             return retargetingLocalCellEndpointsIfNeeded(
                 in: editableConfiguration,
-                sourceEndpoint: sourceEndpoint
+                sourceEndpoint: validation.canonicalEndpoint,
+                endpointPolicy: endpointPolicy
             )
         }
 
@@ -223,7 +309,8 @@ public enum CellConfigurationPayloadSupport {
 
             return retargetingLocalCellEndpointsIfNeeded(
                 in: configuration,
-                sourceEndpoint: sourceEndpoint
+                sourceEndpoint: validation.canonicalEndpoint,
+                endpointPolicy: endpointPolicy
             )
         }
 
@@ -238,12 +325,17 @@ public enum CellConfigurationPayloadSupport {
 
     private static func retargetingLocalCellEndpointsIfNeeded(
         in configuration: CellConfiguration,
-        sourceEndpoint: String?
-    ) -> CellConfiguration {
+        sourceEndpoint: String?,
+        endpointPolicy: CellSecurityEndpointPolicy
+    ) -> CellConfiguration? {
         guard let sourceEndpoint else { return configuration }
+        guard let validation = try? endpointPolicy.validate(sourceEndpoint) else {
+            return nil
+        }
         return retargetingLocalCellEndpoints(
             in: configuration,
-            toScaffoldEndpoint: sourceEndpoint
+            toScaffoldEndpoint: validation.canonicalEndpoint,
+            endpointPolicy: endpointPolicy
         )
     }
 
@@ -285,6 +377,21 @@ public enum CellConfigurationPayloadSupport {
         return lookup.hasIdentity ? lookup : nil
     }
 
+    private static func explicitLookup(from value: ValueType?) -> Lookup? {
+        guard case let .object(object)? = value else { return nil }
+
+        for key in nestedLookupKeys where object[key] != nil {
+            return decodeLookup(from: value)
+        }
+
+        if stringValue(object["sourceCellEndpoint"]) != nil ||
+            stringValue(object["endpoint"]) != nil {
+            return decodeLookupObject(object)
+        }
+
+        return nil
+    }
+
     private static func stringValue(_ value: ValueType?) -> String? {
         switch value {
         case .string(let string):
@@ -306,6 +413,17 @@ public enum CellConfigurationPayloadSupport {
 
     private static func normalizedLookupToken(_ value: String?) -> String? {
         trimmedLookupToken(value)?.lowercased()
+    }
+
+    private static func canonicalEndpointToken(
+        _ value: String?,
+        endpointPolicy: CellSecurityEndpointPolicy
+    ) -> String? {
+        guard let value = trimmedLookupToken(value),
+              let validation = try? endpointPolicy.validate(value) else {
+            return nil
+        }
+        return validation.canonicalEndpoint
     }
 
     private static func trimmedLookupToken(_ value: String?) -> String? {
@@ -410,7 +528,7 @@ public enum CellConfigurationPayloadSupport {
         init?(scaffoldEndpoint: String) {
             guard let components = URLComponents(string: scaffoldEndpoint),
                   let scheme = components.scheme?.lowercased(),
-                  ["cell", "ws", "wss", "http", "https"].contains(scheme),
+                  ["cell", "wss"].contains(scheme),
                   let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !host.isEmpty
             else {

@@ -4,7 +4,7 @@
 import Foundation
 
 public extension CellResolverProtocol {
-    public func registerDefaultWebSocketBridgeTransports() async throws {
+    func registerDefaultWebSocketBridgeTransports() async throws {
         try await registerTransport(LightweightBridgeTransport.self, for: "ws")
         try await registerTransport(LightweightBridgeTransport.self, for: "wss")
     }

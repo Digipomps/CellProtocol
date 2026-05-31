@@ -184,7 +184,9 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         if let messageData = message.data(using: .utf8) {
             do {
                 return try await sign(data: messageData)
-            } catch { print("Signing failed with error: \(error)") }
+            } catch {
+                CellBase.diagnosticLog("Identity signing failed for uuid=\(uuid): \(error)", domain: .identity)
+            }
             
         }
         return nil
@@ -203,7 +205,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
             do {
                 return try await currentIdentityVault.verifySignature(signature: signatureData, messageData: messageData, for: self)
             } catch {
-                print("Verifing signature for \(uuid) failed with error: \(error)")
+                CellBase.diagnosticLog("Identity signature verification failed for uuid=\(uuid): \(error)", domain: .identity)
             }
     }
      return false

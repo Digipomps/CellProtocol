@@ -43,7 +43,7 @@ public struct ValueTypeViewFinder {
             case .object(let value):
                 ObjectView(object: value)
                 
-            case .verifiableCredential(let value):
+            case .verifiableCredential(_):
                 Text("View for Verifiable Credential not yet implemented")
                 
             default:

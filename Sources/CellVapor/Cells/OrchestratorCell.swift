@@ -177,7 +177,7 @@ class OrchestratorCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "addConfiguration", setValueIntercept:  {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "addConfiguration", for: requester) {
+            if await self.validateAccess("-w--", at: "addConfiguration", for: requester) {
                 print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
                 
                 guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
@@ -205,17 +205,18 @@ class OrchestratorCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "setConfiguration", setValueIntercept:  {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "setConfiguration", for: requester) {
+            if await self.validateAccess("-w--", at: "setConfiguration", for: requester) {
                 print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
-                
-   
-//                guard case let .cellConfiguration(cellConfig) = value else {
-//                    throw SetValueError.paramErr
-//                }
-//
-                let cellConfig = try JSONDecoder().decode(CellConfiguration.self, fromString: value.jsonString())
-                
-                try await self.setCellConfiguration(cellConfig: cellConfig)
+
+                guard let cellConfig = await CellConfigurationPayloadSupport.resolveCellConfiguration(
+                    from: value,
+                    requester: requester,
+                    candidates: self.availableCellConfigurationCandidates()
+                ) else {
+                    return .string("error: invalid payload for setConfiguration")
+                }
+
+                try await self.loadCellConfiguration(cellConfig, requester: requester)
                 
                 var flowElement = FlowElement(title: "Orchestrator update", content: .string("refresh"), properties: FlowElement.Properties(type: .event, contentType: .string))
                 flowElement.topic = "porthole"
@@ -291,16 +292,7 @@ class OrchestratorCell: GeneralCell {
     }
     
     
-    // This is unsafe - we must check permissions TODO: check permissions
-    func setCellConfiguration(cellConfig: CellConfiguration) async throws {
-        if let cellConfiguration = self.cellConfiguration {
-            self.cellConfigurationHistory.append(cellConfiguration)
-        }
-        self.cellConfiguration = cellConfig
-        try await self.saveCellConfiguration()
-    }
-    
-    // Also unsafe
+    // Local UI snapshot; external access must go through Resolver/Meddle policy.
     func getCellConfiguration() -> CellConfiguration? {
         return self.cellConfiguration
     }

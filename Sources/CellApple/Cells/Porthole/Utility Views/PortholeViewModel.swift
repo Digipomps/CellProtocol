@@ -321,18 +321,18 @@ public class PortholeViewModel: ObservableObject {
                 if Task.isCancelled {
                     return
                 }
-                guard await self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true else {
+                guard self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true else {
                     return
                 }
                 _ = await self?.retryPendingAdmissionSession(sessionID: sessionID)
             }
 
-            while await self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true {
+            while self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 if Task.isCancelled {
                     return
                 }
-                guard await self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true else {
+                guard self?.shouldContinuePendingAdmissionAutoRetry(sessionID: sessionID) == true else {
                     return
                 }
                 _ = await self?.retryPendingAdmissionSession(sessionID: sessionID)

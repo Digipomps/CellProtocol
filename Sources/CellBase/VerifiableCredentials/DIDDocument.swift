@@ -434,7 +434,7 @@ public struct DIDDocument : Codable {
             CellBase.diagnosticLog("DIDDocument.identity use=keyAgreement", domain: .credentials)
         }
         
-        guard let selectedVerificationMethod = verificationMethod else {
+        guard verificationMethod != nil else {
             throw DIDError.noVerificationMethod
         }
         
@@ -514,7 +514,7 @@ public struct DIDDocument : Codable {
          OKP x: public key in base64url d: private key
          */
         
-        var keyUse = KeyUse.signature
+        let keyUse = KeyUse.signature
         var curveType = CurveType.Curve25519
         var algorithm = CurveAlgorithm.EdDSA
         var publicKeyData = Data()
@@ -537,7 +537,7 @@ public struct DIDDocument : Codable {
                 }
             }
             CellBase.diagnosticLog("DIDDocument publicKeyMultibase encountered", domain: .credentials)
-        case .publicBase58(let string):
+        case .publicBase58(_):
             CellBase.diagnosticLog("DIDDocument publicBase58 encountered", domain: .credentials)
         case .publicKeyJwk(let publicKeyJwk):
             if let publicKeyDataBase64 = publicKeyJwk.x,

@@ -347,6 +347,85 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(decodedSpec.features.first?.id, "booth-a")
     }
 
+    func testSpatialFeaturePayloadRoundTripsInsideMapFeatureProperties() throws {
+        let payload = SpatialFeaturePayload(
+            featureId: "artifact-oslo-1",
+            kind: "artifact",
+            positionDisclosure: "coarse",
+            accuracyMeters: 250,
+            purposeRefs: ["personal.chat.assist.spatial-query"],
+            interestRefs: ["coffee", "neighbor-help"],
+            matchExplanation: SpatialMatchExplanation(
+                summary: "Matched coffee interest and nearby help purpose.",
+                matchedPurposeRefs: ["personal.chat.assist.spatial-query"],
+                matchedInterestRefs: ["coffee"],
+                score: 13
+            ),
+            contactEndpoint: SpatialContactEndpointReference(
+                endpointId: "contact-anna",
+                displayName: "Anna",
+                cellEndpoint: "cell:///ContactEndpoint",
+                capabilityRef: "capability:contact:anna"
+            ),
+            mediaRefs: [
+                SpatialMediaReference(id: "text-1", kind: "text", title: "Note"),
+                SpatialMediaReference(id: "audio-1", kind: "audio", mimeType: "audio/mpeg", cellEndpoint: "cell:///Media/audio-1"),
+                SpatialMediaReference(id: "image-1", kind: "image", mimeType: "image/jpeg", cellEndpoint: "cell:///Media/image-1", previewKeypath: "preview"),
+                SpatialMediaReference(id: "anchor-1", kind: "ar", title: "AR fallback marker")
+            ],
+            visibility: "nearby",
+            expiresAt: "2026-05-29T12:00:00Z",
+            sourceCellEndpoint: "cell:///SpatialArtifact",
+            proofRefs: ["proof:publisher-consent"]
+        )
+
+        let properties = try XCTUnwrap(payload.mapFeatureProperties)
+        XCTAssertEqual(properties["schema"], .string("haven.spatial.feature.v1"))
+        XCTAssertEqual(properties["featureId"], .string("artifact-oslo-1"))
+        XCTAssertEqual(properties["positionDisclosure"], .string("coarse"))
+
+        guard case .list(let mediaRefs)? = properties["mediaRefs"] else {
+            return XCTFail("Expected mediaRefs list")
+        }
+        XCTAssertEqual(mediaRefs.count, 4)
+        let mediaKinds = Set(mediaRefs.compactMap { value -> String? in
+            guard case .object(let object) = value,
+                  case .string(let kind)? = object["kind"] else {
+                return nil
+            }
+            return kind
+        })
+        XCTAssertEqual(mediaKinds, Set(["text", "audio", "image", "ar"]))
+
+        let spec = MapVisualizationSpec(
+            coordinateSpace: .geospatial,
+            viewport: MapVisualizationViewport(
+                center: MapVisualizationCoordinate(10.7522, 59.9139),
+                zoom: 14
+            ),
+            fit: .fitFeatures,
+            features: [
+                MapVisualizationFeature(
+                    id: payload.featureId,
+                    geometry: .point(MapVisualizationCoordinate(10.7522, 59.9139)),
+                    label: "Coffee note",
+                    properties: properties,
+                    selectable: true,
+                    style: MapVisualizationStyle(fillColor: "#0EA5E9", radius: 9)
+                )
+            ],
+            revision: "spatial-v1"
+        )
+
+        let reparsedSpec = try XCTUnwrap(MapVisualizationSpec.decode(from: spec.valueType))
+        let reparsedPayload = try XCTUnwrap(
+            SpatialFeaturePayload.decode(fromProperties: reparsedSpec.features.first?.properties)
+        )
+        XCTAssertEqual(reparsedPayload, payload)
+        XCTAssertEqual(reparsedPayload.contactEndpoint?.cellEndpoint, "cell:///ContactEndpoint")
+        XCTAssertEqual(reparsedPayload.mediaRefs.last?.kind, "ar")
+    }
+
     func testMapVisualizationSpecDecodesGeospatialValueType() throws {
         let tileBase = mapObject([
             "kind": .string("tiles"),

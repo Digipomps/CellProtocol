@@ -27,10 +27,6 @@ struct TestCellSkeletonView: View {
 }
 
 #Preview {
-    let configuration = CellConfiguration(name: "Preview config", cellReferences: [CellReference(endpoint: "cell:///EventEmitter", label: "eventTest")])
-    let cellText = SkeletonText(text: "String")
-    let element = SkeletonElement.Text(cellText)
-//    let description = SkeletonDescription(cellConfiguration: configuration, skeletonContent: element)
     TestCellSkeletonView(description: SkeletonDescriptions.skeletonDescriptionFromJson()).environmentObject(PortholeViewModel())
 }
 

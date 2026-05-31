@@ -63,7 +63,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     required init(owner: Identity) async {
         await super.init(owner: owner)
 
-        print("Entity Scanner Cell init. Owner: \(owner.uuid)")
+        CellBase.diagnosticLog("EntityScannerCell init owner=\(owner.uuid)", domain: .lifecycle)
 
         await setupPermissions(owner: owner)
         await setupKeys(owner: owner)
@@ -89,13 +89,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func setupKeys(owner: Identity) async {
         await addIntercept(requester: owner, intercept: { [weak self] flowElement, requester in
-            print("Incoming feedItem to Entity Scanner cell: \(flowElement.title) label: \(flowElement.topic) payload: \(String(describing: try? flowElement.content.valueType().jsonString()))")
+            CellBase.diagnosticLog("EntityScannerCell feed item title=\(flowElement.title) topic=\(flowElement.topic)", domain: .flow)
 
             if flowElement.properties?.type == .event && flowElement.topic == "radar.service" {
                 do {
                     try self?.gotSharedDicoveryToken(payload: flowElement.content)
                 } catch {
-                    print("Handling shared discovery token failed with error: \(error)")
+                    CellBase.diagnosticLog("Handling shared discovery token failed: \(error)", domain: .flow)
                 }
             }
 
@@ -130,7 +130,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "start", for: requester) {
                 self.requester = requester
-                print("Connect Radar start. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell start keypath=\(keypath)", domain: .flow)
                 try await self.startConnectService(requester: requester)
             }
             return nil
@@ -140,7 +140,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "stop", for: requester) {
                 self.requester = requester
-                print("Connect stop start. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell stop keypath=\(keypath)", domain: .flow)
                 self.stopConnectService(requester: requester)
             }
             return nil
@@ -150,7 +150,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "start", for: requester) {
                 self.requester = requester
-                print("Connect Radar start. Keypath: \(keypath)")
+                CellBase.diagnosticLog("EntityScannerCell start get keypath=\(keypath)", domain: .flow)
                 try await self.startConnectService(requester: requester)
             }
             return .string("ok")
@@ -159,7 +159,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         await addInterceptForGet(requester: owner, key: "stop", getValueIntercept: { [weak self] keypath, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "stop", for: requester) {
-                print("Connect Radar stop. Keypath: \(keypath)")
+                CellBase.diagnosticLog("EntityScannerCell stop get keypath=\(keypath)", domain: .flow)
                 self.stopConnectService(requester: requester)
             }
             return .string("ok")
@@ -169,7 +169,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "invite", for: requester) {
                 self.requester = requester
-                print("Connect Radar invite. Keypath: \(keypath)")
+                CellBase.diagnosticLog("EntityScannerCell invite get keypath=\(keypath)", domain: .flow)
             }
             return .string("ok")
         })
@@ -178,7 +178,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "invite", for: requester) {
                 self.requester = requester
-                print("Connect Radar invite. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell invite keypath=\(keypath)", domain: .flow)
                 self.invitePeer(peerDeviceDesciptionValue: value)
             }
             return nil
@@ -188,7 +188,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "requestContact", for: requester) {
                 self.requester = requester
-                print("Request contact. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell requestContact keypath=\(keypath)", domain: .flow)
                 return await self.requestContact(payload: value, requester: requester)
             }
             return .string("denied")
@@ -198,7 +198,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "acceptContact", for: requester) {
                 self.requester = requester
-                print("Accept contact. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell acceptContact keypath=\(keypath)", domain: .flow)
                 return await self.acceptContact(payload: value, requester: requester)
             }
             return .string("denied")
@@ -208,7 +208,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "exportEncounter", for: requester) {
                 self.requester = requester
-                print("Export encounter. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell exportEncounter keypath=\(keypath)", domain: .flow)
                 return await self.exportEncounter(payload: value, requester: requester)
             }
             return .string("denied")
@@ -218,7 +218,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "exportEncounterJSON", for: requester) {
                 self.requester = requester
-                print("Export encounter JSON. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell exportEncounterJSON keypath=\(keypath)", domain: .flow)
                 return await self.exportEncounterJSON(payload: value, requester: requester)
             }
             return .string("denied")
@@ -228,7 +228,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "sharedToken", for: requester) {
                 self.requester = requester
-                print("Set shared token Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("EntityScannerCell sharedToken set keypath=\(keypath)", domain: .flow)
                 try await self.startConnectService(requester: requester)
             }
             return nil
@@ -238,7 +238,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "sharedToken", for: requester) {
                 self.requester = requester
-                print("Set shared token. Keypath: \(keypath)")
+                CellBase.diagnosticLog("EntityScannerCell sharedToken get keypath=\(keypath)", domain: .flow)
             }
             return .string("ok")
         })
@@ -287,11 +287,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func invitePeer(peerDeviceDesciptionValue: ValueType) {
         guard let connectService = connectService else {
-            print("Invite ignored because scanner is not started")
+            CellBase.diagnosticLog("EntityScannerCell invite ignored because scanner is not started", domain: .flow)
             return
         }
         guard let remoteUUID = remoteUUID(from: peerDeviceDesciptionValue) else {
-            print("Invite ignored because remote UUID was missing")
+            CellBase.diagnosticLog("EntityScannerCell invite ignored because remote UUID was missing", domain: .flow)
             return
         }
         connectService.invitePeer(remoteUUID)
@@ -861,7 +861,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {
-        print("Connected devices: \(connectedDevices)")
+        CellBase.diagnosticLog("EntityScannerCell connected devices changed count=\(connectedDevices.count)", domain: .flow)
         let requester = activeLocalIdentity(service: manager)
         let payload = makeScannerEventObject(
             event: "connected",
@@ -1020,7 +1020,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func foundDevicesChanged(manager: ScannerService, foundDevices: [String], requester: Identity) {
-        print("Found devices: \(foundDevices)")
+        CellBase.diagnosticLog("EntityScannerCell found devices changed count=\(foundDevices.count)", domain: .flow)
         guard let displayName = foundDevices.first else {
             return
         }

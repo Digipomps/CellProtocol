@@ -89,7 +89,7 @@ final class GraphMatchTool: Tool {
 //        }
 
         // 4) Resultat
-        let refs = await collector.results()
+        _ = await collector.results()
 //        let limited = Array(refs.prefix(arguments.args.limit ?? 50))
         // Pakk i et enkelt JSON-objekt
 //        let response: [String: Any] = [

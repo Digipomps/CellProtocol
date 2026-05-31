@@ -9,7 +9,6 @@
 //
 
 import Foundation
-import CellBase
 
 enum PerspectiveNodeRelation: String {
     case types
@@ -85,9 +84,7 @@ public class PerspectiveNodeImpl: PerspectiveNode, Referenceable {
         
         for currentKey in keypathArray {
             lastKey = String(currentKey)
-            if let relation = PerspectiveNodeRelation(rawValue: lastKey) {
-                
-            } else {
+            if PerspectiveNodeRelation(rawValue: lastKey) == nil {
                 // Check out other relations
             }
             
@@ -95,8 +92,6 @@ public class PerspectiveNodeImpl: PerspectiveNode, Referenceable {
     }
     
     public func set(keypath: String, setValue: ValueType?) async throws {
-        let keypathArray = keypath.split(separator: ".")
-        
     }
 }
 

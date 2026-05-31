@@ -174,7 +174,6 @@ public class EntityAnchorCell: GeneralCell {
                     // then check if it exists
                     // if not exists
                     // store identityId and new identity in a new entityId
-                    let shortenedKeypath = self.deletePrefix("relations.", from: keypath)
                     let keypathArray = keypath.split(separator: ".")
                     if keypathArray.count > 1 {
                         let subkey = String(keypathArray[1])
@@ -182,8 +181,7 @@ public class EntityAnchorCell: GeneralCell {
                         case "identities":
                             print("Got identities")
                             do {
-                                let result = try self.storage.get(keypath: keypath) // Will throw if not found
-                                
+                                _ = try self.storage.get(keypath: keypath) // Will throw if not found
                             } catch {
                                 print("Entity get relations.identities failed with error: \(error)")
                                 if case KeyPathError.notFound(let keypathError) = error {
@@ -206,9 +204,8 @@ public class EntityAnchorCell: GeneralCell {
                         case "issuers":
                             print("Got issuers")
                             do {
-                                let result = try self.storage.get(keypath: keypath) // Will throw if not found
-                                
-                            } catch  KeyPathError.notFound(let keypathError) {
+                                _ = try self.storage.get(keypath: keypath) // Will throw if not found
+                            } catch  KeyPathError.notFound(_) {
                                 _ = try self.storage.set(value, keypath: keypath)
                             } catch {
                                 print("Entity get relations.issuers failed with error: \(error)")
@@ -216,7 +213,7 @@ public class EntityAnchorCell: GeneralCell {
                             
                         default:
                             print("relations unknown subkey: \(subkey)")
-                            try await self.storage.set(keypath: keypath, setValue: value)
+                            try self.storage.set(keypath: keypath, setValue: value)
                         }
                         
                     }
@@ -241,7 +238,7 @@ public class EntityAnchorCell: GeneralCell {
             
                 do {
 //                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
-                    try await self.storage.set(keypath: keypath, setValue: value)
+                    try self.storage.set(keypath: keypath, setValue: value)
                     try await self.saveKeypathStorage(entity: self.storage)
                     // Send FlowElement notification
                     
@@ -479,8 +476,6 @@ public class EntityAnchorCell: GeneralCell {
         // Check whether we should post a storage saved notification? (Flow Element)
         
         
-        let setDataObject: Object = ["keypath" : .string(keypath), "value" : value, "timestamp" : .float(Date.now.timeIntervalSince1970)]
-        let flowElement = FlowElement(title: "Set data", content: .object(setDataObject), properties: FlowElement.Properties(type: .event, contentType: .object))
     }
 
     private func persistBatchEnvelope(_ envelope: EntityBatchPersistEnvelope) async throws -> [String] {
@@ -494,7 +489,7 @@ public class EntityAnchorCell: GeneralCell {
     }
     
     func get(keypath: String) async throws -> ValueType? {
-        try await self.storage.get(keypath: keypath)
+        try self.storage.get(keypath: keypath)
     }
     
     func reloadStorage() async throws {

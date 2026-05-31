@@ -57,6 +57,29 @@ final class ResolverTests: XCTestCase {
         XCTAssertNotEqual(first.uuid, second.uuid)
     }
 
+    func testTemplateResolveUsesRequesterAsOwner() async throws {
+        let resolver = CellResolver.sharedInstance
+        let name = "TemplateRequesterOwner-\(UUID().uuidString)"
+        try await resolver.addCellResolve(name: name, cellScope: .template, identityDomain: "scaffold-template-owner", type: GeneralCell.self)
+
+        guard let requesterA = await CellBase.defaultIdentityVault?.identity(for: "template-requester-a", makeNewIfNotFound: true),
+              let requesterB = await CellBase.defaultIdentityVault?.identity(for: "template-requester-b", makeNewIfNotFound: true) else {
+            return XCTFail("Expected requester identities")
+        }
+
+        guard let first = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: requesterA) as? GeneralCell,
+              let second = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: requesterB) as? GeneralCell else {
+            return XCTFail("Expected template resolves to create GeneralCell instances")
+        }
+
+        let firstOwner = try await first.getOwner(requester: requesterA)
+        let secondOwner = try await second.getOwner(requester: requesterB)
+
+        XCTAssertNotEqual(first.uuid, second.uuid)
+        XCTAssertEqual(firstOwner.uuid, requesterA.uuid)
+        XCTAssertEqual(secondOwner.uuid, requesterB.uuid)
+    }
+
     func testScaffoldUniqueReturnsSameInstance() async throws {
         let resolver = CellResolver.sharedInstance
         let name = "Scaffold-\(UUID().uuidString)"

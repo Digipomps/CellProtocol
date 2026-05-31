@@ -12,6 +12,15 @@ import CellBase
 
 
 public struct SkeletonDescriptions {
+    private static func logConfigurationEncoding(_ configuration: CellConfiguration, context: String) {
+        do {
+            let jsonData = try JSONEncoder().encode(configuration)
+            CellBase.diagnosticLog("Encoded skeleton preview context=\(context) bytes=\(jsonData.count)", domain: .skeleton)
+        } catch {
+            CellBase.diagnosticLog("Encoding skeleton preview failed context=\(context) error=\(error)", domain: .skeleton)
+        }
+    }
+
     static func simpleSkeletonDescription() -> CellConfiguration {
         var configuration = CellConfiguration(name: "Preview config", cellReferences: [CellReference(endpoint: "cell:///EventEmitter", label: "eventTest")])
         let cellText = SkeletonText(text: "String")
@@ -34,43 +43,11 @@ public struct SkeletonDescriptions {
         
         configuration.skeleton = .VStack(skelVStack)
                 
-        do {
-            let jsonData = try JSONEncoder().encode(configuration)
-            print(String(data: jsonData, encoding: .utf8) ?? "failed...")
-            
-        } catch {
-            print("json dump failed with error: \(error)")
-        }
+        logConfigurationEncoding(configuration, context: "simpleSkeletonDescription2")
         return configuration
     }
     
     static func jsonData1() -> Data {
-        let jsonString = """
-{
-  "cellReferences": [
-    {
-      "setKeysAndValues": [
-        {
-          "key": "start"
-        }
-      ],
-      "endpoint": "cell:///EventEmitter",
-      "label": "eventTest",
-      "subscribeFeed": true,
-      "subscriptions": []
-    }
-  ],
-  "name": "Preview config",
-  "uuid": "1E33CF55-D756-47A8-877B-4BCC2AB9A56D",
-  "skeleton": {
-    "Text": {
-      "text": "Should vi try with List?"
-    }
-  }
-}
-"""
-        
-        
         let jsonString2 = """
 {
   "cellReferences": [
@@ -126,7 +103,7 @@ public struct SkeletonDescriptions {
         if let jsonData = jsonString2.data(using: .utf8) {
             return jsonData
         }
-        print("Conveting json string to data failed")
+        CellBase.diagnosticLog("Converting skeleton JSON string to data failed context=jsonData1", domain: .skeleton)
         return Data()
         
     }
@@ -176,7 +153,7 @@ public struct SkeletonDescriptions {
         if let jsonData = jsonString.data(using: .utf8) {
             return jsonData
         }
-        print("Conveting json string to data failed")
+        CellBase.diagnosticLog("Converting skeleton JSON string to data failed context=jsonPerspectivePurpose", domain: .skeleton)
         return Data()
         
     }
@@ -238,17 +215,10 @@ public struct SkeletonDescriptions {
         let jsonData = jsonString.data(using: .utf8)! // Just for testing
         do {
             let configuration = try JSONDecoder().decode(CellConfiguration.self, from: jsonData)
-            // Debug
-            do {
-                let jsonData = try JSONEncoder().encode(configuration)
-                print(String(data: jsonData, encoding: .utf8) ?? "failed...")
-                
-            } catch {
-                print("json dump failed with error: \(error)")
-            }
+            logConfigurationEncoding(configuration, context: "skeletonDescriptionForPurposes")
             return configuration
         } catch {
-            print("json decoding failed with error: \(error)")
+            CellBase.diagnosticLog("Decoding skeletonDescriptionForPurposes failed: \(error)", domain: .skeleton)
         }
     return SkeletonDescriptions.simpleSkeletonDescription()
     }
@@ -258,17 +228,10 @@ public struct SkeletonDescriptions {
         
             do {
                 let configuration = try JSONDecoder().decode(CellConfiguration.self, from: jsonData)
-                // Debug
-                do {
-                    let jsonData = try JSONEncoder().encode(configuration)
-                    print(String(data: jsonData, encoding: .utf8) ?? "failed...")
-                    
-                } catch {
-                    print("json dump failed with error: \(error)")
-                }
+                logConfigurationEncoding(configuration, context: "skeletonDescriptionFromJson")
                 return configuration
             } catch {
-                print("json decoding failed with error: \(error)")
+                CellBase.diagnosticLog("Decoding skeletonDescriptionFromJson failed: \(error)", domain: .skeleton)
             }
         return SkeletonDescriptions.simpleSkeletonDescription()
     }
@@ -278,17 +241,10 @@ public struct SkeletonDescriptions {
         
             do {
                 let configuration = try JSONDecoder().decode(CellConfiguration.self, from: jsonData)
-                // Debug
-                do {
-                    let jsonData = try JSONEncoder().encode(configuration)
-                    print(String(data: jsonData, encoding: .utf8) ?? "failed...")
-                    
-                } catch {
-                    print("json dump failed with error: \(error)")
-                }
+                logConfigurationEncoding(configuration, context: "setupPerspectiveGoalFromJson")
                 return configuration
             } catch {
-                print("json decoding failed with error: \(error)")
+                CellBase.diagnosticLog("Decoding setupPerspectiveGoalFromJson failed: \(error)", domain: .skeleton)
             }
         return SkeletonDescriptions.simpleSkeletonDescription()
     }
@@ -760,7 +716,7 @@ public struct SkeletonDescriptions {
         // Test Purposes Cell (is going to be loaded based on current Purpose - which is starting with filling perspective withh purposes)
         
         var configuration3 = CellConfiguration(name: "Purposes")
-        var connectPurposesReference = CellReference(endpoint: "cell:///Purposes", label: "purposes")
+        let connectPurposesReference = CellReference(endpoint: "cell:///Purposes", label: "purposes")
         
 //        connectPurposesReference.addKeyAndValue( KeyValue(key: "state", target: "") )
         configuration3.addReference(connectPurposesReference)
@@ -794,13 +750,7 @@ public struct SkeletonDescriptions {
         configuration3.skeleton = .VStack(SkeletonVStack(elements: elementListPurposes))
         configurations.append(configuration3)
         
-        do {
-            let jsonData = try JSONEncoder().encode(configuration2)
-            print(String(data: jsonData, encoding: .utf8) ?? "failed...")
-            
-        } catch {
-            print("json dump failed with error: \(error)")
-        }
+        logConfigurationEncoding(configuration2, context: "menuConfigurations")
         
         return configurations
     }

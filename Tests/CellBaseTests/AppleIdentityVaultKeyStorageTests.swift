@@ -66,6 +66,18 @@ final class AppleIdentityVaultKeyStorageTests: XCTestCase {
         XCTAssertEqual(nickname, "Ada")
     }
 
+    func testScopedSecretDataStaysStableInUnsignedTestHost() async throws {
+        let tag = "apple-vault-scoped-secret-\(UUID().uuidString)"
+        defer { deleteScopedSecretIfPresent(for: tag) }
+
+        let vault = IdentityVault.shared
+        let first = try await vault.scopedSecretData(tag: tag, minimumLength: 32)
+        let second = try await vault.scopedSecretData(tag: tag, minimumLength: 32)
+
+        XCTAssertEqual(first, second)
+        XCTAssertGreaterThanOrEqual(first.count, 32)
+    }
+
     func testLegacyEmbeddedPrivateKeyStillSigns() async throws {
         let uuid = UUID().uuidString
         defer { deletePrivateKeyIfPresent(for: uuid) }
@@ -306,6 +318,29 @@ private func makeLegacyVaultIdentity(
 private func deletePrivateKeyIfPresent(for uuid: String) {
     deleteKeychainKey(withApplicationTag: managedPrivateKeyApplicationTag(for: uuid))
     deleteKeychainKey(withApplicationTag: legacyPrivateKeyApplicationTag(for: uuid))
+}
+
+private func deleteScopedSecretIfPresent(for tag: String) {
+    let storageTag = "cell.scoped.secret.v1.\(tag)"
+    deleteGenericPasswordData(withApplicationTag: storageTag)
+    deleteLegacyKeychainData(withApplicationTag: storageTag)
+}
+
+private func deleteGenericPasswordData(withApplicationTag tag: String) {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: IdentityVault.keychainGenericPasswordService,
+        kSecAttrAccount as String: tag
+    ]
+    SecItemDelete(query as CFDictionary)
+}
+
+private func deleteLegacyKeychainData(withApplicationTag tag: String) {
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassKey,
+        kSecAttrApplicationTag as String: tag
+    ]
+    SecItemDelete(query as CFDictionary)
 }
 
 private func deleteKeychainKey(withApplicationTag tag: String) {

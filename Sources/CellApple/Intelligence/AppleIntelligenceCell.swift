@@ -54,7 +54,7 @@ public class AppleIntelligenceCell: GeneralCell {
 
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        print("AppleIntelligenceCell init")
+        CellBase.diagnosticLog("AppleIntelligenceCell init owner=\(owner.uuid)", domain: .lifecycle)
 //        var selfAsGeneral: GeneralCell = self
 //        await bootstrap.seed(cell: &selfAsGeneral, requester: owner)
         await self.ensurePurpose(perspective: Perspective(), requester: owner)
@@ -133,7 +133,7 @@ public class AppleIntelligenceCell: GeneralCell {
 
         // SET ai.discover -> trigger discovery
         await addInterceptForSet(requester: owner, key: "\(AIKeys.root).discover", setValueIntercept: { [weak self] keypath, value, requester in
-            print("Set intercept for discover")
+            CellBase.diagnosticLog("AppleIntelligenceCell set intercept keypath=\(keypath)", domain: .flow)
             guard let self = self else { return .string("failure") }
             try await self.discover(requester: requester)
             return .string("ok")
@@ -428,7 +428,7 @@ public class AppleIntelligenceCell: GeneralCell {
                     flowElement.title = "Suggestion no: \(counter) - \(wrappedPurpose?.title ?? "")"
                     flowElement.content = .string(wrappedPurpose?.description ?? "")
                     self.pushFlowElement(flowElement, requester: requester)
-                    print("flowElement.title \(flowElement.title)")
+                    CellBase.diagnosticLog("AppleIntelligenceCell pushed suggestion number=\(counter)", domain: .flow)
                 }
             }
         } else {
@@ -824,12 +824,12 @@ public class AppleIntelligenceCell: GeneralCell {
                     let response = try await session.respond(to: prompt, options: GenerationOptions())
                     return response.content
                 } catch {
-                    print("LanguageModelSession respond error: \(error)")
+                    CellBase.diagnosticLog("LanguageModelSession respond failed: \(error)", domain: .flow)
                     return nil
                 }
             case .unavailable(let reason):
                 let reasonString = "LanguageModelSession unavailable: \(reason)"
-                print(reasonString)
+                CellBase.diagnosticLog(reasonString, domain: .flow)
                 let flowElement = FlowElement( title: "Apple Intelligence Error", content: .string(reasonString), properties: FlowElement.Properties(type: .alert, contentType: .string))
                 pushFlowElement(flowElement, requester: requester)
                 return nil
