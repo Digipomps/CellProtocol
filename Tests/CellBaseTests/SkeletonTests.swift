@@ -1018,6 +1018,193 @@ final class SkeletonTests: XCTestCase {
         }
         XCTAssertNotNil(reference.flowElementSkeleton)
     }
+
+    func testVisibilityModifierEncodesAndDecodes() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.visibility = SkeletonVisibilityRule(
+            when: SkeletonCondition(
+                keypath: "chat.intent.kind",
+                equals: .string("invite")
+            )
+        )
+        var skeletonText = SkeletonText(text: "Invite helper")
+        skeletonText.modifiers = modifiers
+        let element = SkeletonElement.Text(skeletonText)
+
+        let data = try JSONEncoder().encode(element)
+        let json = decodeJSONObject(data)
+        let textJSON = json["Text"] as? [String: Any]
+        let modifiersJSON = textJSON?["modifiers"] as? [String: Any]
+        let visibilityJSON = modifiersJSON?["visibility"] as? [String: Any]
+        let whenJSON = visibilityJSON?["when"] as? [String: Any]
+        XCTAssertEqual(whenJSON?["keypath"] as? String, "chat.intent.kind")
+        XCTAssertEqual(whenJSON?["equals"] as? String, "invite")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Text(text) = decoded else {
+            XCTFail("Expected Text element")
+            return
+        }
+        let matchingRoot: ValueType = .object([
+            "chat": .object([
+                "intent": .object([
+                    "kind": .string("invite")
+                ])
+            ])
+        ])
+        let nonMatchingRoot: ValueType = .object([
+            "chat": .object([
+                "intent": .object([
+                    "kind": .string("poll")
+                ])
+            ])
+        ])
+
+        XCTAssertEqual(text.modifiers?.visibility?.isVisible(root: matchingRoot), true)
+        XCTAssertEqual(text.modifiers?.visibility?.isVisible(root: nonMatchingRoot), false)
+    }
+
+    func testVisibilityConditionSupportsLogicalOperatorsAndContains() throws {
+        let root: ValueType = .object([
+            "nearby": .object([
+                "available": .bool(true),
+                "permission": .string("granted"),
+                "capabilities": .list([.string("scanner"), .string("radar")])
+            ])
+        ])
+
+        let condition = SkeletonCondition(
+            allOf: [
+                SkeletonCondition(keypath: "nearby.available", equals: .bool(true)),
+                SkeletonCondition(
+                    anyOf: [
+                        SkeletonCondition(keypath: "nearby.permission", equals: .string("granted")),
+                        SkeletonCondition(keypath: "nearby.permission", equals: .string("prompt"))
+                    ]
+                ),
+                SkeletonCondition(keypath: "nearby.capabilities", contains: .string("scanner")),
+                SkeletonCondition(not: SkeletonCondition(keypath: "nearby.permission", equals: .string("denied")))
+            ]
+        )
+
+        XCTAssertTrue(condition.evaluate(root: root))
+    }
+
+    func testVisibilityConditionSupportsInValuesAndExists() throws {
+        let root: ValueType = .object([
+            "provider": .object([
+                "mode": .string("local")
+            ])
+        ])
+        let condition = SkeletonCondition(
+            allOf: [
+                SkeletonCondition(keypath: "provider.mode", exists: true),
+                SkeletonCondition(keypath: "provider.mode", inValues: [.string("local"), .string("approvedExternal")])
+            ]
+        )
+        let missingCondition = SkeletonCondition(keypath: "provider.route", exists: true)
+
+        XCTAssertTrue(condition.evaluate(root: root))
+        XCTAssertFalse(missingCondition.evaluate(root: root))
+    }
+
+    func testVisibilityConditionUsesItemScope() throws {
+        let root: ValueType = .object([
+            "status": .string("root")
+        ])
+        let item: ValueType = .object([
+            "status": .string("selected")
+        ])
+        let condition = SkeletonCondition(
+            scope: .item,
+            keypath: "status",
+            equals: .string("selected")
+        )
+
+        XCTAssertTrue(condition.evaluate(root: root, item: item))
+        XCTAssertFalse(condition.evaluate(root: root))
+    }
+
+    func testVisibilityConditionFailsClosedWhenMalformed() throws {
+        let root: ValueType = .object([
+            "status": .string("ready")
+        ])
+        let malformed = SkeletonCondition()
+        let missingEquals = SkeletonCondition(keypath: "missing.value", equals: .string("ready"))
+        let missingNotEquals = SkeletonCondition(keypath: "missing.value", notEquals: .string("ready"))
+
+        XCTAssertFalse(malformed.evaluate(root: root))
+        XCTAssertFalse(missingEquals.evaluate(root: root))
+        XCTAssertFalse(missingNotEquals.evaluate(root: root))
+    }
+
+    func testVisibilityConditionMalformedJSONDecodesAndFailsClosed() throws {
+        let json = """
+        {
+          "Text": {
+            "text": "Bad visibility",
+            "modifiers": {
+              "visibility": {
+                "when": {
+                  "scope": "session",
+                  "keypath": "state.ready",
+                  "equals": true
+                }
+              }
+            }
+          }
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case let .Text(text) = decoded else {
+            XCTFail("Expected Text element")
+            return
+        }
+
+        let root: ValueType = .object([
+            "state": .object([
+                "ready": .bool(true)
+            ])
+        ])
+        XCTAssertFalse(text.modifiers?.visibility?.isVisible(root: root) ?? true)
+    }
+
+    func testMalformedVisibilityRuleDecodesAndFailsClosed() throws {
+        let json = """
+        {
+          "Text": {
+            "text": "Bad visibility",
+            "modifiers": {
+              "visibility": "bad"
+            }
+          }
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case let .Text(text) = decoded else {
+            XCTFail("Expected Text element")
+            return
+        }
+
+        XCTAssertFalse(text.modifiers?.visibility?.isVisible() ?? true)
+    }
+
+    func testUnknownConditionalWrapperStillThrows() throws {
+        let json = """
+        {
+          "Conditional": {
+            "when": { "keypath": "state.ready", "equals": true },
+            "then": [
+              { "Text": { "text": "Ready" } }
+            ]
+          }
+        }
+        """
+
+        XCTAssertThrowsError(try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8)))
+    }
 }
 
 private extension SkeletonElement {

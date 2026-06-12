@@ -749,6 +749,10 @@ public struct SkeletonView: View {
     }
 
     private func render(_ element: SkeletonElement) -> AnyView {
+        guard skeletonElementIsVisible(element) else {
+            return AnyView(EmptyView())
+        }
+
         switch element {
         case .Text(let text):
             return AnyView(
@@ -931,6 +935,66 @@ public struct SkeletonView: View {
         }
     }
 
+    private func skeletonElementIsVisible(_ element: SkeletonElement) -> Bool {
+        let modifiers: SkeletonModifiers?
+        switch element {
+        case .Text(let value):
+            modifiers = value.modifiers
+        case .AttachmentField(let value):
+            modifiers = value.modifiers
+        case .FileUpload(let value):
+            modifiers = value.modifiers
+        case .TextField(let value):
+            modifiers = value.modifiers
+        case .TextArea(let value):
+            modifiers = value.modifiers
+        case .HStack(let value):
+            modifiers = value.modifiers
+        case .VStack(let value):
+            modifiers = value.modifiers
+        case .Image(let value):
+            modifiers = value.modifiers
+        case .List(let value):
+            modifiers = value.modifiers
+        case .Object(let value):
+            modifiers = value.modifiers
+        case .Spacer(let value):
+            modifiers = value.modifiers
+        case .Reference(let value):
+            modifiers = value.modifiers
+        case .Button(let value):
+            modifiers = value.modifiers
+        case .Divider(let value):
+            modifiers = value.modifiers
+        case .ScrollView(let value):
+            modifiers = value.modifiers
+        case .Section(let value):
+            modifiers = value.modifiers
+        case .Tabs(let value):
+            modifiers = value.modifiers
+        case .ZStack(let value):
+            modifiers = value.modifiers
+        case .Grid(let value):
+            modifiers = value.modifiers
+        case .Toggle(let value):
+            modifiers = value.modifiers
+        case .Picker(let value):
+            modifiers = value.modifiers
+        case .Visualization(let value):
+            modifiers = value.modifiers
+        @unknown default:
+            modifiers = nil
+        }
+
+        if modifiers?.hidden == true {
+            return false
+        }
+        guard let visibility = modifiers?.visibility else {
+            return true
+        }
+        return visibility.isVisible(root: userInfoValue, item: userInfoValue, context: userInfoValue)
+    }
+
     private func describe(_ value: ValueType) -> String {
         (try? value.jsonString()) ?? "null"
     }
@@ -965,13 +1029,16 @@ public struct SkeletonView: View {
         if let urlValue = object["url"], case let .string(urlString) = urlValue {
             button.url = urlString
         }
-        if let keypathValue = object["keypath"], case let .string(keypathString) = keypathValue {
+        let keypathField = skeletonButton.keypathKeypath ?? "keypath"
+        let labelField = skeletonButton.labelKeypath ?? "label"
+        let payloadField = skeletonButton.payloadKeypath ?? "payload"
+        if let keypathValue = object[keypathField], case let .string(keypathString) = keypathValue {
             button.keypath = keypathString
         }
-        if let payloadValue = object["payload"] {
+        if let payloadValue = object[payloadField] {
             button.payload = payloadValue
         }
-        if let labelValue = object["label"], case let .string(labelString) = labelValue {
+        if let labelValue = object[labelField], case let .string(labelString) = labelValue {
             button.label = labelString
         }
         return button

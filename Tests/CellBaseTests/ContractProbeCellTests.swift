@@ -168,6 +168,43 @@ final class ContractProbeCellTests: XCTestCase {
         )
     }
 
+    func testProbeBehaviorFailureIncludesPathSpecificValidationIssue() async throws {
+        let vault = MockIdentityVault()
+        let resolver = MockCellResolver()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = resolver
+
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let target = await makeProbeTarget(owner: owner, returnIntegerStatus: true)
+        try await resolver.registerNamedEmitCell(name: "ProbeWrongReturnTypeTarget", emitCell: target, scope: .template, identity: owner)
+
+        let probe = await ContractProbeCell(owner: owner)
+        _ = try await probe.set(keypath: "probe.target", value: .string("cell:///ProbeWrongReturnTypeTarget"), requester: owner)
+
+        let response = try await probe.set(
+            keypath: "probe.run",
+            value: .object([
+                "sampleInputs": .object([
+                    "publish": .object(["message": .string("Hello wrong return type")])
+                ]),
+                "includeFlowChecks": .bool(false),
+                "includeInvalidInputChecks": .bool(false),
+                "includePermissionChecks": .bool(false)
+            ]),
+            requester: owner
+        )
+
+        let report: ContractProbeReport = try decode(response)
+        XCTAssertEqual(report.status, .failed)
+        XCTAssertTrue(
+            report.assertions.contains(where: {
+                $0.phase == "behavior.set" &&
+                $0.status == .failed &&
+                $0.message.contains("$.status expected string, observed integer")
+            })
+        )
+    }
+
     func testProbeTargetAcceptsCellConfigurationPayload() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
@@ -425,6 +462,7 @@ final class ContractProbeCellTests: XCTestCase {
         emitForeignOriginNoise: Bool = false,
         causationKey: String? = nil,
         includeCausationInFlowPayload: Bool = true,
+        returnIntegerStatus: Bool = false,
         emitForeignCausationNoise: Bool = false
     ) async -> GeneralCell {
         let cell = await GeneralCell(owner: owner)
@@ -500,6 +538,9 @@ final class ContractProbeCellTests: XCTestCase {
                 flowElement.origin = cell?.uuid
             }
             cell?.pushFlowElement(flowElement, requester: requester)
+            if returnIntegerStatus {
+                return .object(["status": .integer(200)])
+            }
             return .object(["status": .string("ok")])
         }
         await cell.registerExploreContract(

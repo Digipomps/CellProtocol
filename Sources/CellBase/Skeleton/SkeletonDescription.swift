@@ -22,6 +22,393 @@ public enum SkeletonMotionHint: String, Codable, CaseIterable {
     case emphasize
 }
 
+public enum SkeletonVisibilityScope: String, Codable, CaseIterable {
+    case root
+    case item
+    case context
+}
+
+public struct SkeletonVisibilityRule: Codable, Equatable {
+    public var when: SkeletonCondition?
+
+    enum CodingKeys: String, CodingKey {
+        case when
+    }
+
+    public init(when: SkeletonCondition? = nil) {
+        self.when = when
+    }
+
+    public init(from decoder: any Decoder) throws {
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self.when = .expression(SkeletonConditionExpression(isMalformed: true))
+            return
+        }
+        do {
+            self.when = try container.decodeIfPresent(SkeletonCondition.self, forKey: .when)
+        } catch {
+            self.when = .expression(SkeletonConditionExpression(isMalformed: true))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(when, forKey: .when)
+    }
+
+    public func isVisible(root: ValueType? = nil, item: ValueType? = nil, context: ValueType? = nil) -> Bool {
+        guard let when else {
+            return true
+        }
+        return when.evaluate(root: root, item: item, context: context)
+    }
+}
+
+public indirect enum SkeletonCondition: Codable, Equatable {
+    case expression(SkeletonConditionExpression)
+
+    public init(
+        scope: SkeletonVisibilityScope? = nil,
+        keypath: String? = nil,
+        exists: Bool? = nil,
+        equals: ValueType? = nil,
+        notEquals: ValueType? = nil,
+        inValues: [ValueType]? = nil,
+        contains: ValueType? = nil,
+        allOf: [SkeletonCondition]? = nil,
+        anyOf: [SkeletonCondition]? = nil,
+        not: SkeletonCondition? = nil
+    ) {
+        self = .expression(
+            SkeletonConditionExpression(
+                scope: scope,
+                keypath: keypath,
+                exists: exists,
+                equals: equals,
+                notEquals: notEquals,
+                inValues: inValues,
+                contains: contains,
+                allOf: allOf,
+                anyOf: anyOf,
+                not: not
+            )
+        )
+    }
+
+    public init(from decoder: any Decoder) throws {
+        self = .expression(try SkeletonConditionExpression(from: decoder))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .expression(let expression):
+            try expression.encode(to: encoder)
+        }
+    }
+
+    public func evaluate(root: ValueType? = nil, item: ValueType? = nil, context: ValueType? = nil) -> Bool {
+        switch self {
+        case .expression(let expression):
+            return expression.evaluate(root: root, item: item, context: context)
+        }
+    }
+}
+
+public struct SkeletonConditionExpression: Codable, Equatable {
+    public var scope: SkeletonVisibilityScope?
+    public var keypath: String?
+    public var exists: Bool?
+    public var equals: ValueType?
+    public var notEquals: ValueType?
+    public var inValues: [ValueType]?
+    public var contains: ValueType?
+    public var allOf: [SkeletonCondition]?
+    public var anyOf: [SkeletonCondition]?
+    public var not: SkeletonCondition?
+    public var isMalformed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case scope
+        case keypath
+        case exists
+        case equals
+        case notEquals
+        case inValues = "in"
+        case contains
+        case allOf
+        case anyOf
+        case not
+    }
+
+    public init(
+        scope: SkeletonVisibilityScope? = nil,
+        keypath: String? = nil,
+        exists: Bool? = nil,
+        equals: ValueType? = nil,
+        notEquals: ValueType? = nil,
+        inValues: [ValueType]? = nil,
+        contains: ValueType? = nil,
+        allOf: [SkeletonCondition]? = nil,
+        anyOf: [SkeletonCondition]? = nil,
+        not: SkeletonCondition? = nil,
+        isMalformed: Bool = false
+    ) {
+        self.scope = scope
+        self.keypath = keypath
+        self.exists = exists
+        self.equals = equals
+        self.notEquals = notEquals
+        self.inValues = inValues
+        self.contains = contains
+        self.allOf = allOf
+        self.anyOf = anyOf
+        self.not = not
+        self.isMalformed = isMalformed
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        var isMalformed = false
+
+        if container.contains(.scope) {
+            do {
+                if let rawScope = try container.decodeIfPresent(String.self, forKey: .scope) {
+                    if let scope = SkeletonVisibilityScope(rawValue: rawScope) {
+                        self.scope = scope
+                    } else {
+                        self.scope = nil
+                        isMalformed = true
+                    }
+                } else {
+                    self.scope = nil
+                }
+            } catch {
+                self.scope = nil
+                isMalformed = true
+            }
+        } else {
+            self.scope = nil
+        }
+
+        do {
+            self.keypath = try container.decodeIfPresent(String.self, forKey: .keypath)
+        } catch {
+            self.keypath = nil
+            isMalformed = true
+        }
+        do {
+            self.exists = try container.decodeIfPresent(Bool.self, forKey: .exists)
+        } catch {
+            self.exists = nil
+            isMalformed = true
+        }
+        do {
+            self.equals = try container.decodeIfPresent(ValueType.self, forKey: .equals)
+        } catch {
+            self.equals = nil
+            isMalformed = true
+        }
+        do {
+            self.notEquals = try container.decodeIfPresent(ValueType.self, forKey: .notEquals)
+        } catch {
+            self.notEquals = nil
+            isMalformed = true
+        }
+        do {
+            self.inValues = try container.decodeIfPresent([ValueType].self, forKey: .inValues)
+        } catch {
+            self.inValues = nil
+            isMalformed = true
+        }
+        do {
+            self.contains = try container.decodeIfPresent(ValueType.self, forKey: .contains)
+        } catch {
+            self.contains = nil
+            isMalformed = true
+        }
+        do {
+            self.allOf = try container.decodeIfPresent([SkeletonCondition].self, forKey: .allOf)
+        } catch {
+            self.allOf = nil
+            isMalformed = true
+        }
+        do {
+            self.anyOf = try container.decodeIfPresent([SkeletonCondition].self, forKey: .anyOf)
+        } catch {
+            self.anyOf = nil
+            isMalformed = true
+        }
+        do {
+            self.not = try container.decodeIfPresent(SkeletonCondition.self, forKey: .not)
+        } catch {
+            self.not = nil
+            isMalformed = true
+        }
+
+        self.isMalformed = isMalformed
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(scope, forKey: .scope)
+        try container.encodeIfPresent(keypath, forKey: .keypath)
+        try container.encodeIfPresent(exists, forKey: .exists)
+        try container.encodeIfPresent(equals, forKey: .equals)
+        try container.encodeIfPresent(notEquals, forKey: .notEquals)
+        try container.encodeIfPresent(inValues, forKey: .inValues)
+        try container.encodeIfPresent(contains, forKey: .contains)
+        try container.encodeIfPresent(allOf, forKey: .allOf)
+        try container.encodeIfPresent(anyOf, forKey: .anyOf)
+        try container.encodeIfPresent(not, forKey: .not)
+    }
+
+    public func evaluate(root: ValueType? = nil, item: ValueType? = nil, context: ValueType? = nil) -> Bool {
+        if isMalformed {
+            return false
+        }
+
+        var evaluatedAnyPredicate = false
+
+        if let allOf {
+            evaluatedAnyPredicate = true
+            guard allOf.allSatisfy({ $0.evaluate(root: root, item: item, context: context) }) else {
+                return false
+            }
+        }
+
+        if let anyOf {
+            evaluatedAnyPredicate = true
+            guard anyOf.contains(where: { $0.evaluate(root: root, item: item, context: context) }) else {
+                return false
+            }
+        }
+
+        if let not {
+            evaluatedAnyPredicate = true
+            guard not.evaluate(root: root, item: item, context: context) == false else {
+                return false
+            }
+        }
+
+        let resolvedValue: ValueType?
+        if let keypath, keypath.isEmpty == false {
+            evaluatedAnyPredicate = true
+            resolvedValue = Self.resolve(keypath: keypath, scope: scope ?? .root, root: root, item: item, context: context)
+        } else {
+            resolvedValue = nil
+        }
+
+        if let exists {
+            evaluatedAnyPredicate = true
+            guard (resolvedValue != nil) == exists else {
+                return false
+            }
+        }
+
+        if let equals {
+            evaluatedAnyPredicate = true
+            guard let resolvedValue, Self.valuesMatch(resolvedValue, equals) else {
+                return false
+            }
+        }
+
+        if let notEquals {
+            evaluatedAnyPredicate = true
+            guard let resolvedValue, Self.valuesMatch(resolvedValue, notEquals) == false else {
+                return false
+            }
+        }
+
+        if let inValues {
+            evaluatedAnyPredicate = true
+            guard let resolvedValue, inValues.contains(where: { Self.valuesMatch(resolvedValue, $0) }) else {
+                return false
+            }
+        }
+
+        if let contains {
+            evaluatedAnyPredicate = true
+            guard let resolvedValue, Self.value(resolvedValue, contains: contains) else {
+                return false
+            }
+        }
+
+        return evaluatedAnyPredicate
+    }
+
+    private static func resolve(
+        keypath: String,
+        scope: SkeletonVisibilityScope,
+        root: ValueType?,
+        item: ValueType?,
+        context: ValueType?
+    ) -> ValueType? {
+        let scopedValue: ValueType?
+        switch scope {
+        case .root:
+            scopedValue = root
+        case .item:
+            scopedValue = item ?? context
+        case .context:
+            scopedValue = context ?? item ?? root
+        }
+
+        guard let scopedValue else {
+            return nil
+        }
+
+        if keypath == "." || keypath == "$" {
+            return scopedValue
+        }
+
+        switch scopedValue {
+        case .object(let object):
+            return try? object.get(keypath: keypath)
+        default:
+            return nil
+        }
+    }
+
+    private static func value(_ value: ValueType, contains candidate: ValueType) -> Bool {
+        switch (value, candidate) {
+        case (.string(let string), .string(let substring)):
+            return string.contains(substring)
+        case (.list(let list), _):
+            return list.contains(where: { valuesMatch($0, candidate) })
+        default:
+            return false
+        }
+    }
+
+    private static func valuesMatch(_ lhs: ValueType, _ rhs: ValueType) -> Bool {
+        switch (lhs, rhs) {
+        case (.null, .null):
+            return true
+        case (.string(let lhs), .string(let rhs)):
+            return lhs == rhs
+        case (.bool(let lhs), .bool(let rhs)):
+            return lhs == rhs
+        case (.integer(let lhs), .integer(let rhs)):
+            return lhs == rhs
+        case (.number(let lhs), .number(let rhs)):
+            return lhs == rhs
+        case (.float(let lhs), .float(let rhs)):
+            return lhs == rhs
+        case (.integer(let lhs), .float(let rhs)),
+            (.number(let lhs), .float(let rhs)):
+            return Double(lhs) == rhs
+        case (.float(let lhs), .integer(let rhs)),
+            (.float(let lhs), .number(let rhs)):
+            return lhs == Double(rhs)
+        case (.integer(let lhs), .number(let rhs)),
+            (.number(let lhs), .integer(let rhs)):
+            return lhs == rhs
+        default:
+            return false
+        }
+    }
+}
+
 public struct SkeletonModifiers: Codable {
     public var padding: Double?
     public var maxWidthInfinity: Bool?
@@ -40,6 +427,7 @@ public struct SkeletonModifiers: Codable {
     public var borderColor: String?
     public var opacity: Double?
     public var hidden: Bool?
+    public var visibility: SkeletonVisibilityRule?
     
     public var foregroundColor: String?
     public var fontStyle: String?
@@ -1125,13 +1513,27 @@ public struct SkeletonButton: Codable, Identifiable {
     public var label: String
     public var url: String?
     public var payload: ValueType?
+    public var keypathKeypath: String?
+    public var labelKeypath: String?
+    public var payloadKeypath: String?
     public var modifiers: SkeletonModifiers?
     
-    public init(keypath: String, label: String, url: String? = nil, payload: ValueType? = nil ) {
+    public init(
+        keypath: String,
+        label: String,
+        url: String? = nil,
+        payload: ValueType? = nil,
+        keypathKeypath: String? = nil,
+        labelKeypath: String? = nil,
+        payloadKeypath: String? = nil
+    ) {
         self.keypath = keypath
         self.label = label
         self.url = url
         self.payload = payload
+        self.keypathKeypath = keypathKeypath
+        self.labelKeypath = labelKeypath
+        self.payloadKeypath = payloadKeypath
     }
     
     public enum CodingKeys: CodingKey {
@@ -1140,6 +1542,9 @@ public struct SkeletonButton: Codable, Identifiable {
         case label
         case url
         case payload
+        case keypathKeypath
+        case labelKeypath
+        case payloadKeypath
         case modifiers
     }
     
@@ -1157,6 +1562,9 @@ public struct SkeletonButton: Codable, Identifiable {
         self.label = try container.decode(String.self, forKey: .label)
         self.url = try container.decodeIfPresent(String.self, forKey: .url)
         self.payload = try container.decodeIfPresent(ValueType.self, forKey: .payload)
+        self.keypathKeypath = try container.decodeIfPresent(String.self, forKey: .keypathKeypath)
+        self.labelKeypath = try container.decodeIfPresent(String.self, forKey: .labelKeypath)
+        self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
         
         
@@ -1172,6 +1580,9 @@ public struct SkeletonButton: Codable, Identifiable {
         try elementContainer.encode(self.label, forKey: .label)
         try elementContainer.encodeIfPresent(self.url, forKey: .url)
         try elementContainer.encodeIfPresent(self.payload, forKey: .payload)
+        try elementContainer.encodeIfPresent(self.keypathKeypath, forKey: .keypathKeypath)
+        try elementContainer.encodeIfPresent(self.labelKeypath, forKey: .labelKeypath)
+        try elementContainer.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
         

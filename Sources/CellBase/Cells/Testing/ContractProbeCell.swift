@@ -476,7 +476,7 @@ public final class ContractProbeCell: GeneralCell {
 
                     if let expectedContract = expectedContracts[key] {
                         let normalizedExpected = ExploreContract.normalizeSchema(key: key, schema: expectedContract)
-                        let equal = ContractProbeSchema.deepEqual(normalizedExpected, normalizedDeclared)
+                        let equal = ExploreContractValidator.deepEqual(normalizedExpected, normalizedDeclared)
                         appendAssertion(
                             ContractProbeAssertionResult(
                                 key: key,
@@ -560,7 +560,7 @@ public final class ContractProbeCell: GeneralCell {
                         continue
                     }
 
-                    let sampleInput = options.sampleInputs[key] ?? ContractProbeSchema.defaultSample(for: inputSchema)
+                    let sampleInput = options.sampleInputs[key] ?? ExploreContractValidator.defaultSample(for: inputSchema)
 
                     if options.includeBehaviorChecks {
                         if let sampleInput {
@@ -626,7 +626,7 @@ public final class ContractProbeCell: GeneralCell {
                     }
 
                     if options.includeInvalidInputChecks {
-                        guard let invalidInput = ContractProbeSchema.invalidInput(for: inputSchema) else {
+                        guard let invalidInput = ExploreContractValidator.invalidInput(for: inputSchema) else {
                             appendAssertion(
                                 ContractProbeAssertionResult(
                                     key: key,
@@ -1034,7 +1034,8 @@ public final class ContractProbeCell: GeneralCell {
         expectedSchema: ValueType,
         observedValue: ValueType?
     ) -> ContractProbeAssertionResult {
-        let matches = ContractProbeSchema.matches(value: observedValue, schema: expectedSchema)
+        let validation = ExploreContractValidator.validate(value: observedValue, against: expectedSchema)
+        let matches = validation.ok
         let runtimeError = Self.isRuntimeErrorValue(observedValue)
         let status: ContractProbeAssertionStatus = matches && !runtimeError ? .passed : .failed
         let message: String
@@ -1043,7 +1044,7 @@ public final class ContractProbeCell: GeneralCell {
         } else if matches {
             message = "Observed value matches the declared return schema."
         } else {
-            message = "Observed value does not match the declared return schema."
+            message = "Observed value does not match the declared return schema: \(Self.validationSummary(from: validation))."
         }
 
         return ContractProbeAssertionResult(
@@ -1054,6 +1055,14 @@ public final class ContractProbeCell: GeneralCell {
             expected: expectedSchema,
             observed: observedValue
         )
+    }
+
+    private static func validationSummary(from report: ExploreValidationReport) -> String {
+        guard let issue = report.issues.first else {
+            return "no validation issues were reported"
+        }
+
+        return "\(issue.path) expected \(issue.expected), observed \(issue.observed)"
     }
 
     private static func parseTarget(from value: ValueType) throws -> ContractProbeTarget {
@@ -1374,225 +1383,6 @@ private enum ContractProbeCellCodec {
             return String(number)
         default:
             return nil
-        }
-    }
-}
-
-private enum ContractProbeSchema {
-    static func matches(value: ValueType?, schema: ValueType?) -> Bool {
-        guard let schema else {
-            return true
-        }
-
-        switch schema {
-        case .null:
-            if value == nil { return true }
-            guard case .null? = value else { return false }
-            return true
-        case let .string(typeName):
-            return matches(value: value, schema: ExploreContract.schema(type: typeName))
-        case let .object(object):
-            if let options = ExploreContract.list(from: object[ExploreContract.Field.oneOf]) {
-                return options.contains { option in
-                    matches(value: value, schema: option)
-                }
-            }
-
-            let schemaType = ExploreContract.schemaType(from: .object(object)) ?? "object"
-            switch schemaType {
-            case "unknown":
-                return true
-            case "null":
-                if value == nil { return true }
-                guard case .null? = value else { return false }
-                return true
-            case "bool":
-                return value?.contractTypeName == "bool"
-            case "integer":
-                return value?.contractTypeName == "integer"
-            case "float":
-                if case .float? = value { return true }
-                return false
-            case "string":
-                return value?.contractTypeName == "string"
-            case "data":
-                return value?.contractTypeName == "data"
-            case "list":
-                guard case let .list(list)? = value else {
-                    return false
-                }
-                let itemSchema = object[ExploreContract.Field.item]
-                return list.allSatisfy { item in
-                    matches(value: item, schema: itemSchema)
-                }
-            case "object":
-                guard case let .object(actualObject)? = value else {
-                    return false
-                }
-
-                let propertySchemas = ExploreContract.object(from: object[ExploreContract.Field.properties]) ?? [:]
-                let requiredKeys = ExploreContract.list(from: object[ExploreContract.Field.requiredKeys])?.compactMap {
-                    ExploreContract.string(from: $0)
-                } ?? []
-
-                for key in requiredKeys where actualObject[key] == nil {
-                    return false
-                }
-
-                for (propertyKey, propertySchema) in propertySchemas {
-                    guard let actualValue = actualObject[propertyKey] else {
-                        continue
-                    }
-                    if !matches(value: actualValue, schema: propertySchema) {
-                        return false
-                    }
-                }
-                return true
-            default:
-                return value?.contractTypeName == schemaType
-            }
-        default:
-            return value?.contractTypeName == schema.contractTypeName
-        }
-    }
-
-    static func defaultSample(for schema: ValueType?) -> ValueType? {
-        guard let schema else {
-            return nil
-        }
-
-        switch schema {
-        case .null:
-            return .null
-        case let .string(typeName):
-            return defaultSample(for: ExploreContract.schema(type: typeName))
-        case let .object(object):
-            if let options = ExploreContract.list(from: object[ExploreContract.Field.oneOf]) {
-                for option in options {
-                    if let sample = defaultSample(for: option) {
-                        return sample
-                    }
-                }
-                return nil
-            }
-
-            let schemaType = ExploreContract.schemaType(from: .object(object)) ?? "object"
-            switch schemaType {
-            case "unknown":
-                return nil
-            case "null":
-                return .null
-            case "bool":
-                return .bool(true)
-            case "integer":
-                return .integer(1)
-            case "float":
-                return .float(1.0)
-            case "string":
-                return .string("sample")
-            case "data":
-                return .data(Data("sample".utf8))
-            case "list":
-                if let itemSchema = object[ExploreContract.Field.item],
-                   let item = defaultSample(for: itemSchema) {
-                    return .list([item])
-                }
-                return .list([])
-            case "object":
-                let propertySchemas = ExploreContract.object(from: object[ExploreContract.Field.properties]) ?? [:]
-                let requiredKeys = ExploreContract.list(from: object[ExploreContract.Field.requiredKeys])?.compactMap {
-                    ExploreContract.string(from: $0)
-                } ?? Array(propertySchemas.keys)
-
-                var sampleObject = Object()
-                for key in requiredKeys {
-                    let propertySchema = propertySchemas[key]
-                    if let sample = defaultSample(for: propertySchema) {
-                        sampleObject[key] = sample
-                    } else {
-                        sampleObject[key] = .string("sample")
-                    }
-                }
-                return .object(sampleObject)
-            default:
-                return .string("sample")
-            }
-        default:
-            switch schema.contractTypeName {
-            case "bool":
-                return .bool(true)
-            case "integer":
-                return .integer(1)
-            case "float":
-                return .float(1.0)
-            case "string":
-                return .string("sample")
-            case "list":
-                return .list([])
-            case "object":
-                return .object([:])
-            default:
-                return nil
-            }
-        }
-    }
-
-    static func invalidInput(for schema: ValueType?) -> ValueType? {
-        guard let schema else {
-            return nil
-        }
-
-        let candidates: [ValueType] = [
-            .string("invalid"),
-            .object(["invalid": .bool(true)]),
-            .list([.string("invalid")]),
-            .integer(-1),
-            .bool(false),
-            .null
-        ]
-
-        for candidate in candidates where !matches(value: candidate, schema: schema) {
-            return candidate
-        }
-        return nil
-    }
-
-    static func deepEqual(_ lhs: ValueType?, _ rhs: ValueType?) -> Bool {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            return true
-        case (nil, _), (_, nil):
-            return false
-        case (.null?, .null?):
-            return true
-        case let (.string(left)?, .string(right)?):
-            return left == right
-        case let (.bool(left)?, .bool(right)?):
-            return left == right
-        case let (.number(left)?, .number(right)?):
-            return left == right
-        case let (.integer(left)?, .integer(right)?):
-            return left == right
-        case let (.float(left)?, .float(right)?):
-            return abs(left - right) < 0.000_001
-        case let (.object(left)?, .object(right)?):
-            guard Set(left.keys) == Set(right.keys) else {
-                return false
-            }
-            for key in left.keys where !deepEqual(left[key], right[key]) {
-                return false
-            }
-            return true
-        case let (.list(left)?, .list(right)?):
-            guard left.count == right.count else {
-                return false
-            }
-            for (leftItem, rightItem) in zip(left, right) where !deepEqual(leftItem, rightItem) {
-                return false
-            }
-            return true
-        default:
-            return false
         }
     }
 }
