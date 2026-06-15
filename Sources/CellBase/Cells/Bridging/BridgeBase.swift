@@ -1049,25 +1049,35 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     
                 
             case .get:
-                    if
-                        let identity =  command.identity,
-                        case let .string(key) = command.payload,
-                        let keypathLookupPublisher = try await resolvedEmitCell(for: identity) as? Meddle
-                    {
-                        do {
-                            let valueType = try await keypathLookupPublisher.get(keypath: key, requester: identity)
-                            let response = BridgeCommand(cmd: "response", payload: valueType, cid: command.cid)
-                            if let responseJSONData = try? JSONEncoder().encode(response),
-                               let transport = transport {
-                                try await transport.sendData(responseJSONData)
-                            }
-                        } catch {
-                            bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
-                        }
-                    } else {
-                        // Analyse and handle error...
-                        bridgeLog("Value for keypath failed")
+                guard let identity = command.identity,
+                      case let .string(key) = command.payload else {
+                    await sendGetErrorResponse(
+                        message: "Value for keypath failed: missing identity or keypath payload",
+                        cid: command.cid
+                    )
+                    break
+                }
+
+                do {
+                    guard let keypathLookupPublisher = try await resolvedEmitCell(for: identity) as? Meddle else {
+                        await sendGetErrorResponse(
+                            message: "Value for keypath failed: publisher does not expose Meddle",
+                            cid: command.cid
+                        )
+                        break
                     }
+                    let valueType = try await keypathLookupPublisher.get(keypath: key, requester: identity)
+                    let response = BridgeCommand(cmd: "response", payload: valueType, cid: command.cid)
+                    if let responseJSONData = try? JSONEncoder().encode(response),
+                       let transport = transport {
+                        try await transport.sendData(responseJSONData)
+                    }
+                } catch {
+                    await sendGetErrorResponse(
+                        message: "Consume command \(command.cmd) failed for get(\(key)): \(error)",
+                        cid: command.cid
+                    )
+                }
             
             case .sign:
                 bridgeLog("Got sign command")
@@ -1161,6 +1171,19 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             default:
                 bridgeLog("Could not recognise command: \(command.command.rawValue)")
             }
+    }
+
+    private func sendGetErrorResponse(message: String, cid: Int) async {
+        bridgeLog(message)
+        let response = BridgeCommand(cmd: "response", payload: .string("failure: \(message)"), cid: cid)
+        do {
+            if let responseJSONData = try? JSONEncoder().encode(response),
+               let transport {
+                try await transport.sendData(responseJSONData)
+            }
+        } catch {
+            bridgeLog("Sending get error response failed with error: \(error)")
+        }
     }
   
     private func processDescriptionCommand(command: BridgeCommand) async {
