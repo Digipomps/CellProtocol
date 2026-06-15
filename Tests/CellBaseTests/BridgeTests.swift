@@ -215,6 +215,54 @@ final class BridgeTests: XCTestCase {
         }
     }
 
+    func testInboundBridgeCanPinIdentityScopedPublisherLookupToRouteIdentity() async throws {
+        let transport = MockBridgeTransport()
+        let routeIdentity = TestFixtures.makeIdentity(displayName: "route-identity", uuid: TestFixtures.fixedUUID1)
+        let requester = TestFixtures.makeIdentity(displayName: "requester", uuid: TestFixtures.fixedUUID2)
+        let resolver = MockCellResolver()
+        CellBase.defaultCellResolver = resolver
+
+        let routePublisher = TestEmitCell(owner: routeIdentity, uuid: "route-vault-publisher")
+        _ = try await routePublisher.set(keypath: "state.marker", value: .string("route"), requester: routeIdentity)
+        try await resolver.registerNamedEmitCell(
+            name: "Vault",
+            emitCell: routePublisher,
+            scope: .identityUnique,
+            identity: routeIdentity
+        )
+
+        let requesterPublisher = TestEmitCell(owner: requester, uuid: "requester-vault-publisher")
+        _ = try await requesterPublisher.set(keypath: "state.marker", value: .string("requester"), requester: requester)
+        try await resolver.registerNamedEmitCell(
+            name: "Vault",
+            emitCell: requesterPublisher,
+            scope: .identityUnique,
+            identity: requester
+        )
+
+        let config = BridgeBase.Config(
+            owner: routeIdentity,
+            transport: transport,
+            connection: .inbound(publisherUuid: "Vault"),
+            inboundPublisherLookupIdentity: routeIdentity
+        )
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Vault"))
+
+        let command = BridgeCommand(
+            cmd: Command.get.rawValue,
+            identity: requester,
+            payload: .string("state.marker"),
+            cid: 9
+        )
+        try await bridge.consumeCommand(command: command)
+
+        XCTAssertFalse(transport.sentData.isEmpty)
+        let response = try JSONDecoder().decode(BridgeCommand.self, from: transport.sentData.last!)
+        XCTAssertEqual(response.command, .response)
+        XCTAssertEqual(response.payload, .string("route"))
+    }
+
     func testBridgeBaseSignMessageRoutesResponsesByCommandID() async throws {
         let transport = MockBridgeTransport()
         let vault = MockIdentityVault()

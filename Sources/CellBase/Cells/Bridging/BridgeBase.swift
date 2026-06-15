@@ -118,6 +118,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     var transport: BridgeTransportProtocol?
     var emitCellAtEndpoint: Emit?
     private var inboundEmitCellCache = [String: Emit]()
+    private var inboundPublisherLookupIdentity: Identity?
     private let callbackStateLock = NSLock()
     
     
@@ -136,6 +137,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         feedEndpoint = URL(string: "https://localhost/")
         identityDomain = config.identityDomain
         self.transport = config.transport
+        self.inboundPublisherLookupIdentity = config.inboundPublisherLookupIdentity
         self.cellScope = .template // TODO: get from config's 
 //        self.cellScope = config.cellRepresentation?.cellScope
         self.persistancy = .ephemeral
@@ -695,15 +697,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 throw BridgeError.resolverIsMissing
             }
 
-            let resolvingIdentity: Identity
-            if let requester {
-                resolvingIdentity = requester
-            } else if let owner {
-                resolvingIdentity = owner
-            } else {
-                throw BridgeError.noOwner
-            }
-
+            let resolvingIdentity = try inboundPublisherResolvingIdentity(for: requester)
             let cacheKey = resolvingIdentity.uuid.lowercased()
             if let cached = inboundEmitCellCache[cacheKey] {
                 return cached
@@ -722,6 +716,19 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
 
         throw BridgeError.emitterUnavailable
+    }
+
+    private func inboundPublisherResolvingIdentity(for requester: Identity?) throws -> Identity {
+        if let inboundPublisherLookupIdentity {
+            return inboundPublisherLookupIdentity
+        }
+        if let requester {
+            return requester
+        }
+        if let owner {
+            return owner
+        }
+        throw BridgeError.noOwner
     }
 
         public func sendSetValueState(for requestedKey: String, setValueState: SetValueState) {

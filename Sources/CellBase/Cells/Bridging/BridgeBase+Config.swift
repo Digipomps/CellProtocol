@@ -17,14 +17,26 @@ extension BridgeBase {
         let cellRepresentation: AnyCell? = nil
         let transport: BridgeTransportProtocol
         let connection: Connection
+        // Pins which local identity resolves an inbound publisher. Command identity
+        // is still passed to the publisher for access checks and mutations.
+        let inboundPublisherLookupIdentity: Identity?
         
-        public init(owner: Identity = Identity(), contractTemplate: Agreement? = nil, identityDomain: String = "bridge", uuid: String? = nil, transport: BridgeTransportProtocol, connection: Connection) {
+        public init(
+            owner: Identity = Identity(),
+            contractTemplate: Agreement? = nil,
+            identityDomain: String = "bridge",
+            uuid: String? = nil,
+            transport: BridgeTransportProtocol,
+            connection: Connection,
+            inboundPublisherLookupIdentity: Identity? = nil
+        ) {
             self.uuid = uuid ?? UUID().uuidString
             self.owner = owner
             self.agreementTemplate = contractTemplate
             self.identityDomain = identityDomain
             self.transport = transport
             self.connection = connection
+            self.inboundPublisherLookupIdentity = inboundPublisherLookupIdentity
         }
         
         public init(owner: Identity = Identity(), contractTemplate: Agreement? = nil, identityDomain: String = "bridge", uuid: String? = nil, transport: BridgeTransportProtocol) {
@@ -34,6 +46,7 @@ extension BridgeBase {
             self.identityDomain = identityDomain
             self.transport = transport
             self.connection = .outbound
+            self.inboundPublisherLookupIdentity = nil
         }
         
         public func getTransport() -> BridgeTransportProtocol {transport}
