@@ -146,14 +146,14 @@ struct HavenCommonsCLI {
 
     private func runBenchmark(_ args: [String]) async throws {
         guard let domain = args.first else {
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]")
         }
 
         switch domain {
         case "purpose-interest":
             try await runPurposeInterestBenchmark(Array(args.dropFirst()))
         default:
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]")
         }
     }
 
@@ -164,13 +164,36 @@ struct HavenCommonsCLI {
             throw CLIError.invalidArgument("--format \(rawFormat)")
         }
 
-        let tuning = try optionalOptionValue("--tuning", in: args).map(loadTuningConfig(from:))
         let repositoryRoot = commonsRoot.deletingLastPathComponent()
-        let report = try await PerspectiveMatchingScenarioSupport.buildBenchmarkReport(
-            format: format,
-            repositoryRoot: repositoryRoot,
-            tuning: tuning
-        )
+        let report: String
+        if hasFlag("--runtime-comparison", in: args) {
+            let useConferenceDataset = hasFlag("--conference-dataset", in: args)
+            let iterations = try optionalOptionValue("--iterations", in: args).map { rawValue -> Int in
+                guard let value = Int(rawValue), value > 0 else {
+                    throw CLIError.invalidArgument("--iterations \(rawValue)")
+                }
+                return value
+            } ?? 100
+            if useConferenceDataset {
+                report = try await PerspectiveMatchingScenarioSupport.buildConferenceRuntimeComparisonReport(
+                    format: format,
+                    iterations: iterations
+                )
+            } else {
+                report = try await PerspectiveMatchingScenarioSupport.buildRuntimeComparisonReport(
+                    format: format,
+                    repositoryRoot: repositoryRoot,
+                    iterations: iterations
+                )
+            }
+        } else {
+            let tuning = try optionalOptionValue("--tuning", in: args).map(loadTuningConfig(from:))
+            report = try await PerspectiveMatchingScenarioSupport.buildBenchmarkReport(
+                format: format,
+                repositoryRoot: repositoryRoot,
+                tuning: tuning
+            )
+        }
 
         if let outputPath = try optionalOptionValue("--output", in: args) {
             try write(report: report, to: outputPath)
@@ -257,6 +280,10 @@ struct HavenCommonsCLI {
         return args[valueIndex]
     }
 
+    private func hasFlag(_ key: String, in args: [String]) -> Bool {
+        args.contains(key)
+    }
+
     private func encodeJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -296,7 +323,7 @@ struct HavenCommonsCLI {
           haven-commons resolve keypath --entity <id> --path <path> [--role <owner|member|sponsor|service|unknown>] [--consent <token1,token2>]
           haven-commons resolve term --id <term_id> --lang <locale> [--namespace <namespace>]
           haven-commons resolve guidance --namespace <namespace>
-          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--output <path>]
+          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]
         """
     }
 

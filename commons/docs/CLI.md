@@ -24,6 +24,8 @@ I dette miljøet er kjøring via bygget binær mest robust:
 ./.build/debug/haven-commons resolve guidance --namespace haven.conference
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown --tuning Docs/benchmarks/purpose_interest_local_tuning_example.json
+./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --iterations 100 --format markdown
+./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --conference-dataset --iterations 100 --format markdown
 ```
 
 Alternativt:
@@ -49,4 +51,7 @@ swift run haven-commons lint keypaths
 - `benchmark purpose-interest`
   - kjører kuraterte Purpose/Interest-scenarier mot weighted og cosine baseline
   - `--tuning <path>` legger lokale vektjusteringer oppå felles baseline uten å endre checked-in truth
+  - `--runtime-comparison` sammenlikner `weightedSignal`, sparse `cosine` og `weightedRaw` med latency/RSS-sampling
+  - `--conference-dataset` kjører runtime-sammenligningen mot et større deterministisk konferansedatasett
+  - `--iterations <n>` styrer antall gjennomløp for runtime-sammenligningen
   - rapporten viser felles guardrails (`purpose.human-equal-worth`, `purpose.net-positive-contribution`) og eventuelle top-resultatendringer

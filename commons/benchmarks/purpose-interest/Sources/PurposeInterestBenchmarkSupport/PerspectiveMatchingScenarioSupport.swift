@@ -2,6 +2,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import Foundation
+import Dispatch
+#if canImport(Darwin)
+import Darwin
+#endif
 import HavenPerspectiveSchemas
 import CellBase
 
@@ -23,6 +27,7 @@ public struct PurposeScenarioProfile: Sendable {
 
 public enum ScenarioRankingMethod: String, Codable, CaseIterable, Sendable {
     case weightedRaw
+    case weightedSignal
     case cosine
 }
 
@@ -278,6 +283,159 @@ public struct ScenarioBenchmarkArtifact: Codable, Sendable {
     }
 }
 
+public struct ScenarioRuntimeMethodMeasurement: Codable, Sendable {
+    public var method: ScenarioRankingMethod
+    public var iterations: Int
+    public var caseCount: Int
+    public var rankingCount: Int
+    public var totalElapsedNanoseconds: UInt64
+    public var averageNanosecondsPerCase: Double
+    public var rssBeforeBytes: UInt64?
+    public var rssAfterBytes: UInt64?
+    public var rssDeltaBytes: Int64?
+
+    public init(
+        method: ScenarioRankingMethod,
+        iterations: Int,
+        caseCount: Int,
+        rankingCount: Int,
+        totalElapsedNanoseconds: UInt64,
+        averageNanosecondsPerCase: Double,
+        rssBeforeBytes: UInt64?,
+        rssAfterBytes: UInt64?,
+        rssDeltaBytes: Int64?
+    ) {
+        self.method = method
+        self.iterations = iterations
+        self.caseCount = caseCount
+        self.rankingCount = rankingCount
+        self.totalElapsedNanoseconds = totalElapsedNanoseconds
+        self.averageNanosecondsPerCase = averageNanosecondsPerCase
+        self.rssBeforeBytes = rssBeforeBytes
+        self.rssAfterBytes = rssAfterBytes
+        self.rssDeltaBytes = rssDeltaBytes
+    }
+}
+
+public struct ScenarioRuntimeComparisonArtifact: Codable, Sendable {
+    public var schemaVersion: String
+    public var notes: [String]
+    public var measurements: [ScenarioRuntimeMethodMeasurement]
+
+    public init(
+        schemaVersion: String,
+        notes: [String],
+        measurements: [ScenarioRuntimeMethodMeasurement]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.notes = notes
+        self.measurements = measurements
+    }
+}
+
+public struct ConferenceScenarioTextCase: Codable, Sendable {
+    public var caseID: String
+    public var description: String
+    public var expectedPurposeID: String
+    public var interests: [String]
+    public var notes: [String]
+
+    public init(
+        caseID: String,
+        description: String,
+        expectedPurposeID: String,
+        interests: [String],
+        notes: [String] = []
+    ) {
+        self.caseID = caseID
+        self.description = description
+        self.expectedPurposeID = expectedPurposeID
+        self.interests = interests
+        self.notes = notes
+    }
+}
+
+public struct ConferenceLayeredCandidate: Codable, Sendable {
+    public var candidateID: String
+    public var interestID: String
+    public var purposeID: String
+    public var requiredVariables: [String: String]
+
+    public init(
+        candidateID: String,
+        interestID: String,
+        purposeID: String,
+        requiredVariables: [String: String]
+    ) {
+        self.candidateID = candidateID
+        self.interestID = interestID
+        self.purposeID = purposeID
+        self.requiredVariables = requiredVariables
+    }
+}
+
+public struct ConferenceLayeredScenario: Codable, Sendable {
+    public var caseID: String
+    public var description: String
+    public var startInterestIDs: [String]
+    public var firstLayerPurposeID: String
+    public var localVariables: [String: String]
+    public var candidates: [ConferenceLayeredCandidate]
+    public var expectedCandidateID: String
+    public var expectedPurposeID: String
+
+    public init(
+        caseID: String,
+        description: String,
+        startInterestIDs: [String],
+        firstLayerPurposeID: String,
+        localVariables: [String: String],
+        candidates: [ConferenceLayeredCandidate],
+        expectedCandidateID: String,
+        expectedPurposeID: String
+    ) {
+        self.caseID = caseID
+        self.description = description
+        self.startInterestIDs = startInterestIDs
+        self.firstLayerPurposeID = firstLayerPurposeID
+        self.localVariables = localVariables
+        self.candidates = candidates
+        self.expectedCandidateID = expectedCandidateID
+        self.expectedPurposeID = expectedPurposeID
+    }
+}
+
+public struct ConferenceLayeredScenarioResult: Codable, Sendable {
+    public var caseID: String
+    public var firstLayerPurposeID: String?
+    public var selectedCandidateID: String?
+    public var selectedPurposeID: String?
+    public var carriedLocalVariables: [String: String]
+    public var layer1HitCount: Int
+    public var layer2HitCount: Int
+    public var layer3HitCount: Int
+
+    public init(
+        caseID: String,
+        firstLayerPurposeID: String?,
+        selectedCandidateID: String?,
+        selectedPurposeID: String?,
+        carriedLocalVariables: [String: String],
+        layer1HitCount: Int,
+        layer2HitCount: Int,
+        layer3HitCount: Int
+    ) {
+        self.caseID = caseID
+        self.firstLayerPurposeID = firstLayerPurposeID
+        self.selectedCandidateID = selectedCandidateID
+        self.selectedPurposeID = selectedPurposeID
+        self.carriedLocalVariables = carriedLocalVariables
+        self.layer1HitCount = layer1HitCount
+        self.layer2HitCount = layer2HitCount
+        self.layer3HitCount = layer3HitCount
+    }
+}
+
 public enum ScenarioBenchmarkReportFormat: String, CaseIterable {
     case json
     case markdown
@@ -297,6 +455,8 @@ public enum PerspectiveMatchingScenarioSupport {
         "home-weekend-recovery.json",
         "family-care-coordination.json"
     ]
+
+    private static let stableBenchmarkMethods: [ScenarioRankingMethod] = [.weightedRaw, .cosine]
 
     public static let profiles: [PurposeScenarioProfile] = [
         PurposeScenarioProfile(
@@ -491,6 +651,452 @@ public enum PerspectiveMatchingScenarioSupport {
         )
     ]
 
+    public static let conferenceProfiles: [PurposeScenarioProfile] = [
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.discover-relevant-program",
+            interestWeights: [
+                "interest.ai": 0.55,
+                "interest.conference.track": 0.90,
+                "interest.conference.session": 0.85,
+                "interest.speaker-fit": 0.65,
+                "interest.note-taking": 0.45,
+                "interest.schedule-fit": 0.70
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.learn-hands-on",
+            interestWeights: [
+                "interest.workshop-participation": 1.00,
+                "interest.problem-solving": 0.90,
+                "interest.practical-exercises": 0.85
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.extract-actionable-insights",
+            interestWeights: [
+                "interest.education": 0.80,
+                "interest.note-taking": 0.85,
+                "interest.documentation": 0.70,
+                "interest.implementation-notes": 0.90,
+                "interest.followup": 0.45
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.scan-strategic-trends",
+            interestWeights: [
+                "interest.keynote": 0.95,
+                "interest.market-trends": 0.90,
+                "interest.future-scenarios": 0.80
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.build-high-trust-intros",
+            interestWeights: [
+                "interest.peer-meetings": 0.95,
+                "interest.hallway-conversations": 0.85,
+                "interest.shared-context": 0.70,
+                "interest.followup": 0.70,
+                "interest.team-fit": 0.45,
+                "interest.trust-signal": 0.90
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.find-strategic-partner",
+            interestWeights: [
+                "interest.partner-fit": 1.00,
+                "interest.shared-projects": 0.90,
+                "interest.decision-maker": 0.75
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.evaluate-vendors",
+            interestWeights: [
+                "interest.conference.expo": 0.90,
+                "interest.vendor-comparison": 0.95,
+                "interest.security": 0.70,
+                "interest.budget": 0.65,
+                "interest.integration-fit": 0.80,
+                "interest.procurement-readiness": 0.55
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.buy-with-intent",
+            interestWeights: [
+                "interest.hosted-buyer": 1.00,
+                "interest.procurement-readiness": 0.90,
+                "interest.decision-window": 0.85
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.generate-qualified-leads",
+            interestWeights: [
+                "interest.conference.lead": 1.00,
+                "interest.conference.exhibitor": 0.85,
+                "interest.pitch-fit": 0.75,
+                "interest.followup": 0.80,
+                "interest.crm-capture": 0.70,
+                "interest.buyer-intent": 0.90
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.capture-feedback-burst",
+            interestWeights: [
+                "interest.feedback": 1.00,
+                "interest.product-demo": 0.90,
+                "interest.objection-handling": 0.80
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.find-speakers-to-follow",
+            interestWeights: [
+                "interest.speaker-fit": 0.95,
+                "interest.topic-authority": 0.90,
+                "interest.session-quality": 0.75,
+                "interest.social-proof": 0.55,
+                "interest.followup": 0.50
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.map-opposing-views",
+            interestWeights: [
+                "interest.panel-discussion": 0.95,
+                "interest.policy-debate": 0.90,
+                "interest.argument-map": 0.85
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.join-community",
+            interestWeights: [
+                "interest.community": 0.95,
+                "interest.peer-meetings": 0.65,
+                "interest.hallway-conversations": 0.70,
+                "interest.birds-of-a-feather": 0.85,
+                "interest.followup": 0.60,
+                "interest.shared-context": 0.80
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.co-create-agenda",
+            interestWeights: [
+                "interest.unconference": 1.00,
+                "interest.participant-led": 0.95,
+                "interest.collaborative-agenda": 0.90
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.turn-talks-into-projects",
+            interestWeights: [
+                "interest.shared-projects": 0.95,
+                "interest.problem-solving": 0.85,
+                "interest.followup": 0.90,
+                "interest.documentation": 0.65,
+                "interest.next-step": 0.90,
+                "interest.team-fit": 0.55
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.schedule-post-event-followup",
+            interestWeights: [
+                "interest.followup": 1.00,
+                "interest.calendar-coordination": 0.90,
+                "interest.next-step": 0.85
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.optimize-personal-agenda",
+            interestWeights: [
+                "interest.schedule-fit": 1.00,
+                "interest.energy-management": 0.80,
+                "interest.must-attend-session": 0.85,
+                "interest.travel-buffer": 0.60,
+                "interest.priority-conflict": 0.90
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.recover-between-sessions",
+            interestWeights: [
+                "interest.rest": 0.95,
+                "interest.energy-management": 0.90,
+                "interest.low-effort-planning": 0.80
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.assess-risk-and-compliance",
+            interestWeights: [
+                "interest.security": 0.95,
+                "interest.privacy": 0.90,
+                "interest.regulation": 0.85,
+                "interest.vendor-comparison": 0.55,
+                "interest.documentation": 0.70,
+                "interest.decision-maker": 0.45
+            ]
+        ),
+        PurposeScenarioProfile(
+            purposeId: "purpose.conference.support-organizer-outcomes",
+            interestWeights: [
+                "interest.conference.sponsor": 0.90,
+                "interest.attendee-success": 0.95,
+                "interest.session-feedback": 0.85
+            ]
+        )
+    ]
+
+    public static let conferenceTextCases: [ConferenceScenarioTextCase] = [
+        ConferenceScenarioTextCase(
+            caseID: "conference.first-time-program-navigation",
+            description: "A first-time participant wants to find the sessions and speakers that make the conference intelligible without drowning in the schedule.",
+            expectedPurposeID: "purpose.conference.discover-relevant-program",
+            interests: ["interest.ai", "interest.conference.track", "interest.conference.session", "interest.speaker-fit", "interest.schedule-fit"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.hands-on-workshop-practice",
+            description: "An engineer wants practical exercises and a workshop where they can solve a real implementation problem before going home.",
+            expectedPurposeID: "purpose.conference.learn-hands-on",
+            interests: ["interest.workshop-participation", "interest.problem-solving", "interest.practical-exercises"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.architecture-notes-for-team",
+            description: "A team lead wants implementation notes, documentation and actionable architecture decisions to bring back to colleagues.",
+            expectedPurposeID: "purpose.conference.extract-actionable-insights",
+            interests: ["interest.documentation", "interest.implementation-notes", "interest.note-taking", "interest.education"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.executive-trend-scan",
+            description: "An executive is scanning keynotes for market shifts, future scenarios and strategic technology trends.",
+            expectedPurposeID: "purpose.conference.scan-strategic-trends",
+            interests: ["interest.keynote", "interest.market-trends", "interest.future-scenarios"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.high-trust-peer-intros",
+            description: "A returning attendee wants high-trust hallway conversations with peers who share context and can follow up after the event.",
+            expectedPurposeID: "purpose.conference.build-high-trust-intros",
+            interests: ["interest.peer-meetings", "interest.hallway-conversations", "interest.shared-context", "interest.trust-signal", "interest.followup"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.partner-search",
+            description: "A founder is looking for a strategic partner with shared project fit and decision authority.",
+            expectedPurposeID: "purpose.conference.find-strategic-partner",
+            interests: ["interest.partner-fit", "interest.shared-projects", "interest.decision-maker"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.enterprise-vendor-shortlist",
+            description: "A buyer compares vendors in the expo and needs security, budget, integration and procurement signals.",
+            expectedPurposeID: "purpose.conference.evaluate-vendors",
+            interests: ["interest.conference.expo", "interest.vendor-comparison", "interest.security", "interest.budget", "interest.integration-fit", "interest.procurement-readiness"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.hosted-buyer-ready",
+            description: "A hosted buyer has a near-term decision window and wants to move quickly from procurement intent to meetings.",
+            expectedPurposeID: "purpose.conference.buy-with-intent",
+            interests: ["interest.hosted-buyer", "interest.procurement-readiness", "interest.decision-window"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.exhibitor-qualified-leads",
+            description: "An exhibitor wants qualified buyer intent, CRM capture and follow-up from leads that fit their pitch.",
+            expectedPurposeID: "purpose.conference.generate-qualified-leads",
+            interests: ["interest.conference.lead", "interest.conference.exhibitor", "interest.pitch-fit", "interest.buyer-intent", "interest.crm-capture", "interest.followup"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.demo-feedback-sprint",
+            description: "A product team wants concentrated feedback on a demo and objections they can handle before launch.",
+            expectedPurposeID: "purpose.conference.capture-feedback-burst",
+            interests: ["interest.feedback", "interest.product-demo", "interest.objection-handling"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.speaker-follow-list",
+            description: "A researcher wants to find authoritative speakers to follow based on session quality and social proof.",
+            expectedPurposeID: "purpose.conference.find-speakers-to-follow",
+            interests: ["interest.speaker-fit", "interest.topic-authority", "interest.session-quality", "interest.social-proof"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.policy-opposing-views",
+            description: "A policy analyst wants panel discussions where opposing views can be mapped into a clear argument map.",
+            expectedPurposeID: "purpose.conference.map-opposing-views",
+            interests: ["interest.panel-discussion", "interest.policy-debate", "interest.argument-map"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.local-community-chapter",
+            description: "A community organizer wants birds-of-a-feather groups, shared context and follow-up for a local chapter.",
+            expectedPurposeID: "purpose.conference.join-community",
+            interests: ["interest.community", "interest.birds-of-a-feather", "interest.shared-context", "interest.followup", "interest.peer-meetings"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.unconference-agenda",
+            description: "A participant wants an unconference setting where attendees co-create the agenda rather than only consume talks.",
+            expectedPurposeID: "purpose.conference.co-create-agenda",
+            interests: ["interest.unconference", "interest.participant-led", "interest.collaborative-agenda"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.post-event-projects",
+            description: "A maintainer wants to turn conversations into shared projects with next steps, documentation and follow-up.",
+            expectedPurposeID: "purpose.conference.turn-talks-into-projects",
+            interests: ["interest.shared-projects", "interest.problem-solving", "interest.next-step", "interest.documentation", "interest.followup"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.followup-scheduling",
+            description: "A small group has agreed to continue and now needs calendar coordination and a concrete next step.",
+            expectedPurposeID: "purpose.conference.schedule-post-event-followup",
+            interests: ["interest.followup", "interest.calendar-coordination", "interest.next-step"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.personal-agenda-optimizer",
+            description: "An attendee has conflicts between must-attend sessions and needs a schedule that protects energy and travel buffers.",
+            expectedPurposeID: "purpose.conference.optimize-personal-agenda",
+            interests: ["interest.schedule-fit", "interest.energy-management", "interest.must-attend-session", "interest.travel-buffer", "interest.priority-conflict"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.recovery-between-sessions",
+            description: "A burned-out leader needs low-effort planning, rest and energy management between dense sessions.",
+            expectedPurposeID: "purpose.conference.recover-between-sessions",
+            interests: ["interest.rest", "interest.energy-management", "interest.low-effort-planning"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.risk-compliance-evaluation",
+            description: "A security lead compares regulation, privacy and vendor risk while collecting documentation for compliance review.",
+            expectedPurposeID: "purpose.conference.assess-risk-and-compliance",
+            interests: ["interest.security", "interest.privacy", "interest.regulation", "interest.vendor-comparison", "interest.documentation"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.organizer-sponsor-outcomes",
+            description: "An organizer wants sponsor outcomes, attendee success and useful session feedback without distorting the program.",
+            expectedPurposeID: "purpose.conference.support-organizer-outcomes",
+            interests: ["interest.conference.sponsor", "interest.attendee-success", "interest.session-feedback"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.accessible-program-path",
+            description: "An accessibility advocate wants schedule fit, session quality and quiet recovery space before choosing sessions.",
+            expectedPurposeID: "purpose.conference.optimize-personal-agenda",
+            interests: ["interest.schedule-fit", "interest.energy-management", "interest.conference.session", "interest.priority-conflict", "interest.rest"],
+            notes: ["multi_layer_candidate"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.press-briefing-notes",
+            description: "A journalist needs speaker authority, session quality, documentation and follow-up for accurate coverage.",
+            expectedPurposeID: "purpose.conference.find-speakers-to-follow",
+            interests: ["interest.speaker-fit", "interest.topic-authority", "interest.session-quality", "interest.documentation", "interest.followup"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.investor-founder-patterns",
+            description: "An investor uses keynotes and market trends to find decision makers for strategic partnerships.",
+            expectedPurposeID: "purpose.conference.find-strategic-partner",
+            interests: ["interest.partner-fit", "interest.decision-maker", "interest.market-trends", "interest.shared-projects"]
+        ),
+        ConferenceScenarioTextCase(
+            caseID: "conference.remote-worker-social-energy",
+            description: "A remote worker wants small peer meetings and community, but only if energy management and rest are respected.",
+            expectedPurposeID: "purpose.conference.join-community",
+            interests: ["interest.community", "interest.peer-meetings", "interest.shared-context", "interest.energy-management", "interest.rest"],
+            notes: ["multi_layer_candidate"]
+        )
+    ]
+
+    public static let conferenceLayeredScenarios: [ConferenceLayeredScenario] = [
+        ConferenceLayeredScenario(
+            caseID: "layered.after-hours-speaker-dinner",
+            description: "Layer 1 finds high-trust networking; layer 2 must carry role, after-hours consent, language and trust into dinner candidate selection.",
+            startInterestIDs: ["interest.peer-meetings", "interest.after-hours", "interest.trust-signal"],
+            firstLayerPurposeID: "purpose.conference.build-high-trust-intros",
+            localVariables: ["role": "attendee", "afterHours": "true", "language": "nb", "consent.intros": "true", "trust.min": "0.7"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.speaker-dinner.nb", interestID: "interest.layer.speaker-dinner.nb", purposeID: "purpose.conference.build-high-trust-intros", requiredVariables: ["role": "attendee", "afterHours": "true", "language": "nb", "consent.intros": "true"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.sponsor-dinner.closed", interestID: "interest.layer.sponsor-dinner.closed", purposeID: "purpose.conference.generate-qualified-leads", requiredVariables: ["role": "sponsor", "afterHours": "true"])
+            ],
+            expectedCandidateID: "candidate.speaker-dinner.nb",
+            expectedPurposeID: "purpose.conference.build-high-trust-intros"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.workshop-seat-allocation",
+            description: "Layer 1 finds hands-on learning; layer 2 must keep capacity, ticket tier and time window before recommending a workshop slot.",
+            startInterestIDs: ["interest.workshop-participation", "interest.practical-exercises", "interest.problem-solving"],
+            firstLayerPurposeID: "purpose.conference.learn-hands-on",
+            localVariables: ["ticketTier": "workshop", "capacity.remaining": "4", "timeWindow": "morning", "calendar.conflict": "false"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.ai-workshop.morning", interestID: "interest.layer.ai-workshop.morning", purposeID: "purpose.conference.learn-hands-on", requiredVariables: ["ticketTier": "workshop", "timeWindow": "morning", "calendar.conflict": "false"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.ai-workshop.waitlist", interestID: "interest.layer.ai-workshop.waitlist", purposeID: "purpose.conference.optimize-personal-agenda", requiredVariables: ["capacity.remaining": "0"])
+            ],
+            expectedCandidateID: "candidate.ai-workshop.morning",
+            expectedPurposeID: "purpose.conference.learn-hands-on"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.hosted-buyer-vendor",
+            description: "Layer 1 finds buyer intent; layer 2 must keep role, commercial consent and procurement window to avoid spammy exhibitor matches.",
+            startInterestIDs: ["interest.hosted-buyer", "interest.procurement-readiness", "interest.decision-window"],
+            firstLayerPurposeID: "purpose.conference.buy-with-intent",
+            localVariables: ["role": "hostedBuyer", "consent.commercial": "true", "procurementWindow": "quarter", "budgetRange": "enterprise"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.vendor-meeting.enterprise", interestID: "interest.layer.vendor-meeting.enterprise", purposeID: "purpose.conference.evaluate-vendors", requiredVariables: ["role": "hostedBuyer", "consent.commercial": "true", "budgetRange": "enterprise"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.exhibitor-lead-capture", interestID: "interest.layer.exhibitor-lead-capture", purposeID: "purpose.conference.generate-qualified-leads", requiredVariables: ["role": "exhibitor", "consent.commercial": "true"])
+            ],
+            expectedCandidateID: "candidate.vendor-meeting.enterprise",
+            expectedPurposeID: "purpose.conference.evaluate-vendors"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.language-compatible-hallway-chat",
+            description: "Layer 1 finds networking; layer 2 must carry language, zone and availability to avoid impossible hallway introductions.",
+            startInterestIDs: ["interest.hallway-conversations", "interest.shared-context", "interest.peer-meetings"],
+            firstLayerPurposeID: "purpose.conference.build-high-trust-intros",
+            localVariables: ["language": "en", "locationZone": "hall-b", "availableUntil": "15:30", "conversationMode": "short"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.hallway-chat.en.hall-b", interestID: "interest.layer.hallway-chat.en.hall-b", purposeID: "purpose.conference.build-high-trust-intros", requiredVariables: ["language": "en", "locationZone": "hall-b", "conversationMode": "short"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.hallway-chat.nb.hall-a", interestID: "interest.layer.hallway-chat.nb.hall-a", purposeID: "purpose.conference.join-community", requiredVariables: ["language": "nb", "locationZone": "hall-a"])
+            ],
+            expectedCandidateID: "candidate.hallway-chat.en.hall-b",
+            expectedPurposeID: "purpose.conference.build-high-trust-intros"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.press-briefing-embargo",
+            description: "Layer 1 finds speaker/documentation value; layer 2 must keep press role and embargo acceptance before private briefing.",
+            startInterestIDs: ["interest.speaker-fit", "interest.documentation", "interest.topic-authority"],
+            firstLayerPurposeID: "purpose.conference.find-speakers-to-follow",
+            localVariables: ["role": "press", "embargoAccepted": "true", "allowedTopic": "roadmap", "timeWindow": "afternoon"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.press-briefing.roadmap", interestID: "interest.layer.press-briefing.roadmap", purposeID: "purpose.conference.extract-actionable-insights", requiredVariables: ["role": "press", "embargoAccepted": "true", "allowedTopic": "roadmap"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.public-session-only", interestID: "interest.layer.public-session-only", purposeID: "purpose.conference.discover-relevant-program", requiredVariables: ["embargoAccepted": "false"])
+            ],
+            expectedCandidateID: "candidate.press-briefing.roadmap",
+            expectedPurposeID: "purpose.conference.extract-actionable-insights"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.accessibility-aware-session",
+            description: "Layer 1 finds personal agenda optimization; layer 2 must carry room access needs and distance tolerance.",
+            startInterestIDs: ["interest.schedule-fit", "interest.energy-management", "interest.conference.session"],
+            firstLayerPurposeID: "purpose.conference.optimize-personal-agenda",
+            localVariables: ["accessibilityNeeds": "stepFree", "roomFeature": "captioning", "distanceTolerance": "near", "timeWindow": "midday"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.accessible-session.captioned", interestID: "interest.layer.accessible-session.captioned", purposeID: "purpose.conference.discover-relevant-program", requiredVariables: ["accessibilityNeeds": "stepFree", "roomFeature": "captioning", "distanceTolerance": "near"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.remote-overflow-room", interestID: "interest.layer.remote-overflow-room", purposeID: "purpose.conference.recover-between-sessions", requiredVariables: ["distanceTolerance": "remote"])
+            ],
+            expectedCandidateID: "candidate.accessible-session.captioned",
+            expectedPurposeID: "purpose.conference.discover-relevant-program"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.followup-project-triage",
+            description: "Layer 1 finds project conversion; layer 2 must carry contact consent, follow-up deadline and owner availability.",
+            startInterestIDs: ["interest.followup", "interest.shared-projects", "interest.next-step"],
+            firstLayerPurposeID: "purpose.conference.turn-talks-into-projects",
+            localVariables: ["contactConsent": "true", "followupDeadline": "7d", "ownerAvailability": "high", "trust.min": "0.6"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.project-followup.7d", interestID: "interest.layer.project-followup.7d", purposeID: "purpose.conference.schedule-post-event-followup", requiredVariables: ["contactConsent": "true", "followupDeadline": "7d", "ownerAvailability": "high"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.defer-followup", interestID: "interest.layer.defer-followup", purposeID: "purpose.conference.extract-actionable-insights", requiredVariables: ["ownerAvailability": "low"])
+            ],
+            expectedCandidateID: "candidate.project-followup.7d",
+            expectedPurposeID: "purpose.conference.schedule-post-event-followup"
+        ),
+        ConferenceLayeredScenario(
+            caseID: "layered.budgeted-after-hours-dinner",
+            description: "Layer 1 finds networking; layer 2 must carry budget, dietary need and social consent before suggesting dinner.",
+            startInterestIDs: ["interest.peer-meetings", "interest.after-hours", "interest.local-food"],
+            firstLayerPurposeID: "purpose.conference.build-high-trust-intros",
+            localVariables: ["budgetMax": "moderate", "dietaryNeed": "vegetarian", "availableAfter": "18:00", "consent.social": "true"],
+            candidates: [
+                ConferenceLayeredCandidate(candidateID: "candidate.vegetarian-dinner.moderate", interestID: "interest.layer.vegetarian-dinner.moderate", purposeID: "purpose.conference.join-community", requiredVariables: ["budgetMax": "moderate", "dietaryNeed": "vegetarian", "consent.social": "true"]),
+                ConferenceLayeredCandidate(candidateID: "candidate.expensive-sponsor-dinner", interestID: "interest.layer.expensive-sponsor-dinner", purposeID: "purpose.conference.generate-qualified-leads", requiredVariables: ["budgetMax": "high", "consent.social": "true"])
+            ],
+            expectedCandidateID: "candidate.vegetarian-dinner.moderate",
+            expectedPurposeID: "purpose.conference.join-community"
+        )
+    ]
+
     public static func defaultRepositoryRoot(filePath: String = #filePath) -> URL {
         URL(fileURLWithPath: filePath)
             .deletingLastPathComponent()
@@ -554,13 +1160,21 @@ public enum PerspectiveMatchingScenarioSupport {
         includeChallengeDecoys: Bool,
         tuning: ScenarioWeightTuningConfig? = nil
     ) async -> [ScenarioRankedPurpose] {
+        await rankedPurposes(
+            interests: interests,
+            method: method,
+            profiles: purposeProfiles(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning)
+        )
+    }
+
+    public static func rankedPurposes(
+        interests: [String],
+        method: ScenarioRankingMethod,
+        profiles: [PurposeScenarioProfile]
+    ) async -> [ScenarioRankedPurpose] {
         switch method {
         case .weightedRaw:
-            let scores = await weightedScores(
-                interests: interests,
-                includeChallengeDecoys: includeChallengeDecoys,
-                tuning: tuning
-            )
+            let scores = await weightedScores(interests: interests, profiles: profiles)
             return scores.map { score in
                 let matched = score.explain.topEdges
                     .map(\.edge.toNode.id)
@@ -571,10 +1185,15 @@ public enum PerspectiveMatchingScenarioSupport {
                     matchedInterestRefs: matched
                 )
             }
+        case .weightedSignal:
+            return await weightedSignalRankings(
+                interests: interests,
+                profiles: profiles
+            )
         case .cosine:
             return cosineRankings(
                 interests: interests,
-                profiles: purposeProfiles(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning)
+                profiles: profiles
             )
         }
     }
@@ -632,6 +1251,51 @@ public enum PerspectiveMatchingScenarioSupport {
         )
     }
 
+    public static func evaluateConferenceDataset(method: ScenarioRankingMethod) async -> ScenarioEvaluationSummary {
+        var caseResults = [ScenarioEvaluationCaseResult]()
+
+        for scenarioCase in conferenceTextCases {
+            let rankings = await rankedPurposes(
+                interests: scenarioCase.interests,
+                method: method,
+                profiles: conferenceProfiles
+            )
+            let topPurpose = rankings.first
+            let top3 = Array(rankings.prefix(3))
+            let reciprocalRank = reciprocalRank(
+                expectedPurposeID: scenarioCase.expectedPurposeID,
+                in: rankings
+            )
+
+            caseResults.append(
+                ScenarioEvaluationCaseResult(
+                    caseID: scenarioCase.caseID,
+                    expectedPurposeID: scenarioCase.expectedPurposeID,
+                    topPurposeID: topPurpose?.purposeId,
+                    topScore: topPurpose?.score ?? 0.0,
+                    top3ContainsExpected: top3.contains(where: { $0.purposeId == scenarioCase.expectedPurposeID }),
+                    reciprocalRank: reciprocalRank
+                )
+            )
+        }
+
+        let totalCases = caseResults.count
+        let top1Correct = caseResults.filter { $0.topPurposeID == $0.expectedPurposeID }.count
+        let top3Correct = caseResults.filter { $0.top3ContainsExpected }.count
+        let meanReciprocalRank = totalCases > 0
+            ? caseResults.map(\.reciprocalRank).reduce(0.0, +) / Double(totalCases)
+            : 0.0
+
+        return ScenarioEvaluationSummary(
+            method: method,
+            totalCases: totalCases,
+            top1Correct: top1Correct,
+            top3Correct: top3Correct,
+            meanReciprocalRank: meanReciprocalRank,
+            caseResults: caseResults
+        )
+    }
+
     public static func challengeConfidenceFloor(
         method: ScenarioRankingMethod,
         repositoryRoot: URL = defaultRepositoryRoot()
@@ -655,7 +1319,7 @@ public enum PerspectiveMatchingScenarioSupport {
         let cosineFloor = try await challengeConfidenceFloor(method: .cosine, repositoryRoot: repositoryRoot)
 
         var methodResults = [ScenarioChallengeMethodSummary]()
-        for method in [ScenarioRankingMethod.weightedRaw, .cosine] {
+        for method in stableBenchmarkMethods {
             let confidenceFloor = method == .weightedRaw ? weightedFloor : cosineFloor
             var caseResults = [ScenarioChallengeCaseResult]()
             for challengeCase in challengeCases {
@@ -763,6 +1427,294 @@ public enum PerspectiveMatchingScenarioSupport {
         return try renderReport(artifact, format: format)
     }
 
+    public static func buildRuntimeComparisonArtifact(
+        repositoryRoot: URL = defaultRepositoryRoot(),
+        iterations: Int = 100,
+        methods: [ScenarioRankingMethod] = [.weightedSignal, .cosine, .weightedRaw],
+        includeChallengeCases: Bool = true
+    ) async throws -> ScenarioRuntimeComparisonArtifact {
+        let sanitizedIterations = max(1, iterations)
+        let cases = try runtimeComparisonCases(
+            repositoryRoot: repositoryRoot,
+            includeChallengeCases: includeChallengeCases
+        )
+        var measurements = [ScenarioRuntimeMethodMeasurement]()
+
+        for method in methods {
+            for benchmarkCase in cases {
+                _ = await rankedPurposes(
+                    interests: benchmarkCase.interests,
+                    method: method,
+                    includeChallengeDecoys: benchmarkCase.includeChallengeDecoys
+                )
+            }
+
+            let rssBefore = currentResidentMemoryBytes()
+            let started = DispatchTime.now().uptimeNanoseconds
+            var rankingCount = 0
+
+            for _ in 0..<sanitizedIterations {
+                for benchmarkCase in cases {
+                    let rankings = await rankedPurposes(
+                        interests: benchmarkCase.interests,
+                        method: method,
+                        includeChallengeDecoys: benchmarkCase.includeChallengeDecoys
+                    )
+                    rankingCount += rankings.count
+                }
+            }
+
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started
+            let rssAfter = currentResidentMemoryBytes()
+            let operations = max(1, sanitizedIterations * cases.count)
+            let rssDelta = rssDeltaBytes(before: rssBefore, after: rssAfter)
+            measurements.append(
+                ScenarioRuntimeMethodMeasurement(
+                    method: method,
+                    iterations: sanitizedIterations,
+                    caseCount: cases.count,
+                    rankingCount: rankingCount,
+                    totalElapsedNanoseconds: elapsed,
+                    averageNanosecondsPerCase: Double(elapsed) / Double(operations),
+                    rssBeforeBytes: rssBefore,
+                    rssAfterBytes: rssAfter,
+                    rssDeltaBytes: rssDelta
+                )
+            )
+        }
+
+        return ScenarioRuntimeComparisonArtifact(
+            schemaVersion: "1.0",
+            notes: [
+                "`weightedSignal` traverses preweighted Interest -> Purpose edges through `WeightedGraphRuntime` and ranks by edge-weight evidence.",
+                "`cosine` is sparse cosine over deterministic interest-id vectors; it is not an external word-vector or embedding baseline yet.",
+                "RSS is resident set size sampled before and after each warmed method loop, not peak allocation."
+            ],
+            measurements: measurements
+        )
+    }
+
+    public static func buildRuntimeComparisonReport(
+        format: ScenarioBenchmarkReportFormat,
+        repositoryRoot: URL = defaultRepositoryRoot(),
+        iterations: Int = 100
+    ) async throws -> String {
+        let artifact = try await buildRuntimeComparisonArtifact(
+            repositoryRoot: repositoryRoot,
+            iterations: iterations
+        )
+        return try renderRuntimeComparisonReport(artifact, format: format)
+    }
+
+    public static func buildConferenceRuntimeComparisonArtifact(
+        iterations: Int = 100,
+        methods: [ScenarioRankingMethod] = [.weightedSignal, .cosine, .weightedRaw]
+    ) async -> ScenarioRuntimeComparisonArtifact {
+        let sanitizedIterations = max(1, iterations)
+        var measurements = [ScenarioRuntimeMethodMeasurement]()
+
+        for method in methods {
+            for scenarioCase in conferenceTextCases {
+                _ = await rankedPurposes(
+                    interests: scenarioCase.interests,
+                    method: method,
+                    profiles: conferenceProfiles
+                )
+            }
+
+            let rssBefore = currentResidentMemoryBytes()
+            let started = DispatchTime.now().uptimeNanoseconds
+            var rankingCount = 0
+
+            for _ in 0..<sanitizedIterations {
+                for scenarioCase in conferenceTextCases {
+                    let rankings = await rankedPurposes(
+                        interests: scenarioCase.interests,
+                        method: method,
+                        profiles: conferenceProfiles
+                    )
+                    rankingCount += rankings.count
+                }
+            }
+
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started
+            let rssAfter = currentResidentMemoryBytes()
+            let operations = max(1, sanitizedIterations * conferenceTextCases.count)
+            measurements.append(
+                ScenarioRuntimeMethodMeasurement(
+                    method: method,
+                    iterations: sanitizedIterations,
+                    caseCount: conferenceTextCases.count,
+                    rankingCount: rankingCount,
+                    totalElapsedNanoseconds: elapsed,
+                    averageNanosecondsPerCase: Double(elapsed) / Double(operations),
+                    rssBeforeBytes: rssBefore,
+                    rssAfterBytes: rssAfter,
+                    rssDeltaBytes: rssDeltaBytes(before: rssBefore, after: rssAfter)
+                )
+            )
+        }
+
+        return ScenarioRuntimeComparisonArtifact(
+            schemaVersion: "1.0",
+            notes: [
+                "Conference dataset: \(conferenceTextCases.count) generated text cases over \(conferenceProfiles.count) deterministic Purpose/Interest profiles.",
+                "`weightedSignal` traverses preweighted Interest -> Purpose edges through `WeightedGraphRuntime` and ranks by edge-weight evidence.",
+                "`cosine` is sparse cosine over deterministic interest-id vectors; it is not an external word-vector or embedding baseline yet.",
+                "Layered conference scenarios are separate because they require localVariables carried from one match layer into the next."
+            ],
+            measurements: measurements
+        )
+    }
+
+    public static func buildConferenceRuntimeComparisonReport(
+        format: ScenarioBenchmarkReportFormat,
+        iterations: Int = 100
+    ) async throws -> String {
+        let artifact = await buildConferenceRuntimeComparisonArtifact(iterations: iterations)
+        return try renderRuntimeComparisonReport(artifact, format: format)
+    }
+
+    public static func resolveConferenceLayeredScenario(
+        _ scenario: ConferenceLayeredScenario
+    ) async throws -> ConferenceLayeredScenarioResult {
+        let runtime = WeightedGraphRuntime()
+        let finalPurposes = Dictionary(
+            uniqueKeysWithValues: Set(scenario.candidates.map(\.purposeID)).map { purposeID in
+                (
+                    purposeID,
+                    Purpose(name: purposeID, description: "Layered conference target \(purposeID)")
+                )
+            }
+        )
+
+        let candidateInterests = Dictionary(
+            uniqueKeysWithValues: scenario.candidates.map { candidate in
+                (
+                    candidate.interestID,
+                    Interest(
+                        name: candidate.interestID,
+                        types: [],
+                        parts: [],
+                        partOf: [],
+                        purposes: [
+                            Weight<Purpose>(
+                                weight: 1.0,
+                                value: finalPurposes[candidate.purposeID]
+                            )
+                        ]
+                    )
+                )
+            }
+        )
+
+        let firstLayerPurpose = Purpose(
+            name: scenario.firstLayerPurposeID,
+            description: "Layered conference first-layer purpose \(scenario.firstLayerPurposeID)",
+            interests: scenario.candidates.compactMap { candidate in
+                guard let interest = candidateInterests[candidate.interestID] else {
+                    return nil
+                }
+                return Weight<Interest>(weight: 1.0, value: interest)
+            }
+        )
+        let startInterests = scenario.startInterestIDs.map { interestID in
+            Interest(
+                name: interestID,
+                types: [],
+                parts: [],
+                partOf: [],
+                purposes: [
+                    Weight<Purpose>(weight: 1.0, value: firstLayerPurpose)
+                ]
+            )
+        }
+        let root = Purpose(
+            name: "\(scenario.caseID).root",
+            description: "Layered conference root \(scenario.caseID)",
+            interests: startInterests.map { Weight<Interest>(weight: 1.0, value: $0) }
+        )
+
+        let layer1Signal = Signal(
+            relationship: .interests,
+            weight: 1.0,
+            tolerance: 1.0,
+            token: "\(scenario.caseID).layer1",
+            ttl: 5.0,
+            hops: 2,
+            localVariables: object(from: scenario.localVariables)
+        )
+        let layer1 = try await runtime.match(
+            start: root,
+            signal: layer1Signal,
+            configuration: WeightedGraphRuntimeConfiguration(
+                relationships: [.interests, .purposes],
+                maxHops: 2,
+                ttl: 5.0,
+                localVariables: layer1Signal.localVariables
+            )
+        )
+        let firstLayerMatchedPurposeID = layer1.hits
+            .first(where: { $0.node.kind == .purpose && $0.ref == scenario.firstLayerPurposeID })?
+            .ref
+
+        let layer2Signal = Signal(
+            relationship: .interests,
+            weight: 1.0,
+            tolerance: 1.0,
+            token: "\(scenario.caseID).layer2",
+            ttl: 5.0,
+            hops: 1,
+            localVariables: layer1.localVariables
+        )
+        let layer2 = try await runtime.match(
+            start: firstLayerPurpose,
+            signal: layer2Signal,
+            configuration: WeightedGraphRuntimeConfiguration(signal: layer2Signal)
+        )
+        let hitInterestIDs = Set(layer2.hits.map(\.ref))
+        let selectedCandidate = scenario.candidates.first { candidate in
+            hitInterestIDs.contains(candidate.interestID) &&
+                requirements(candidate.requiredVariables, areSatisfiedBy: layer2.localVariables)
+        }
+
+        let layer3: MatchResult?
+        if let selectedCandidate,
+           let selectedInterest = candidateInterests[selectedCandidate.interestID] {
+            let layer3Signal = Signal(
+                relationship: .purposes,
+                weight: 1.0,
+                tolerance: 1.0,
+                token: "\(scenario.caseID).layer3",
+                ttl: 5.0,
+                hops: 1,
+                localVariables: layer2.localVariables
+            )
+            layer3 = try await runtime.match(
+                start: selectedInterest,
+                signal: layer3Signal,
+                configuration: WeightedGraphRuntimeConfiguration(signal: layer3Signal)
+            )
+        } else {
+            layer3 = nil
+        }
+
+        let selectedPurposeID = selectedCandidate.flatMap { candidate in
+            layer3?.hits.first(where: { $0.node.kind == .purpose && $0.ref == candidate.purposeID })?.ref
+        }
+
+        return ConferenceLayeredScenarioResult(
+            caseID: scenario.caseID,
+            firstLayerPurposeID: firstLayerMatchedPurposeID,
+            selectedCandidateID: selectedCandidate?.candidateID,
+            selectedPurposeID: selectedPurposeID,
+            carriedLocalVariables: strings(from: layer2.localVariables),
+            layer1HitCount: layer1.hits.count,
+            layer2HitCount: layer2.hits.count,
+            layer3HitCount: layer3?.hits.count ?? 0
+        )
+    }
+
     public static func renderReport(
         _ artifact: ScenarioBenchmarkArtifact,
         format: ScenarioBenchmarkReportFormat
@@ -772,6 +1724,18 @@ public enum PerspectiveMatchingScenarioSupport {
             return try encodeJSON(artifact)
         case .markdown:
             return markdownReport(artifact)
+        }
+    }
+
+    public static func renderRuntimeComparisonReport(
+        _ artifact: ScenarioRuntimeComparisonArtifact,
+        format: ScenarioBenchmarkReportFormat
+    ) throws -> String {
+        switch format {
+        case .json:
+            return try encodeJSON(artifact)
+        case .markdown:
+            return markdownRuntimeComparisonReport(artifact)
         }
     }
 
@@ -864,6 +1828,34 @@ public enum PerspectiveMatchingScenarioSupport {
                     )
                 }
             }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func markdownRuntimeComparisonReport(_ artifact: ScenarioRuntimeComparisonArtifact) -> String {
+        var lines = [String]()
+        lines.append("# Purpose/Interest Runtime Comparison")
+        lines.append("")
+        lines.append("- Schema version: `\(artifact.schemaVersion)`")
+        if let first = artifact.measurements.first {
+            lines.append("- Cases: `\(first.caseCount)`")
+            lines.append("- Iterations per method: `\(first.iterations)`")
+        }
+        lines.append("")
+        lines.append("## Notes")
+        for note in artifact.notes {
+            lines.append("- \(note)")
+        }
+        lines.append("")
+        lines.append("## Measurements")
+        for measurement in artifact.measurements {
+            let average = formattedNanoseconds(measurement.averageNanosecondsPerCase)
+            let total = formattedNanoseconds(Double(measurement.totalElapsedNanoseconds))
+            let rssDelta = formattedSignedBytes(measurement.rssDeltaBytes)
+            let rssAfter = formattedBytes(measurement.rssAfterBytes)
+            lines.append(
+                "- `\(measurement.method.rawValue)`: avg `\(average)`/case, total `\(total)`, rankings `\(measurement.rankingCount)`, RSS delta `\(rssDelta)`, RSS after `\(rssAfter)`"
+            )
         }
         return lines.joined(separator: "\n")
     }
@@ -968,7 +1960,7 @@ public enum PerspectiveMatchingScenarioSupport {
                 guard let expectedPurposeID = expectedTopPurposeID(for: snapshot) else {
                     continue
                 }
-                for method in ScenarioRankingMethod.allCases {
+                for method in stableBenchmarkMethods {
                     let globalTop = await rankedPurposes(for: snapshot, method: method).first
                     let tunedTop = await rankedPurposes(for: snapshot, method: method, tuning: tuning).first
                     deltas.append(
@@ -988,7 +1980,7 @@ public enum PerspectiveMatchingScenarioSupport {
         }
 
         for challengeCase in challengeCases {
-            for method in ScenarioRankingMethod.allCases {
+            for method in stableBenchmarkMethods {
                 let globalTop = await rankedPurposes(
                     interests: challengeCase.interests,
                     method: method,
@@ -1041,6 +2033,43 @@ public enum PerspectiveMatchingScenarioSupport {
         }
     }
 
+    private struct ScenarioRuntimeComparisonCase {
+        var interests: [String]
+        var includeChallengeDecoys: Bool
+    }
+
+    private static func runtimeComparisonCases(
+        repositoryRoot: URL,
+        includeChallengeCases: Bool
+    ) throws -> [ScenarioRuntimeComparisonCase] {
+        var cases = [ScenarioRuntimeComparisonCase]()
+        for exampleName in exampleNames {
+            let document = try loadDocument(named: exampleName, repositoryRoot: repositoryRoot)
+            for phase in PerspectiveScenarioPhase.allCases {
+                let snapshot = snapshot(for: phase, in: document)
+                cases.append(
+                    ScenarioRuntimeComparisonCase(
+                        interests: snapshot.interests,
+                        includeChallengeDecoys: false
+                    )
+                )
+            }
+        }
+
+        if includeChallengeCases {
+            for challengeCase in challengeCases {
+                cases.append(
+                    ScenarioRuntimeComparisonCase(
+                        interests: challengeCase.interests,
+                        includeChallengeDecoys: true
+                    )
+                )
+            }
+        }
+
+        return cases
+    }
+
     private static func apply(
         tuning: ScenarioWeightTuningConfig,
         to profiles: [PurposeScenarioProfile]
@@ -1078,7 +2107,17 @@ public enum PerspectiveMatchingScenarioSupport {
         includeChallengeDecoys: Bool,
         tuning: ScenarioWeightTuningConfig? = nil
     ) async -> [RelationalPurposeScore] {
-        let engine = await seededEngine(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning)
+        await weightedScores(
+            interests: interests,
+            profiles: purposeProfiles(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning)
+        )
+    }
+
+    private static func weightedScores(
+        interests: [String],
+        profiles: [PurposeScenarioProfile]
+    ) async -> [RelationalPurposeScore] {
+        let engine = await seededEngine(profiles: profiles)
         let contextSnapshot = RelationalContextSnapshot(activeInterestRefs: interests)
         let scores = await engine.scorePurposes(contextSnapshot: contextSnapshot, at: fixtureTimestamp, explainTopN: 5)
         return scores.sorted {
@@ -1089,12 +2128,102 @@ public enum PerspectiveMatchingScenarioSupport {
         }
     }
 
+    private static func weightedSignalRankings(
+        interests: [String],
+        profiles: [PurposeScenarioProfile]
+    ) async -> [ScenarioRankedPurpose] {
+        let activeInterestIDs = Array(Set(interests)).sorted()
+        let purposeNodes = Dictionary(
+            uniqueKeysWithValues: profiles.map { profile in
+                (
+                    profile.purposeId,
+                    Purpose(name: profile.purposeId, description: "Scenario benchmark purpose \(profile.purposeId)")
+                )
+            }
+        )
+        var purposeEdgesByInterest = [String: [Weight<Purpose>]]()
+
+        for profile in profiles {
+            guard let purpose = purposeNodes[profile.purposeId] else { continue }
+            for (interestID, weight) in profile.interestWeights where activeInterestIDs.contains(interestID) {
+                purposeEdgesByInterest[interestID, default: []].append(
+                    Weight<Purpose>(weight: weight, value: purpose)
+                )
+            }
+        }
+
+        let runtime = WeightedGraphRuntime()
+        let configuration = WeightedGraphRuntimeConfiguration(
+            relationships: [.purposes],
+            maxHops: 1,
+            ttl: 5.0,
+            maxHits: Int.max,
+            minScore: 0.0
+        )
+        var scoresByPurpose = [String: Double]()
+        var matchedInterestsByPurpose = [String: Set<String>]()
+
+        for interestID in activeInterestIDs {
+            let edges = (purposeEdgesByInterest[interestID] ?? []).sorted {
+                ($0.value?.reference ?? $0.reference ?? "") < ($1.value?.reference ?? $1.reference ?? "")
+            }
+            let interest = Interest(
+                name: interestID,
+                types: [],
+                parts: [],
+                partOf: [],
+                purposes: edges
+            )
+            let signal = Signal(
+                relationship: .purposes,
+                weight: 0.5,
+                tolerance: Double.greatestFiniteMagnitude,
+                token: "scenario.weightedSignal.\(interestID)",
+                ttl: 5.0,
+                hops: 1
+            )
+
+            guard let result = try? await runtime.match(
+                start: interest,
+                signal: signal,
+                configuration: configuration
+            ) else {
+                continue
+            }
+
+            for hit in result.hits where hit.node.kind == .purpose {
+                let edgeWeight = hit.evidence.last(where: { $0.relationship == .purposes })?.edgeWeight ?? 0.0
+                scoresByPurpose[hit.ref, default: 0.0] += edgeWeight
+                matchedInterestsByPurpose[hit.ref, default: []].insert(interestID)
+            }
+        }
+
+        let rankings = profiles.map { profile in
+            ScenarioRankedPurpose(
+                purposeId: profile.purposeId,
+                score: scoresByPurpose[profile.purposeId] ?? 0.0,
+                matchedInterestRefs: Array(matchedInterestsByPurpose[profile.purposeId] ?? []).sorted()
+            )
+        }
+
+        return rankings.sorted {
+            if $0.score == $1.score {
+                return $0.purposeId < $1.purposeId
+            }
+            return $0.score > $1.score
+        }
+    }
+
     private static func seededEngine(
         includeChallengeDecoys: Bool,
         tuning: ScenarioWeightTuningConfig? = nil
     ) async -> RelationalLearningEngine {
+        await seededEngine(profiles: purposeProfiles(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning))
+    }
+
+    private static func seededEngine(profiles: [PurposeScenarioProfile]) async -> RelationalLearningEngine {
         let engine = RelationalLearningEngine()
-        for profile in purposeProfiles(includeChallengeDecoys: includeChallengeDecoys, tuning: tuning) {
+        for profile in profiles {
             await seed(profile: profile, into: engine)
         }
         return engine
@@ -1198,6 +2327,82 @@ public enum PerspectiveMatchingScenarioSupport {
         return (value * factor).rounded() / factor
     }
 
+    private static func currentResidentMemoryBytes() -> UInt64? {
+        #if canImport(Darwin)
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<integer_t>.stride
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    reboundPointer,
+                    &count
+                )
+            }
+        }
+
+        guard result == KERN_SUCCESS else {
+            return nil
+        }
+        return UInt64(info.resident_size)
+        #else
+        return nil
+        #endif
+    }
+
+    private static func rssDeltaBytes(before: UInt64?, after: UInt64?) -> Int64? {
+        guard let before, let after else {
+            return nil
+        }
+        return Int64(after) - Int64(before)
+    }
+
+    private static func object(from variables: [String: String]) -> Object {
+        Dictionary(uniqueKeysWithValues: variables.map { key, value in
+            (key, ValueType.string(value))
+        })
+    }
+
+    private static func strings(from variables: Object) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: variables.compactMap { key, value in
+            guard let stringValue = string(from: value) else {
+                return nil
+            }
+            return (key, stringValue)
+        })
+    }
+
+    private static func requirements(
+        _ requirements: [String: String],
+        areSatisfiedBy variables: Object
+    ) -> Bool {
+        requirements.allSatisfy { key, expectedValue in
+            string(from: variables[key]) == expectedValue
+        }
+    }
+
+    private static func string(from value: ValueType?) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        switch value {
+        case .string(let string):
+            return string
+        case .bool(let bool):
+            return bool ? "true" : "false"
+        case .number(let number), .integer(let number):
+            return String(number)
+        case .float(let double):
+            return String(double)
+        default:
+            return nil
+        }
+    }
+
     private static func exampleURL(named name: String, repositoryRoot: URL) -> URL {
         repositoryRoot
             .appendingPathComponent("commons", isDirectory: true)
@@ -1208,5 +2413,34 @@ public enum PerspectiveMatchingScenarioSupport {
 
     private static func formatted(_ value: Double) -> String {
         String(format: "%.3f", value)
+    }
+
+    private static func formattedNanoseconds(_ value: Double) -> String {
+        let microseconds = value / 1_000.0
+        if microseconds < 1_000.0 {
+            return String(format: "%.1f us", microseconds)
+        }
+        let milliseconds = microseconds / 1_000.0
+        if milliseconds < 1_000.0 {
+            return String(format: "%.3f ms", milliseconds)
+        }
+        return String(format: "%.3f s", milliseconds / 1_000.0)
+    }
+
+    private static func formattedBytes(_ value: UInt64?) -> String {
+        guard let value else {
+            return "unavailable"
+        }
+        let mib = Double(value) / (1024.0 * 1024.0)
+        return String(format: "%.2f MiB", mib)
+    }
+
+    private static func formattedSignedBytes(_ value: Int64?) -> String {
+        guard let value else {
+            return "unavailable"
+        }
+        let sign = value >= 0 ? "+" : "-"
+        let magnitude = Double(abs(value)) / (1024.0 * 1024.0)
+        return String(format: "%@%.2f MiB", sign, magnitude)
     }
 }
