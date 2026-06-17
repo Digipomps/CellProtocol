@@ -1,6 +1,6 @@
 # Purpose/Interest Matching: Videre plan og vitenskapelig testoppsett
 
-Sist oppdatert: 2026-03-26
+Sist oppdatert: 2026-06-13
 
 ## 1. Utgangspunkt i dagens kode
 
@@ -8,19 +8,24 @@ Vi har allerede to relevante fundament i kodebasen:
 
 1. En enkel, deterministisk signalmatcher:
    - `Sources/CellBase/PurposeAndInterest/Signal.swift`
+   - `Sources/CellBase/PurposeAndInterest/WeightedGraphRuntime.swift`
    - `Sources/CellBase/PurposeAndInterest/Purpose.swift`
    - `Sources/CellBase/PurposeAndInterest/Interest.swift`
    - `Tests/CellBaseTests/PurposeAndInterestMatchingTests.swift`
 
-   Dagens matcher fungerer i praksis som:
+   Dagens matcher fungerer naa som en vektet graf-runtime:
 
    - velg relasjon (`types`, `parts`, `interests`, ...)
    - sammenlign signalvekt mot kantvekt innenfor toleranse
-   - registrer treff i `HitCollector`
+   - traverser en eller flere relasjonstyper over `hops`
+   - stopp paa `ttl`/deadline og sykluser
+   - filtrer betingede interesser med `InterestCondition`
+   - registrer scorede treff med `MatchHit`/`MatchEvidence`
+   - behold bakoverkompatible refs i `HitCollector`
 
-   Dette er et godt utgangspunkt for et-lags matching. Samtidig er dagens `Signal`
-   bare delvis utnyttet: `ttl` og `hops` finnes i modellen, men brukes ikke aktivt
-   i matchingflyten enda.
+   `Signal` beskriver fortsatt hva som skal matches. `SignalRunState` beskriver
+   hva som skjer i den konkrete gjennomkjoringen, inkludert `visitedRefs`, path,
+   akkumulert evidens, score, lokale variabler, gjenstaende hopp og deadline.
 
 2. En nyere relasjonslaeringsmotor:
    - `Sources/CellBase/PurposeAndInterest/RelationalLearningEngine.swift`
@@ -35,12 +40,13 @@ Vi har allerede to relevante fundament i kodebasen:
    - explainability
    - lokale, eventdrevne oppdateringer
 
-Det som mangler mellom disse to sporene er en felles match-orchestrering:
+Det som fortsatt mangler mellom disse to sporene er hoeyere-nivaa orkestrering:
 
-- signalinstans med lokal tilstand
-- flerlags grafgjennomgang
 - collector/oppsamlingsnoder med terskler
-- et kontrollert eksperiment som sammenligner vektet grafmatching mot vektor/cosinus
+- tidsvektede `Weight<T>`-kanter eller en tydelig bro fra `WeightedGraphRuntime`
+  til `RelationalEdge`
+- ekte ordvektor-fixtures dersom vi skal sammenligne mot embedding/cosinus og
+  ikke bare sparse cosine over interesse-IDer
 
 ## 2. Maal
 
@@ -60,13 +66,13 @@ Dette tilsvarer:
 
 ## 3.1 Fase 1: Et-lags matching som ren baseline
 
-Foerste leveranse boer vaere en ren og avgrenset baseline som bygger videre paa
-dagens matcher.
+Foerste leveranse er naa implementert som `WeightedGraphRuntime` og bygger videre
+paa dagens matcher.
 
 Foreslaatte endringer:
 
 - Behold dagens `Weight<T>`-kanter og relasjoner som primitiv.
-- Introduser en egen runtime-struktur, for eksempel `SignalRunState`, slik at vi
+- Bruk en egen runtime-struktur, `SignalRunState`, slik at vi
   skiller:
   - statisk matchforesporsel
   - lokal tilstand for den konkrete signalinstansen
@@ -100,6 +106,20 @@ Resultatet boer vaere et nytt svarobjekt, for eksempel:
 
 slik at vi ikke er laast til bare `HitCollector` med `Set<String>`.
 
+Betingede interesser er naa representert som codable `InterestCondition` paa
+`Interest.constraint`. Foerste implementerte vilkaar er:
+
+- `purposeSolvedWithin`
+- `metadataFreshness`
+- `all`
+- `any`
+- `not`
+
+Runtime evaluerer disse fail-closed: vilkaar som trenger kontekst matcher ikke
+uten `InterestConditionContext`. Dette gjor det mulig aa modellere
+dokumentasjonskunnskap som bare er relevant naar f.eks. et verifikasjonsformaal
+ble loest innenfor et tidsvindu, eller naar `last_verified` metadata er fersk nok.
+
 ## 3.2 Fase 1b: Collector-/oppsamlingsnoder
 
 Naar et-lags matching fungerer, boer neste steg ikke vaere full grafdybde, men
@@ -123,6 +143,29 @@ Eksempelstrategier:
 
 Da kan ulike celler abonnere paa ulike collectors med ulike terskler, uten at vi
 maa bygge ny matchinglogikk per celle.
+
+## 3.2.1 Fase 1c: Sammensatte formaal
+
+Sammensatte formaal er naa lagt inn som en separat evalueringsmodell ved siden av
+grafmatcheren:
+
+- `PurposeComposition`
+- `PurposeCompositionEvaluationContext`
+- `PurposeCompositionEvaluation`
+
+Foerste operatorer:
+
+- `allOf`: alle underformaal maa vaere oppfylt.
+- `anyOf`: minst ett alternativ maa vaere oppfylt.
+- `sequence`: alle underformaal maa vaere oppfylt i oppsatt rekkefolge.
+- `atLeast`: minst N av underformaalene maa vaere oppfylt.
+
+`Purpose` kan naa baere en valgfri `composition`. Evalueringen skjer mot
+`PurposeResolutionRecord` og returnerer status, score, oppfylte refs, manglende
+refs, barn-resultater og eventuelt blokkert indeks/aarsak. Dette gjor det mulig
+aa modellere restaurant- og konferanseformaal som "finn kandidat, sjekk
+betingelser, reserver, fullfoer" uten aa blande oppfyllelseslogikken inn i den
+raske `WeightedGraphRuntime`.
 
 ## 3.3 Fase 2: Perspektivgrafer med flere lag
 
@@ -443,11 +486,12 @@ System-2-motoren foerst.
 
 Den mest naturlige rekkefolgen i denne kodebasen er:
 
-1. Utvid den eksisterende `Signal`-matcheren til en ordentlig runtime-primitive.
+1. Utvid den eksisterende `Signal`-matcheren til en ordentlig runtime-primitive. (Ferdig som `WeightedGraphRuntime`.)
 2. Lag et eget eksperiment-/benchmarklag i tester med faste fixtures.
 3. Gjenbruk `RelationalLearningEngine` som separat laert-vekt-arm.
-4. Koble `GraphMatchTool` til ekte matchresultater etter at testgrunnlaget er paa plass.
-5. Bygg flerlags perspektivgraf bare etter at baseline-data viser hvor gevinsten er.
+4. Koble `GraphMatchTool` til ekte matchresultater etter at testgrunnlaget er paa plass. (Ferdig som bred grafutforsking; presise tool-argumenter mangler fortsatt.)
+5. Legg til betingede interesser for tidsvinduer og dokumentasjonsferskhet. (Ferdig som `InterestCondition` + `InterestConditionContext`.)
+6. Bygg flerlags perspektivgraf bare etter at baseline-data viser hvor gevinsten er.
 
 Da faar vi en utviklingsretning som er:
 
@@ -491,7 +535,43 @@ Foerste verktøy for dette finnes naa i `haven-commons benchmark purpose-interes
 ```bash
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown --tuning Docs/benchmarks/purpose_interest_local_tuning_example.json
+./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --iterations 100 --format markdown
 ```
+
+Runtime-sammenligningen legger til `weightedSignal`, som bruker
+`WeightedGraphRuntime` over forhaandsvektede Interest -> Purpose-kanter og
+rangerer paa edge-weight-evidens. `cosine` i denne benchmarken er fortsatt en
+sparse cosine-kontroll over deterministiske interest-id vectors, ikke en ekstern
+word-vector/embedding-baseline. Ekte ordvektor-cosine boer komme som separat
+fixture med modellnavn, dimensjon, normalisering og vektorhash.
+
+Det finnes naa ogsaa et storre konferansedatasett i
+`PurposeInterestBenchmarkSupport`:
+
+- 20 deterministiske konferanse-profiler
+- 24 tekstlige konferanse-caser med forventet formaal og interesser
+- 8 flerlags-caser der `Signal.localVariables` baerer rolle, samtykke, språk,
+  kapasitet, budsjett eller tidsvindu videre til neste matchlag
+
+Dette kan kjoeres med:
+
+```bash
+./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --conference-dataset --iterations 100 --format markdown
+```
+
+Restaurantmodellen finnes som egen fixture i
+`RestaurantPurposeScenarioSupport`:
+
+- restauranter annonserer ett eller flere formaal med tilhorende interesser
+- en brukerprofil, forelopig `user.kjetil`, har egne formaal med egne
+  interessevekter
+- anbefalinger lages ved aa traversere brukerens interesser mot restaurantens
+  annonserte formaal og score overlapp mellom brukerens vekt og restaurantens
+  vekt
+
+Dette tester en annen retning enn konferansecasene: matchen er ikke bare
+"hvilket formaal passer denne teksten", men "hvilket annonsert restaurantformaal
+matcher brukerens lokale formaal akkurat naa".
 
 Tuningfilen beskriver lokale justeringer:
 
