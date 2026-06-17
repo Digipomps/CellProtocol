@@ -73,30 +73,35 @@ final class GraphMatchTool: Tool {
         let startRef = try await resolveStartRef(args: arguments.args, perspective: perspective)
 
         // 3) Kjør match
-        let collector = HitCollector()
-//        let rel = try parseRelationship(arguments.args.relationship)
-//        let signal = Signal(relationship: rel,
-//                            weight: arguments.args.weight,
-//                            tolerance: arguments.args.tolerance,
-//                            token: UUID().uuidString,
-//                            ttl: arguments.args.ttl ?? 1.0 /*,
-//                            collector: collector*/)
-//
-//        if let start = await findNode(ref: startRef, type: arguments.args.startType, perspective: perspective) {
-//            try await start.match(signal: signal)
-//        } else {
-//            return "Start node not found"
-//        }
+        let signal = Signal(
+            relationship: .interests,
+            weight: 0.5,
+            tolerance: Double.greatestFiniteMagnitude,
+            token: UUID().uuidString,
+            ttl: 1.0,
+            hops: 2
+        )
+        let configuration = WeightedGraphRuntimeConfiguration(
+            relationships: [.interests, .purposes, .entities, .states, .types, .parts, .partOf, .subTypes],
+            maxHops: 2,
+            ttl: 1.0,
+            maxHits: 50
+        )
+
+        guard let start = await findNode(ref: startRef, type: nil, perspective: perspective) else {
+            return "Start node not found"
+        }
+        let result = try await WeightedGraphRuntime().match(
+            start: start,
+            signal: signal,
+            configuration: configuration
+        )
 
         // 4) Resultat
-        _ = await collector.results()
-//        let limited = Array(refs.prefix(arguments.args.limit ?? 50))
-        // Pakk i et enkelt JSON-objekt
-//        let response: [String: Any] = [
-//            "hits": limited.map { ["ref": $0] },
-//            "count": limited.count
-//        ]
-        return  "Found startRef: \(startRef)"
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(result)
+        return String(data: data, encoding: .utf8) ?? "Graph match result could not be encoded"
     }
 
     private func parseRelationship(_ s: String) throws -> PerspectiveRelationship {
@@ -122,7 +127,7 @@ final class GraphMatchTool: Tool {
         throw NSError(domain: "GraphMatchTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "No startRef and no active purposes"])
     }
 
-    private func findNode(ref: String, type: String?, perspective: Perspective) async -> (any WeightedMatch)? {
+    private func findNode(ref: String, type: String?, perspective: Perspective) async -> (any WeightedMatch & PerspectiveNode)? {
         print("findNode ref: \(ref) type: \(String(describing: type)) ")
         switch type {
         case "interest":

@@ -151,4 +151,259 @@ final class PurposeAndInterestMatchingTests: XCTestCase {
             tolerance: 0.05
         )
     }
+
+    func testWeightedGraphRuntimeRecordsScoredEvidenceForOneHopMatch() async throws {
+        let interest = Interest(name: "runtime-interest", types: [], parts: [], partOf: [], purposes: [])
+        let source = Purpose(
+            name: "runtime-source-purpose",
+            description: "source",
+            interests: [Weight<Interest>(weight: 0.5, value: interest)]
+        )
+        let collector = HitCollector()
+        let signal = Signal(
+            relationship: .interests,
+            weight: 0.5,
+            tolerance: 0.01,
+            token: "runtime-one-hop",
+            collector: collector
+        )
+
+        let result = try await WeightedGraphRuntime().match(start: source, signal: signal)
+        let hit = try XCTUnwrap(result.hits.first)
+        let evidence = try XCTUnwrap(hit.evidence.first)
+        let collectorHits = await collector.hitResults()
+        let collectorHit = try XCTUnwrap(collectorHits.first)
+
+        XCTAssertEqual(hit.ref, interest.reference)
+        XCTAssertEqual(hit.node.kind, .interest)
+        XCTAssertEqual(hit.score, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(hit.path.map(\.reference), [source.reference, interest.reference])
+        XCTAssertEqual(evidence.relationship, .interests)
+        XCTAssertEqual(evidence.from.reference, source.reference)
+        XCTAssertEqual(evidence.to.reference, interest.reference)
+        XCTAssertTrue(result.visitedRefs.contains("interest:\(interest.reference)"))
+        XCTAssertEqual(collectorHit.ref, interest.reference)
+    }
+
+    func testWeightedGraphRuntimeTraversesMultipleRelationshipsAcrossHops() async throws {
+        let target = Purpose(name: "runtime-target-purpose", description: "target")
+        let bridge = Interest(name: "runtime-bridge-interest", types: [], parts: [], partOf: [], purposes: [
+            Weight<Purpose>(weight: 0.5, value: target)
+        ])
+        let source = Purpose(
+            name: "runtime-multihop-source",
+            description: "source",
+            interests: [Weight<Interest>(weight: 0.5, value: bridge)]
+        )
+        let signal = Signal(
+            relationship: .interests,
+            weight: 0.5,
+            tolerance: 0.01,
+            token: "runtime-multihop",
+            hops: 2
+        )
+        let configuration = WeightedGraphRuntimeConfiguration(
+            relationships: [.interests, .purposes],
+            maxHops: 2,
+            ttl: 1.0
+        )
+
+        let result = try await WeightedGraphRuntime().match(
+            start: source,
+            signal: signal,
+            configuration: configuration
+        )
+        let targetHit = try XCTUnwrap(result.hits.first(where: { $0.ref == target.reference }))
+
+        XCTAssertEqual(targetHit.node.kind, .purpose)
+        XCTAssertEqual(targetHit.depth, 2)
+        XCTAssertEqual(targetHit.path.map(\.reference), [source.reference, bridge.reference, target.reference])
+        XCTAssertEqual(targetHit.evidence.map(\.relationship), [.interests, .purposes])
+        XCTAssertEqual(result.maxDepthReached, 2)
+    }
+
+    func testWeightedGraphRuntimeDoesNotLoopThroughCycles() async throws {
+        let source = Purpose(name: "runtime-cycle-source", description: "source")
+        let target = Purpose(name: "runtime-cycle-target", description: "target")
+        source.purposes = [Weight<Purpose>(weight: 0.5, value: target)]
+        target.purposes = [Weight<Purpose>(weight: 0.5, value: source)]
+        let signal = Signal(
+            relationship: .purposes,
+            weight: 0.5,
+            tolerance: 0.01,
+            token: "runtime-cycle",
+            hops: 4
+        )
+
+        let result = try await WeightedGraphRuntime().match(start: source, signal: signal)
+        let refs = Set(result.hits.map(\.ref))
+
+        XCTAssertTrue(refs.contains(target.reference))
+        XCTAssertFalse(refs.contains(source.reference))
+        XCTAssertEqual(result.maxDepthReached, 1)
+        XCTAssertTrue(result.visitedRefs.contains("purpose:\(source.reference)"))
+        XCTAssertTrue(result.visitedRefs.contains("purpose:\(target.reference)"))
+    }
+
+    func testInterestConditionPurposeSolvedWithinRequiresFreshSuccessfulResolution() {
+        let condition = InterestCondition.purposeSolvedWithin(
+            PurposeSolvedWithinCondition(
+                purposeRef: "purpose.answer-cellprotocol-question",
+                maxAgeSeconds: 60.0
+            )
+        )
+        let freshContext = InterestConditionContext(
+            evaluatedAt: 1_000.0,
+            purposeResolutions: [
+                PurposeResolutionRecord(
+                    purposeRef: "purpose.answer-cellprotocol-question",
+                    resolvedAt: 950.0
+                )
+            ]
+        )
+        let staleContext = InterestConditionContext(
+            evaluatedAt: 1_000.0,
+            purposeResolutions: [
+                PurposeResolutionRecord(
+                    purposeRef: "purpose.answer-cellprotocol-question",
+                    resolvedAt: 900.0
+                )
+            ]
+        )
+        let failedContext = InterestConditionContext(
+            evaluatedAt: 1_000.0,
+            purposeResolutions: [
+                PurposeResolutionRecord(
+                    purposeRef: "purpose.answer-cellprotocol-question",
+                    status: .failed,
+                    resolvedAt: 990.0
+                )
+            ]
+        )
+
+        XCTAssertTrue(condition.evaluate(in: freshContext))
+        XCTAssertFalse(condition.evaluate(in: staleContext))
+        XCTAssertFalse(condition.evaluate(in: failedContext))
+        XCTAssertFalse(condition.evaluate(in: nil))
+    }
+
+    func testInterestConditionSupportsDocumentationMetadataFreshness() {
+        let condition = InterestCondition.metadataFreshness(
+            MetadataFreshnessCondition(
+                key: "doc.Book/15_Documentation_Discovery_and_RAG.last_verified",
+                maxAgeSeconds: 86_400.0
+            )
+        )
+        let freshContext = InterestConditionContext(
+            evaluatedAt: 200_000.0,
+            metadataTimestamps: [
+                "doc.Book/15_Documentation_Discovery_and_RAG.last_verified": 150_000.0
+            ]
+        )
+        let staleContext = InterestConditionContext(
+            evaluatedAt: 200_000.0,
+            metadataTimestamps: [
+                "doc.Book/15_Documentation_Discovery_and_RAG.last_verified": 20_000.0
+            ]
+        )
+
+        XCTAssertTrue(condition.evaluate(in: freshContext))
+        XCTAssertFalse(condition.evaluate(in: staleContext))
+    }
+
+    func testInterestConditionRoundTripsThroughInterestConstraintField() throws {
+        let condition = InterestCondition.all([
+            .purposeSolvedWithin(
+                PurposeSolvedWithinCondition(
+                    purposeRef: "purpose.verify-contracts",
+                    maxAgeSeconds: 3_600.0
+                )
+            ),
+            .metadataFreshness(
+                MetadataFreshnessCondition(
+                    key: "doc.contracts.last_verified",
+                    maxAgeSeconds: 86_400.0
+                )
+            )
+        ])
+        let interest = Interest(
+            name: "interest.contract-docs-current",
+            types: [],
+            parts: [],
+            partOf: [],
+            purposes: [],
+            condition: condition
+        )
+
+        let data = try JSONEncoder().encode(interest)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        let decoded = try JSONDecoder().decode(Interest.self, from: data)
+
+        XCTAssertTrue(json.contains("\"constraint\""))
+        XCTAssertTrue(json.contains("\"type\":\"all\""))
+        XCTAssertEqual(decoded.condition, condition)
+    }
+
+    func testWeightedGraphRuntimeFiltersInterestHitsByConditionContext() async throws {
+        let gatedInterest = Interest(
+            name: "interest.docs-runtime-verified",
+            types: [],
+            parts: [],
+            partOf: [],
+            purposes: [],
+            condition: .purposeSolvedWithin(
+                PurposeSolvedWithinCondition(
+                    purposeRef: "purpose.verify-cellprotocol-docs",
+                    maxAgeSeconds: 120.0
+                )
+            )
+        )
+        let source = Purpose(
+            name: "purpose.answer-doc-question",
+            description: "Answer a CellProtocol documentation question.",
+            interests: [Weight<Interest>(weight: 0.5, value: gatedInterest)]
+        )
+        let signal = Signal(
+            relationship: .interests,
+            weight: 0.5,
+            tolerance: 0.01,
+            token: "runtime-condition"
+        )
+        let staleConfig = WeightedGraphRuntimeConfiguration(
+            relationships: [.interests],
+            maxHops: 1,
+            ttl: 1.0,
+            conditionContext: InterestConditionContext(
+                evaluatedAt: 1_000.0,
+                purposeResolutions: [
+                    PurposeResolutionRecord(
+                        purposeRef: "purpose.verify-cellprotocol-docs",
+                        resolvedAt: 800.0
+                    )
+                ]
+            )
+        )
+        let freshConfig = WeightedGraphRuntimeConfiguration(
+            relationships: [.interests],
+            maxHops: 1,
+            ttl: 1.0,
+            conditionContext: InterestConditionContext(
+                evaluatedAt: 1_000.0,
+                purposeResolutions: [
+                    PurposeResolutionRecord(
+                        purposeRef: "purpose.verify-cellprotocol-docs",
+                        resolvedAt: 950.0
+                    )
+                ]
+            )
+        )
+
+        let noContextResult = try await WeightedGraphRuntime().match(start: source, signal: signal)
+        let staleResult = try await WeightedGraphRuntime().match(start: source, signal: signal, configuration: staleConfig)
+        let freshResult = try await WeightedGraphRuntime().match(start: source, signal: signal, configuration: freshConfig)
+
+        XCTAssertTrue(noContextResult.hits.isEmpty)
+        XCTAssertTrue(staleResult.hits.isEmpty)
+        XCTAssertEqual(freshResult.hits.first?.ref, gatedInterest.reference)
+    }
 }

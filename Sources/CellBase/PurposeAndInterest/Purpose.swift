@@ -14,11 +14,13 @@ public class Purpose: PerspectiveNodeImpl {
     public private(set) var goal: CellConfiguration? // Change to CellReference?
     // Helper cells can automate remediation or provide user-facing guidance.
     public private(set) var helperCells = [CellConfiguration]()
+    public private(set) var composition: PurposeComposition?
     var description: String?
 //    init(name: String, description: String, goal: Goal, actions: [Action], interests: [WeightedInterest], hasA: [WeightedPurpose], partOf: [WeightedPurpose], types: [WeightedPurpose]) {
-        public init(name: String, description: String, /*goal: Goal = Goal(name: "Default Goal", test: "notification.content.state = ok"),*/ actions: [Action] = [], interests: [Weight<Interest>] = [], purposes: [Weight<Purpose>] = [], entities: [Weight<EntityRepresentation>] = [], states: [Weight<Interest>] = [], types: [Weight<Purpose>] = [], subTypes: [Weight<Purpose>] = [], parts: [Weight<Purpose>] = [], partOf:[ Weight<Purpose>] = [], goal: CellConfiguration? = nil, helperCells: [CellConfiguration] = []) {
+        public init(name: String, description: String, /*goal: Goal = Goal(name: "Default Goal", test: "notification.content.state = ok"),*/ actions: [Action] = [], interests: [Weight<Interest>] = [], purposes: [Weight<Purpose>] = [], entities: [Weight<EntityRepresentation>] = [], states: [Weight<Interest>] = [], types: [Weight<Purpose>] = [], subTypes: [Weight<Purpose>] = [], parts: [Weight<Purpose>] = [], partOf:[ Weight<Purpose>] = [], goal: CellConfiguration? = nil, helperCells: [CellConfiguration] = [], composition: PurposeComposition? = nil) {
             self.goal = goal
             self.helperCells = helperCells
+            self.composition = composition
             
             super.init()
             self.name = name
@@ -49,12 +51,14 @@ public class Purpose: PerspectiveNodeImpl {
             case constraint
             case goal
             case helperCells
+            case composition
         }
         
     required public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
         self.goal = try container.decodeIfPresent(CellConfiguration.self, forKey: .goal)
         self.helperCells = try container.decodeIfPresent([CellConfiguration].self, forKey: .helperCells) ?? []
+        self.composition = try container.decodeIfPresent(PurposeComposition.self, forKey: .composition)
             super.init()
             
             self.name = try container.decode(String.self, forKey: .name)
@@ -85,6 +89,7 @@ public class Purpose: PerspectiveNodeImpl {
         try container.encode(types, forKey: .types)
         try container.encodeIfPresent(self.goal, forKey: .goal)
         try container.encodeIfPresent(self.helperCells, forKey: .helperCells)
+        try container.encodeIfPresent(self.composition, forKey: .composition)
         try container.encodeIfPresent(self.subTypes as? [Weight<Purpose>], forKey: .subTypes)
         try container.encodeIfPresent(self.parts as? [Weight<Purpose>], forKey: .parts)
         try container.encodeIfPresent(self.partOf as? [Weight<Purpose>], forKey: .partOf)
@@ -124,6 +129,10 @@ public class Purpose: PerspectiveNodeImpl {
     public func clearHelperCells() {
         self.helperCells.removeAll()
     }
+
+    public func setComposition(_ composition: PurposeComposition?) {
+        self.composition = composition
+    }
 }
 
 enum PurposeError: Error {
@@ -135,59 +144,9 @@ enum PurposeError: Error {
 extension Purpose: WeightedMatch {
     public func match(signal: Signal) async throws {
         CellBase.diagnosticLog("Purpose.match relationship=\(signal.relationship)", domain: .semantics)
-        
-        switch signal.relationship {
-        case .parts:
-            CellBase.diagnosticLog("Purpose.match relationship=parts", domain: .semantics)
-            try await match(weightedNodes: self.parts, with: signal)
-            
-            
-        case .types:
-            CellBase.diagnosticLog("Purpose.match relationship=types", domain: .semantics)
-            try await match(weightedNodes: self.types, with: signal)
-        case .partOf:
-            CellBase.diagnosticLog("Purpose.match relationship=partOf", domain: .semantics)
-            try await match(weightedNodes: self.partOf, with: signal)
-        case .purposes:
-            CellBase.diagnosticLog("Purpose.match relationship=purposes", domain: .semantics)
-            try await match(weightedNodes: self.purposes, with: signal)
-            
-        case .interests:
-            try await match(weightedNodes: self.interests, with: signal)
-            CellBase.diagnosticLog("Purpose.match relationship=interests", domain: .semantics)
-        case .entities:
-            try await match(weightedNodes: self.entities, with: signal)
-            CellBase.diagnosticLog("Purpose.match relationship=entities", domain: .semantics)
-        case .states:
-            try await match(weightedNodes: self.states, with: signal)
-            CellBase.diagnosticLog("Purpose.match relationship=states", domain: .semantics)
-        case .subTypes:
-            try await match(weightedNodes: self.subTypes, with: signal)
-            CellBase.diagnosticLog("Purpose.match relationship=subTypes", domain: .semantics)
-        }
-        
+        _ = try await WeightedGraphRuntime().match(start: self, signal: signal)
     }
-    
-    private func match(weightedNodes: [Weighted], with signal: Signal) async throws {
-        for weighted in weightedNodes where isSignalMatch(weighted.weight, signal: signal) {
-            if let weightedInterest = weighted as? Weight<Interest> {
-                try await weightedInterest.node.hit(signal)
-                continue
-            }
-            if let weightedPurpose = weighted as? Weight<Purpose> {
-                try await weightedPurpose.node.hit(signal)
-                continue
-            }
-            if let weightedEntity = weighted as? Weight<EntityRepresentation> {
-                try await weightedEntity.node.hit(signal)
-            }
-        }
-    }
-    
-    private func isSignalMatch(_ edgeWeight: Double, signal: Signal) -> Bool {
-        signal.weight > (edgeWeight - signal.tolerance) && signal.weight < (edgeWeight + signal.tolerance)
-    }
-    
+
     public func hit(_ signal: Signal) async throws {
         CellBase.diagnosticLog("Purpose.hit name=\(name)", domain: .semantics)
         await signal.collector?.record(self.reference)
@@ -197,54 +156,9 @@ extension Purpose: WeightedMatch {
 extension EntityRepresentation: WeightedMatch {
     public func match(signal: Signal) async throws {
         CellBase.diagnosticLog("EntityRepresentation.match relationship=\(signal.relationship)", domain: .semantics)
-        switch signal.relationship {
-        case .parts:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=parts", domain: .semantics)
-            try await match(weightedNodes: self.parts, with: signal)
-        case .types:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=types", domain: .semantics)
-            try await match(weightedNodes: self.types, with: signal)
-        case .partOf:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=partOf", domain: .semantics)
-            try await match(weightedNodes: self.partOf, with: signal)
-        case .purposes:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=purposes", domain: .semantics)
-            try await match(weightedNodes: self.purposes, with: signal)
-        case .interests:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=interests", domain: .semantics)
-            try await match(weightedNodes: self.interests, with: signal)
-        case .entities:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=entities", domain: .semantics)
-            try await match(weightedNodes: self.entities, with: signal)
-        case .states:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=states", domain: .semantics)
-            try await match(weightedNodes: self.states, with: signal)
-        case .subTypes:
-            CellBase.diagnosticLog("EntityRepresentation.match relationship=subTypes", domain: .semantics)
-            try await match(weightedNodes: self.subTypes, with: signal)
-        }
+        _ = try await WeightedGraphRuntime().match(start: self, signal: signal)
     }
-    
-    private func match(weightedNodes: [Weighted], with signal: Signal) async throws {
-        for weighted in weightedNodes where isSignalMatch(weighted.weight, signal: signal) {
-            if let weightedInterest = weighted as? Weight<Interest> {
-                try await weightedInterest.node.hit(signal)
-                continue
-            }
-            if let weightedPurpose = weighted as? Weight<Purpose> {
-                try await weightedPurpose.node.hit(signal)
-                continue
-            }
-            if let weightedEntity = weighted as? Weight<EntityRepresentation> {
-                try await weightedEntity.node.hit(signal)
-            }
-        }
-    }
-    
-    private func isSignalMatch(_ edgeWeight: Double, signal: Signal) -> Bool {
-        signal.weight > (edgeWeight - signal.tolerance) && signal.weight < (edgeWeight + signal.tolerance)
-    }
-    
+
     public func hit(_ signal: Signal) async throws {
         CellBase.diagnosticLog("EntityRepresentation.hit name=\(name)", domain: .semantics)
         await signal.collector?.record(self.reference)

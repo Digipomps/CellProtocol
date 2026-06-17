@@ -13,10 +13,18 @@ import Foundation
 public class Interest: PerspectiveNodeImpl {
     
     var constraint: InterestConstraint = DefaultInterestConstraint()
+    public var condition: InterestCondition = .always
 
     
     
-    init(name: String, types: [Weight<Interest>], parts: [Weight<Interest>], partOf: [Weight<Interest>], purposes: [Weight<Purpose>], constraint: InterestConstraint = DefaultInterestConstraint()) {
+    public init(
+        name: String,
+        types: [Weight<Interest>],
+        parts: [Weight<Interest>],
+        partOf: [Weight<Interest>],
+        purposes: [Weight<Purpose>],
+        condition: InterestCondition = .always
+    ) {
         super.init()
         self.name = name
         self.types = types
@@ -27,7 +35,7 @@ public class Interest: PerspectiveNodeImpl {
         self.entities = [Weight<EntityRepresentation>]()
         self.states = [Weight<Interest>]()
         self.interests = [Weight<Interest>]()
-        self.constraint = constraint
+        self.condition = condition
     }
     
     
@@ -45,8 +53,7 @@ public class Interest: PerspectiveNodeImpl {
         self.entities = try container.decode([Weight<EntityRepresentation>].self, forKey: .entities)
         
         self.constraint = DefaultInterestConstraint()
-        
-//        self.constraint = try container.decode(DefaultInterestConstraint.self, forKey: .constraint) // TODO: Look into if it must be serializable
+        self.condition = try container.decodeIfPresent(InterestCondition.self, forKey: .constraint) ?? .always
         
         
     }
@@ -80,7 +87,13 @@ public class Interest: PerspectiveNodeImpl {
         try container.encodeIfPresent(self.interests as? [Weight<Interest>], forKey: .interests)
         try container.encodeIfPresent(self.states as? [Weight<Interest>], forKey: .states)
         try container.encodeIfPresent(self.entities as? [Weight<EntityRepresentation>], forKey: .entities)
-//        try container.encodeIfPresent(self.constraint, forKey: .constraint)
+        if condition != .always {
+            try container.encode(condition, forKey: .constraint)
+        }
+    }
+
+    public func conditionSatisfied(in context: InterestConditionContext?) -> Bool {
+        condition.evaluate(in: context)
     }
 }
 
@@ -97,57 +110,10 @@ public class Interest: PerspectiveNodeImpl {
 
 extension Interest: WeightedMatch {
     public func match(signal: Signal) async throws { // Perform matching
-        switch signal.relationship {
-        case .parts:
-            CellBase.diagnosticLog("Interest.match relationship=parts", domain: .semantics)
-            try await match(weightedNodes: self.parts, with: signal)
-            
-            
-        case .types:
-            CellBase.diagnosticLog("Interest.match relationship=types", domain: .semantics)
-            try await match(weightedNodes: self.types, with: signal)
-        case .partOf:
-            CellBase.diagnosticLog("Interest.match relationship=partOf", domain: .semantics)
-            try await match(weightedNodes: self.partOf, with: signal)
-        case .purposes:
-            CellBase.diagnosticLog("Interest.match relationship=purposes", domain: .semantics)
-            try await match(weightedNodes: self.purposes, with: signal)
-            
-        case .interests:
-            try await match(weightedNodes: self.interests, with: signal)
-            CellBase.diagnosticLog("Interest.match relationship=interests", domain: .semantics)
-        case .entities:
-            try await match(weightedNodes: self.entities, with: signal)
-            CellBase.diagnosticLog("Interest.match relationship=entities", domain: .semantics)
-        case .states:
-            try await match(weightedNodes: self.states, with: signal)
-            CellBase.diagnosticLog("Interest.match relationship=states", domain: .semantics)
-        case .subTypes:
-            try await match(weightedNodes: self.subTypes, with: signal)
-            CellBase.diagnosticLog("Interest.match relationship=subTypes", domain: .semantics)
-        }
+        CellBase.diagnosticLog("Interest.match relationship=\(signal.relationship)", domain: .semantics)
+        _ = try await WeightedGraphRuntime().match(start: self, signal: signal)
     }
-    
-    private func match(weightedNodes: [Weighted], with signal: Signal) async throws {
-        for weighted in weightedNodes where isSignalMatch(weighted.weight, signal: signal) {
-            if let weightedInterest = weighted as? Weight<Interest> {
-                try await weightedInterest.node.hit(signal)
-                continue
-            }
-            if let weightedPurpose = weighted as? Weight<Purpose> {
-                try await weightedPurpose.node.hit(signal)
-                continue
-            }
-            if let weightedEntity = weighted as? Weight<EntityRepresentation> {
-                try await weightedEntity.node.hit(signal)
-            }
-        }
-    }
-    
-    private func isSignalMatch(_ edgeWeight: Double, signal: Signal) -> Bool {
-        signal.weight > (edgeWeight - signal.tolerance) && signal.weight < (edgeWeight + signal.tolerance)
-    }
-    
+
     public func hit(_ signal: Signal) async throws {
         CellBase.diagnosticLog("Interest.hit name=\(name)", domain: .semantics)
         await signal.collector?.record(self.reference)
