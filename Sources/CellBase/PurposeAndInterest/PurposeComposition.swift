@@ -17,7 +17,7 @@ public struct PurposeCompositionLeaf: Codable, Equatable {
     }
 }
 
-public enum PurposeCompositionStatus: String, Codable, Equatable {
+public enum PurposeCompositionStatus: String, Codable, Equatable, Sendable {
     case satisfied
     case partial
     case unsatisfied

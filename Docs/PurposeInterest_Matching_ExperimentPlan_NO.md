@@ -1,6 +1,6 @@
 # Purpose/Interest Matching: Videre plan og vitenskapelig testoppsett
 
-Sist oppdatert: 2026-06-13
+Sist oppdatert: 2026-06-25
 
 ## 1. Utgangspunkt i dagens kode
 
@@ -166,6 +166,50 @@ refs, barn-resultater og eventuelt blokkert indeks/aarsak. Dette gjor det mulig
 aa modellere restaurant- og konferanseformaal som "finn kandidat, sjekk
 betingelser, reserver, fullfoer" uten aa blande oppfyllelseslogikken inn i den
 raske `WeightedGraphRuntime`.
+
+## 3.2.2 Fase 1d: Konferanse-swarm med privacy-kontrakt
+
+Det finnes naa en deterministisk swarm-fixture for konferansematching:
+
+- `ConferenceSwarmEntity`
+- `ConferenceSwarmOpportunity`
+- `ConferenceSwarmCapabilityGrant`
+- `ConferenceSwarmCase`
+- `ConferenceSwarmEvaluationSummary`
+
+Scenarioet simulerer deltakere, presse, hosted buyers, grunnleggere og
+community-deltakere som matcher mot pseudonyme muligheter. Testen kjoerer flere
+lag:
+
+1. rask vektet matching fra interesser til annonserte formaal
+2. kontekstfiltrering paa lokale variable som rolle, samtykke, tid, spraak,
+   tilgjengelighet og grove trust-/behovsbuckets
+3. eksplisitt capability-sjekk som krever aktiv grant for `matchPurpose` og
+   `discloseContext`
+4. `PurposeComposition` for aa kreve at weighted match, kontekst, privacy og grant alle
+   er oppfylt
+5. privacy-rejection av kandidater som krever PII eller ikke-minimert disclosure
+
+Dette er eksplisitt ikke en live agent-swarm. Agent/swarm-delen kan generere nye
+caseforslag senere, men kontraktstesten bruker innlaaste fixtures slik at
+kvalitet, determinisme og privacy kan maales stabilt.
+
+Personvernkontrakten i foerste versjon:
+
+- matching bruker pseudonyme `entityRef`-verdier, ikke global brukeridentitet
+- private variable som `email`, `phone`, `fullName`, `legalName`,
+  `preciseLocation`, `medicalNote` og `calendarURL` skal ikke baeres i signalet
+- endelig disclosure skal vaere eksakt settet av requester-variable valgt
+  mulighet krever, og dette maa vaere subset av `allowedDisclosureKeys`
+- valgt match maa ha en aktiv `ConferenceSwarmCapabilityGrant`; manglende eller
+  utloept grant gir forventet capability-rejection selv om vektet match scorer hoyt
+- en privacy-avvist kandidat er en forventet suksess, ikke en testfeil
+
+Fixturen kan kjoeres som rapport via CLI:
+
+```bash
+./.build/debug/haven-commons benchmark purpose-interest --conference-swarm --iterations 100 --format markdown
+```
 
 ## 3.3 Fase 2: Perspektivgrafer med flere lag
 

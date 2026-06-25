@@ -146,14 +146,14 @@ struct HavenCommonsCLI {
 
     private func runBenchmark(_ args: [String]) async throws {
         guard let domain = args.first else {
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]")
         }
 
         switch domain {
         case "purpose-interest":
             try await runPurposeInterestBenchmark(Array(args.dropFirst()))
         default:
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]")
         }
     }
 
@@ -166,7 +166,18 @@ struct HavenCommonsCLI {
 
         let repositoryRoot = commonsRoot.deletingLastPathComponent()
         let report: String
-        if hasFlag("--runtime-comparison", in: args) {
+        if hasFlag("--conference-swarm", in: args) {
+            let iterations = try optionalOptionValue("--iterations", in: args).map { rawValue -> Int in
+                guard let value = Int(rawValue), value > 0 else {
+                    throw CLIError.invalidArgument("--iterations \(rawValue)")
+                }
+                return value
+            } ?? 100
+            report = try await PerspectiveMatchingScenarioSupport.buildConferenceSwarmReport(
+                format: format,
+                iterations: iterations
+            )
+        } else if hasFlag("--runtime-comparison", in: args) {
             let useConferenceDataset = hasFlag("--conference-dataset", in: args)
             let iterations = try optionalOptionValue("--iterations", in: args).map { rawValue -> Int in
                 guard let value = Int(rawValue), value > 0 else {
@@ -323,7 +334,7 @@ struct HavenCommonsCLI {
           haven-commons resolve keypath --entity <id> --path <path> [--role <owner|member|sponsor|service|unknown>] [--consent <token1,token2>]
           haven-commons resolve term --id <term_id> --lang <locale> [--namespace <namespace>]
           haven-commons resolve guidance --namespace <namespace>
-          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--iterations <n>] [--output <path>]
+          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]
         """
     }
 
