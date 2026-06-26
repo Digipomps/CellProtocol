@@ -454,6 +454,112 @@ public struct SkeletonModifiers: Codable {
     public var accessibilityDropLabel: String?
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case padding
+        case maxWidthInfinity
+        case maxHeightInfinity
+        case width
+        case height
+        case hAlignment
+        case vAlignment
+        case background
+        case cornerRadius
+        case shadowRadius
+        case shadowX
+        case shadowY
+        case shadowColor
+        case borderWidth
+        case borderColor
+        case opacity
+        case hidden
+        case visibility
+        case foregroundColor
+        case fontStyle
+        case fontSize
+        case fontWeight
+        case lineLimit
+        case multilineTextAlignment
+        case minimumScaleFactor
+        case styleRole
+        case styleClasses
+        case motionHint
+        case motionSourceRole
+        case draggableRole
+        case dragPayloadKeypath
+        case dragPreviewRole
+        case accessibilityDragLabel
+        case dropTargetRole
+        case acceptedDragRoles
+        case dropTargetPayloadKeypath
+        case dropActionKeypath
+        case dropIntents
+        case dropValidationStateKeypath
+        case dropDeniedReasonKeypath
+        case accessibilityDropLabel
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        self.padding = Self.decodeLossy(Double.self, from: container, forKey: .padding)
+        self.maxWidthInfinity = Self.decodeLossy(Bool.self, from: container, forKey: .maxWidthInfinity)
+        self.maxHeightInfinity = Self.decodeLossy(Bool.self, from: container, forKey: .maxHeightInfinity)
+        self.width = Self.decodeLossy(Double.self, from: container, forKey: .width)
+        self.height = Self.decodeLossy(Double.self, from: container, forKey: .height)
+        self.hAlignment = Self.decodeLossy(String.self, from: container, forKey: .hAlignment)
+        self.vAlignment = Self.decodeLossy(String.self, from: container, forKey: .vAlignment)
+        self.background = Self.decodeLossy(String.self, from: container, forKey: .background)
+        self.cornerRadius = Self.decodeLossy(Double.self, from: container, forKey: .cornerRadius)
+        self.shadowRadius = Self.decodeLossy(Double.self, from: container, forKey: .shadowRadius)
+        self.shadowX = Self.decodeLossy(Double.self, from: container, forKey: .shadowX)
+        self.shadowY = Self.decodeLossy(Double.self, from: container, forKey: .shadowY)
+        self.shadowColor = Self.decodeLossy(String.self, from: container, forKey: .shadowColor)
+        self.borderWidth = Self.decodeLossy(Double.self, from: container, forKey: .borderWidth)
+        self.borderColor = Self.decodeLossy(String.self, from: container, forKey: .borderColor)
+        self.opacity = Self.decodeLossy(Double.self, from: container, forKey: .opacity)
+        self.hidden = Self.decodeLossy(Bool.self, from: container, forKey: .hidden)
+        self.visibility = Self.decodeLossy(SkeletonVisibilityRule.self, from: container, forKey: .visibility)
+        self.foregroundColor = Self.decodeLossy(String.self, from: container, forKey: .foregroundColor)
+        self.fontStyle = Self.decodeLossy(String.self, from: container, forKey: .fontStyle)
+        self.fontSize = Self.decodeLossy(Double.self, from: container, forKey: .fontSize)
+        self.fontWeight = Self.decodeLossy(String.self, from: container, forKey: .fontWeight)
+        self.lineLimit = Self.decodeLossy(Int.self, from: container, forKey: .lineLimit)
+        self.multilineTextAlignment = Self.decodeLossy(String.self, from: container, forKey: .multilineTextAlignment)
+        self.minimumScaleFactor = Self.decodeLossy(Double.self, from: container, forKey: .minimumScaleFactor)
+        self.styleRole = Self.decodeLossy(String.self, from: container, forKey: .styleRole)
+        self.styleClasses = Self.decodeLossy([String].self, from: container, forKey: .styleClasses)
+        self.motionHint = Self.decodeLossy(SkeletonMotionHint.self, from: container, forKey: .motionHint)
+        self.motionSourceRole = Self.decodeLossy(String.self, from: container, forKey: .motionSourceRole)
+        self.draggableRole = Self.decodeLossy(String.self, from: container, forKey: .draggableRole)
+        self.dragPayloadKeypath = Self.decodeLossy(String.self, from: container, forKey: .dragPayloadKeypath)
+        self.dragPreviewRole = Self.decodeLossy(String.self, from: container, forKey: .dragPreviewRole)
+        self.accessibilityDragLabel = Self.decodeLossy(String.self, from: container, forKey: .accessibilityDragLabel)
+        self.dropTargetRole = Self.decodeLossy(String.self, from: container, forKey: .dropTargetRole)
+        self.acceptedDragRoles = Self.decodeLossy([String].self, from: container, forKey: .acceptedDragRoles)
+        self.dropTargetPayloadKeypath = Self.decodeLossy(String.self, from: container, forKey: .dropTargetPayloadKeypath)
+        self.dropActionKeypath = Self.decodeLossy(String.self, from: container, forKey: .dropActionKeypath)
+        self.dropIntents = Self.decodeLossy([String].self, from: container, forKey: .dropIntents)
+        self.dropValidationStateKeypath = Self.decodeLossy(String.self, from: container, forKey: .dropValidationStateKeypath)
+        self.dropDeniedReasonKeypath = Self.decodeLossy(String.self, from: container, forKey: .dropDeniedReasonKeypath)
+        self.accessibilityDropLabel = Self.decodeLossy(String.self, from: container, forKey: .accessibilityDropLabel)
+    }
+
+    private static func decodeLossy<T: Decodable>(
+        _ type: T.Type,
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> T? {
+        guard container.contains(key) else {
+            return nil
+        }
+        do {
+            return try container.decodeIfPresent(type, forKey: key)
+        } catch {
+            CellBase.diagnosticLog("Ignoring invalid SkeletonModifiers.\(key.stringValue): \(error)", domain: .skeleton)
+            return nil
+        }
+    }
 }
 
 public struct SkeletonImage : Codable, Identifiable {
@@ -2265,6 +2371,68 @@ public struct SkeletonVisualization: Codable, Identifiable {
     }
 }
 
+public struct SkeletonUnsupported: Codable, Identifiable {
+    public var id = UUID()
+    public var elementType: String
+    public var reason: String?
+    public var rawPayload: ValueType?
+    public var modifiers: SkeletonModifiers?
+
+    enum ElementKey: CodingKey { case Unsupported }
+    enum CodingKeys: String, CodingKey {
+        case id
+        case elementType
+        case type
+        case reason
+        case rawPayload
+        case payload
+        case modifiers
+    }
+
+    public init(
+        id: UUID = UUID(),
+        elementType: String,
+        reason: String? = nil,
+        rawPayload: ValueType? = nil,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.id = id
+        self.elementType = elementType
+        self.reason = reason
+        self.rawPayload = rawPayload
+        self.modifiers = modifiers
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container: KeyedDecodingContainer<CodingKeys>
+        if let wrapper = try? decoder.container(keyedBy: ElementKey.self),
+           wrapper.contains(.Unsupported) {
+            container = try wrapper.nestedContainer(keyedBy: CodingKeys.self, forKey: .Unsupported)
+        } else {
+            container = try decoder.container(keyedBy: CodingKeys.self)
+        }
+
+        self.id = (try? container.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        self.elementType = (try? container.decodeIfPresent(String.self, forKey: .elementType))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .type))
+            ?? "Unknown"
+        self.reason = try? container.decodeIfPresent(String.self, forKey: .reason)
+        self.rawPayload = (try? container.decodeIfPresent(ValueType.self, forKey: .rawPayload))
+            ?? (try? container.decodeIfPresent(ValueType.self, forKey: .payload))
+        self.modifiers = try? container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: ElementKey.self)
+        var elementContainer = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Unsupported)
+        try elementContainer.encode(id, forKey: .id)
+        try elementContainer.encode(elementType, forKey: .elementType)
+        try elementContainer.encodeIfPresent(reason, forKey: .reason)
+        try elementContainer.encodeIfPresent(rawPayload, forKey: .rawPayload)
+        try elementContainer.encodeIfPresent(modifiers, forKey: .modifiers)
+    }
+}
+
 public indirect enum SkeletonElement : Codable, Identifiable {
     case List(SkeletonList)
     case Object(SkeletonObject)
@@ -2288,6 +2456,7 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     case Toggle(SkeletonToggle)
     case Picker(SkeletonPicker)
     case Visualization(SkeletonVisualization)
+    case Unsupported(SkeletonUnsupported)
     
     public var id: UUID {
         switch self {
@@ -2355,285 +2524,180 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return value.id
         case .Visualization(let value):
             return value.id
+
+        case .Unsupported(let value):
+            return value.id
         }
     
     }
-        
-    
-    
-    
+
+    private static func rawPayload(from decoder: any Decoder) -> ValueType? {
+        guard let container = try? decoder.singleValueContainer() else {
+            return nil
+        }
+        return try? container.decode(ValueType.self)
+    }
+
+    private static func unsupported(
+        elementType: String,
+        reason: String,
+        decoder: any Decoder
+    ) -> SkeletonElement {
+        CellBase.diagnosticLog("Unsupported skeleton element \(elementType): \(reason)", domain: .skeleton)
+        return .Unsupported(SkeletonUnsupported(
+            elementType: elementType,
+            reason: reason,
+            rawPayload: rawPayload(from: decoder)
+        ))
+    }
+
+    private static func decodeKnownElement(
+        named key: String,
+        from decoder: any Decoder,
+        trace: (String) -> Void
+    ) -> SkeletonElement? {
+        func decode<T: Decodable>(_ type: T.Type, wrap: (T) -> SkeletonElement) -> SkeletonElement {
+            do {
+                let singleValueContainer = try decoder.singleValueContainer()
+                return wrap(try singleValueContainer.decode(T.self))
+            } catch {
+                trace("Decoding \(key) failed with error: \(error)")
+                return unsupported(
+                    elementType: key,
+                    reason: "Decode failed: \(error)",
+                    decoder: decoder
+                )
+            }
+        }
+
+        switch key {
+        case "List":
+            return decode(SkeletonList.self, wrap: SkeletonElement.List)
+        case "Object":
+            return decode(SkeletonObject.self, wrap: SkeletonElement.Object)
+        case "Spacer":
+            return decode(SkeletonSpacer.self, wrap: SkeletonElement.Spacer)
+        case "Image":
+            return decode(SkeletonImage.self, wrap: SkeletonElement.Image)
+        case "Text":
+            return decode(SkeletonText.self, wrap: SkeletonElement.Text)
+        case "AttachmentField":
+            return decode(SkeletonAttachmentField.self, wrap: SkeletonElement.AttachmentField)
+        case "FileUpload":
+            return decode(SkeletonFileUpload.self, wrap: SkeletonElement.FileUpload)
+        case "TextField":
+            return decode(SkeletonTextField.self, wrap: SkeletonElement.TextField)
+        case "TextArea":
+            return decode(SkeletonTextArea.self, wrap: SkeletonElement.TextArea)
+        case "HStack":
+            return decode(SkeletonHStack.self, wrap: SkeletonElement.HStack)
+        case "VStack":
+            return decode(SkeletonVStack.self, wrap: SkeletonElement.VStack)
+        case "Reference":
+            return decode(SkeletonCellReference.self, wrap: SkeletonElement.Reference)
+        case "Button":
+            return decode(SkeletonButton.self, wrap: SkeletonElement.Button)
+        case "Divider":
+            return decode(SkeletonDivider.self, wrap: SkeletonElement.Divider)
+        case "ScrollView":
+            return decode(SkeletonScrollView.self, wrap: SkeletonElement.ScrollView)
+        case "Section":
+            return decode(SkeletonSection.self, wrap: SkeletonElement.Section)
+        case "Tabs":
+            return decode(SkeletonTabs.self, wrap: SkeletonElement.Tabs)
+        case "ZStack":
+            return decode(SkeletonZStack.self, wrap: SkeletonElement.ZStack)
+        case "Grid":
+            return decode(SkeletonGrid.self, wrap: SkeletonElement.Grid)
+        case "Toggle":
+            return decode(SkeletonToggle.self, wrap: SkeletonElement.Toggle)
+        case "Picker":
+            return decode(SkeletonPicker.self, wrap: SkeletonElement.Picker)
+        case "Visualization":
+            return decode(SkeletonVisualization.self, wrap: SkeletonElement.Visualization)
+        case "Unsupported":
+            return decode(SkeletonUnsupported.self, wrap: SkeletonElement.Unsupported)
+        default:
+            return nil
+        }
+    }
+
+    private static func decodeWrappedElementIfPresent(
+        from decoder: any Decoder,
+        trace: (String) -> Void
+    ) -> SkeletonElement? {
+        guard let container = try? decoder.container(keyedBy: DynamicCodingKey.self),
+              container.allKeys.count == 1,
+              let key = container.allKeys.first else {
+            return nil
+        }
+
+        do {
+            return try container.decode(SkeletonElement.self, forKey: key)
+        } catch {
+            trace("Decoding nested SkeletonElement with key \(key.stringValue) failed with error: \(error)")
+            return unsupported(
+                elementType: key.stringValue,
+                reason: "Decode failed: \(error)",
+                decoder: decoder
+            )
+        }
+    }
+
     public init(from decoder: any Decoder) throws {
-//        print("Decode SkeletonElement")
         func trace(_ message: String) {
             CellBase.diagnosticLog(message, domain: .skeleton)
         }
 
-        if let key = decoder.codingPath.last?.stringValue {
-            trace("Decoding key: \(key)")
-            switch key {
-            case "List":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let list = try singleValueContainer.decode(SkeletonList.self)
-                    self = .List(list)
-                    return
-                } catch {
-                    trace("Decoding List failed with error: \(error)")
-                }
-            case "Object":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonObject = try singleValueContainer.decode(SkeletonObject.self)
-                    self = .Object(skeletonObject)
-                    return
-                } catch {
-                    trace("Decoding skeletonObject failed with error: \(error)")
-                }
-                
-            case "Spacer":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonSpacer = try singleValueContainer.decode(SkeletonSpacer.self)
-                    self = .Spacer(skeletonSpacer)
-                    return
-                } catch {
-                    trace("Decoding skeletonSpacer failed with error: \(error)")
-                }
-                
-            case "Image":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonImage = try singleValueContainer.decode(SkeletonImage.self)
-                    self = .Image(skeletonImage)
-                    return
-                } catch {
-                    trace("Decoding skeletonImage failed with error: \(error)")
-                }
-                
-            case "Text":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonText = try singleValueContainer.decode(SkeletonText.self)
-                    self = .Text(skeletonText)
-                    return
-                } catch {
-                    trace("Decoding skeletonText failed with error: \(error)")
-                }
-
-            case "AttachmentField":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let attachmentField = try singleValueContainer.decode(SkeletonAttachmentField.self)
-                    self = .AttachmentField(attachmentField)
-                    return
-                } catch {
-                    trace("Decoding attachmentField failed with error: \(error)")
-                }
-
-            case "FileUpload":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let fileUpload = try singleValueContainer.decode(SkeletonFileUpload.self)
-                    self = .FileUpload(fileUpload)
-                    return
-                } catch {
-                    trace("Decoding fileUpload failed with error: \(error)")
-                }
-
-            case "TextField":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonTextField = try singleValueContainer.decode(SkeletonTextField.self)
-                    self = .TextField(skeletonTextField)
-                    return
-                } catch {
-                    trace("Decoding skeletonTextField failed with error: \(error)")
-                }
-                
-            case "TextArea":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonTextArea = try singleValueContainer.decode(SkeletonTextArea.self)
-                    self = .TextArea(skeletonTextArea)
-                    return
-                } catch {
-                    trace("Decoding skeletonTextArea failed with error: \(error)")
-                }
-
-            case "HStack":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonHStack = try singleValueContainer.decode(SkeletonHStack.self)
-                    self = .HStack(skeletonHStack)
-                    return
-                } catch {
-                    trace("Decoding skeletonHStack failed with error: \(error)")
-                }
-                
-            case "VStack":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonVStack = try singleValueContainer.decode(SkeletonVStack.self)
-                    self = .VStack(skeletonVStack)
-                    return
-                } catch {
-                    trace("Decoding VStack failed with error: \(error)")
-                }
-                
-            case "Reference":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonCellReference = try singleValueContainer.decode(SkeletonCellReference.self)
-                    self = .Reference(skeletonCellReference)
-                    return
-                } catch {
-                    trace("Decoding skeletonCellreference failed with error: \(error)")
-                }
-                
-            case "Button":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonButton = try singleValueContainer.decode(SkeletonButton.self)
-                    self = .Button(skeletonButton)
-                    return
-                } catch {
-                    trace("Decoding skeletonButton failed with error: \(error)")
-                }
-                
-            case "Divider":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonDivider = try singleValueContainer.decode(SkeletonDivider.self)
-                    self = .Divider(skeletonDivider)
-                    return
-                } catch {
-                    trace("Decoding skeletonDivider failed with error: \(error)")
-                }
-                
-            case "ScrollView":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonScrollView = try singleValueContainer.decode(SkeletonScrollView.self)
-                    self = .ScrollView(skeletonScrollView)
-                    return
-                } catch {
-                    trace("Decoding skeletonScrollView failed with error: \(error)")
-                }
-                
-            case "Section":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonSection = try singleValueContainer.decode(SkeletonSection.self)
-                    self = .Section(skeletonSection)
-                    return
-                } catch {
-                    trace("Decoding skeletonSection failed with error: \(error)")
-                }
-
-            case "Tabs":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonTabs = try singleValueContainer.decode(SkeletonTabs.self)
-                    self = .Tabs(skeletonTabs)
-                    return
-                } catch {
-                    trace("Decoding skeletonTabs failed with error: \(error)")
-                }
-                
-            case "ZStack":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonZStack = try singleValueContainer.decode(SkeletonZStack.self)
-                    self = .ZStack(skeletonZStack)
-                    return
-                } catch {
-                    trace("Decoding skeletonZStack failed with error: \(error)")
-                }
-                
-            case "Grid":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonGrid = try singleValueContainer.decode(SkeletonGrid.self)
-                    self = .Grid(skeletonGrid)
-                    return
-                } catch {
-                    trace("Decoding skeletonGrid failed with error: \(error)")
-                }
-                
-            case "Toggle":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonToggle = try singleValueContainer.decode(SkeletonToggle.self)
-                    self = .Toggle(skeletonToggle)
-                    return
-                } catch {
-                    trace("Decoding skeletonToggle failed with error: \(error)")
-                }
-
-            case "Picker":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonPicker = try singleValueContainer.decode(SkeletonPicker.self)
-                    self = .Picker(skeletonPicker)
-                    return
-                } catch {
-                    trace("Decoding skeletonPicker failed with error: \(error)")
-                }
-
-            case "Visualization":
-                do {
-                    let singleValueContainer = try decoder.singleValueContainer()
-                    let skeletonVisualization = try singleValueContainer.decode(SkeletonVisualization.self)
-                    self = .Visualization(skeletonVisualization)
-                    return
-                } catch {
-                    trace("Decoding skeletonVisualization failed with error: \(error)")
-                }
-                
-            default:
-                break
+        if let key = decoder.codingPath.last, key.intValue == nil {
+            let keyName = key.stringValue
+            trace("Decoding key: \(keyName)")
+            if let decoded = Self.decodeKnownElement(named: keyName, from: decoder, trace: trace) {
+                self = decoded
+                return
             }
-            
-            do {
-                let container = try decoder.container(keyedBy: DynamicCodingKey.self)
-//                print("container: \(container.allKeys)")
-                
-                for key in container.allKeys {
-                    do {
-//                        print("@@@@@@@ Decoding key: \(key)")
-                        let decodedObject = try container.decode(SkeletonElement.self, forKey: key )
-                        self = decodedObject
-                        return
-                    } catch { trace("Decoding SkeletonElement in object using key: \(key) failed with error: \(error)") }
-                }
-             
-                
-            } catch {
-                trace("Single value decoder failed with error: \(error)")
-                
+            if let decoded = Self.decodeWrappedElementIfPresent(from: decoder, trace: trace) {
+                self = decoded
+                return
             }
-            trace("SkeletonElement decode exhausted keyed fallback")
-            throw DecodingPDSError.corruptedData
-        } else {
-            do {
-                let container = try decoder.container(keyedBy: DynamicCodingKey.self)
-                for key in container.allKeys {
-                    do {
-                        let decodedObject = try container.decode(SkeletonElement.self, forKey: key)
-                        self = decodedObject
-                        return
-                    } catch {
-                        trace("Decoding SkeletonElement with no codingPath using key: \(key) failed with error: \(error)")
-                    }
-                }
-            } catch {
-                trace("No Key fallback failed with error: \(error)")
-            }
-
-            trace("SkeletonElement decode had no codingPath key")
+            self = Self.unsupported(
+                elementType: keyName,
+                reason: "Unknown skeleton element type",
+                decoder: decoder
+            )
+            return
         }
-        trace("End of SkeletonElement decode")
-        throw DecodingPDSError.corruptedData
+
+        guard let container = try? decoder.container(keyedBy: DynamicCodingKey.self) else {
+            self = Self.unsupported(
+                elementType: "InvalidSkeletonElement",
+                reason: "Expected single-key skeleton element object",
+                decoder: decoder
+            )
+            return
+        }
+
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            self = Self.unsupported(
+                elementType: "InvalidSkeletonElement",
+                reason: "Expected one skeleton element key, found \(container.allKeys.count)",
+                decoder: decoder
+            )
+            return
+        }
+
+        do {
+            self = try container.decode(SkeletonElement.self, forKey: key)
+            return
+        } catch {
+            trace("Decoding SkeletonElement with key \(key.stringValue) failed with error: \(error)")
+            self = Self.unsupported(
+                elementType: key.stringValue,
+                reason: "Decode failed: \(error)",
+                decoder: decoder
+            )
+            return
+        }
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -2683,6 +2747,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case let .Picker(value):
             try container.encode(value)
         case let .Visualization(value):
+            try container.encode(value)
+        case let .Unsupported(value):
             try container.encode(value)
         }
     }

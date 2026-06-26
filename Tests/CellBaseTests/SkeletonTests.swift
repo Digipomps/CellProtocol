@@ -894,7 +894,7 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(list.allowsEmptySelection, true)
     }
 
-    func testListDecodeRejectsIDSelectionPayloadWithoutSelectionValueKeypath() throws {
+    func testListDecodeFallsBackForIDSelectionPayloadWithoutSelectionValueKeypath() throws {
         let json = """
         {
           "List": {
@@ -905,7 +905,14 @@ final class SkeletonTests: XCTestCase {
         """
 
         let data = json.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(SkeletonElement.self, from: data))
+        let element = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Unsupported(unsupported) = element else {
+            XCTFail("Expected unsupported fallback for invalid List schema")
+            return
+        }
+
+        XCTAssertEqual(unsupported.elementType, "List")
+        XCTAssertTrue(unsupported.reason?.contains("missingSelectionValueKeypath") == true)
     }
 
     func testListEncodeRejectsIDSelectionPayloadWithoutSelectionValueKeypath() throws {
@@ -1191,7 +1198,7 @@ final class SkeletonTests: XCTestCase {
         XCTAssertFalse(text.modifiers?.visibility?.isVisible() ?? true)
     }
 
-    func testUnknownConditionalWrapperStillThrows() throws {
+    func testUnknownConditionalWrapperDecodesAsUnsupportedElement() throws {
         let json = """
         {
           "Conditional": {
@@ -1203,7 +1210,14 @@ final class SkeletonTests: XCTestCase {
         }
         """
 
-        XCTAssertThrowsError(try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8)))
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case let .Unsupported(unsupported) = decoded else {
+            XCTFail("Expected unsupported fallback for unknown skeleton element")
+            return
+        }
+
+        XCTAssertEqual(unsupported.elementType, "Conditional")
+        XCTAssertEqual(unsupported.reason, "Unknown skeleton element type")
     }
 }
 

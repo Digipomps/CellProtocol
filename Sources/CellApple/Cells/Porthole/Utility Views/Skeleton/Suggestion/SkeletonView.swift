@@ -930,6 +930,20 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(ta.modifiers)
                     .environmentObject(viewModel)
             )
+        case .Unsupported(let unsupported):
+            return AnyView(
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Unsupported skeleton element: \(unsupported.elementType)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let reason = unsupported.reason, reason.isEmpty == false {
+                        Text(reason)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .applySkeletonModifiers(unsupported.modifiers)
+            )
         @unknown default:
             return AnyView(EmptyView())
         }
@@ -981,6 +995,8 @@ public struct SkeletonView: View {
         case .Picker(let value):
             modifiers = value.modifiers
         case .Visualization(let value):
+            modifiers = value.modifiers
+        case .Unsupported(let value):
             modifiers = value.modifiers
         @unknown default:
             modifiers = nil
