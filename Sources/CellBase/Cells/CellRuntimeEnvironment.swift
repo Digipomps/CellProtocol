@@ -20,6 +20,10 @@ internal final class CellRuntimeEnvironment: @unchecked Sendable {
     private var storedEnabledDiagnosticLogDomains = Set<CellBase.DiagnosticLogDomain>()
     private var storedDiagnosticLogHandler: ((CellBase.DiagnosticLogDomain, String) -> Void)?
     private var storedRemoteWebSocketQueryItemsProvider: (@Sendable (URL) -> [URLQueryItem])?
+    private var storedSecurityEventSink: CellSecurityEventSink?
+    private var storedSigningChallengeReplayStore: CellSecuritySigningChallengeReplayStore? = CellSecuritySigningChallengeReplayStore()
+    private var storedSecurityContainmentPolicy: CellSecurityContainmentPolicy = .monitorOnly
+    private var storedSecurityContainmentController: CellSecurityContainmentController? = CellSecurityContainmentController()
 
     var defaultIdentityVault: IdentityVaultProtocol? {
         get { withLock { storedDefaultIdentityVault } }
@@ -159,6 +163,26 @@ internal final class CellRuntimeEnvironment: @unchecked Sendable {
             }
             _ = oldValue
         }
+    }
+
+    var securityEventSink: CellSecurityEventSink? {
+        get { withLock { storedSecurityEventSink } }
+        set { withLock { storedSecurityEventSink = newValue } }
+    }
+
+    var signingChallengeReplayStore: CellSecuritySigningChallengeReplayStore? {
+        get { withLock { storedSigningChallengeReplayStore } }
+        set { withLock { storedSigningChallengeReplayStore = newValue } }
+    }
+
+    var securityContainmentPolicy: CellSecurityContainmentPolicy {
+        get { withLock { storedSecurityContainmentPolicy } }
+        set { withLock { storedSecurityContainmentPolicy = newValue } }
+    }
+
+    var securityContainmentController: CellSecurityContainmentController? {
+        get { withLock { storedSecurityContainmentController } }
+        set { withLock { storedSecurityContainmentController = newValue } }
     }
 
     func diagnosticLoggingEnabled(for domain: CellBase.DiagnosticLogDomain) -> Bool {

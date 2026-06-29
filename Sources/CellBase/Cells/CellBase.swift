@@ -104,6 +104,26 @@ public struct CellBase {
         set { runtimeEnvironment.remoteWebSocketQueryItemsProvider = newValue }
     }
 
+    public static var securityEventSink: CellSecurityEventSink? {
+        get { runtimeEnvironment.securityEventSink }
+        set { runtimeEnvironment.securityEventSink = newValue }
+    }
+
+    public static var signingChallengeReplayStore: CellSecuritySigningChallengeReplayStore? {
+        get { runtimeEnvironment.signingChallengeReplayStore }
+        set { runtimeEnvironment.signingChallengeReplayStore = newValue }
+    }
+
+    public static var securityContainmentPolicy: CellSecurityContainmentPolicy {
+        get { runtimeEnvironment.securityContainmentPolicy }
+        set { runtimeEnvironment.securityContainmentPolicy = newValue }
+    }
+
+    public static var securityContainmentController: CellSecurityContainmentController? {
+        get { runtimeEnvironment.securityContainmentController }
+        set { runtimeEnvironment.securityContainmentController = newValue }
+    }
+
     public static var allowsInsecureWebSockets: Bool {
         switch webSocketSecurityPolicy {
         case .requireTLS:
@@ -128,6 +148,14 @@ public struct CellBase {
 
     public static func diagnosticLog(_ message: @autoclosure () -> String, domain: DiagnosticLogDomain) {
         runtimeEnvironment.diagnosticLog(message(), domain: domain)
+    }
+
+    public static func recordSecurityEvent(_ event: CellSecurityEvent) async {
+        let sink = securityEventSink
+        let controller = securityContainmentController
+        let policy = securityContainmentPolicy
+        await sink?.record(event)
+        _ = await controller?.observe(event, policy: policy)
     }
     
     public init() {

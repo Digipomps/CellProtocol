@@ -858,12 +858,48 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             } catch {
                 CellBase.diagnosticLog("Signing contract failed: \(error)", domain: .contracts)
                 agreement.state = .rejected
+                await recordContractRejected(
+                    identity: identity,
+                    reasonCode: "contract_signing_failed",
+                    message: "Contract signing failed."
+                )
             }
         } else {
             agreement.state = .rejected
-            
+            await recordContractRejected(
+                identity: identity,
+                reasonCode: "contract_conditions_unmet",
+                message: "Contract conditions were not met."
+            )
         }
         return agreement.state
+    }
+
+    private func recordContractRejected(
+        identity: Identity,
+        reasonCode: String,
+        message: String
+    ) async {
+        await CellBase.recordSecurityEvent(
+            CellSecurityEvent(
+                kind: .contractRejected,
+                severity: .medium,
+                resource: CellSecurityResource(
+                    kind: "cell",
+                    identifier: uuid,
+                    action: "addAgreement"
+                ),
+                requester: CellSecurityActor(
+                    identityUUID: identity.uuid,
+                    signingKeyFingerprint: identity.signingPublicKeyFingerprint,
+                    domain: identityDomain
+                ),
+                reasonCode: reasonCode,
+                userMessage: message,
+                requiredAction: "review_agreement_or_present_required_proof",
+                canAutoResolve: false
+            )
+        )
     }
     
     private func allConditionsResolved(_ conditions: [Condition], context: ConnectContext) async -> Bool {
@@ -1143,7 +1179,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             ? false
             : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
 
-        return CellAuthorizationPolicy.decide(
+        let decision = CellAuthorizationPolicy.decide(
             request: request,
             ownerReferenceMatches: ownerReferenceMatches,
             ownerUUIDMatches: owner.uuid == identity.uuid,
@@ -1151,6 +1187,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             contracts: contracts,
             cellSpecificAllowed: cellSpecificAllowed
         )
+        await recordSecurityEvent(for: decision)
+        return decision
+    }
+
+    private func recordSecurityEvent(for decision: CellAuthorizationDecision) async {
+        guard !decision.allowed else { return }
+        await CellBase.recordSecurityEvent(.authorizationDenied(decision))
     }
 
     open func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {

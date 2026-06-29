@@ -1,6 +1,7 @@
 # CellSecurityKit Architecture
 
-Status: initial implementation with first runtime integration started
+Status: runtime integration, authorized probe runner, local containment and
+CellScaffold SecurityWorkbench are in place
 
 ## Formaal
 
@@ -24,12 +25,13 @@ Biblioteket skal beskytte disse grunnreglene:
 
 Foerste fase skal ikke:
 
-- innfoere ny UI eller nytt CellScaffold
 - flytte policy ut av Resolver
 - lage en stor observability-stack
 - legge til nye tredjepartsavhengigheter
 - signere, verifisere eller hente remote data paa vegne av runtime
 - auto-utbedre access-denials uten eksplisitt policybeslutning
+- bruke Workbench eller probes som authority eller auto-grant
+- utfoere generell nettverksskanning eller motangrep
 
 ## Plassering
 
@@ -50,9 +52,13 @@ sikkerhetsprimitive, boer vi splitte ut en egen target:
 
 ## Foerste leveranse
 
-Foerste kodepass etablerer tre smaa byggesteiner. Neste pass koblet
+Foerste kodepass etablerte tre smaa byggesteiner. Neste pass koblet
 endpoint-policyen inn i CellConfiguration-opploesning og strammet Orchestrator
-sin config-mutasjon til write-policy.
+sin config-mutasjon til write-policy. Runtime-pass nummer to koblet security
+event sink inn i authorization-denials, bridge signing denials og config lookup
+blocks, og koblet replay-store inn i inbound bridge signing. Dette passet
+la til lokal containment, autorisert probe-runner og en SecurityWorkbench i
+CellScaffold.
 
 ### 1. Security event model
 
@@ -113,11 +119,79 @@ candidate- og source-backed resolution. En malicious configuration skal derfor
 ikke kunne bruke privileged requester som confused deputy mot uventede remote
 endepunkter uten en eksplisitt allowlist-policy.
 
+### 4. Local containment
+
+`CellSecurityContainmentPolicy` og `CellSecurityContainmentController` gir
+lokale defensive tiltak uten aa flytte authority ut av Resolver eller Vault.
+
+Default er `monitorOnly`. I denne modusen registreres foreslaatte tiltak, men
+ingenting blokkeres. Naar policy settes til `localProtection`, kan runtime
+bruke tiltakene som lokal beskyttelse:
+
+- rate-limit paa signing/admission-scope
+- midlertidig bridge quarantine ved replay eller eksplisitt lokal handling
+- revoke/retry challenge som remediation ved replay
+- require re-auth for high/critical eventer
+- blokkering av remote config lookup naar endpoint-policy sier nei
+
+Viktige sikkerhetsvalg:
+
+- Rate-limit scope for bridge-signering inkluderer bridge id, action, identity
+  uuid, signing key fingerprint og identity domain. Det er bevisst ikke
+  uuid-only.
+- Quarantine stopper en bridge-signering foer vaulten faar signeringsoppdraget.
+- Containment-actions kan aldri gi tilgang, mint-e contracts eller signere noe.
+- `CellBase.recordSecurityEvent(_:)` er felles inngang: event sink registrerer
+  hendelsen og containment-controlleren observerer den med gjeldende policy.
+
+### 5. Authorized probe runner
+
+`CellSecurityProbeRunner` kjorer deterministiske probe-simuleringer basert paa
+`CellSecurityProbeCatalog.baseline`.
+
+Runneren:
+
+- gjoer ikke nettverks-I/O
+- nekter probes som deklarerer `performsNetworkIO`
+- har `local` og `stagingAllowlist` modus
+- krever eksplisitt target endpoint og host allowlist i staging-modus
+- returnerer rapport med planned/refused, expected event kind, reasonCode,
+  requiredAction og remediation
+
+Dette er et staging-smoke-grunnlag, ikke et generelt angrepsverktøy.
+
+### 6. SecurityWorkbench
+
+CellScaffold har naa `SecurityWorkbenchCell` og
+`SecurityWorkbenchConfigurationFactory`.
+
+Workbench viser:
+
+- sanitized `CellSecurityEvent`-liste fra `InMemoryCellSecurityEventSink`
+- baseline probe-katalog
+- siste probe-run rapport
+- containment policy og snapshot
+- authority-regler for Identity/Resolver/Vault
+
+Workbench-actions er avgrenset til:
+
+- run local probes
+- run staging allowlist probes
+- switch monitor/localProtection
+- clear in-memory events
+- reset containment
+- require re-auth for current requester
+
+Workbench kan ikke auto-grante tilgang, utstede Contract, endre Agreement eller
+signere data. Den er en menneskelig og testbar observability-/operasjonsflate,
+ikke policy-authority.
+
 ## Defensive brukstilfeller
 
 - Avvise replay av signerings-challenges.
 - Logge access-denials med konkret remediation.
 - Blokkere uventet remote config lookup.
+- Aktivere lokal rate-limit/quarantine/re-auth i `localProtection`.
 - Teste at wrong-vault og same-uuid/wrong-key aldri gir owner access.
 - Lage staging-hendelser for policy-forslag uten aa gi tilgang.
 
@@ -153,16 +227,21 @@ CellSecurityKit skal vaere billig aa bruke i hot paths:
 - Replay-store er en ekstra kontroll, ikke erstatning for signature/expiry.
 - SecurityWorkbench skal aldri signere med produksjonsidentiteter som default.
 - Ingen policy skal baseres paa uuid alene.
+- SecurityWorkbench viser bare redigerte eventfelter og skal ikke vise private
+  payloads, tokens, raw challenge bytes eller raw signatures.
 
 ## Integrasjon senere
 
 Anbefalt rekkefolge:
 
-1. Koble replay-store inn i verifier/admission path for
-   `IdentitySigningChallenge`.
-2. Emit `CellSecurityEvent` fra Resolver/Bridge/Orchestrator denial paths.
-3. Bygg SecurityWorkbenchCell som leser eventer og kjorer autoriserte probes.
-4. Vurder egen SwiftPM target naar API-et har stabil importflate.
+1. Utvid replay-store-bruk fra inbound bridge signing til flere verifier- og
+   admission paths der challenge faktisk konsumeres.
+2. Emit `CellSecurityEvent` fra flere Resolver/Orchestrator denial paths og fra
+   contract rejection der det finnes stabil reasonCode.
+3. Utvid probe-runneren fra deterministic planning til lokale mock-fixtures for
+   de viktigste denial-pathene.
+4. Legg staging-smoke rundt Workbench/runner med eksplisitt allowlist.
+5. Vurder egen SwiftPM target naar API-et har stabil importflate.
 
 ## Teststrategi
 
@@ -175,5 +254,15 @@ Foerste testsett skal bare bevise de nye primitive invariantene:
 - canonicalization bevarer path case
 - CellConfiguration resolution blokkerer remote source endpoint default
 - Orchestrator config-mutasjon bruker write-policy
+- authorization-denial produserer redigert `CellSecurityEvent`
+- inbound bridge signing avviser replayed challenge og produserer
+  `signingChallengeReplay`
+- baseline probe-katalog er local-only og deklarerer expected event/remediation
+- containment-policy foreslaar replay/re-auth/quarantine uten grant semantics
+- containment-controller rate-limiter bare i `localProtection`
+- bridge quarantine stopper inbound signering foer vault-signering
+- probe-runner planlegger local catalog og nekter uallowlistet staging target
+- SecurityWorkbench viser state, kjorer probes og publiseres i katalogen
 
-Senere testsett skal dekke Resolver/Bridge-integrasjon og staging-probes.
+Senere testsett skal dekke bredere Resolver/Bridge-integrasjon,
+contract-rejection events og staging-probes.

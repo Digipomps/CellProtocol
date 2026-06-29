@@ -43,20 +43,38 @@ final class BridgeTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousRemoteWebSocketQueryItemsProvider: (@Sendable (URL) -> [URLQueryItem])?
+    private var previousSecurityEventSink: CellSecurityEventSink?
+    private var previousSigningChallengeReplayStore: CellSecuritySigningChallengeReplayStore?
+    private var previousSecurityContainmentPolicy: CellSecurityContainmentPolicy?
+    private var previousSecurityContainmentController: CellSecurityContainmentController?
 
     override func setUp() {
         super.setUp()
         previousVault = CellBase.defaultIdentityVault
         previousResolver = CellBase.defaultCellResolver
         previousRemoteWebSocketQueryItemsProvider = CellBase.remoteWebSocketQueryItemsProvider
+        previousSecurityEventSink = CellBase.securityEventSink
+        previousSigningChallengeReplayStore = CellBase.signingChallengeReplayStore
+        previousSecurityContainmentPolicy = CellBase.securityContainmentPolicy
+        previousSecurityContainmentController = CellBase.securityContainmentController
         CellBase.defaultIdentityVault = MockIdentityVault()
         CellBase.remoteWebSocketQueryItemsProvider = nil
+        CellBase.securityEventSink = nil
+        CellBase.signingChallengeReplayStore = CellSecuritySigningChallengeReplayStore()
+        CellBase.securityContainmentPolicy = .monitorOnly
+        CellBase.securityContainmentController = CellSecurityContainmentController()
     }
 
     override func tearDown() {
         CellBase.defaultIdentityVault = previousVault
         CellBase.defaultCellResolver = previousResolver
         CellBase.remoteWebSocketQueryItemsProvider = previousRemoteWebSocketQueryItemsProvider
+        CellBase.securityEventSink = previousSecurityEventSink
+        CellBase.signingChallengeReplayStore = previousSigningChallengeReplayStore
+        if let previousSecurityContainmentPolicy {
+            CellBase.securityContainmentPolicy = previousSecurityContainmentPolicy
+        }
+        CellBase.securityContainmentController = previousSecurityContainmentController
         super.tearDown()
     }
 
@@ -571,6 +589,100 @@ final class BridgeTests: XCTestCase {
         } else {
             XCTFail("Expected signature payload")
         }
+    }
+
+    func testInboundBridgeSignCommandRejectsReplayedChallengeAndRecordsEvent() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        let sink = InMemoryCellSecurityEventSink()
+        CellBase.defaultIdentityVault = vault
+        CellBase.securityEventSink = sink
+        CellBase.signingChallengeReplayStore = CellSecuritySigningChallengeReplayStore()
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "inbound-replay")
+
+        try await bridge.consumeCommand(command: BridgeCommand(
+            cmd: Command.sign.rawValue,
+            identity: owner,
+            payload: .signData(challenge),
+            cid: 201
+        ))
+        _ = try await waitUntilTransportHasSent(1, transport: transport)
+
+        try await bridge.consumeCommand(command: BridgeCommand(
+            cmd: Command.sign.rawValue,
+            identity: owner,
+            payload: .signData(challenge),
+            cid: 202
+        ))
+
+        let sentCommands = try await waitUntilTransportHasSent(2, transport: transport)
+        let replayResponse = try XCTUnwrap(sentCommands.last)
+        XCTAssertEqual(replayResponse.cid, 202)
+        if case let .string(message) = replayResponse.payload {
+            XCTAssertTrue(message.contains("signing denied"))
+            XCTAssertTrue(message.contains("replay"))
+        } else {
+            XCTFail("Expected replay signing denied string response")
+        }
+
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.last?.kind, .signingChallengeReplay)
+        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.challengeReplay)
+        XCTAssertEqual(events.last?.requiredAction, "retry_with_fresh_challenge")
+    }
+
+    func testInboundBridgeSignCommandRespectsLocalQuarantineBeforeVaultSigning() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        let sink = InMemoryCellSecurityEventSink()
+        let controller = CellSecurityContainmentController()
+        CellBase.defaultIdentityVault = vault
+        CellBase.securityEventSink = sink
+        CellBase.securityContainmentController = controller
+        CellBase.securityContainmentPolicy = .localProtection
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        await controller.applyManualAction(
+            CellSecurityContainmentAction(
+                kind: .quarantineBridge,
+                reasonCode: CellSecurityReasonCode.bridgeQuarantined,
+                resource: CellSecurityResource(kind: "bridge", identifier: bridge.uuid, action: "sign"),
+                requiredAction: "wait_for_quarantine_or_reauthenticate",
+                automatic: true,
+                expiresAt: Date().addingTimeInterval(60)
+            )
+        )
+        let challenge = try identityChallengeData(for: owner, nonce: "inbound-quarantine")
+
+        try await bridge.consumeCommand(command: BridgeCommand(
+            cmd: Command.sign.rawValue,
+            identity: owner,
+            payload: .signData(challenge),
+            cid: 203
+        ))
+
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let response = try XCTUnwrap(sentCommands.last)
+        XCTAssertEqual(response.cid, 203)
+        if case let .string(message) = response.payload {
+            XCTAssertTrue(message.contains("signing denied"))
+            XCTAssertTrue(message.contains("quarantined"))
+        } else {
+            XCTFail("Expected quarantine signing denied string response")
+        }
+
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.last?.kind, .transportRejected)
+        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.bridgeQuarantined)
+        XCTAssertEqual(events.last?.requiredAction, "wait_for_quarantine_or_reauthenticate")
     }
 
     func testInboundBridgeSignCommandRejectsNonLocalIdentity() async throws {

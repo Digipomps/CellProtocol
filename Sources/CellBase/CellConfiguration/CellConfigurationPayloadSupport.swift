@@ -277,7 +277,15 @@ public enum CellConfigurationPayloadSupport {
         requester: Identity,
         endpointPolicy: CellSecurityEndpointPolicy
     ) async -> CellConfiguration? {
-        guard let validation = try? endpointPolicy.validate(sourceEndpoint) else {
+        let validation: CellSecurityEndpointValidation
+        do {
+            validation = try endpointPolicy.validate(sourceEndpoint)
+        } catch {
+            await recordConfigLookupBlocked(
+                sourceEndpoint,
+                requester: requester,
+                error: error
+            )
             return nil
         }
 
@@ -329,7 +337,11 @@ public enum CellConfigurationPayloadSupport {
         endpointPolicy: CellSecurityEndpointPolicy
     ) -> CellConfiguration? {
         guard let sourceEndpoint else { return configuration }
-        guard let validation = try? endpointPolicy.validate(sourceEndpoint) else {
+        let validation: CellSecurityEndpointValidation
+        do {
+            validation = try endpointPolicy.validate(sourceEndpoint)
+        } catch {
+            recordConfigLookupBlockedEventually(sourceEndpoint, requester: nil, error: error)
             return nil
         }
         return retargetingLocalCellEndpoints(
@@ -430,6 +442,38 @@ public enum CellConfigurationPayloadSupport {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func recordConfigLookupBlockedEventually(
+        _ endpoint: String,
+        requester: Identity?,
+        error: Error
+    ) {
+        Task {
+            await recordConfigLookupBlocked(endpoint, requester: requester, error: error)
+        }
+    }
+
+    private static func recordConfigLookupBlocked(
+        _ endpoint: String,
+        requester: Identity?,
+        error: Error
+    ) async {
+        await CellBase.recordSecurityEvent(
+            .configLookupBlocked(
+                endpoint: endpoint,
+                requester: requester,
+                reasonCode: reasonCode(for: error),
+                message: "CellConfiguration endpoint policy rejected a source endpoint: \(error)"
+            )
+        )
+    }
+
+    private static func reasonCode(for error: Error) -> String {
+        if case CellSecurityEndpointPolicyError.remoteEndpointNotAllowed = error {
+            return CellSecurityReasonCode.remoteEndpointBlocked
+        }
+        return CellSecurityReasonCode.endpointPolicyRejected
     }
 
     private static func rewriteEndpointStrings(

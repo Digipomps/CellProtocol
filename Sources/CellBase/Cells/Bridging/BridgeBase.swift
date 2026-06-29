@@ -829,6 +829,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 do {
                     try IdentitySigningChallenge.validateSigningData(messageData, for: identity)
                 } catch {
+                    if let self {
+                        Task {
+                            await self.recordSigningDeniedEvent(
+                                String(describing: error),
+                                identity: identity,
+                                reasonCode: CellSecurityReasonCode.invalidSigningChallenge
+                            )
+                        }
+                    }
                     promise(.failure(error))
                     return
                 }
@@ -838,11 +847,32 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     return
                 }
                 guard self.ready else {
+                    Task {
+                        await self.recordSigningDeniedEvent(
+                            "bridge session is not ready",
+                            identity: identity,
+                            reasonCode: CellSecurityReasonCode.bridgeNotReady,
+                            kind: .transportRejected,
+                            requiredAction: "wait_for_bridge_ready"
+                        )
+                    }
                     promise(.failure(BridgeError.denied))
                     return
                 }
 
                 Task {
+                    if let denial = await self.signingContainmentDenial(for: identity) {
+                        await self.recordSigningDeniedEvent(
+                            denial.message,
+                            identity: identity,
+                            reasonCode: denial.reasonCode,
+                            kind: .transportRejected,
+                            requiredAction: denial.requiredAction
+                        )
+                        promise(.failure(BridgeError.denied))
+                        return
+                    }
+
                     let commandID = await self.auditor.getNewCommandId()
                     let bridgeCommand = BridgeCommand(
                         cmd: Command.sign.rawValue,
@@ -887,12 +917,87 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func sendSigningDenied(_ message: String, cid: Int) async {
+    private func sendSigningDenied(
+        _ message: String,
+        cid: Int,
+        identity: Identity? = nil,
+        reasonCode: String = CellSecurityReasonCode.bridgeSigningDenied,
+        kind: CellSecurityEventKind = .vaultSignRejected,
+        requiredAction: String = "retry_with_valid_identity_signing_challenge"
+    ) async {
         bridgeLog("Rejected bridge signing request: \(message)")
+        await recordSigningDeniedEvent(
+            message,
+            identity: identity,
+            reasonCode: reasonCode,
+            kind: kind,
+            requiredAction: requiredAction
+        )
         let response = BridgeCommand(cmd: "response", payload: .string("signing denied: \(message)"), cid: cid)
         if let responseJSONData = try? JSONEncoder().encode(response),
            let transport {
             try? await transport.sendData(responseJSONData)
+        }
+    }
+
+    private func recordSigningDeniedEvent(
+        _ message: String,
+        identity: Identity?,
+        reasonCode: String,
+        kind: CellSecurityEventKind = .vaultSignRejected,
+        requiredAction: String = "retry_with_valid_identity_signing_challenge"
+    ) async {
+        await CellBase.recordSecurityEvent(
+            .bridgeSigningDenied(
+                bridgeUUID: uuid,
+                identity: identity,
+                reasonCode: reasonCode,
+                message: message,
+                kind: kind,
+                requiredAction: requiredAction,
+                identityDomain: identityDomain
+            )
+        )
+    }
+
+    private func signingContainmentDenial(
+        for identity: Identity
+    ) async -> (message: String, reasonCode: String, requiredAction: String)? {
+        guard let controller = CellBase.securityContainmentController else {
+            return nil
+        }
+
+        if await controller.isQuarantined(resourceKind: "bridge", identifier: uuid) {
+            return (
+                "bridge is temporarily quarantined",
+                CellSecurityReasonCode.bridgeQuarantined,
+                "wait_for_quarantine_or_reauthenticate"
+            )
+        }
+
+        let fingerprint = identity.signingPublicKeyFingerprint ?? "missing-signing-key"
+        let scope = [
+            "bridge",
+            uuid,
+            "sign",
+            identity.uuid,
+            fingerprint,
+            identityDomain
+        ].joined(separator: ":")
+        let decision = await controller.checkSigningRateLimit(
+            scope: scope,
+            policy: CellBase.securityContainmentPolicy
+        )
+        switch decision {
+        case .allowed:
+            return nil
+        case .denied(let retryAfter):
+            let seconds = max(1, Int(ceil(retryAfter)))
+            return (
+                "signing is rate limited; retry after \(seconds)s",
+                CellSecurityReasonCode.signingRateLimited,
+                "wait_before_retrying_signing"
+            )
         }
     }
 
@@ -1085,20 +1190,63 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                    case let .signData(value) = sentPayload,
                    let identity = command.identity
                 {
+                    let challenge: IdentitySigningChallenge
                     do {
-                        try IdentitySigningChallenge.validateSigningData(value, for: identity)
+                        challenge = try IdentitySigningChallenge.validateSigningData(value, for: identity)
                     } catch {
-                        await sendSigningDenied(String(describing: error), cid: command.cid)
+                        await sendSigningDenied(
+                            String(describing: error),
+                            cid: command.cid,
+                            identity: identity,
+                            reasonCode: CellSecurityReasonCode.invalidSigningChallenge
+                        )
                         return
                     }
                     guard ready else {
-                        await sendSigningDenied("bridge session is not ready", cid: command.cid)
+                        await sendSigningDenied(
+                            "bridge session is not ready",
+                            cid: command.cid,
+                            identity: identity,
+                            reasonCode: CellSecurityReasonCode.bridgeNotReady,
+                            kind: .transportRejected,
+                            requiredAction: "wait_for_bridge_ready"
+                        )
+                        return
+                    }
+                    if let denial = await signingContainmentDenial(for: identity) {
+                        await sendSigningDenied(
+                            denial.message,
+                            cid: command.cid,
+                            identity: identity,
+                            reasonCode: denial.reasonCode,
+                            kind: .transportRejected,
+                            requiredAction: denial.requiredAction
+                        )
                         return
                     }
                     guard let signingVault = identity.identityVault ?? CellBase.defaultIdentityVault,
                           await signingVault.identityExistInVault(identity) else {
-                        await sendSigningDenied("identity is not available in the local signing vault", cid: command.cid)
+                        await sendSigningDenied(
+                            "identity is not available in the local signing vault",
+                            cid: command.cid,
+                            identity: identity,
+                            reasonCode: "identity_not_available_in_local_vault"
+                        )
                         return
+                    }
+                    if let replayStore = CellBase.signingChallengeReplayStore {
+                        let replayDecision = await replayStore.consume(challenge)
+                        guard replayDecision == .accepted else {
+                            await sendSigningDenied(
+                                "signing challenge rejected: \(replayDecision)",
+                                cid: command.cid,
+                                identity: identity,
+                                reasonCode: replayDecision.reasonCode,
+                                kind: replayDecision == .replay ? .signingChallengeReplay : .vaultSignRejected,
+                                requiredAction: replayDecision.requiredAction
+                            )
+                            return
+                        }
                     }
                     
                     Task {
@@ -1107,7 +1255,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid)
                         } catch {
                             bridgeLog("Consume command signing data failed with error: \(error)")
-                            await self.sendSigningDenied(String(describing: error), cid: command.cid)
+                            await self.sendSigningDenied(
+                                String(describing: error),
+                                cid: command.cid,
+                                identity: identity,
+                                reasonCode: CellSecurityReasonCode.bridgeSigningDenied
+                            )
                         }
                     }
                     
