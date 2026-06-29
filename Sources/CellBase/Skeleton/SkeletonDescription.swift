@@ -9,6 +9,26 @@
 //
 import Foundation
 
+private let skeletonUnavailableUserMessage = "Innholdet er ikke tilgjengelig akkurat nå."
+
+private func skeletonLooksLikeUserFacingTechnicalFailure(_ string: String) -> Bool {
+    let trimSet = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\""))
+    let normalized = string.trimmingCharacters(in: trimSet).lowercased()
+    guard normalized.isEmpty == false else { return false }
+    return normalized.hasPrefix("failure:")
+        || normalized == "failure"
+        || normalized.hasPrefix("denied(")
+        || normalized.contains("consume command get failed")
+        || normalized.contains("cellauthorizationdecision")
+        || normalized.contains("deniednogrant")
+        || normalized.contains("no verified owner proof")
+        || normalized.contains("getting content failed with error:")
+}
+
+private func skeletonUserFacingString(_ string: String) -> String {
+    skeletonLooksLikeUserFacingTechnicalFailure(string) ? skeletonUnavailableUserMessage : string
+}
+
 public typealias SkeletonElementList = [SkeletonElement]
 public typealias SkeletonElementObject = [String: SkeletonElement]
 
@@ -707,7 +727,7 @@ public struct SkeletonText: Codable, Identifiable {
     private func stringValue(from value: ValueType) -> String {
         switch value {
         case .string(let string):
-            return string
+            return skeletonUserFacingString(string)
         case .integer(let integer):
             return String(integer)
         case .number(let number):
@@ -727,6 +747,13 @@ public struct SkeletonText: Codable, Identifiable {
         let detail = String(describing: error)
         let normalized = detail.lowercased()
 
+        if normalized.contains("cellauthorizationdecision") ||
+            normalized.contains("deniednogrant") ||
+            normalized.contains("no verified owner proof") ||
+            normalized.contains("denied(") {
+            return skeletonUnavailableUserMessage
+        }
+
         if normalized.contains("bad response from the server") ||
             normalized.contains("502") ||
             normalized.contains("notconnected") ||
@@ -739,10 +766,10 @@ public struct SkeletonText: Codable, Identifiable {
         }
 
         if normalized.contains("notfound") {
-            return "Innholdet er ikke tilgjengelig akkurat nå."
+            return skeletonUnavailableUserMessage
         }
 
-        return "Getting content failed with error: \(error)"
+        return skeletonUnavailableUserMessage
     }
 
     public func asyncContent(userInfoValue: ValueType? = nil, requester explicitRequester: Identity? = nil) async -> String {
@@ -761,14 +788,14 @@ public struct SkeletonText: Codable, Identifiable {
                 if let keypath {
                     if let returnObjectValue = try? object.get(keypath: keypath),
                     let responseString = try? returnObjectValue.jsonString() {
-                        return responseString
+                        return skeletonUserFacingString(responseString)
                     } else {
-                        return "get \(keypath) failed"
+                        return skeletonUnavailableUserMessage
                     }
                     
                 }
             default:
-                return "Text asyncContent case not implemented. userInfoValue: \(String(describing: userInfoValue))"
+                return skeletonUnavailableUserMessage
             }
             
             
@@ -799,7 +826,7 @@ public struct SkeletonText: Codable, Identifiable {
                        let identity {
                         let pathComponents = fetchURL.pathComponents
                         guard pathComponents.count > 1 else {
-                            return "failure"
+                            return skeletonUnavailableUserMessage
                         }
 
                         let cellName = pathComponents[1]
@@ -837,7 +864,7 @@ public struct SkeletonText: Codable, Identifiable {
                 CellBase.diagnosticLog("SkeletonText asyncContent missing resolver or vault", domain: .skeleton)
             }
         }
-        return "failure"
+        return skeletonUnavailableUserMessage
     }
     
     
@@ -996,12 +1023,12 @@ public struct SkeletonTextField: Codable, Identifiable {
             case .object(let object):
                 if let returnObjectValue = try? object.get(keypath: sourceKeypath),
                    let responseString = try? returnObjectValue.jsonString() {
-                    return responseString
+                    return skeletonUserFacingString(responseString)
                 } else {
-                    return "get \(sourceKeypath) failed"
+                    return skeletonUnavailableUserMessage
                 }
             default:
-                return "TextField asyncContent case not implemented. userInfoValue: \(String(describing: userInfoValue))"
+                return skeletonUnavailableUserMessage
             }
         } else if let text {
             return text

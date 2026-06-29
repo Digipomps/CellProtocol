@@ -70,6 +70,31 @@ private func dismissSkeletonKeyboardIfNeeded() {
     #endif
 }
 
+private let skeletonUnavailableDisplayText = "Innholdet er ikke tilgjengelig akkurat nå."
+
+private func skeletonLooksLikeTechnicalFailure(_ string: String) -> Bool {
+    let trimSet = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\""))
+    let normalized = string.trimmingCharacters(in: trimSet).lowercased()
+    guard normalized.isEmpty == false else { return false }
+    return normalized.hasPrefix("failure:")
+        || normalized == "failure"
+        || normalized.hasPrefix("denied(")
+        || normalized.contains("consume command get failed")
+        || normalized.contains("cellauthorizationdecision")
+        || normalized.contains("deniednogrant")
+        || normalized.contains("no verified owner proof")
+        || normalized.contains("getting content failed with error:")
+        || normalized.contains("text asynccontent case not implemented")
+}
+
+private func skeletonDisplayString(_ string: String) -> String {
+    skeletonLooksLikeTechnicalFailure(string) ? skeletonUnavailableDisplayText : string
+}
+
+private func skeletonEditableString(_ string: String) -> String? {
+    skeletonLooksLikeTechnicalFailure(string) ? nil : string
+}
+
 private extension View {
     @ViewBuilder
     func applySkeletonKeyboardDismissBehavior() -> some View {
@@ -87,8 +112,11 @@ private extension View {
         self.toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
-                Button("Ferdig") {
+                Button {
                     dismissSkeletonKeyboardIfNeeded()
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .accessibilityLabel("Skjul tastatur")
                 }
             }
         }
@@ -121,6 +149,14 @@ private func skeletonStringValue(_ value: ValueType?) -> String? {
     default:
         return String(describing: value)
     }
+}
+
+private func skeletonDisplayStringValue(_ value: ValueType?) -> String? {
+    skeletonStringValue(value).map(skeletonDisplayString)
+}
+
+private func skeletonEditableStringValue(_ value: ValueType?) -> String? {
+    skeletonStringValue(value).flatMap(skeletonEditableString)
 }
 
 private func skeletonBoolValue(_ value: ValueType?) -> Bool? {
@@ -746,6 +782,7 @@ public struct SkeletonView: View {
     
     public var body: some View {
         render(element)
+            .applySkeletonKeyboardToolbar()
     }
 
     private func render(_ element: SkeletonElement) -> AnyView {
@@ -1582,7 +1619,7 @@ private struct CellTextView: View {
     }
 
     var body: some View {
-        renderText(resolvedText ?? (skeletonText.text ?? ""))
+        renderText(resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""))
             .applyIf(skeletonText.modifiers?.foregroundColor != nil && Color(hex: skeletonText.modifiers?.foregroundColor ?? "") != nil) { v in
                 v.foregroundColor(Color(hex: skeletonText.modifiers?.foregroundColor ?? "")!)
             }
@@ -1613,8 +1650,9 @@ private struct CellTextView: View {
                     userInfoValue: userInfoValue,
                     requester: requester
                 )
-                resolvedText = loaded
-                await cacheResolvedText(loaded)
+                let displayText = skeletonDisplayString(loaded)
+                resolvedText = displayText
+                await cacheResolvedText(displayText)
             }
     }
 
@@ -2920,14 +2958,14 @@ private struct CellTabsView: View {
         if let id = row[skeletonTabs.idKeypath] {
             return skeletonStringValue(id) ?? ""
         }
-        return skeletonStringValue(row) ?? ""
+        return skeletonEditableStringValue(row) ?? ""
     }
 
     private func tabLabel(for row: ValueType, fallback: String) -> String {
         if let label = row[skeletonTabs.labelKeypath] {
-            return skeletonStringValue(label) ?? fallback
+            return skeletonDisplayStringValue(label) ?? fallback
         }
-        return skeletonStringValue(row) ?? fallback
+        return skeletonDisplayStringValue(row) ?? fallback
     }
 
     private func defaultPanelTitle(_ id: String) -> String {
@@ -3040,7 +3078,6 @@ private struct CellTextFieldView: View {
         VStack(alignment: .leading, spacing: 4) {
             SwiftUI.TextField(skeletonTextField.placeholder ?? "", text: binding())
                 .focused($isFocused)
-                .applySkeletonKeyboardToolbar()
                 .applyIf(skeletonTextField.modifiers?.foregroundColor != nil && Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "")!)
                 }
@@ -3279,7 +3316,7 @@ private struct CellTextFieldView: View {
         if let keypath = skeletonTextField.autocomplete?.optionLabelKeypath,
            keypath.isEmpty == false,
            let value = suggestion[keypath] {
-            return skeletonStringValue(value) ?? suggestionValue(suggestion)
+            return skeletonDisplayStringValue(value) ?? suggestionValue(suggestion)
         }
         return suggestionValue(suggestion)
     }
@@ -3288,18 +3325,18 @@ private struct CellTextFieldView: View {
         if let keypath = skeletonTextField.autocomplete?.optionValueKeypath,
            keypath.isEmpty == false,
            let value = suggestion[keypath],
-           let string = skeletonStringValue(value),
+           let string = skeletonEditableStringValue(value),
            string.isEmpty == false {
             return string
         }
-        return skeletonStringValue(suggestion) ?? ""
+        return skeletonEditableStringValue(suggestion) ?? ""
     }
 
     private func suggestionDetail(_ suggestion: ValueType) -> String {
         let detailKeypaths = skeletonTextField.autocomplete?.optionDetailKeypaths ?? []
         return detailKeypaths.compactMap { keypath in
             guard let value = suggestion[keypath],
-                  let text = skeletonStringValue(value),
+                  let text = skeletonDisplayStringValue(value),
                   text.isEmpty == false else {
                 return nil
             }
@@ -3344,12 +3381,8 @@ private struct CellTextFieldView: View {
     private func loadInitial() async {
         // seed from userInfoValue if available
         if text.isEmpty, let key = skeletonTextField.sourceKeypath, let v = userInfoValue?[key] {
-            switch v {
-            case .string(let s): text = s
-            case .integer(let i): text = String(i)
-            case .float(let d): text = String(d)
-            case .bool(let b): text = b ? "true" : "false"
-            default: break
+            if let editable = skeletonEditableStringValue(v) {
+                text = editable
             }
         }
         // then try to fetch from remote
@@ -3369,16 +3402,10 @@ private struct CellTextFieldView: View {
         }
         
         if valueType != nil {
-            switch valueType {
-            case .string(let s): text = s
-            case .integer(let i): text = String(i)
-            case .float(let d): text = String(d)
-            case .bool(let b): text = b ? "true" : "false"
-            default: ()
-            
-        }
-            await setCache(url: fullURL, requester: requester, valueType: .string(text))
-            
+            if let editable = skeletonEditableStringValue(valueType) {
+                text = editable
+                await setCache(url: fullURL, requester: requester, valueType: .string(text))
+            }
         }
         
     }
@@ -3511,7 +3538,6 @@ private struct CellTextAreaView: View {
             }
 
             TextEditor(text: binding())
-                .applySkeletonKeyboardToolbar()
                 .applyIf(skeletonTextArea.modifiers?.foregroundColor != nil && Color(hex: skeletonTextArea.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextArea.modifiers?.foregroundColor ?? "")!)
                 }
@@ -3632,12 +3658,8 @@ private struct CellTextAreaView: View {
         }
 
         if text.isEmpty, let key = skeletonTextArea.sourceKeypath, let v = userInfoValue?[key] {
-            switch v {
-            case .string(let s): text = s
-            case .integer(let i): text = String(i)
-            case .float(let d): text = String(d)
-            case .bool(let b): text = b ? "true" : "false"
-            default: break
+            if let editable = skeletonEditableStringValue(v) {
+                text = editable
             }
         }
 
@@ -3656,14 +3678,10 @@ private struct CellTextAreaView: View {
         }
 
         if valueType != nil {
-            switch valueType {
-            case .string(let s): text = s
-            case .integer(let i): text = String(i)
-            case .float(let d): text = String(d)
-            case .bool(let b): text = b ? "true" : "false"
-            default: ()
+            if let editable = skeletonEditableStringValue(valueType) {
+                text = editable
+                await setCache(url: fullURL, requester: requester, valueType: .string(text))
             }
-            await setCache(url: fullURL, requester: requester, valueType: .string(text))
         }
     }
 
