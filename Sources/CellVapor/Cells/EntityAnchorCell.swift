@@ -120,7 +120,7 @@ public class EntityAnchorCell: GeneralCell {
     
     await addInterceptForSet(requester: owner, key: "person", setValueIntercept:  { keypath, value, requester in
         if await self.validateAccess("r---", at: "person", for: requester) {
-            print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
+            CellBase.diagnosticLog("Entity data set keypath=\(keypath)", domain: .identity)
             try await self.storage.set(keypath: keypath, setValue: value)
             try await self.saveKeypathStorage(entity: self.storage)
             // Send flowElement notification
@@ -139,7 +139,7 @@ public class EntityAnchorCell: GeneralCell {
 	    await addInterceptForSet(requester: owner, key: "proofs", setValueIntercept:  { keypath, value, requester in
         
             do {
-                print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
+                CellBase.diagnosticLog("Entity data set keypath=\(keypath)", domain: .identity)
                 try await self.storage.set(keypath: keypath, setValue: value)
                 try await self.saveKeypathStorage(entity: self.storage)
                 // Send flowElement notification
@@ -222,9 +222,11 @@ public class EntityAnchorCell: GeneralCell {
         var correlationId: String?
         var operation: String?
         do {
-            print("Got flowElement: \(flowElement) with payload: \(try flowElement.content.valueType().jsonString())")
-            
-            
+            CellBase.diagnosticLog(
+                "EntityAnchor received flowElement title=\(flowElement.title) topic=\(flowElement.topic)",
+                domain: .identity
+            )
+
             guard case let  .object(paramObject) = flowElement.content else {
                 throw SetValueError.paramErr
             }

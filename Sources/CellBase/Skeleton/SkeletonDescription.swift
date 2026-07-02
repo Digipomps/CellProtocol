@@ -42,6 +42,93 @@ public enum SkeletonMotionHint: String, Codable, CaseIterable {
     case emphasize
 }
 
+public enum SkeletonPresentationKind: String, Codable, CaseIterable {
+    case overlay
+    case drawer
+    case sheet
+    case popover
+    case modal
+}
+
+public enum SkeletonPresentationPlacement: String, Codable, CaseIterable {
+    case leading
+    case trailing
+    case top
+    case bottom
+    case center
+    case anchor
+}
+
+public enum SkeletonBackdropStyle: String, Codable, CaseIterable {
+    case none
+    case dim
+    case blur
+}
+
+public enum SkeletonDismissBehavior: String, Codable, CaseIterable {
+    case disabled
+    case closeAction
+}
+
+public struct SkeletonPresentationFallback: Codable, Equatable {
+    public var kind: SkeletonPresentationKind?
+    public var placement: SkeletonPresentationPlacement?
+
+    public init(
+        kind: SkeletonPresentationKind? = nil,
+        placement: SkeletonPresentationPlacement? = nil
+    ) {
+        self.kind = kind
+        self.placement = placement
+    }
+}
+
+public struct SkeletonPresentation: Codable, Equatable {
+    public var kind: SkeletonPresentationKind
+    public var placement: SkeletonPresentationPlacement?
+    public var closeActionKeypath: String?
+    public var openStateKeypath: String?
+    public var dismissOnBackdrop: Bool?
+    public var backdropStyle: SkeletonBackdropStyle?
+    public var escapeKeyBehavior: SkeletonDismissBehavior?
+    public var focusTrap: Bool?
+    public var anchorRole: String?
+    public var anchorKeypath: String?
+    public var zIndex: Int?
+    public var mobileFallback: SkeletonPresentationFallback?
+    public var accessibilityLabel: String?
+
+    public init(
+        kind: SkeletonPresentationKind,
+        placement: SkeletonPresentationPlacement? = nil,
+        closeActionKeypath: String? = nil,
+        openStateKeypath: String? = nil,
+        dismissOnBackdrop: Bool? = nil,
+        backdropStyle: SkeletonBackdropStyle? = nil,
+        escapeKeyBehavior: SkeletonDismissBehavior? = nil,
+        focusTrap: Bool? = nil,
+        anchorRole: String? = nil,
+        anchorKeypath: String? = nil,
+        zIndex: Int? = nil,
+        mobileFallback: SkeletonPresentationFallback? = nil,
+        accessibilityLabel: String? = nil
+    ) {
+        self.kind = kind
+        self.placement = placement
+        self.closeActionKeypath = closeActionKeypath
+        self.openStateKeypath = openStateKeypath
+        self.dismissOnBackdrop = dismissOnBackdrop
+        self.backdropStyle = backdropStyle
+        self.escapeKeyBehavior = escapeKeyBehavior
+        self.focusTrap = focusTrap
+        self.anchorRole = anchorRole
+        self.anchorKeypath = anchorKeypath
+        self.zIndex = zIndex
+        self.mobileFallback = mobileFallback
+        self.accessibilityLabel = accessibilityLabel
+    }
+}
+
 public enum SkeletonVisibilityScope: String, Codable, CaseIterable {
     case root
     case item
@@ -460,6 +547,7 @@ public struct SkeletonModifiers: Codable {
     public var styleClasses: [String]?
     public var motionHint: SkeletonMotionHint?
     public var motionSourceRole: String?
+    public var presentation: SkeletonPresentation?
     public var draggableRole: String?
     public var dragPayloadKeypath: String?
     public var dragPreviewRole: String?
@@ -505,6 +593,7 @@ public struct SkeletonModifiers: Codable {
         case styleClasses
         case motionHint
         case motionSourceRole
+        case presentation
         case draggableRole
         case dragPayloadKeypath
         case dragPreviewRole
@@ -551,6 +640,7 @@ public struct SkeletonModifiers: Codable {
         self.styleClasses = Self.decodeLossy([String].self, from: container, forKey: .styleClasses)
         self.motionHint = Self.decodeLossy(SkeletonMotionHint.self, from: container, forKey: .motionHint)
         self.motionSourceRole = Self.decodeLossy(String.self, from: container, forKey: .motionSourceRole)
+        self.presentation = Self.decodeLossy(SkeletonPresentation.self, from: container, forKey: .presentation)
         self.draggableRole = Self.decodeLossy(String.self, from: container, forKey: .draggableRole)
         self.dragPayloadKeypath = Self.decodeLossy(String.self, from: container, forKey: .dragPayloadKeypath)
         self.dragPreviewRole = Self.decodeLossy(String.self, from: container, forKey: .dragPreviewRole)

@@ -84,6 +84,7 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
     var webSocketTask: URLSessionWebSocketTask!
     var urlSession: URLSession!
     let delegateQueue = OperationQueue()
+    private var pingWorkItem: DispatchWorkItem?
     
     init(url: URL) {
         super.init()
@@ -109,6 +110,8 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask
         }
+        pingWorkItem?.cancel()
+        pingWorkItem = nil
         webSocketTask.cancel(with: .goingAway, reason: nil)
         self.webSocketTask = nil
         self.delegateQueue.cancelAllOperations()
@@ -169,14 +172,19 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
         }
       webSocketTask.sendPing { [weak self] error in
           guard let self = self else { return }
+          guard self.webSocketTask === webSocketTask else { return }
         if let error = error {
           print("Error when sending PING \(error)")
         } else {
 //            print("Web Socket connection is alive")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
+            let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in
                 guard let self = self else { return }
+                guard let webSocketTask, self.webSocketTask === webSocketTask else { return }
                 try? self.ping()
             }
+            self.pingWorkItem?.cancel()
+            self.pingWorkItem = workItem
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: workItem)
         }
       }
     }
@@ -203,6 +211,7 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
     var webSocketTask: URLSessionWebSocketTask!
     var urlSession: URLSession!
     let delegateQueue = OperationQueue()
+    private var pingWorkItem: DispatchWorkItem?
     
     public init(url: URL) {
         super.init()
@@ -239,6 +248,8 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask
         }
+        pingWorkItem?.cancel()
+        pingWorkItem = nil
         webSocketTask.cancel(with: .goingAway, reason: nil)
         self.webSocketTask = nil
         self.delegateQueue.cancelAllOperations()
@@ -305,14 +316,19 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         }
       webSocketTask.sendPing { [weak self] error in
           guard let self = self else { return }
+          guard self.webSocketTask === webSocketTask else { return }
         if let error = error {
           print("Error when sending PING \(error)")
         } else {
 //            print("Web Socket connection is alive")
-            DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [weak self] in
+            let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in
                 guard let self = self else { return }
+                guard let webSocketTask, self.webSocketTask === webSocketTask else { return }
                 try? self.ping()
             }
+            self.pingWorkItem?.cancel()
+            self.pingWorkItem = workItem
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: workItem)
         }
       }
     }

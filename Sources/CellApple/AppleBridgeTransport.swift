@@ -25,6 +25,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     private var delegate: BridgeDelegateProtocol?
     private var closeCleanupCompleted = false
     private var localIdentityUUID: String?
+    private var localIdentityVault: IdentityVaultProtocol?
     
     public init(webSocketConnection: WebSocketConnection2? = nil, delegateSource: (() async throws -> BridgeDelegateProtocol?)? = nil) {
         self.webSocketConnection = webSocketConnection
@@ -51,6 +52,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
         let websocketConn = WebSocketTaskConnection2(url: wsEndpoint)
         withStateLock {
             localIdentityUUID = identity.uuid
+            localIdentityVault = identity.identityVault ?? CellBase.defaultIdentityVault
         }
         setWebSocketConnection(websocketConn)
         do {
@@ -128,6 +130,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
         let decoder = JSONDecoder()
         if let bridgeCommand = try? decoder.decode(BridgeCommand.self, from: data),
            let delegate = currentDelegate() {
+            bridgeCommand.identity?.identityVault = await identityVault(for: bridgeCommand.identity)
             let currentCommand = bridgeCommand.command
             
             switch currentCommand {
@@ -141,6 +144,18 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
         if let identity {
+            let localState = withStateLock {
+                (uuid: localIdentityUUID, vault: localIdentityVault)
+            }
+            if identity.uuid == localState.uuid,
+               let vault = localState.vault,
+               await vault.identityExistInVault(identity) {
+                return vault
+            }
+            if let vault = localState.vault,
+               await vault.identityExistInVault(identity) {
+                return vault
+            }
             if identity.uuid == currentLocalIdentityUUID(),
                await IdentityVault.shared.identityExistInVault(identity) {
                 return IdentityVault.shared

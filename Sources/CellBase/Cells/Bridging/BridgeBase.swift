@@ -27,6 +27,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         var promise: SignPromise
         var identity: Identity
         var messageData: Data
+        var cleanupTask: Task<Void, Never>?
     }
     
     
@@ -109,6 +110,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     private var readyPublisher = PassthroughSubject<Bool, Error>()
     private var ready = false
+    var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
     var feedActive = false
     let auditor = BridgeBaseAuditor()
@@ -231,11 +233,25 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         messageData: Data,
         for commandID: Int
     ) {
+        let timeoutNanoseconds = signRequestTimeoutNanoseconds
+        let cleanupTask = Task { [weak self] in
+            guard timeoutNanoseconds > 0 else { return }
+            do {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            guard let expiredRequest = self.takeSignRequest(for: commandID) else { return }
+            await self.auditor.removeBridgeCommand(for: commandID)
+            expiredRequest.promise(.failure(BridgeError.timeout))
+        }
         withCallbackStateLock {
             signCallbackRequests[commandID] = SignRequest(
                 promise: promise,
                 identity: identity,
-                messageData: messageData
+                messageData: messageData,
+                cleanupTask: cleanupTask
             )
         }
     }
@@ -340,6 +356,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             let request = signCallbackRequests[commandID]
             signCallbackRequests[commandID] = nil
+            request?.cleanupTask?.cancel()
             return request
         }
     }
@@ -398,18 +415,36 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, any Error> {
         if !feedActive {
             if validateFeedPermission(identity: requester) {
+                let commandID = await auditor.getNewCommandId()
                 flowElementCallbackCancellable = flowElementCallbackDataPublisher
-                    .handleEvents(receiveCancel: {
+                    .handleEvents(receiveCancel: { [weak self] in
                         bridgeLog("Cancelled feed")
+                        Task { [weak self] in
+                            await self?.auditor.removeBridgeCommand(for: commandID)
+                        }
                     })
                     .sink(receiveCompletion: { [weak self] completion in
                         bridgeLog("Bridge got flowElement publisher completion: \(completion)")
                         self?.flowElementCallbackCancellable = nil
+                        Task { [weak self] in
+                            await self?.auditor.removeBridgeCommand(for: commandID)
+                        }
                     }, receiveValue: { flowElement in
                         bridgeLog("BridgeBase got flowElement: \(flowElement)")
                         self.feedPublisher2.send(flowElement)
                     })
-                try await sendCommandChecked(command: .feed, identity: requester, payload: nil)
+                do {
+                    try await sendCommandChecked(
+                        command: .feed,
+                        identity: requester,
+                        payload: nil,
+                        commandId: commandID
+                    )
+                } catch {
+                    flowElementCallbackCancellable = nil
+                    await auditor.removeBridgeCommand(for: commandID)
+                    throw error
+                }
             } else {
                 throw StreamState.denied
             }
@@ -688,6 +723,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         case noOwner
         case denied
         case emitterUnavailable
+        case timeout
         case someError
     }
 
@@ -891,6 +927,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     guard let bridgeCommandJSON = try? JSONEncoder().encode(bridgeCommand),
                           let transport = self.transport else {
                         self.takeSignRequest(for: commandID)?.promise(.failure(BridgeError.someError))
+                        await self.auditor.removeBridgeCommand(for: commandID)
                         return
                     }
 
@@ -898,6 +935,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         try await transport.sendData(bridgeCommandJSON)
                     } catch {
                         self.takeSignRequest(for: commandID)?.promise(.failure(error))
+                        await self.auditor.removeBridgeCommand(for: commandID)
                     }
                 }
             }
@@ -1418,6 +1456,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Consume response cmd: \(command.cmd)")
 
         if let commandRequest = await auditor.loadBridgeCommandForCommandId(command.cid) {
+            let retainCommandForStream = commandRequest.command == .feed
             switch commandRequest.command {
             case .description:
                 if let sentPayload = command.payload {
@@ -1515,7 +1554,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 case let .signature(value):
                     guard let signRequest else {
                         bridgeLog("No pending sign request for response cid=\(command.cid)")
-                        return
+                        break
                     }
                     let verifier = signRequest.identity.identityVault ?? CellBase.defaultIdentityVault ?? BridgeIdentityVault()
                     let verified = (try? await verifier.verifySignature(
@@ -1526,7 +1565,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     guard verified else {
                         bridgeLog("Bridge sign response failed verification for cid=\(command.cid)")
                         signRequest.promise(.failure(IdentityVaultError.signingFailed))
-                        return
+                        break
                     }
                     signRequest.promise(.success(value))
                     
@@ -1567,6 +1606,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 
             default:
                 bridgeLog("Response did not match commands: \(commandRequest.cmd)")
+            }
+
+            if retainCommandForStream == false {
+                await auditor.removeBridgeCommand(for: command.cid)
             }
             
         } else {

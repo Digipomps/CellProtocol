@@ -1071,6 +1071,115 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(text.modifiers?.visibility?.isVisible(root: nonMatchingRoot), false)
     }
 
+    func testPresentationModifierEncodesAndDecodes() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.visibility = SkeletonVisibilityRule(
+            when: SkeletonCondition(
+                keypath: "workItems.state.selectedItemIsOpen",
+                equals: .bool(true)
+            )
+        )
+        modifiers.presentation = SkeletonPresentation(
+            kind: .drawer,
+            placement: .trailing,
+            closeActionKeypath: "workItems.clearSelection",
+            openStateKeypath: "workItems.state.selectedItemIsOpen",
+            dismissOnBackdrop: false,
+            backdropStyle: SkeletonBackdropStyle.none,
+            escapeKeyBehavior: .closeAction,
+            focusTrap: false,
+            anchorRole: "work-item-card",
+            anchorKeypath: "workItems.state.selectedItemID",
+            zIndex: 10,
+            mobileFallback: SkeletonPresentationFallback(kind: .sheet, placement: .bottom),
+            accessibilityLabel: "Card details"
+        )
+        var section = SkeletonSection(content: [
+            .Text(SkeletonText(text: "Card details"))
+        ])
+        section.modifiers = modifiers
+        let element = SkeletonElement.Section(section)
+
+        let data = try JSONEncoder().encode(element)
+        let json = decodeJSONObject(data)
+        let sectionJSON = json["Section"] as? [String: Any]
+        let modifiersJSON = sectionJSON?["modifiers"] as? [String: Any]
+        let presentationJSON = modifiersJSON?["presentation"] as? [String: Any]
+        XCTAssertEqual(presentationJSON?["kind"] as? String, "drawer")
+        XCTAssertEqual(presentationJSON?["placement"] as? String, "trailing")
+        XCTAssertEqual(presentationJSON?["closeActionKeypath"] as? String, "workItems.clearSelection")
+        XCTAssertEqual(presentationJSON?["openStateKeypath"] as? String, "workItems.state.selectedItemIsOpen")
+        XCTAssertEqual(presentationJSON?["dismissOnBackdrop"] as? Bool, false)
+        XCTAssertEqual(presentationJSON?["backdropStyle"] as? String, "none")
+        XCTAssertEqual(presentationJSON?["escapeKeyBehavior"] as? String, "closeAction")
+        XCTAssertEqual(presentationJSON?["focusTrap"] as? Bool, false)
+        XCTAssertEqual(presentationJSON?["anchorRole"] as? String, "work-item-card")
+        XCTAssertEqual(presentationJSON?["anchorKeypath"] as? String, "workItems.state.selectedItemID")
+        XCTAssertEqual(presentationJSON?["zIndex"] as? Int, 10)
+        XCTAssertEqual(presentationJSON?["accessibilityLabel"] as? String, "Card details")
+
+        let mobileFallbackJSON = presentationJSON?["mobileFallback"] as? [String: Any]
+        XCTAssertEqual(mobileFallbackJSON?["kind"] as? String, "sheet")
+        XCTAssertEqual(mobileFallbackJSON?["placement"] as? String, "bottom")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Section(decodedSection) = decoded else {
+            XCTFail("Expected Section element")
+            return
+        }
+        let presentation = try XCTUnwrap(decodedSection.modifiers?.presentation)
+        XCTAssertEqual(presentation.kind, .drawer)
+        XCTAssertEqual(presentation.placement, .trailing)
+        XCTAssertEqual(presentation.closeActionKeypath, "workItems.clearSelection")
+        XCTAssertEqual(presentation.openStateKeypath, "workItems.state.selectedItemIsOpen")
+        XCTAssertEqual(presentation.dismissOnBackdrop, false)
+        XCTAssertEqual(presentation.backdropStyle, SkeletonBackdropStyle.none)
+        XCTAssertEqual(presentation.escapeKeyBehavior, .closeAction)
+        XCTAssertEqual(presentation.focusTrap, false)
+        XCTAssertEqual(presentation.anchorRole, "work-item-card")
+        XCTAssertEqual(presentation.anchorKeypath, "workItems.state.selectedItemID")
+        XCTAssertEqual(presentation.zIndex, 10)
+        XCTAssertEqual(presentation.mobileFallback?.kind, .sheet)
+        XCTAssertEqual(presentation.mobileFallback?.placement, .bottom)
+        XCTAssertEqual(presentation.accessibilityLabel, "Card details")
+    }
+
+    func testMalformedPresentationModifierDecodesLossilyWithoutBreakingVisibility() throws {
+        let json = """
+        {
+          "Text": {
+            "text": "Presented helper",
+            "modifiers": {
+              "visibility": {
+                "when": {
+                  "keypath": "state.ready",
+                  "equals": true
+                }
+              },
+              "presentation": {
+                "kind": "popup",
+                "placement": "trailing"
+              }
+            }
+          }
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case let .Text(text) = decoded else {
+            XCTFail("Expected Text element")
+            return
+        }
+
+        let root: ValueType = .object([
+            "state": .object([
+                "ready": .bool(true)
+            ])
+        ])
+        XCTAssertNil(text.modifiers?.presentation)
+        XCTAssertTrue(text.modifiers?.visibility?.isVisible(root: root) ?? false)
+    }
+
     func testVisibilityConditionSupportsLogicalOperatorsAndContains() throws {
         let root: ValueType = .object([
             "nearby": .object([

@@ -260,9 +260,11 @@ public class EntityAnchorCell: GeneralCell {
         var correlationId: String?
         var operation: String?
         do {
-            print("Got flowElement: \(flowElement) with payload: \(try flowElement.content.valueType().jsonString())")
-            
-            
+            CellBase.diagnosticLog(
+                "EntityAnchor received flowElement title=\(flowElement.title) topic=\(flowElement.topic)",
+                domain: .identity
+            )
+
             guard case let  .object(paramObject) = flowElement.content else {
                 throw SetValueError.paramErr
             }

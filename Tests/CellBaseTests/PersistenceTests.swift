@@ -42,9 +42,29 @@ final class PersistenceTests: XCTestCase {
         let tempRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("cellprotocol-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
         setenv("HOME", tempRoot.path, 1)
         CellBase.documentRootPath = tempRoot.appendingPathComponent("CellsContainer").path
         return try await body(tempRoot.path)
+    }
+
+    private func withSeparateTempHomeAndDocumentRoot<T>(
+        _ body: (_ homeRoot: URL, _ documentRoot: URL) async throws -> T
+    ) async throws -> T {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cellprotocol-tests-\(UUID().uuidString)")
+        let homeRoot = tempRoot.appendingPathComponent("home")
+        let documentRoot = tempRoot.appendingPathComponent("runtime-cells")
+        try FileManager.default.createDirectory(at: homeRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: documentRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        setenv("HOME", homeRoot.path, 1)
+        CellBase.documentRootPath = documentRoot.path
+        return try await body(homeRoot, documentRoot)
     }
 
     func testTypedCellUtilityRoundTripWithFileSystemStorage() async throws {
@@ -67,6 +87,34 @@ final class PersistenceTests: XCTestCase {
             let loadedByPath = tcu.loadTypedEmitCell(at: cell.uuid) as? GeneralCell
             XCTAssertNotNil(loadedByPath)
             XCTAssertEqual(loadedByPath?.uuid, cell.uuid)
+        }
+    }
+
+    func testFileSystemStorageStoresUnderDocumentRootNotHome() async throws {
+        try await withSeparateTempHomeAndDocumentRoot { homeRoot, documentRoot in
+            let storage = FileSystemCellStorage()
+            let tcu = TypedCellUtility(storage: storage)
+            try tcu.register(name: "GeneralCell", type: GeneralCell.self)
+
+            let vault = MockIdentityVault()
+            CellBase.defaultIdentityVault = vault
+            let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+            let cell = await GeneralCell(owner: owner)
+
+            tcu.storeAsTypedCell(cellName: "GeneralCell", cell: cell, uuid: cell.uuid)
+
+            let documentRootFile = documentRoot
+                .appendingPathComponent(cell.uuid)
+                .appendingPathComponent("typedCell.json")
+            let oldHomeFile = homeRoot
+                .appendingPathComponent("CellsContainer")
+                .appendingPathComponent(cell.uuid)
+                .appendingPathComponent("typedCell.json")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: documentRootFile.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: oldHomeFile.path))
+
+            let loaded = tcu.loadTypedEmitCell(with: cell.uuid) as? GeneralCell
+            XCTAssertEqual(loaded?.uuid, cell.uuid)
         }
     }
 

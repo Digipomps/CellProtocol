@@ -8,7 +8,6 @@ import Vapor
 
 public struct FileSystemCellStorage: CellStorage {
 
-    private let rootDirectoryName = "CellsContainer"
     private let dataFilename = "typedCell.json"
     
     public enum StorageError: Error {
@@ -94,7 +93,7 @@ public struct FileSystemCellStorage: CellStorage {
             uuid: uuid,
             options: options
         )
-        let directoryURL = cellDirectoryURL(uuid: uuid)
+        let directoryURL = try cellDirectoryURL(uuid: uuid)
         let directory = directoryURL.path.cString(using: .utf8)
         if !directoryExists(directory) {
             if mkdir_p(directory) != 0 {
@@ -105,14 +104,10 @@ public struct FileSystemCellStorage: CellStorage {
   
     }
     
-    private func cellDirectoryURL(uuid: String) -> URL {
-        var cellDirectoryURL: URL
-        if let home = Environment.get("HOME") {
-            cellDirectoryURL = URL(fileURLWithPath: home)
-        } else {
-            cellDirectoryURL = URL(fileURLWithPath: "/")
+    private func cellDirectoryURL(uuid: String) throws -> URL {
+        guard let documentRootPath = CellBase.documentRootPath else {
+            throw StorageError.noDocumentRoot
         }
-        cellDirectoryURL = cellDirectoryURL.appendingPathComponent(rootDirectoryName).appendingPathComponent(uuid)
-        return cellDirectoryURL
+        return URL(fileURLWithPath: documentRootPath).appendingPathComponent(uuid)
     }
 }

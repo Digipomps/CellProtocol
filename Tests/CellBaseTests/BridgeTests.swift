@@ -175,6 +175,34 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(second.command, .get)
     }
 
+    func testBridgeBaseAuditorTakesCommandsAndPurgesExpiredEntries() async throws {
+        let auditor = BridgeBaseAuditor(commandRetentionSeconds: 1)
+        let identity = TestFixtures.makeIdentity(displayName: "auditor")
+        let now = Date(timeIntervalSince1970: 10_000)
+        let command = BridgeCommand(
+            cmd: Command.get.rawValue,
+            identity: identity,
+            payload: .string("state"),
+            cid: 1
+        )
+
+        await auditor.storeBridgeCommand(command, for: 1, now: now)
+
+        let initialPendingCount = await auditor.pendingCommandCount(now: now.addingTimeInterval(0.5))
+        let takenCommand = await auditor.takeBridgeCommandForCommandId(1, now: now.addingTimeInterval(0.5))
+        let pendingCountAfterTake = await auditor.pendingCommandCount(now: now.addingTimeInterval(0.5))
+        XCTAssertEqual(initialPendingCount, 1)
+        XCTAssertEqual(takenCommand?.cid, 1)
+        XCTAssertEqual(pendingCountAfterTake, 0)
+
+        await auditor.storeBridgeCommand(command, for: 2, now: now)
+
+        let expiredCommand = await auditor.loadBridgeCommandForCommandId(2, now: now.addingTimeInterval(2))
+        let pendingCountAfterExpiry = await auditor.pendingCommandCount(now: now.addingTimeInterval(2))
+        XCTAssertNil(expiredCommand)
+        XCTAssertEqual(pendingCountAfterExpiry, 0)
+    }
+
     func testBridgeBaseConsumeAdmitSendsResponse() async throws {
         let transport = MockBridgeTransport()
         let owner = TestFixtures.makeIdentity(displayName: "owner")
@@ -347,6 +375,37 @@ final class BridgeTests: XCTestCase {
         let resolvedSecond = try await secondSignature
         XCTAssertEqual(resolvedFirst, firstExpected)
         XCTAssertEqual(resolvedSecond, secondExpected)
+        let pendingCommandCount = await bridge.auditor.pendingCommandCount()
+        XCTAssertEqual(pendingCommandCount, 0)
+    }
+
+    func testBridgeBaseSignMessageTimeoutClearsPendingCommand() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        bridge.signRequestTimeoutNanoseconds = 300_000_000
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "sign-timeout")
+
+        let publisher = bridge.signMessageForIdentity(
+            messageData: challenge,
+            identity: owner
+        )
+        async let timedOutSignature = publisher.getOneWithTimeout(1)
+        _ = try await waitUntilTransportHasSent(1, transport: transport)
+
+        do {
+            _ = try await timedOutSignature
+            XCTFail("Expected unanswered bridge signing request to time out")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("timeout"))
+        }
+        let pendingCommandCount = await bridge.auditor.pendingCommandCount()
+        XCTAssertEqual(pendingCommandCount, 0)
     }
 
     func testBridgeIdentityVaultAsyncSigningReturnsResponseSignature() async throws {

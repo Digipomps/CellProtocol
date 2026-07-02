@@ -244,6 +244,27 @@ final class CellSecurityKitTests: XCTestCase {
         XCTAssertNil(event.metadata["privatePayload"])
     }
 
+    func testInMemorySecurityEventSinkRetainsOnlyNewestEvents() async throws {
+        let sink = InMemoryCellSecurityEventSink(maxEvents: 3)
+
+        for index in 0..<5 {
+            await sink.record(CellSecurityEvent(
+                kind: .authorizationDenied,
+                severity: .medium,
+                resource: CellSecurityResource(
+                    kind: "cell",
+                    identifier: "cell-\(index)",
+                    action: "read"
+                ),
+                reasonCode: "test_denial"
+            ))
+        }
+
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.count, 3)
+        XCTAssertEqual(events.map(\.resource.identifier), ["cell-2", "cell-3", "cell-4"])
+    }
+
     func testAuthorizationDeniedRecordsSecurityEvent() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
@@ -364,6 +385,42 @@ final class CellSecurityKitTests: XCTestCase {
         XCTAssertTrue(monitorSecond.allowed)
         XCTAssertTrue(localFirst.allowed)
         XCTAssertFalse(localSecond.allowed)
+    }
+
+    func testContainmentControllerBoundsActionHistoryAndActorMaps() async throws {
+        let controller = CellSecurityContainmentController(
+            maxActions: 2,
+            maxReauthenticationEntries: 2,
+            maxRateLimitScopes: 2
+        )
+        let now = Date(timeIntervalSince1970: 4_500)
+        let resource = CellSecurityResource(kind: "bridge", identifier: "bridge-1", action: "sign")
+
+        for index in 0..<4 {
+            await controller.applyManualAction(
+                CellSecurityContainmentAction(
+                    kind: .requireReauthentication,
+                    reasonCode: CellSecurityReasonCode.reauthenticationRequired,
+                    resource: resource,
+                    actor: CellSecurityActor(identityUUID: "identity-\(index)"),
+                    requiredAction: "require_reauthentication",
+                    automatic: true,
+                    createdAt: now.addingTimeInterval(TimeInterval(index))
+                ),
+                now: now.addingTimeInterval(TimeInterval(index))
+            )
+            _ = await controller.checkSigningRateLimit(
+                scope: "scope-\(index)",
+                policy: .localProtection,
+                now: now.addingTimeInterval(TimeInterval(index))
+            )
+        }
+
+        let snapshot = await controller.snapshot(now: now.addingTimeInterval(10))
+        XCTAssertEqual(snapshot.actions.count, 2)
+        XCTAssertEqual(snapshot.reauthenticationRequired.count, 2)
+        XCTAssertFalse(snapshot.reauthenticationRequired.keys.contains("identity-0::"))
+        XCTAssertFalse(snapshot.reauthenticationRequired.keys.contains("identity-1::"))
     }
 
     func testRecordSecurityEventFeedsContainmentController() async throws {

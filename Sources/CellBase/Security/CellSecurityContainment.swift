@@ -197,8 +197,19 @@ public actor CellSecurityContainmentController {
     private var quarantinedResources = [String: Date]()
     private var reauthenticationRequired = [String: Date]()
     private var rateLimitBuckets = [String: [Date]]()
+    private let maxActions: Int
+    private let maxReauthenticationEntries: Int
+    private let maxRateLimitScopes: Int
 
-    public init() {}
+    public init(
+        maxActions: Int = 1_000,
+        maxReauthenticationEntries: Int = 1_000,
+        maxRateLimitScopes: Int = 1_000
+    ) {
+        self.maxActions = max(1, maxActions)
+        self.maxReauthenticationEntries = max(1, maxReauthenticationEntries)
+        self.maxRateLimitScopes = max(1, maxRateLimitScopes)
+    }
 
     @discardableResult
     public func observe(
@@ -209,6 +220,7 @@ public actor CellSecurityContainmentController {
         purgeExpired(now: now)
         let proposedActions = policy.actions(for: event, now: now)
         actions.append(contentsOf: proposedActions)
+        trimActions()
 
         guard policy.mode == .localProtection else {
             return proposedActions
@@ -225,6 +237,7 @@ public actor CellSecurityContainmentController {
         now: Date = Date()
     ) {
         actions.append(action)
+        trimActions()
         apply(action, now: now)
     }
 
@@ -241,6 +254,7 @@ public actor CellSecurityContainmentController {
         let attempts = (rateLimitBuckets[scope] ?? []).filter { $0 >= windowStart }
         let updated = attempts + [now]
         rateLimitBuckets[scope] = updated
+        trimRateLimitScopes()
 
         guard updated.count <= policy.signingRateLimit.maxAttempts else {
             let oldest = updated.first ?? now
@@ -265,6 +279,7 @@ public actor CellSecurityContainmentController {
     ) {
         guard let key = actorKey(actor) else { return }
         reauthenticationRequired[key] = now
+        trimReauthenticationRequired()
     }
 
     public func snapshot(now: Date = Date()) -> CellSecurityContainmentSnapshot {
@@ -291,6 +306,7 @@ public actor CellSecurityContainmentController {
         case .requireReauthentication:
             if let actor = action.actor, let key = actorKey(actor) {
                 reauthenticationRequired[key] = now
+                trimReauthenticationRequired()
             }
         case .rateLimitSigning, .revokeOrRetryChallenge, .blockRemoteConfigurationLookup:
             break
@@ -299,8 +315,47 @@ public actor CellSecurityContainmentController {
 
     private func purgeExpired(now: Date) {
         quarantinedResources = quarantinedResources.filter { _, expiresAt in expiresAt >= now }
+        actions = actions.filter { action in
+            guard let expiresAt = action.expiresAt else { return true }
+            return expiresAt >= now
+        }
         let cutoff = now.addingTimeInterval(-3600)
         rateLimitBuckets = rateLimitBuckets.mapValues { attempts in attempts.filter { $0 >= cutoff } }
+        rateLimitBuckets = rateLimitBuckets.filter { _, attempts in attempts.isEmpty == false }
+        trimActions()
+        trimRateLimitScopes()
+    }
+
+    private func trimActions() {
+        let overflow = actions.count - maxActions
+        guard overflow > 0 else { return }
+        actions.removeFirst(overflow)
+    }
+
+    private func trimReauthenticationRequired() {
+        let overflow = reauthenticationRequired.count - maxReauthenticationEntries
+        guard overflow > 0 else { return }
+        let keysToRemove = reauthenticationRequired
+            .sorted { lhs, rhs in lhs.value < rhs.value }
+            .prefix(overflow)
+            .map { $0.key }
+        for key in keysToRemove {
+            reauthenticationRequired[key] = nil
+        }
+    }
+
+    private func trimRateLimitScopes() {
+        let overflow = rateLimitBuckets.count - maxRateLimitScopes
+        guard overflow > 0 else { return }
+        let keysToRemove = rateLimitBuckets
+            .sorted { lhs, rhs in
+                (lhs.value.last ?? .distantPast) < (rhs.value.last ?? .distantPast)
+            }
+            .prefix(overflow)
+            .map { $0.key }
+        for key in keysToRemove {
+            rateLimitBuckets[key] = nil
+        }
     }
 
     private func resourceKey(_ resource: CellSecurityResource) -> String {

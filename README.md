@@ -246,6 +246,7 @@ interoperability live in:
 
 - `Docs/VerifiableCredentials_Standards_PhasePlan.md`
 - `Docs/VerifiableCredentials_EUDI_Gap_Checklist.md`
+- `Docs/Swarm_Identity_Admission_and_Entity_Link_NO.md`
 
 The first implemented interoperability step in code is DID-focused:
 

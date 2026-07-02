@@ -105,11 +105,15 @@ public protocol CellSecurityEventSink: Sendable {
 
 public actor InMemoryCellSecurityEventSink: CellSecurityEventSink {
     private var events: [CellSecurityEvent] = []
+    private let maxEvents: Int
 
-    public init() {}
+    public init(maxEvents: Int = 1_000) {
+        self.maxEvents = max(1, maxEvents)
+    }
 
     public func record(_ event: CellSecurityEvent) {
         events.append(event)
+        trimEvents()
     }
 
     public func snapshot() -> [CellSecurityEvent] {
@@ -118,6 +122,12 @@ public actor InMemoryCellSecurityEventSink: CellSecurityEventSink {
 
     public func clear() {
         events.removeAll()
+    }
+
+    private func trimEvents() {
+        let overflow = events.count - maxEvents
+        guard overflow > 0 else { return }
+        events.removeFirst(overflow)
     }
 }
 

@@ -16,6 +16,7 @@ import Crypto
 //@available(iOS 15.0.0, *)
 public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol, IdentityKeyRoleProviderProtocol {
     private var initialized = false
+    private var loadedDocumentRootPath: String?
     private var identitiesDictionary = [String : String]()
     private var visitingIdentitiesDictionary = [String : Identity]()
     private var identitiesUUIDDictionary = [String : VaultIdentity]()
@@ -26,7 +27,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     private static let keyEnvName = "CELL_VAULT_MASTER_KEY_B64"
     private static let keyPathEnvName = "CELL_VAULT_MASTER_KEY_PATH"
     private static let allowDevKeygenEnvName = "CELL_VAULT_ALLOW_DEV_KEYGEN"
+    private static let documentRootEnvName = "CELL_VAULT_DOCUMENT_ROOT"
     private static let defaultMasterKeyFilename = "vault-master.key"
+    private static let maxVaultFileBytes: UInt64 = 64 * 1024 * 1024
+    private static let maxPersistedIdentityCount = 100_000
 #if os(Linux)
     static let documentRoot = "/app/CellsContainer/" // We should move this to a more secret place
 #else
@@ -36,24 +40,53 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     public static let shared = VaporIdentityVault()
     
     public func initialize() async -> IdentityVaultProtocol {
-        if !initialized {
-            initialized = true
-            
+        let currentDocumentRootPath = configuredDocumentRootURL().standardizedFileURL.path
+        if initialized, loadedDocumentRootPath == currentDocumentRootPath {
+            return self
+        }
+
+        initialized = true
+        loadedDocumentRootPath = currentDocumentRootPath
+        identitiesDictionary.removeAll(keepingCapacity: true)
+        visitingIdentitiesDictionary.removeAll(keepingCapacity: true)
+        identitiesUUIDDictionary.removeAll(keepingCapacity: true)
+
+        do {
+            try ensureVaultDirectoryExists()
             let identities = await loadIdentities()
             if let identities = identities {
                 for identity in identities {
-                    identitiesDictionary[identity.identityContext!] = identity.uuid
+                    if let identityContext = identity.identityContext,
+                       identityContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                        identitiesDictionary[identityContext] = identity.uuid
+                    }
                     identitiesUUIDDictionary[identity.uuid] = identity // Also add with uuid for uuid lookups
                 }
-                
-                print("Vapor Vault identitiesDictionary: \(identitiesDictionary)")
+
+                CellBase.diagnosticLog(
+                    "VaporIdentityVault loaded \(identities.count) identities from \(currentDocumentRootPath)",
+                    domain: .identity
+                )
             }
+        } catch {
+            CellBase.diagnosticLog(
+                "VaporIdentityVault initialization skipped persisted identities from \(currentDocumentRootPath): \(error)",
+                domain: .identity
+            )
         }
         return self
     }
     
     public func setPostAuthenticationInitializer(initializer: @escaping () -> ()) async {
-        print("Vapor Identity Vault set post auth initializer not implemented")
+        CellBase.diagnosticLog("VaporIdentityVault post-auth initializer is not implemented", domain: .identity)
+    }
+
+    private func ensureInitializedForCurrentDocumentRoot() async {
+        let currentDocumentRootPath = configuredDocumentRootURL().standardizedFileURL.path
+        guard initialized, loadedDocumentRootPath == currentDocumentRootPath else {
+            _ = await initialize()
+            return
+        }
     }
     
     
@@ -82,14 +115,53 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     
     private init() {}
 
+    private enum StorageError: Error, CustomStringConvertible {
+        case vaultFileTooLarge(bytes: UInt64, maxBytes: UInt64)
+        case tooManyPersistedIdentities(count: Int, maxCount: Int)
+
+        var description: String {
+            switch self {
+            case .vaultFileTooLarge(let bytes, let maxBytes):
+                return "vault file too large: \(bytes) bytes exceeds \(maxBytes)"
+            case .tooManyPersistedIdentities(let count, let maxCount):
+                return "too many persisted identities: \(count) exceeds \(maxCount)"
+            }
+        }
+    }
+
+    private func configuredDocumentRootURL() -> URL {
+        let environment = ProcessInfo.processInfo.environment
+        if let override = environment[VaporIdentityVault.documentRootEnvName]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           override.isEmpty == false {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
+        if let documentRootPath = CellBase.documentRootPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           documentRootPath.isEmpty == false {
+            return URL(fileURLWithPath: documentRootPath, isDirectory: true)
+        }
+
+        return URL(fileURLWithPath: VaporIdentityVault.documentRoot, isDirectory: true)
+    }
+
     private func vaultFileURL() -> URL {
-        return URL(fileURLWithPath: VaporIdentityVault.documentRoot).appendingPathComponent(VaporIdentityVault.identitiesFileName)
+        return configuredDocumentRootURL().appendingPathComponent(VaporIdentityVault.identitiesFileName)
     }
 
     private func defaultMasterKeyURL() -> URL {
-        return URL(fileURLWithPath: VaporIdentityVault.documentRoot)
+        return configuredDocumentRootURL()
             .appendingPathComponent(".secrets")
             .appendingPathComponent(VaporIdentityVault.defaultMasterKeyFilename)
+    }
+
+    private func ensureVaultDirectoryExists() throws {
+        try FileManager.default.createDirectory(
+            at: configuredDocumentRootURL(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
     }
 
     private func boolEnv(_ key: String) -> Bool? {
@@ -335,6 +407,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     
     public func identity(for identityContext: String, makeNewIfNotFound: Bool = true) async -> Identity? {
+        await ensureInitializedForCurrentDocumentRoot()
         if let targetUUid = identitiesDictionary[identityContext] {
             if let currentVaultIdentity =  identitiesUUIDDictionary[targetUUid] {
                 let healedVaultIdentity = healedVaultIdentityIfNeeded(currentVaultIdentity)
@@ -354,9 +427,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     
     public func addIdentity(identity: inout Identity, for identityContext: String) async {
+        await ensureInitializedForCurrentDocumentRoot()
         if identity.uuid == identityContext { // visiting identities will have same uuid as identityContext
             visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
-            print("identity.uuid \(identity.uuid) added as visitor")
+            CellBase.diagnosticLog("VaporIdentityVault added visitor identity uuid=\(identity.uuid)", domain: .identity)
         } else {
             
             identity.identityVault = self
@@ -412,17 +486,20 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     
     public func addVisitingIdentity(identity: Identity) async {
+        await ensureInitializedForCurrentDocumentRoot()
         visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
-        print("identity.uuid \(identity.uuid) added as visitor")
+        CellBase.diagnosticLog("VaporIdentityVault added visitor identity uuid=\(identity.uuid)", domain: .identity)
     }
 
     func addVisitingIdentity(snapshot: VaporBridgeIdentitySnapshot) async {
+        await ensureInitializedForCurrentDocumentRoot()
         let identity = snapshot.makeIdentity()
         visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
         CellBase.diagnosticLog("Visiting identity \(identity.uuid) added to Vapor vault", domain: .bridge)
     }
     
     public func getIdentity(by uuid: String) async -> Identity? {
+        await ensureInitializedForCurrentDocumentRoot()
         var identity = visitingIdentitiesDictionary[uuid]
         
         if identity == nil {
@@ -437,25 +514,24 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     func saveIdentities() {
         let identities = Array(identitiesUUIDDictionary.values)
-        
-        
-        let serializedIdentites = try! JSONEncoder().encode(identities )
-        
+
         do {
-            
+            let serializedIdentites = try JSONEncoder().encode(identities)
             try saveIdentities(jsonData: serializedIdentites)
-        
-        } catch { print("Serializing identities failed with error: \(error)") }
+        } catch {
+            CellBase.diagnosticLog("VaporIdentityVault failed to save identities: \(error)", domain: .identity)
+        }
     }
     
     func saveIdentities(jsonData: Data) throws {
+        try ensureVaultDirectoryExists()
         let encryptedData = try encryptVaultData(jsonData, scope: VaporIdentityVault.identitiesFileName)
         let encryptedFileUrl = vaultFileURL()
-        print("file url: \(encryptedFileUrl)")
-        try encryptedData.write(to: encryptedFileUrl)
+        try encryptedData.write(to: encryptedFileUrl, options: [.atomic])
     }
     
     public func saveIdentity(_ identity: Identity) async {
+        await ensureInitializedForCurrentDocumentRoot()
         if var vaultIdentity = vaultIdentityWithUUID(identity.uuid) {
             vaultIdentity.update(with: identity)
             identitiesUUIDDictionary[identity.uuid] = vaultIdentity
@@ -463,9 +539,23 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     
     func loadIdentities() async -> [VaultIdentity]? {
-        var identities: [VaultIdentity]?
         do {
-            let encryptedData = try Data(contentsOf: vaultFileURL())
+            let encryptedFileURL = vaultFileURL()
+            guard FileManager.default.fileExists(atPath: encryptedFileURL.path) else {
+                saveIdentities()
+                return []
+            }
+
+            let attributes = try FileManager.default.attributesOfItem(atPath: encryptedFileURL.path)
+            let fileSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+            if fileSize > VaporIdentityVault.maxVaultFileBytes {
+                throw StorageError.vaultFileTooLarge(
+                    bytes: fileSize,
+                    maxBytes: VaporIdentityVault.maxVaultFileBytes
+                )
+            }
+
+            let encryptedData = try Data(contentsOf: encryptedFileURL, options: [.uncached])
             let decryptedResult = try decryptVaultData(encryptedData, scope: VaporIdentityVault.identitiesFileName)
             let decryptedData = decryptedResult.payload
 //            print("encryptedFileUrl: \(encryptedFileUrl)")
@@ -480,24 +570,26 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
 //            decoder.userInfo[.facilitator] = Facilitator()
             
             
-                if let decryptedIdentities = try? JSONDecoder().decode([VaultIdentity].self, from: decryptedData) {
-                    identities =  decryptedIdentities
-                    if decryptedResult.needsMigration {
-                        try? saveIdentities(jsonData: decryptedData)
-                    }
-                }
+            let decryptedIdentities = try JSONDecoder().decode([VaultIdentity].self, from: decryptedData)
+            if decryptedIdentities.count > VaporIdentityVault.maxPersistedIdentityCount {
+                throw StorageError.tooManyPersistedIdentities(
+                    count: decryptedIdentities.count,
+                    maxCount: VaporIdentityVault.maxPersistedIdentityCount
+                )
+            }
+            if decryptedResult.needsMigration {
+                try? saveIdentities(jsonData: decryptedData)
+            }
+            return decryptedIdentities
         } catch {
-            print("Reading Vapor VaultIdentity json failed. Error: \(error)")
+            CellBase.diagnosticLog("VaporIdentityVault failed to load identities: \(error)", domain: .identity)
+            return nil
         }
- 
-        if identities == nil {
-            saveIdentities() // Just to initialise the file
-        }
-        return identities
     }
     
     // This may have to change - should we just check on identityContext?
     public func identityExistInVault(_ identity: Identity) async -> Bool {
+        await ensureInitializedForCurrentDocumentRoot()
         guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid] else {
             return false
         }
@@ -505,13 +597,15 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
 
     func identityExistsInVault(uuid: String) async -> Bool {
-        identitiesUUIDDictionary[uuid] != nil
+        await ensureInitializedForCurrentDocumentRoot()
+        return identitiesUUIDDictionary[uuid] != nil
     }
     
     public func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        await ensureInitializedForCurrentDocumentRoot()
 
         guard let vaultIdentity = self.vaultIdentityWithUUID(identity.uuid) else {
-            print("Did not find vault identity for \(identity.uuid)")
+            CellBase.diagnosticLog("VaporIdentityVault missing identity uuid=\(identity.uuid)", domain: .identity)
             throw IdentityVaultError.noVaultIdentity
         }
         guard signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity) else {
@@ -543,10 +637,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     let key = try Curve25519.Signing.PublicKey(rawRepresentation: compressedKey)
                     valid = key.isValidSignature(signature, for: messageData)
                 } else {
-                    print("No compressed key")
+                    CellBase.diagnosticLog("VaporIdentityVault missing compressed public key", domain: .identity)
                 }
             case .secp256k1, .P256:
-                print("About to verify ECDSA P-256-compatible signature")
+                CellBase.diagnosticLog("VaporIdentityVault verifying ECDSA P-256-compatible signature", domain: .identity)
                 if let compressedKey = publicSecureKey.compressedKey,
                    let publicKey = try? P256.Signing.PublicKey(x963Representation: compressedKey),
                    let ecdsaSignature = try? P256.Signing.ECDSASignature(derRepresentation: signature) {
@@ -557,7 +651,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             }
             
         } else {
-            print("No public secure key vapor")
+            CellBase.diagnosticLog("VaporIdentityVault missing public secure key", domain: .identity)
         }
         return valid
     }
@@ -572,6 +666,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
 
     public func privateKeyData(for identity: Identity, role: IdentityKeyRole) async throws -> Data? {
+        await ensureInitializedForCurrentDocumentRoot()
         guard let vaultIdentity = vaultIdentityWithUUID(identity.uuid) else {
             return nil
         }
@@ -605,7 +700,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     let key = try Curve25519.Signing.PrivateKey(rawRepresentation: compressedKey)
                     signature = try key.signature(for: messageData)
                 } else {
-                    print("No compressed key")
+                    CellBase.diagnosticLog("VaporIdentityVault missing compressed private key", domain: .identity)
                     throw IdentityVaultError.noKey
                 }
             case .secp256k1, .P256:
@@ -807,11 +902,11 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         }
         
         init(identity: inout Identity) {
-                print("Generating VaultIdentity from Identity...")
-                self.uuid = identity.uuid
-                self.displayName = identity.displayName
-                self.properties = identity.properties
-                self.grants = identity.grants
+            CellBase.diagnosticLog("VaporIdentityVault generating persisted identity uuid=\(identity.uuid)", domain: .identity)
+            self.uuid = identity.uuid
+            self.displayName = identity.displayName
+            self.properties = identity.properties
+            self.grants = identity.grants
 //            do {
 //                let keys = try createKeyPairForDomainv2(domainString: uuid)
 //                publicKey = keys.publicKey
@@ -913,10 +1008,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         
         // Not meaningful for VaultIdentity?
         mutating func setValueForKey(key: String, value valuePublisher: AnyPublisher<ValueType, Never>, requester: Identity) {
-            print("Setting value for key: \(key)")
+            CellBase.diagnosticLog("VaporIdentityVault setting value for key=\(key)", domain: .identity)
             var localSelf = self
-            let valueCancellable = valuePublisher.sink(receiveCompletion:{
-                print ("Value for key completion: \($0).")
+            _ = valuePublisher.sink(receiveCompletion:{
+                CellBase.diagnosticLog("VaporIdentityVault set value completion=\($0)", domain: .identity)
             } , receiveValue: { value in
        
                 localSelf.addProperty(property: value, for: key)

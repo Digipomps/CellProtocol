@@ -72,6 +72,9 @@ Designvalg:
   uten aa logge private data.
 - Hendelsen har `requiredAction` og `canAutoResolve`, slik at bruker- eller
   policy-lag kan forklare neste steg.
+- `InMemoryCellSecurityEventSink` er bounded som default. Den beholder de nyeste
+  hendelsene og er ment som lett staging-/workbench-buffer, ikke som varig
+  audit-lager.
 
 Eksempler paa event kinds:
 
@@ -143,6 +146,9 @@ Viktige sikkerhetsvalg:
 - Containment-actions kan aldri gi tilgang, mint-e contracts eller signere noe.
 - `CellBase.recordSecurityEvent(_:)` er felles inngang: event sink registrerer
   hendelsen og containment-controlleren observerer den med gjeldende policy.
+- Containment-controlleren er bounded som default for actions,
+  re-authentication actors og rate-limit scopes. Langvarig observability maa
+  eksportere aggregerte events eller bruke en dedikert sink.
 
 ### 5. Authorized probe runner
 
@@ -218,6 +224,8 @@ CellSecurityKit skal vaere billig aa bruke i hot paths:
 - Ingen nettverk, disk eller crypto i security event model.
 - Endpoint parsing bruker `URLComponents` og simple set membership.
 - Store rydder expired entries opportunistisk ved consume.
+- In-memory event og containment buffers trimmer eldste entries naar de naar
+  sin konfigurerte grense.
 - Ingen bakgrunnsjobber eller global singleton i foerste fase.
 
 ## Sikkerhetsgrenser

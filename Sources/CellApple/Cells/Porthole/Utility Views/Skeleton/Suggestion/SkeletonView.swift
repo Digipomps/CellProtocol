@@ -198,14 +198,25 @@ private func applyStyleMetadata(to view: AnyView, modifiers: SkeletonModifiers?)
     }
     let role = sanitizeStyleToken(modifiers.styleRole ?? "")
     let classes = (modifiers.styleClasses ?? []).map(sanitizeStyleToken).filter { !$0.isEmpty }
-    guard !role.isEmpty || !classes.isEmpty else {
+    let presentation = modifiers.presentation
+    let presentationKind = sanitizeStyleToken(presentation?.kind.rawValue ?? "")
+    let presentationPlacement = sanitizeStyleToken(presentation?.placement?.rawValue ?? "")
+    let accessibilityLabel = presentation?.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !role.isEmpty || !classes.isEmpty || !presentationKind.isEmpty || accessibilityLabel?.isEmpty == false else {
         return view
     }
     let rolePart = role.isEmpty ? "none" : role
     let classesPart = classes.isEmpty ? "none" : classes.joined(separator: ".")
-    return AnyView(
-        view.accessibilityIdentifier("style-role-\(rolePart)|style-classes-\(classesPart)")
+    let presentationPart = presentationKind.isEmpty
+        ? "none"
+        : "\(presentationKind).\(presentationPlacement.isEmpty ? "default" : presentationPlacement)"
+    var result = AnyView(
+        view.accessibilityIdentifier("style-role-\(rolePart)|style-classes-\(classesPart)|presentation-\(presentationPart)")
     )
+    if let accessibilityLabel, accessibilityLabel.isEmpty == false {
+        result = AnyView(result.accessibilityLabel(Text(accessibilityLabel)))
+    }
+    return result
 }
 
 private struct SkeletonMotionHost: ViewModifier {
