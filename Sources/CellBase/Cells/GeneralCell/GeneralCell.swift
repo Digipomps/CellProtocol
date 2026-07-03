@@ -843,9 +843,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 agreement.signatories.append(identity)
             }
             do {
+                guard let signingOwner = await contractSigningOwner(preferredOwner: agreement.owner) else {
+                    throw IdentityVaultError.wrongVault
+                }
+                agreement.owner = signingOwner
                 let contract = try await Contract.signed(
                     agreement: agreement,
-                    issuer: owner,
+                    issuer: signingOwner,
                     subject: identity,
                     domain: identityDomain
                 )
@@ -873,6 +877,17 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             )
         }
         return agreement.state
+    }
+
+    private func contractSigningOwner(preferredOwner: Identity) async -> Identity? {
+        if identitiesReferenceSame(owner, preferredOwner),
+           await checkIdentityOrigin(preferredOwner, against: owner) {
+            return preferredOwner
+        }
+        if await checkIdentityOrigin(owner, against: owner) {
+            return owner
+        }
+        return nil
     }
 
     private func recordContractRejected(

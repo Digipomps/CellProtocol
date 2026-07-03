@@ -4,6 +4,7 @@
 import Foundation
 
 public protocol IdentityVaultProtocol: Sendable {
+    func identityVaultReference() async -> String?
     func initialize() async -> IdentityVaultProtocol
     func addIdentity(identity: inout Identity, for identityContext: String) async
     func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity?
@@ -18,6 +19,10 @@ public protocol IdentityVaultProtocol: Sendable {
 }
 
 public extension IdentityVaultProtocol {
+    func identityVaultReference() async -> String? {
+        nil
+    }
+
     func identity(forUUID uuid: String) async -> Identity? {
         nil
     }

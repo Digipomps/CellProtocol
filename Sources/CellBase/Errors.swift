@@ -40,6 +40,7 @@ public enum IdentityVaultError: Error {
     case notImplemented
     case noKey
     case invalidFilename
+    case wrongVault
 }
 
 enum DecodingPDSError: Error {

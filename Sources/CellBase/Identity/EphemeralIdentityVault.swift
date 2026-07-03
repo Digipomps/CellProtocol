@@ -12,8 +12,13 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     private var identitiesByContext: [String: Identity] = [:]
     private var privateKeysByUUID: [String: Curve25519.Signing.PrivateKey] = [:]
     private var idCounter = 1
+    private let vaultReference = "ephemeral:\(UUID().uuidString)"
 
     public init() {}
+
+    public func identityVaultReference() async -> String? {
+        vaultReference
+    }
 
     public func initialize() async -> IdentityVaultProtocol {
         self
@@ -21,12 +26,15 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
 
     public func addIdentity(identity: inout Identity, for identityContext: String) async {
         identity.identityVault = self
+        identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)
         identitiesByContext[identityContext] = identity
     }
 
     public func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
         if let existing = identitiesByContext[identityContext] {
+            existing.identityVault = self
+            existing.homeVaultReference = vaultReference
             return existing
         }
         guard makeNewIfNotFound else { return nil }
@@ -34,13 +42,19 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
         idCounter += 1
         let uuidString = "00000000-0000-0000-0000-\(suffix)"
         let identity = Identity(uuidString, displayName: identityContext, identityVault: self)
+        identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)
         identitiesByContext[identityContext] = identity
         return identity
     }
 
     public func identity(forUUID uuid: String) async -> Identity? {
-        identitiesByContext.values.first { $0.uuid == uuid }
+        guard let identity = identitiesByContext.values.first(where: { $0.uuid == uuid }) else {
+            return nil
+        }
+        identity.identityVault = self
+        identity.homeVaultReference = vaultReference
+        return identity
     }
 
     public func identityExistInVault(_ identity: Identity) async -> Bool {
@@ -51,6 +65,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     }
 
     public func saveIdentity(_ identity: Identity) async {
+        identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)
         identitiesByContext[identity.displayName] = identity
     }

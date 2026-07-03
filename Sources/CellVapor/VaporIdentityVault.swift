@@ -39,6 +39,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     
     public static let shared = VaporIdentityVault()
     
+    public func identityVaultReference() async -> String? {
+        currentVaultReference()
+    }
+
     public func initialize() async -> IdentityVaultProtocol {
         let currentDocumentRootPath = configuredDocumentRootURL().standardizedFileURL.path
         if initialized, loadedDocumentRootPath == currentDocumentRootPath {
@@ -144,6 +148,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         }
 
         return URL(fileURLWithPath: VaporIdentityVault.documentRoot, isDirectory: true)
+    }
+
+    private func currentVaultReference() -> String {
+        "vapor:\(configuredDocumentRootURL().standardizedFileURL.path)"
     }
 
     private func vaultFileURL() -> URL {
@@ -414,12 +422,14 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 // Testing / Playing
                 let identity = healedVaultIdentity.identity
                 identity.identityVault = self
+                identity.homeVaultReference = currentVaultReference()
                 return identity
             }
         }
         if makeNewIfNotFound {
            var identity = Identity()
            identity.identityVault = self
+           identity.homeVaultReference = currentVaultReference()
            await addIdentity(identity: &identity, for: identityContext) // TODO: behaviour will be different than expected, see ActorBasicTests.swift in renderer project for examples
            return identity
        }
@@ -434,6 +444,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         } else {
             
             identity.identityVault = self
+            identity.homeVaultReference = currentVaultReference()
             if let targetUUid = identitiesDictionary[identityContext] {
                 if targetUUid == identity.uuid, var vaultIdentity = identitiesUUIDDictionary[targetUUid] {
                     vaultIdentity = healedVaultIdentityIfNeeded(vaultIdentity, saveAfterHealing: false)
@@ -507,7 +518,8 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 let healedVaultIdentity = healedVaultIdentityIfNeeded(currentVaultIdentity)
                 // Testing / Playing
                 identity = healedVaultIdentity.identity
-//                identity.identityVault = self
+                identity?.identityVault = self
+                identity?.homeVaultReference = currentVaultReference()
             }
         }
         return identity
@@ -604,6 +616,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     public func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
         await ensureInitializedForCurrentDocumentRoot()
 
+        if let expectedVault = identity.homeVaultReference,
+           expectedVault != currentVaultReference() {
+            throw IdentityVaultError.wrongVault
+        }
         guard let vaultIdentity = self.vaultIdentityWithUUID(identity.uuid) else {
             CellBase.diagnosticLog("VaporIdentityVault missing identity uuid=\(identity.uuid)", domain: .identity)
             throw IdentityVaultError.noVaultIdentity
@@ -738,7 +754,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         
         var identity: Identity {
             get {
-                let newIdentity = Identity(self.uuid, displayName: self.displayName, identityVault: CellBase.defaultIdentityVault)
+                let newIdentity = Identity(self.uuid, displayName: self.displayName, identityVault: nil)
                 
                 newIdentity.properties = self.properties
                 newIdentity.publicSecureKey = self.publicSecureKey ?? {

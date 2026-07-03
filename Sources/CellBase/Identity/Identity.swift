@@ -30,6 +30,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     public var entityAnchorReference = "cell:///EntityAnchor" // each scaffold should have a identity unique cell act as the anchor to the - should it only be the VaultIdentity? At least don't leak this to others
     
     public var identityVault: IdentityVaultProtocol?
+    public var homeVaultReference: String?
     
     var valueCancellable: AnyCancellable?
     
@@ -62,6 +63,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         case properties
         case publicSecureKey
         case publicKeyAgreementSecureKey
+        case homeVaultReference
     }
     
     public init() {
@@ -101,6 +103,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
 //        publicKey  = try? values.decodeIfPresent(Data.self, forKey: .publicKey)
         publicSecureKey = try values.decodeIfPresent(SecureKey.self, forKey: .publicSecureKey)
         publicKeyAgreementSecureKey = try values.decodeIfPresent(SecureKey.self, forKey: .publicKeyAgreementSecureKey)
+        homeVaultReference = try values.decodeIfPresent(String.self, forKey: .homeVaultReference)
 //        if let propertiesContainer = try? values.decodeIfPresent(DynamicProperties.self, forKey: .properties) {
 //            self.properties = propertiesContainer.propertyValues
 //        }
@@ -112,7 +115,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         
         grants.append(Grant(keypath: "displayName", permission: "r--"))
         
-        self.identityVault = CellBase.defaultIdentityVault
+        self.identityVault = nil
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -124,6 +127,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         try container.encodeIfPresent(properties, forKey: .properties)
         try container.encodeIfPresent(publicSecureKey, forKey: .publicSecureKey)
         try container.encodeIfPresent(publicKeyAgreementSecureKey, forKey: .publicKeyAgreementSecureKey)
+        try container.encodeIfPresent(homeVaultReference, forKey: .homeVaultReference)
         // then ecode other aspects of Identity
     }
     
@@ -195,6 +199,11 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     public func sign(data messageData: Data) async throws -> Data? {
         var signedData: Data?
         if let currentIdentityVault = self.identityVault {
+            if let expectedVault = homeVaultReference {
+                guard await currentIdentityVault.identityVaultReference() == expectedVault else {
+                    throw IdentityVaultError.wrongVault
+                }
+            }
             signedData =  try await currentIdentityVault.signMessageForIdentity(messageData: messageData, identity: self)
         }
         return signedData
