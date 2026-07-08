@@ -16,6 +16,9 @@ enum GeneralCellErrors: Error {
 
 
 open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizationDeciding {
+    private static let missingIdentityVaultLogLock = NSLock()
+    nonisolated(unsafe) private static var missingIdentityVaultLoggedUUIDs: Set<String> = []
+
     var ttl = 7776000 // 90 days
     var schemaDict = Object()
     var schemaDescriptionDict = Object()
@@ -1281,7 +1284,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     func checkIdentityOrigin(_ identity: Identity, against trustedIdentity: Identity) async -> Bool {
         if CellBase.debugValidateAccessForEverything {return true}
         guard let identityVault = identity.identityVault else {
-            print("Identity: \(identity.uuid) had no identity vault!")
+            Self.logMissingIdentityVaultOnce(for: identity)
             return false
         }
         guard trustedIdentity.publicSecureKey?.compressedKey?.isEmpty == false else {
@@ -1318,6 +1321,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             return false
         }
         return (try? await verificationVault.verifySignature(signature: signedData, messageData: challengeData, for: trustedIdentity)) ?? false
+    }
+
+    private static func logMissingIdentityVaultOnce(for identity: Identity) {
+        let uuid = identity.uuid
+        missingIdentityVaultLogLock.lock()
+        let shouldLog = missingIdentityVaultLoggedUUIDs.insert(uuid).inserted
+        missingIdentityVaultLogLock.unlock()
+
+        guard shouldLog else { return }
+        CellBase.diagnosticLog("Identity \(uuid) had no identity vault", domain: .identity)
     }
 
     func identitiesReferenceSame(_ trustedIdentity: Identity, _ presentedIdentity: Identity) -> Bool {
