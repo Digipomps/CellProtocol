@@ -1728,21 +1728,29 @@ private struct CellActionButtonView: View {
             }
         } label: {
             HStack(spacing: 8) {
-                switch executionState {
-                case .working:
+                if isChatPrimaryAction && executionState == .working {
                     ProgressView()
                         .controlSize(.small)
-                case .succeeded:
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case .failed:
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                case .idle:
-                    EmptyView()
-                }
+                        .tint(.white)
+                } else {
+                    switch executionState {
+                    case .working:
+                        ProgressView()
+                            .controlSize(.small)
+                    case .succeeded:
+                        if !isChatPrimaryAction {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                    case .failed:
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                    case .idle:
+                        EmptyView()
+                    }
 
-                renderStyledButtonLabel(labelText, modifiers: skeletonButton.modifiers)
+                    renderStyledButtonLabel(labelText, modifiers: skeletonButton.modifiers)
+                }
             }
         }
         .buttonStyle(.plain)
@@ -1774,7 +1782,14 @@ private struct CellActionButtonView: View {
     }
 
     private var labelText: String {
-        executionState == .working ? "\(skeletonButton.label) …" : skeletonButton.label
+        if isChatPrimaryAction {
+            return skeletonButton.label
+        }
+        return executionState == .working ? "\(skeletonButton.label) …" : skeletonButton.label
+    }
+
+    private var isChatPrimaryAction: Bool {
+        sanitizeStyleToken(skeletonButton.modifiers?.styleRole ?? "") == "chat-primary-action"
     }
 
     private var accessibilityValue: String {
@@ -3605,7 +3620,8 @@ private struct CellTextAreaView: View {
     }
 
     private func submitCurrentValue(_ value: String) async {
-        guard let targetKeypath = skeletonTextArea.targetKeypath, !targetKeypath.isEmpty else {
+        let actionKeypath = skeletonTextArea.submitActionKeypath ?? skeletonTextArea.targetKeypath
+        guard let targetKeypath = actionKeypath, !targetKeypath.isEmpty else {
             return
         }
 

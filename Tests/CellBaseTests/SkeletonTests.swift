@@ -47,6 +47,7 @@ final class SkeletonTests: XCTestCase {
             minLines: 4,
             maxLines: 10,
             submitOnEnter: true,
+            submitActionKeypath: "chat.submitMessage",
             editorMode: .richMarkdown
         ))
         let data = try JSONEncoder().encode(element)
@@ -54,6 +55,7 @@ final class SkeletonTests: XCTestCase {
         XCTAssertNotNil(json["TextArea"], "Expected wrapper key 'TextArea' to be present")
         let textarea = json["TextArea"] as? [String: Any]
         XCTAssertEqual(textarea?["editorMode"] as? String, "richMarkdown")
+        XCTAssertEqual(textarea?["submitActionKeypath"] as? String, "chat.submitMessage")
     }
 
     func testTextAreaDecodesWrapped() throws {
@@ -67,6 +69,7 @@ final class SkeletonTests: XCTestCase {
             "minLines": 3,
             "maxLines": 9,
             "submitOnEnter": true,
+            "submitActionKeypath": "chat.submitMessage",
             "editorMode": "richMarkdown"
           }
         }
@@ -82,6 +85,7 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(textArea.minLines, 3)
         XCTAssertEqual(textArea.maxLines, 9)
         XCTAssertEqual(textArea.submitOnEnter, true)
+        XCTAssertEqual(textArea.submitActionKeypath, "chat.submitMessage")
         XCTAssertEqual(textArea.editorMode, .richMarkdown)
     }
 

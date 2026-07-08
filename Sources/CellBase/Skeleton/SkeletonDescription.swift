@@ -1141,6 +1141,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
     public var minLines: Int?
     public var maxLines: Int?
     public var submitOnEnter: Bool?
+    public var submitActionKeypath: String?
     public var editorMode: SkeletonTextAreaEditorMode?
     public var modifiers: SkeletonModifiers?
 
@@ -1152,6 +1153,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
         case minLines
         case maxLines
         case submitOnEnter
+        case submitActionKeypath
         case editorMode
         case modifiers
     }
@@ -1165,6 +1167,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
         minLines: Int? = nil,
         maxLines: Int? = nil,
         submitOnEnter: Bool? = nil,
+        submitActionKeypath: String? = nil,
         editorMode: SkeletonTextAreaEditorMode? = nil,
         modifiers: SkeletonModifiers? = nil
     ) {
@@ -1175,6 +1178,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
         self.minLines = minLines
         self.maxLines = maxLines
         self.submitOnEnter = submitOnEnter
+        self.submitActionKeypath = submitActionKeypath
         self.editorMode = editorMode
         self.modifiers = modifiers
     }
@@ -1188,6 +1192,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
         self.minLines = try container.decodeIfPresent(Int.self, forKey: .minLines)
         self.maxLines = try container.decodeIfPresent(Int.self, forKey: .maxLines)
         self.submitOnEnter = try container.decodeIfPresent(Bool.self, forKey: .submitOnEnter)
+        self.submitActionKeypath = try container.decodeIfPresent(String.self, forKey: .submitActionKeypath)
         self.editorMode = try container.decodeIfPresent(SkeletonTextAreaEditorMode.self, forKey: .editorMode)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
     }
@@ -1202,6 +1207,7 @@ public struct SkeletonTextArea: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.minLines, forKey: .minLines)
         try elementContainer.encodeIfPresent(self.maxLines, forKey: .maxLines)
         try elementContainer.encodeIfPresent(self.submitOnEnter, forKey: .submitOnEnter)
+        try elementContainer.encodeIfPresent(self.submitActionKeypath, forKey: .submitActionKeypath)
         try elementContainer.encodeIfPresent(self.editorMode, forKey: .editorMode)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }

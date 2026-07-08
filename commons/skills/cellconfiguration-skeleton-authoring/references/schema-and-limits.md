@@ -131,6 +131,7 @@ Støtter:
 - `minLines`
 - `maxLines`
 - `submitOnEnter`
+- `submitActionKeypath`
 - `editorMode`
 - `modifiers`
 
@@ -142,6 +143,7 @@ Støtter:
 Viktig:
 
 - Swift-rendereren støtter `submitOnEnter`
+- `submitActionKeypath` kan brukes sammen med `submitOnEnter` når Enter skal kjøre en egen submit-action mens `targetKeypath` fortsatt brukes til løpende draft-lagring
 - meta/ctrl-enter-distinksjon er dokumentert som gap
 - ikke lov å love full rich text-editor eller komplett markdown-editor utover
   dagens implementasjon
