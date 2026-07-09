@@ -38,6 +38,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.addGrant("rw--", for: "person")
         self.agreementTemplate.addGrant("rw--", for: "purposes") // I think this is the one that should hold realations and Interests too?
         self.agreementTemplate.addGrant("rw--", for: "relations")
+        self.agreementTemplate.addGrant("rw--", for: "proofs")
         self.agreementTemplate.addGrant("rw--", for: "agreements")
         self.agreementTemplate.addGrant("rw--", for: "signedAgreementEntity")
         self.agreementTemplate.addGrant("rw--", for: "entityRepresentation")
