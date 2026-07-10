@@ -71,13 +71,16 @@ public class PerspectiveCell: GeneralCell {
         self.context = Perspective()
         try super.init(from: decoder)
         
-        // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
+        let semaphore = DispatchSemaphore(value: 0)
         Task {
             try? await loadPerspective() // Consider decoding this in this method
             let decodedOwner = self.storedOwnerIdentity
-            await setupPermissions(owner: decodedOwner)
-            await setupKeys(owner: decodedOwner)
+            let setupOwner = await Self.vaultBackedOwner(matching: decodedOwner) ?? decodedOwner
+            await setupPermissions(owner: setupOwner)
+            await setupKeys(owner: setupOwner)
+            semaphore.signal()
         }
+        _ = semaphore.wait(timeout: .now() + 5)
     }
     
     deinit {
@@ -90,6 +93,22 @@ public class PerspectiveCell: GeneralCell {
         self.agreementTemplate.addGrant("rw--", for: "addPurpose")
         self.agreementTemplate.addGrant("rw--", for: "matchPurpose")
         self.agreementTemplate.addGrant("rw--", for: "perspective")
+    }
+
+    private static func vaultBackedOwner(matching identity: Identity) async -> Identity? {
+        guard let vault = CellBase.defaultIdentityVault,
+              let restoredOwner = await vault.identity(forUUID: identity.uuid)
+        else {
+            return nil
+        }
+
+        if let expectedFingerprint = identity.signingPublicKeyFingerprint,
+           let restoredFingerprint = restoredOwner.signingPublicKeyFingerprint,
+           expectedFingerprint != restoredFingerprint {
+            return nil
+        }
+
+        return restoredOwner
     }
     
     private func setupKeys(owner: Identity) async  {
