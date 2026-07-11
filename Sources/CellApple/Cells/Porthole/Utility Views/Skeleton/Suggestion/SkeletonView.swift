@@ -3661,7 +3661,14 @@ private struct CellTextAreaView: View {
         guard response != nil else {
             return
         }
+        if skeletonTextArea.submitOnEnter == true, let requester {
+            let (fullURL, _) = generateFullURL(for: skeletonTextArea.targetKeypath ?? skeletonTextArea.sourceKeypath)
+            await setCache(url: fullURL, requester: requester, valueType: .string(""))
+        }
         await MainActor.run {
+            if skeletonTextArea.submitOnEnter == true {
+                text = ""
+            }
             viewModel.markLocalMutation()
         }
     }
