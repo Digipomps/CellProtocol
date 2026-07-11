@@ -1720,6 +1720,7 @@ private struct CellActionButtonView: View {
     let skeletonButton: SkeletonButton
     @State private var actionInstanceID = UUID().uuidString
     @EnvironmentObject var viewModel: PortholeViewModel
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         Button {
@@ -1756,6 +1757,8 @@ private struct CellActionButtonView: View {
         .buttonStyle(.plain)
         .disabled(executionState == .working)
         .opacity(executionState == .working ? 0.86 : 1.0)
+        .accessibilityLabel(Text(skeletonButton.label))
+        .accessibilityIdentifier("skeleton.button.\(skeletonButton.id.uuidString)")
         .accessibilityValue(accessibilityValue)
     }
 
@@ -1813,20 +1816,33 @@ private struct CellActionButtonView: View {
         var button = skeletonButton
         var response: ValueType?
 
+        if SkeletonButtonNavigation.isNavigationButton(button) {
+            let didOpen = await openNavigation(button)
+            await finishExecution(succeeded: didOpen, marksMutation: false)
+            return
+        }
+
         if let requester = await requesterIdentity() {
-            if let url = actionURL(for: button.keypath, or: button.url),
+            if let url = actionURL(for: button.keypath),
                let cachedValueType = await viewModel.cache.get(url.absoluteString) {
                 button = resolvedActionButton(button, cachedValue: cachedValueType)
             }
             response = await button.execute(requester: requester)
         }
 
+        await finishExecution(succeeded: response != nil, marksMutation: true)
+    }
+
+    private func finishExecution(succeeded: Bool, marksMutation: Bool) async {
+
         await MainActor.run {
-            viewModel.markLocalMutation()
-            viewModel.setActionFeedbackState(response == nil ? .failed : .succeeded, for: actionID)
+            if marksMutation {
+                viewModel.markLocalMutation()
+            }
+            viewModel.setActionFeedbackState(succeeded ? .succeeded : .failed, for: actionID)
         }
 
-        guard response != nil else {
+        guard succeeded else {
             return
         }
 
@@ -1838,15 +1854,18 @@ private struct CellActionButtonView: View {
         }
     }
 
+    private func openNavigation(_ button: SkeletonButton) async -> Bool {
+        await SkeletonButtonNavigationExecution.open(button) { url, completion in
+            openURL(url, completion: completion)
+        }
+    }
+
     private func requesterIdentity() async -> Identity? {
         await viewModel.executionRequesterIdentity()
     }
 
-    private func actionURL(for keypath: String?, or urlString: String?) -> URL? {
-        if let urlString, keypath == nil {
-            return URL(string: urlString)
-        }
-        guard let keypath else {
+    private func actionURL(for keypath: String) -> URL? {
+        guard keypath.isEmpty == false else {
             return nil
         }
         if keypath.hasPrefix("cell://") {

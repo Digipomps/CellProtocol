@@ -1817,6 +1817,9 @@ public struct SkeletonButton: Codable, Identifiable {
         
     
     public func execute(requester explicitRequester: Identity? = nil) async -> ValueType? {
+        guard SkeletonButtonNavigation.isNavigationButton(self) == false else {
+            return nil
+        }
         guard let resolver = CellBase.defaultCellResolver else {
             return nil
         }
