@@ -64,6 +64,20 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
         }
     }
 
+    public func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding? {
+        let matchingContexts = identitiesByContext.compactMap { context, storedIdentity -> String? in
+            guard storedIdentity.uuid == identity.uuid,
+                  publicSigningKeyMatches(requested: identity, stored: storedIdentity) else {
+                return nil
+            }
+            return context
+        }
+        guard matchingContexts.count == 1, let domain = matchingContexts.first else {
+            return nil
+        }
+        return IdentityDomainBinding(domain: domain, identity: identity)
+    }
+
     public func saveIdentity(_ identity: Identity) async {
         identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)

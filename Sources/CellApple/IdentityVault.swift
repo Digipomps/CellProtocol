@@ -328,6 +328,16 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         return signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity)
     }
 
+    public func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding? {
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid],
+              signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity),
+              let identityContext = vaultIdentity.identityContext?.trimmingCharacters(in: .whitespacesAndNewlines),
+              identityContext.isEmpty == false else {
+            return nil
+        }
+        return IdentityDomainBinding(domain: identityContext, identity: identity)
+    }
+
     func identityExistsInVault(uuid: String) async -> Bool {
         identitiesUUIDDictionary[uuid] != nil
     }

@@ -608,6 +608,21 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         return signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity)
     }
 
+    public func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding? {
+        await ensureInitializedForCurrentDocumentRoot()
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid],
+              signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity),
+              let identityContext = vaultIdentity.identityContext?.trimmingCharacters(in: .whitespacesAndNewlines),
+              identityContext.isEmpty == false else {
+            return nil
+        }
+        if let expectedVault = identity.homeVaultReference,
+           expectedVault != currentVaultReference() {
+            return nil
+        }
+        return IdentityDomainBinding(domain: identityContext, identity: identity)
+    }
+
     func identityExistsInVault(uuid: String) async -> Bool {
         await ensureInitializedForCurrentDocumentRoot()
         return identitiesUUIDDictionary[uuid] != nil
