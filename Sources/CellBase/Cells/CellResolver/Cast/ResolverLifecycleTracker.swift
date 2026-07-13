@@ -172,6 +172,13 @@ actor ResolverLifecycleTracker {
         trackedPersistedCells[uuid] = nil
     }
 
+#if DEBUG
+    func resetRuntimeStateForTesting() {
+        trackedCells.removeAll(keepingCapacity: false)
+        trackedPersistedCells.removeAll(keepingCapacity: false)
+    }
+#endif
+
     func dueEvents(now: Date = Date()) -> [CellLifecycleDueEvent] {
         var events = [CellLifecycleDueEvent]()
 

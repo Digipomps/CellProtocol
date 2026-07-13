@@ -1807,7 +1807,28 @@ public class CellResolver: CellResolverProtocol {
         await lifecycleTracker.untrackCell(uuid: uuid)
         await syncRuntimeShadowUnloadIfNeeded(uuid: uuid, persistedSnapshotAvailable: true)
     }
-    
+
+#if DEBUG
+    @_spi(Testing)
+    public func resetRuntimeStateForTesting() async {
+        let pendingTasks: [Task<Emit, Error>] = withStateLock {
+            let tasks = Array(pendingRemoteBridgeTasks.values)
+            namedCellResolves.removeAll(keepingCapacity: false)
+            loadCellFacilitators.removeAll(keepingCapacity: false)
+            resolverEmitter = nil
+            resolverEmittersByIdentityUUID.removeAll(keepingCapacity: false)
+            remoteCellHostRoutes.removeAll(keepingCapacity: false)
+            remoteBridgeCache.removeAll(keepingCapacity: false)
+            pendingRemoteBridgeTasks.removeAll(keepingCapacity: false)
+            connectCellCancellables.removeAll(keepingCapacity: false)
+            return tasks
+        }
+        pendingTasks.forEach { $0.cancel() }
+        await auditor.resetRuntimeStateForTesting()
+        await lifecycleTracker.resetRuntimeStateForTesting()
+    }
+#endif
+
     public func loadTypedEmitCell(with reference: String) async throws -> Emit? {
         guard
             let typedCellUtility = CellBase.typedCellUtility,

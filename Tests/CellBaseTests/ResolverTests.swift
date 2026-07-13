@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
-@testable import CellBase
+@_spi(Testing) @testable import CellBase
 import Foundation
 
 #if canImport(CellVapor)
@@ -93,6 +93,42 @@ final class ResolverTests: XCTestCase {
         let second = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity!)
 
         XCTAssertEqual(first.uuid, second.uuid)
+    }
+
+    func testRuntimeResetClearsNamedResolvesAndLoadedInstances() async throws {
+        let resolver = CellResolver.sharedInstance
+        let name = "ResettableResolverState-\(UUID().uuidString)"
+        let resolvedIdentity = await CellBase.defaultIdentityVault?.identity(
+            for: "private",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            identityDomain: "private",
+            type: GeneralCell.self
+        )
+        let first = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: identity
+        )
+
+        await resolver.resetRuntimeStateForTesting()
+
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            identityDomain: "private",
+            type: GeneralCell.self
+        )
+        let second = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: identity
+        )
+
+        XCTAssertNotEqual(first.uuid, second.uuid)
     }
 
     func testScaffoldUniqueSameForDifferentIdentities() async throws {

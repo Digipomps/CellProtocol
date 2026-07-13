@@ -284,6 +284,18 @@ actor ResolverAuditor {
         Array(namedCellResolves.values)
     }
 
+#if DEBUG
+    func resetRuntimeStateForTesting() {
+        namedCellResolves.removeAll(keepingCapacity: false)
+        loadCellFacilitators.removeAll(keepingCapacity: false)
+        personalCellReferences.removeAll(keepingCapacity: false)
+        cellInstanceDict.removeAll(keepingCapacity: false)
+        namedCellsDict.removeAll(keepingCapacity: false)
+        reversedNamedCellsDict.removeAll(keepingCapacity: false)
+        personalCellReferenceDict.removeAll(keepingCapacity: false)
+    }
+#endif
+
     func sharedNamedInstanceSnapshots() -> [CellResolverNamedInstanceSnapshot] {
         namedCellsDict.compactMap { name, uuid in
             guard cellInstanceDict[uuid] != nil else { return nil }
