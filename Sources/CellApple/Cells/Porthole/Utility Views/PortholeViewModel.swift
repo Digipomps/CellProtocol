@@ -47,26 +47,36 @@ public class PortholeViewModel: ObservableObject {
     
     var flowLimit = 10
     var flowCancellable: AnyCancellable?
+    var initializationTask: Task<Void, Never>?
     
     var portholeCell: OrchestratorCell?
     public init() {
         print("*************** Init Porthole view model! **********************")
-        Task {
+        initializationTask = Task {
 //            await AppInitializer.shared.setupCellResolvers()
             
             if let vault = CellBase.defaultIdentityVault,
                 let resolver = CellBase.defaultCellResolver,
                 let identity = await vault.identity(for: "private", makeNewIfNotFound: true) {
 
+                let porthole: OrchestratorCell
                 do {
                     await MainActor.run {
                         self.currentRequesterIdentity = identity
                     }
-                portholeCell = try await resolver.cellAtEndpoint(endpoint: "cell:///Porthole", requester: identity) as? OrchestratorCell
+                    guard let resolvedPorthole = try await resolver.cellAtEndpoint(
+                        endpoint: "cell:///Porthole",
+                        requester: identity
+                    ) as? OrchestratorCell else {
+                        print("Loading Porthole returned a non-orchestrator cell; view model remains idle.")
+                        return
+                    }
+                    porthole = resolvedPorthole
+                    portholeCell = resolvedPorthole
 //                    let _ = portholeCell?.getOwner().valueForKey(key: "String", requester: identity) // Must implement get / set
                     let resolverEmitter = FlowElementPusherCell(owner: identity)
                     try await resolver.setResolverEmitter(resolverEmitter, requester: identity)
-                    let status = try await portholeCell!.attach(emitter: resolverEmitter, label: "resolver", requester: identity)
+                    let status = try await porthole.attach(emitter: resolverEmitter, label: "resolver", requester: identity)
                     print("Attaching resolverEmitter to Porthole with status: \(status)")
                     
                     if let existingConfiguration = portholeCell?.getCellConfiguration(),
@@ -80,6 +90,7 @@ public class PortholeViewModel: ObservableObject {
 //                    try await self.portholeCell?.setCellConfiguration(cellConfig: cellConfiguration)
                 } catch {
                     print("loading Porthole failed with error: \(error)")
+                    return
                 }
                 
 //                do {
@@ -100,7 +111,7 @@ public class PortholeViewModel: ObservableObject {
                 
                 do {
                     
-                    flowCancellable = try await self.portholeCell!.flow(requester: identity)
+                    flowCancellable = try await porthole.flow(requester: identity)
                         .sink(receiveCompletion: { completion in
                             print("Porthole flow got completion: \(completion)")
                             self.flowCancellable = nil
