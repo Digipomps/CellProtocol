@@ -177,20 +177,24 @@ actor ResolverAuditor {
     }
     
     func unregisterIdentityReference(uuid: String? = nil, name: String, identity: Identity) {
-        guard let uuid = personalCellReferenceDict[identity.uuid]?[name] else {
+        guard let registeredUUID = personalCellReferenceDict[identity.uuid]?[name],
+              uuid == nil || uuid == registeredUUID else {
             return
         }
-        
-        let refCount = cellInstanceDict[uuid]?.decrement()
-        if refCount == 0 {
-            unregisterReference()
-            
-            personalCellReferenceDict[identity.uuid]?[name] = nil
-            if personalCellReferenceDict[identity.uuid]?.count == 0 {
-                personalCellReferenceDict[identity.uuid] = nil
-            }
+
+        // Remove the identity-to-cell mapping even when the decoded Cell has
+        // not entered the in-memory instance table yet. This is required when
+        // rejecting corrupt or cross-identity persisted metadata.
+        personalCellReferenceDict[identity.uuid]?[name] = nil
+        if personalCellReferenceDict[identity.uuid]?.isEmpty == true {
+            personalCellReferenceDict[identity.uuid] = nil
         }
-        
+
+        let refCount = cellInstanceDict[registeredUUID]?.decrement()
+        if refCount == 0 {
+            cellInstanceDict[registeredUUID] = nil
+        }
+
 //        guard var instances = personalCellReferences[identity.uuid],
 //              let index = indexOfInstance(uuid: uuid, endpoint: endpoint, instances: instances) else {return}
 //        var instance = cellInstances[index]
@@ -265,6 +269,10 @@ actor ResolverAuditor {
         self.personalCellReferenceDict = identityNamedCells
         
         // 
+    }
+
+    func replaceIdentityNamedCells(_ namedCells: [String: String], for identityUUID: String) {
+        personalCellReferenceDict[identityUUID] = namedCells
     }
 
     func resolveSnapshots() -> [CellResolverResolveSnapshot] {

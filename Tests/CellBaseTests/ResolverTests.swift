@@ -161,6 +161,225 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(first.uuid, third.uuid)
     }
 
+    func testPersistedIdentityUniqueCellRejectsCrossSigningIdentityMappingBeforeReadiness() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resolver-owner-isolation-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = resolver
+        CellBase.persistedCellMasterKey = Data(repeating: 0x51, count: 32)
+        CellBase.documentRootPath = tempRoot.appendingPathComponent("CellsContainer").path
+
+        let resolvedOwnerA = await vault.identity(for: "owner-a", makeNewIfNotFound: true)
+        let resolvedOwnerB = await vault.identity(for: "owner-b", makeNewIfNotFound: true)
+        let ownerA = try XCTUnwrap(resolvedOwnerA)
+        let ownerB = try XCTUnwrap(resolvedOwnerB)
+        let name = "PersistedIdentityOwnerIsolation-\(UUID().uuidString)"
+
+        let firstUtility = TypedCellUtility(storage: FileSystemCellStorage())
+        resolver.tcUtility = firstUtility
+        CellBase.typedCellUtility = firstUtility
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            persistency: .persistant,
+            identityDomain: "owner-a",
+            type: GeneralCell.self
+        )
+        let ownerACell = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: ownerA
+        )
+
+        let copiedPublicDescriptor = ownerA.publicIdentitySnapshot()
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: copiedPublicDescriptor
+            )
+        }
+        let ownerAAfterCopiedLiveAttempt = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: ownerA
+        )
+        XCTAssertEqual(ownerAAfterCopiedLiveAttempt.uuid, ownerACell.uuid)
+
+        let resolvedOtherKeyOwner = await vault.identity(
+            for: "other-signing-key",
+            makeNewIfNotFound: true
+        )
+        let otherKeyOwner = try XCTUnwrap(resolvedOtherKeyOwner)
+        let sameUUIDDifferentKey = Identity(
+            ownerA.uuid,
+            displayName: "same UUID, different signing key",
+            identityVault: vault
+        )
+        sameUUIDDifferentKey.publicSecureKey = otherKeyOwner.publicSecureKey
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: sameUUIDDifferentKey
+            )
+        }
+        let ownerAAfterWrongKeyLiveAttempt = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: ownerA
+        )
+        XCTAssertEqual(ownerAAfterWrongKeyLiveAttempt.uuid, ownerACell.uuid)
+
+        // Simulate stale/corrupt persisted resolver metadata assigning owner
+        // A's Cell UUID to owner B, then start with a clean runtime.
+        await resolver.resetRuntimeStateForTesting()
+        let restartedUtility = TypedCellUtility(storage: FileSystemCellStorage())
+        resolver.tcUtility = restartedUtility
+        CellBase.typedCellUtility = restartedUtility
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            persistency: .persistant,
+            identityDomain: "owner-a",
+            type: GeneralCell.self
+        )
+        await resolver.setIdentityNamedCells(
+            [ownerB.uuid: [name: ownerACell.uuid]],
+            requester: ownerB
+        )
+
+        let ownerBCell = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: ownerB
+        )
+        let restoredOwner = try await ownerBCell.getOwner(requester: ownerB)
+
+        XCTAssertNotEqual(ownerACell.uuid, ownerBCell.uuid)
+        XCTAssertTrue(restoredOwner.referencesSameSigningIdentity(as: ownerB))
+
+        await resolver.resetRuntimeStateForTesting()
+        let forgedAttemptUtility = TypedCellUtility(storage: FileSystemCellStorage())
+        resolver.tcUtility = forgedAttemptUtility
+        CellBase.typedCellUtility = forgedAttemptUtility
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            persistency: .persistant,
+            identityDomain: "owner-a",
+            type: GeneralCell.self
+        )
+        await resolver.setIdentityNamedCells(
+            [ownerA.uuid: [name: ownerACell.uuid]],
+            requester: ownerA
+        )
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: copiedPublicDescriptor
+            )
+        }
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: sameUUIDDifferentKey
+            )
+        }
+        let ownerAAfterRestartedAttacks = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: ownerA
+        )
+        XCTAssertEqual(
+            ownerAAfterRestartedAttacks.uuid,
+            ownerACell.uuid,
+            "Denied public-descriptor and signing-key-collision attempts must preserve the legitimate persisted mapping."
+        )
+    }
+
+    func testIdentityMappingSurvivesAmbiguousPersistenceFailureButReplacesExplicitlyMissingRecord() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = resolver
+        let resolvedOwner = await vault.identity(for: "storage-failure-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(resolvedOwner)
+        let name = "StorageFailure-\(UUID().uuidString)"
+        let mappedUUID = UUID().uuidString
+
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            identityDomain: "storage-failure-owner",
+            type: GeneralCell.self
+        )
+        await resolver.setIdentityNamedCells(
+            [owner.uuid: [name: mappedUUID]],
+            requester: owner
+        )
+        CellBase.typedCellUtility = StatusDecodedCellUtility(result: .unavailable)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: owner
+            )
+        }
+        var mappings = await resolver.identityNamedCells(requester: owner)
+        XCTAssertEqual(mappings[owner.uuid]?[name], mappedUUID)
+
+        CellBase.typedCellUtility = StatusDecodedCellUtility(result: .missing)
+        let replacement = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: owner
+        )
+        mappings = await resolver.identityNamedCells(requester: owner)
+        XCTAssertNotEqual(replacement.uuid, mappedUUID)
+        XCTAssertEqual(mappings[owner.uuid]?[name], replacement.uuid)
+    }
+
+    func testConcurrentOwnerScopedMappingReplacementPreservesEveryOwner() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let resolvedOwnerA = await vault.identity(for: "map-owner-a", makeNewIfNotFound: true)
+        let resolvedOwnerB = await vault.identity(for: "map-owner-b", makeNewIfNotFound: true)
+        let ownerA = try XCTUnwrap(resolvedOwnerA)
+        let ownerB = try XCTUnwrap(resolvedOwnerB)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await resolver.replaceIdentityNamedCells(
+                    ["OwnerAEndpoint": "owner-a-cell"],
+                    requester: ownerA
+                )
+            }
+            group.addTask {
+                try await resolver.replaceIdentityNamedCells(
+                    ["OwnerBEndpoint": "owner-b-cell"],
+                    requester: ownerB
+                )
+            }
+            try await group.waitForAll()
+        }
+
+        let mappings = await resolver.identityNamedCells(requester: ownerA)
+        XCTAssertEqual(mappings[ownerA.uuid]?["OwnerAEndpoint"], "owner-a-cell")
+        XCTAssertEqual(mappings[ownerB.uuid]?["OwnerBEndpoint"], "owner-b-cell")
+
+        await XCTAssertThrowsErrorAsync {
+            try await resolver.replaceIdentityNamedCells(
+                ["Forged": "forged-cell"],
+                requester: ownerA.publicIdentitySnapshot()
+            )
+        }
+        let mappingsAfterDenial = await resolver.identityNamedCells(requester: ownerA)
+        XCTAssertNil(mappingsAfterDenial[ownerA.uuid]?["Forged"])
+    }
+
     func testUnsupportedSchemeThrows() async {
         let resolver = CellResolver.sharedInstance
         let identity = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true)
@@ -451,6 +670,36 @@ private final class FixedDecodedCellUtility: TypedCellProtocol {
 
     func storeAsTypedCell(cellName: String, cell: Codable, uuid: String) {}
 
+    func storeAsTypedCell(
+        cellName: String,
+        cell: Codable,
+        uuid: String,
+        options: CellStorageWriteOptions
+    ) {}
+}
+
+private final class StatusDecodedCellUtility: TypedCellProtocol {
+    private let result: TypedCellLoadResult
+
+    init(result: TypedCellLoadResult) {
+        self.result = result
+    }
+
+    required init(storage: CellStorage) {
+        result = .unavailable
+    }
+
+    func loadTypedEmitCell(with uuid: String) -> Emit? {
+        guard case .loaded(let cell) = result else { return nil }
+        return cell
+    }
+
+    func loadTypedEmitCellResult(with uuid: String) -> TypedCellLoadResult {
+        result
+    }
+
+    func loadTypedEmitCell(at path: String) -> Emit? { nil }
+    func storeAsTypedCell(cellName: String, cell: Codable, uuid: String) {}
     func storeAsTypedCell(
         cellName: String,
         cell: Codable,

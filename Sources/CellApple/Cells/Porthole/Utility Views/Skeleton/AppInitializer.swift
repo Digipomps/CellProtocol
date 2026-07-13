@@ -9,7 +9,7 @@
 //
 
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 public enum AppInitializer {
     private static let localRuntimeOnlyVerifierFlagPath = "/tmp/binding-verifier-local-runtime.flag"
@@ -19,6 +19,23 @@ public enum AppInitializer {
     @MainActor private static var initializationTask: Task<Void, Never>?
     @MainActor private static var localPreparationTask: Task<Void, Never>?
     @MainActor private static var deferredPortholeSetupTask: Task<Void, Never>?
+
+#if DEBUG
+    @_spi(Testing) @MainActor
+    public static func resetRuntimeStateForTesting(scaffoldCells: [String: String] = [:]) async {
+        let tasks = [initializationTask, localPreparationTask, deferredPortholeSetupTask].compactMap { $0 }
+        tasks.forEach { $0.cancel() }
+        initializationTask = nil
+        localPreparationTask = nil
+        deferredPortholeSetupTask = nil
+        for task in tasks {
+            await task.value
+        }
+        didPrepareLocalRuntime = false
+        didInitialize = false
+        scaffoldCellsDict = scaffoldCells
+    }
+#endif
     /// Perform early, one-time app initialization for CellBase defaults.
     /// Call this from your App's init or the first scene's task.
     @MainActor
@@ -301,13 +318,7 @@ public enum AppInitializer {
             identityDomain: "private",
             type: ChatCell.self
         )
-        try await registerResolve(
-            on: resolver,
-            name: "EntityScanner",
-            cellScope: .scaffoldUnique,
-            identityDomain: "private",
-            type: EntityScannerCell.self
-        )
+        try await registerEntityScannerResolve(on: resolver)
 
         if #available(macOS 26.0, iOS 27.0, tvOS 27.0, watchOS 20.0, *) {
             try await registerResolve(
@@ -321,6 +332,21 @@ public enum AppInitializer {
         } else {
             CellBase.diagnosticLog("OS not supported for AppleIntelligenceCell", domain: .lifecycle)
         }
+    }
+
+    /// Register the CellApple-owned scanner without initializing a vault,
+    /// Porthole, authentication UI, or other host lifecycle state. Hosts that
+    /// deliberately own their bootstrap sequence can use this narrow API while
+    /// keeping the concrete scanner implementation inside CellApple.
+    @MainActor
+    public static func registerEntityScannerResolve(on resolver: CellResolver) async throws {
+        try await registerResolve(
+            on: resolver,
+            name: "EntityScanner",
+            cellScope: .scaffoldUnique,
+            identityDomain: "private",
+            type: EntityScannerCell.self
+        )
     }
 
     @MainActor
@@ -427,42 +453,72 @@ public enum AppInitializer {
         
     }
     
-    static func getPorthole(identity: Identity) async throws -> OrchestratorCell? {
+    @_spi(Testing) public static func getPorthole(identity: Identity) async throws -> OrchestratorCell? {
         let resolver = CellResolver.sharedInstance
-        if let portholeUUID = self.scaffoldCellsDict["Porthole"] {
-            
-            
+        let identityScopedKey = portholeScaffoldKey(for: identity)
+        var seenPersistedUUIDs = Set<String>()
+        let persistedCandidates = [
+            self.scaffoldCellsDict[identityScopedKey],
+            self.scaffoldCellsDict["Porthole"]
+        ].compactMap { $0 }.filter { seenPersistedUUIDs.insert($0).inserted }
+
+        for portholeUUID in persistedCandidates {
             let fileManager = FileManager()
             let portholeURL = getDocumentsDirectory().appending(path: "CellsContainer/\(portholeUUID)")
-            
+
             if fileManager.fileExists(atPath: portholeURL.path()) {
-                if let porthole = try await resolver.tcUtility?.loadRuntimeReadyTypedEmitCell(at: "CellsContainer/\(portholeUUID)") as? OrchestratorCell {
+                // Decode without installing runtime state. Orchestrator
+                // readiness restores persisted resolver maps, so owner proof
+                // must be established first.
+                let loadResult = resolver.tcUtility?.loadTypedEmitCellResult(
+                    at: "CellsContainer/\(portholeUUID)"
+                ) ?? .unavailable
+                switch loadResult {
+                case .missing:
+                    continue
+                case .unavailable:
+                    throw CellSetupError.persistedCellUnavailable
+                case .loaded(let loadedCell):
+                    guard let porthole = loadedCell as? OrchestratorCell else {
+                        throw CellSetupError.persistedCellUnavailable
+                    }
+                    guard await porthole.bindStoredOwnerToRuntimeIdentity(identity) else {
+                        CellBase.diagnosticLog(
+                            "Ignoring persisted Porthole without owner key proof cell=\(portholeUUID)",
+                            domain: .lifecycle
+                        )
+                        continue
+                    }
                     do {
+                        try await porthole.ensureRuntimeReady()
                         try await resolver.registerNamedEmitCell(name: "Porthole", emitCell: porthole, scope: .identityUnique, identity: identity)
-                        self.scaffoldCellsDict["Porthole"] = porthole.uuid
+                        self.scaffoldCellsDict[identityScopedKey] = porthole.uuid
                         try self.saveScaffoldCellsDict()
                         CellBase.diagnosticLog("Porthole loaded as persisted on disk", domain: .lifecycle)
                         return porthole
                     } catch {
                         CellBase.diagnosticLog("Getting porthole from disk failed with error: \(error)", domain: .lifecycle)
+                        throw error
                     }
                 }
             }
-            
         }
         if let porthole = try await resolver.cellAtEndpoint(endpoint: "cell:///Porthole", requester: identity) as? OrchestratorCell {
-            resolver.tcUtility?.storeAsTypedCell(
-                cellName: "OrchestratorCell",
-                cell: porthole,
-                uuid: porthole.uuid
-            )
+            // The resolver already persisted this identity-unique Cell using
+            // its owner-bound encryption policy. Do not overwrite it through
+            // the legacy plaintext-compatible storage overload here.
             try await resolver.registerNamedEmitCell(name: "Porthole", emitCell: porthole, scope: .identityUnique, identity: identity)
-            self.scaffoldCellsDict["Porthole"] = porthole.uuid
+            self.scaffoldCellsDict[identityScopedKey] = porthole.uuid
             try self.saveScaffoldCellsDict()
             CellBase.diagnosticLog("Porthole loaded as new and pristine", domain: .lifecycle)
             return porthole
             
         }
         return nil // or throw?
+    }
+
+    private static func portholeScaffoldKey(for identity: Identity) -> String {
+        let fingerprint = identity.signingPublicKeyFingerprint ?? "missing-signing-key"
+        return "Porthole|\(identity.uuid)|\(fingerprint)"
     }
 }

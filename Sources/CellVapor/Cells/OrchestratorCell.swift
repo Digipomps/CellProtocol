@@ -51,7 +51,13 @@ class OrchestratorCell: GeneralCell {
     }
 
     public override func installCellRuntimeBindingsForAccess() async throws {
-        try await setup(owner: storedOwnerIdentity)
+        let descriptor = storedOwnerIdentity
+        guard let vault = CellBase.defaultIdentityVault,
+              let runtimeOwner = await vault.identity(forUUID: descriptor.uuid),
+              await bindStoredOwnerToRuntimeIdentity(runtimeOwner) else {
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+        try await setup(owner: runtimeOwner)
     }
 
     private func setup(owner: Identity) async throws {
@@ -525,8 +531,20 @@ class OrchestratorCell: GeneralCell {
 
         print("Identity Named emitters: \(identityNamedEmitters)")
 
-        
-        await resolver.setIdentityNamedCells(identityNamedEmitters, requester: requester)
+        guard await bindStoredOwnerToRuntimeIdentity(requester) else {
+            CellBase.diagnosticLog(
+                "Refused Vapor identity-named emitter restore without matching Porthole owner proof",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+        let ownerUUID = storedOwnerIdentity.uuid
+        if let ownerMappings = identityNamedEmitters[ownerUUID] {
+            try await resolver.replaceIdentityNamedCells(
+                ownerMappings,
+                requester: requester
+            )
+        }
         
     }
     
@@ -538,8 +556,17 @@ class OrchestratorCell: GeneralCell {
 //        resolver.
         
         let encoder = JSONEncoder()
+        guard await bindStoredOwnerToRuntimeIdentity(requester) else {
+            CellBase.diagnosticLog(
+                "Refused Vapor identity-named emitter save without matching Porthole owner proof",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
         let identityNamedCells = await resolver.identityNamedCells(requester: requester)
-        let identityNamedCellsData = try encoder.encode(identityNamedCells)
+        let ownerUUID = storedOwnerIdentity.uuid
+        let ownerScopedMappings = identityNamedCells[ownerUUID].map { [ownerUUID: $0] } ?? [:]
+        let identityNamedCellsData = try encoder.encode(ownerScopedMappings)
         print("Saving identity named cells: \(String(describing: String(data: identityNamedCellsData, encoding: .utf8)))")
         
         try await self.writeFileDataInCellDirectory(fileData: identityNamedCellsData, filename: identityNamedEmittersFilename)

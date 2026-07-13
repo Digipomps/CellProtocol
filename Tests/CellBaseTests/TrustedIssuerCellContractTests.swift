@@ -12,6 +12,7 @@ final class TrustedIssuerCellContractTests: XCTestCase {
         CellBase.defaultIdentityVault = vault
         let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
         let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+            .publicIdentitySnapshot()
         let cell = await TrustedIssuerCell(owner: owner)
 
         try await CellContractHarness.assertAdvertisedKey(

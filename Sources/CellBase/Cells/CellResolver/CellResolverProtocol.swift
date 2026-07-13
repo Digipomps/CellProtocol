@@ -33,7 +33,16 @@ public protocol CellResolverProtocol {
     func resolverRegistrySnapshot(requester: Identity) async -> CellResolverRegistrySnapshot
     func setResolverEmitter(_ emitter: FlowElementPusherCell, requester: Identity) async  throws
     func setIdentityNamedCells(_ identityNamedCells: [String : [String : String]], requester: Identity) async
+    func replaceIdentityNamedCells(_ namedCells: [String: String], requester: Identity) async throws
     
     func get(from url: URL, requester: Identity) async throws -> ValueType?
     func set(value: ValueType, into url: URL, requester: Identity) async throws -> ValueType?
+}
+
+public extension CellResolverProtocol {
+    func replaceIdentityNamedCells(_ namedCells: [String: String], requester: Identity) async throws {
+        var merged = await identityNamedCells(requester: requester)
+        merged[requester.uuid] = namedCells
+        await setIdentityNamedCells(merged, requester: requester)
+    }
 }

@@ -278,6 +278,25 @@ public class TrustedIssuerCell: GeneralCell {
         }
     }
 
+    /// Trust evaluation is a proof-verification service, not a policy-writing
+    /// capability. During Agreement condition evaluation the normal contract
+    /// lookup is intentionally disabled to prevent recursive authorization.
+    /// Permit only a requester that proves control of its signing key to pass
+    /// GeneralCell's root dispatch and the exact evaluation intercept. Every
+    /// policy, issuer, and attestation mutation still requires owner/Contract
+    /// authority through the normal authorization path.
+    public override func validateCellSpecificAccess(
+        _ requestedAccess: String,
+        at keypath: String,
+        for identity: Identity
+    ) async -> Bool {
+        guard requestedAccess == "-w--",
+              keypath == "trustedIssuers" || keypath == "trustedIssuers.evaluate" else {
+            return false
+        }
+        return await verifyRequesterIdentityControl(identity)
+    }
+
     private func setupKeys(owner: Identity) async {
         await addInterceptForGet(requester: owner, key: "trustedIssuers.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }

@@ -350,17 +350,20 @@ final class TrustedIssuerCellTests: XCTestCase {
     }
 
     func testProvedClaimConditionUsesTrustedIssuerEvaluation() async throws {
-        CellBase.debugValidateAccessForEverything = true
+        CellBase.debugValidateAccessForEverything = false
 
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
 
         let issuerVault = Curve25519TestIdentityVault()
+        CellBase.defaultIdentityVault = issuerVault
         let issuerIdentity = await issuerVault.makeIdentity(displayName: "issuer")
         let requesterIdentity = await issuerVault.identity(for: "requester", makeNewIfNotFound: true)
         let targetOwnerIdentity = await issuerVault.identity(for: "target-owner", makeNewIfNotFound: true)
+        let registryOwnerIdentity = await issuerVault.identity(for: "registry-owner", makeNewIfNotFound: true)
         let requester = try XCTUnwrap(requesterIdentity)
         let targetOwner = try XCTUnwrap(targetOwnerIdentity)
+        let registryOwner = try XCTUnwrap(registryOwnerIdentity)
         let requesterDID = try requester.did()
 
         var claim = try await VCClaim(
@@ -380,7 +383,7 @@ final class TrustedIssuerCellTests: XCTestCase {
         _ = try await entityAnchor.set(keypath: "claims.ageProof", value: .object(claimObject), requester: requester)
         try await resolver.registerNamedEmitCell(name: "EntityAnchor", emitCell: entityAnchor, scope: .identityUnique, identity: requester)
 
-        let trustedIssuerCell = await TrustedIssuerCell(owner: requester)
+        let trustedIssuerCell = await TrustedIssuerCell(owner: registryOwner)
         try await resolver.registerNamedEmitCell(name: "TrustedIssuers", emitCell: trustedIssuerCell, scope: .scaffoldUnique, identity: requester)
 
         _ = try await trustedIssuerCell.set(
@@ -400,7 +403,7 @@ final class TrustedIssuerCellTests: XCTestCase {
                     "expectedValue": .integer(13)
                 ])
             ]),
-            requester: requester
+            requester: registryOwner
         )
         _ = try await trustedIssuerCell.set(
             keypath: "trustedIssuers.issuer.upsert",
@@ -411,19 +414,142 @@ final class TrustedIssuerCellTests: XCTestCase {
                 "baseWeight": .float(0.9),
                 "contexts": .list([.string("age_over_13")])
             ]),
-            requester: requester
+            requester: registryOwner
         )
 
-        let target = TestEmitCell(owner: targetOwner, uuid: "target-cell")
+        let target = await GeneralCell(owner: targetOwner)
         let condition = ProvedClaimCondition(
             name: "age_over_13",
             statement: "identity.claims.ageProof >= 13",
             requiredCredentialType: "AgeCredential",
             subjectClaimPath: "age"
         )
-        let context = ConnectContext(source: nil, target: target, identity: requester)
-        let state = await condition.isMet(context: context)
-        XCTAssertEqual(state, .met)
+        target.agreementTemplate.conditions = [condition]
+        target.agreementTemplate.grants = [Grant(keypath: "member.state", permission: "r---")]
+        target.agreementAdmissionPolicy = .automaticWhenConditionsMet
+        let agreementRequest = Agreement(owner: targetOwner)
+        agreementRequest.conditions = [condition]
+        agreementRequest.grants = [Grant(keypath: "member.state", permission: "r---")]
+
+        let state = await target.addAgreement(agreementRequest, for: requester)
+        XCTAssertEqual(
+            state,
+            .signed,
+            "A cryptographically valid trusted credential must remain evaluable inside Agreement admission."
+        )
+        let stateAfterAdmission = try await trustedIssuerCell.get(
+            keypath: "trustedIssuers.state",
+            requester: registryOwner
+        )
+        guard case .object(let postAdmissionObject) = stateAfterAdmission else {
+            return XCTFail("Expected trusted issuer state immediately after admission")
+        }
+        XCTAssertEqual(postAdmissionObject["evaluationHistoryCount"], .integer(1))
+        let requesterCanRead = await target.validateAccess(
+            "r---",
+            at: "member.state",
+            for: requester
+        )
+        XCTAssertTrue(requesterCanRead)
+
+        let outsiderIdentity = await issuerVault.identity(
+            for: "proof-bearing-outsider",
+            makeNewIfNotFound: true
+        )
+        let outsider = try XCTUnwrap(outsiderIdentity)
+        let rootDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "-w--",
+            at: "trustedIssuers",
+            for: outsider
+        )
+        let evaluateDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "-w--",
+            at: "trustedIssuers.evaluate",
+            for: outsider
+        )
+        XCTAssertTrue(rootDecision.allowed)
+        XCTAssertEqual(rootDecision.path, .cellSpecific)
+        XCTAssertTrue(evaluateDecision.allowed)
+        XCTAssertEqual(evaluateDecision.path, .cellSpecific)
+        let readRootDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "r---",
+            at: "trustedIssuers",
+            for: outsider
+        )
+        let broadRootDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "rw--",
+            at: "trustedIssuers",
+            for: outsider
+        )
+        let childDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "-w--",
+            at: "trustedIssuers.evaluate.child",
+            for: outsider
+        )
+        XCTAssertFalse(readRootDecision.allowed)
+        XCTAssertFalse(broadRootDecision.allowed)
+        XCTAssertFalse(childDecision.allowed)
+
+        let publicOutsider = try JSONDecoder().decode(
+            Identity.self,
+            from: JSONEncoder().encode(outsider)
+        )
+        let publicRootDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "-w--",
+            at: "trustedIssuers",
+            for: publicOutsider
+        )
+        let publicEvaluateDecision = await trustedIssuerCell.authorizationDecision(
+            requestedAccess: "-w--",
+            at: "trustedIssuers.evaluate",
+            for: publicOutsider
+        )
+        XCTAssertFalse(publicRootDecision.allowed)
+        XCTAssertFalse(publicEvaluateDecision.allowed)
+        do {
+            _ = try await trustedIssuerCell.set(
+                keypath: "trustedIssuers.evaluate",
+                value: .object(["contextId": .string("age_over_13")]),
+                requester: publicOutsider
+            )
+            XCTFail("A public identity descriptor without signing-key control must not invoke evaluation")
+        } catch CellAuthorizationError.denied {
+            // Expected.
+        }
+
+        let adminKeypaths = [
+            "trustedIssuers.policy.upsert",
+            "trustedIssuers.policy.delete",
+            "trustedIssuers.issuer.upsert",
+            "trustedIssuers.issuer.delete",
+            "trustedIssuers.attestation.publish",
+            "trustedIssuers.attestation.revoke"
+        ]
+        for keypath in adminKeypaths {
+            let exactDecision = await trustedIssuerCell.authorizationDecision(
+                requestedAccess: "-w--",
+                at: keypath,
+                for: outsider
+            )
+            XCTAssertFalse(exactDecision.allowed, "Unexpected cell-specific admin grant at \(keypath)")
+            let result = try await trustedIssuerCell.set(
+                keypath: keypath,
+                value: .object(["forged": .bool(true)]),
+                requester: outsider
+            )
+            XCTAssertEqual(result, .string("denied"), "Unexpected admin mutation result at \(keypath)")
+        }
+
+        let stateAfterDeniedMutations = try await trustedIssuerCell.get(
+            keypath: "trustedIssuers.state",
+            requester: registryOwner
+        )
+        guard case .object(let stateObject) = stateAfterDeniedMutations else {
+            return XCTFail("Expected trusted issuer state after denied mutation attempts")
+        }
+        XCTAssertEqual(stateObject["policyCount"], .integer(1))
+        XCTAssertEqual(stateObject["issuerCount"], .integer(1))
+        XCTAssertEqual(stateObject["attestationCount"], .integer(0))
     }
 
     func testTargetOwnerSignatureIsNotImplicitCredentialTrust() async throws {

@@ -40,20 +40,34 @@ public class TypedCellUtility: TypedCellProtocol {
     
     
     public func loadTypedEmitCell(with uuid: String) -> Emit? {
+        guard case .loaded(let cell) = loadTypedEmitCellResult(with: uuid) else {
+            return nil
+        }
+        return cell
+    }
+
+    public func loadTypedEmitCellResult(with uuid: String) -> TypedCellLoadResult {
         do {
-            return try storage.loadEmitCell(with: uuid, decoder: decoder)
+            return .loaded(try storage.loadEmitCell(with: uuid, decoder: decoder))
         } catch {
             logLoadFailure(error, location: "uuid:\(uuid)")
-            return nil
+            return Self.isMissingStoredCell(error) ? .missing : .unavailable
         }
     }
     
     public func loadTypedEmitCell(at path: String) -> Emit? {
+        guard case .loaded(let cell) = loadTypedEmitCellResult(at: path) else {
+            return nil
+        }
+        return cell
+    }
+
+    public func loadTypedEmitCellResult(at path: String) -> TypedCellLoadResult {
         do {
-            return try storage.loadEmitCell(at: path, decoder: decoder)
+            return .loaded(try storage.loadEmitCell(at: path, decoder: decoder))
         } catch {
             logLoadFailure(error, location: "path:\(path)")
-            return nil
+            return Self.isMissingStoredCell(error) ? .missing : .unavailable
         }
     }
     

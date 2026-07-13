@@ -39,6 +39,20 @@ enum CellResolverError: Error {
 
 public enum CellSetupError: Error {
     case missingPersistanceUtility
+    case persistedCellUnavailable
+    case ownerAuthorityUnavailable
+}
+
+private enum IdentityUniqueOwnerValidation {
+    case valid
+    case mismatchedReference
+    case authorityUnproven
+}
+
+private enum PersonalCellPersistenceLoadError: Error {
+    case missing
+    case unavailable
+    case ownerReferenceMismatch
 }
 
 public struct RemoteCellHostRoute: Sendable {
@@ -1292,6 +1306,14 @@ public class CellResolver: CellResolverProtocol {
     private func emitCellWithReference(reference: String, identity: Identity) async throws -> Emit {
         if isUUID(reference) {
             if let cell = await loadCellFromMemory(uuid:reference) {
+                if cell.cellScope == .identityUnique {
+                    guard case .valid = try await validateIdentityUniqueOwner(
+                        cell,
+                        requester: identity
+                    ) else {
+                        throw CellSetupError.ownerAuthorityUnavailable
+                    }
+                }
                 if let endpoint = await auditor.cellname(for: cell.uuid),
                    let resolve = await auditor.loadNamedResolve(endpoint) {
                     await applyLifecycleTrackingIfNeeded(
@@ -1303,7 +1325,7 @@ public class CellResolver: CellResolverProtocol {
                 }
                 return cell
             }
-            if let cell = await loadCellFromPersistance(uuid: reference) {
+            if let cell = await loadCellFromPersistance(uuid: reference, requester: identity) {
                 if let endpoint = await auditor.cellname(for: cell.uuid),
                    let resolve = await auditor.loadNamedResolve(endpoint) {
                     await applyLifecycleTrackingIfNeeded(
@@ -1375,23 +1397,57 @@ public class CellResolver: CellResolverProtocol {
             )
             return emitter
         case .identityUnique:
-            if let cell = await loadPersonalCellFromMemory(name:reference, identity: identity) {
-                await applyLifecycleTrackingIfNeeded(
-                    cell: cell,
-                    resolve: resolve,
-                    endpoint: reference,
+            if let existingUUID = await auditor.loadIdentityCellUuid(
+                name: reference,
+                identity: identity
+            ) {
+                if let cell = await auditor.loadIdentityCellInstance(
+                    name: reference,
                     identity: identity
-                )
-                return cell
-            }
-            if let cell = await loadPersonalCellFromPersistance(name: reference, identity: identity) {
-                await applyLifecycleTrackingIfNeeded(
-                    cell: cell,
-                    resolve: resolve,
-                    endpoint: reference,
-                    identity: identity
-                )
-                return cell
+                ) {
+                    switch try await validateIdentityUniqueOwner(cell, requester: identity) {
+                    case .valid:
+                        await applyLifecycleTrackingIfNeeded(
+                            cell: cell,
+                            resolve: resolve,
+                            endpoint: reference,
+                            identity: identity
+                        )
+                        return cell
+                    case .mismatchedReference:
+                        await auditor.unregisterIdentityReference(
+                            uuid: existingUUID,
+                            name: reference,
+                            identity: identity
+                        )
+                    case .authorityUnproven:
+                        throw CellSetupError.ownerAuthorityUnavailable
+                    }
+                }
+                if await auditor.loadIdentityCellUuid(name: reference, identity: identity) != nil {
+                    do {
+                        let cell = try await loadPersonalCellFromPersistance(
+                            name: reference,
+                            identity: identity
+                        )
+                        await applyLifecycleTrackingIfNeeded(
+                            cell: cell,
+                            resolve: resolve,
+                            endpoint: reference,
+                            identity: identity
+                        )
+                        return cell
+                    } catch PersonalCellPersistenceLoadError.missing,
+                            PersonalCellPersistenceLoadError.ownerReferenceMismatch {
+                        await auditor.unregisterIdentityReference(
+                            uuid: existingUUID,
+                            name: reference,
+                            identity: identity
+                        )
+                    } catch {
+                        throw error
+                    }
+                }
             }
             let cell = try await createAndRegisterPersonalCell(endpoint: reference, identity: identity)
             await applyLifecycleTrackingIfNeeded(
@@ -1402,8 +1458,23 @@ public class CellResolver: CellResolverProtocol {
             )
             return cell
         case .none:
-            if let cell = await loadPersonalCellFromMemory(name:reference, identity: identity) {
-                return cell
+            if await auditor.loadIdentityCellUuid(name: reference, identity: identity) != nil {
+                if let cell = await auditor.loadIdentityCellInstance(name: reference, identity: identity) {
+                    guard case .valid = try await validateIdentityUniqueOwner(cell, requester: identity) else {
+                        throw CellSetupError.ownerAuthorityUnavailable
+                    }
+                    return cell
+                }
+                do {
+                    return try await loadPersonalCellFromPersistance(
+                        name: reference,
+                        identity: identity
+                    )
+                } catch {
+                    // Scope is unknown here, so even a missing persistence
+                    // record is not authority to mutate identity metadata.
+                    throw error
+                }
             }
             
             return try await cellLoadingSequence(key: reference, loaders: [
@@ -1440,18 +1511,51 @@ public class CellResolver: CellResolverProtocol {
         }
         return nil
     }
-   
-    private func loadPersonalCellFromPersistance(name: String, identity: Identity) async -> Emit? {
+
+    private func loadCellFromPersistance(uuid: String, requester: Identity) async -> Emit? {
         do {
-            guard let uuid = await auditor.loadIdentityCellUuid(name: name, identity: identity) else {
-                return nil
-            }
-            let emitCell = try await loadTypedEmitCell(with: uuid)
-            return emitCell
+            return try await loadTypedEmitCell(with: uuid, requester: requester)
         } catch {
-            print("loadPersonalCellFromPersistance with name: \(name) for identity: \(identity.uuid) failed with error: \(error)")
+            print("loadTypedEmitCell with uuid: \(uuid) failed with error: \(error)")
         }
         return nil
+    }
+    private func loadPersonalCellFromPersistance(name: String, identity: Identity) async throws -> Emit {
+        guard let uuid = await auditor.loadIdentityCellUuid(name: name, identity: identity),
+              let typedCellUtility = CellBase.typedCellUtility else {
+            throw PersonalCellPersistenceLoadError.unavailable
+        }
+        let emitCell: Emit
+        switch typedCellUtility.loadTypedEmitCellResult(with: uuid) {
+        case .loaded(let loaded):
+            emitCell = loaded
+        case .missing:
+            throw PersonalCellPersistenceLoadError.missing
+        case .unavailable:
+            throw PersonalCellPersistenceLoadError.unavailable
+        }
+
+        // A persisted identity-unique mapping is metadata, not proof that
+        // the active requester owns the decoded Cell. Validate the stored
+        // signing identity before runtime readiness, because readiness may
+        // restore resolver mappings or install other process-wide state.
+        switch try await validateIdentityUniqueOwner(emitCell, requester: identity) {
+        case .valid:
+            break
+        case .mismatchedReference:
+            throw PersonalCellPersistenceLoadError.ownerReferenceMismatch
+        case .authorityUnproven:
+            CellBase.diagnosticLog(
+                "Refusing persisted identity-unique cell without owner key proof endpoint=\(name) cell=\(uuid)",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+
+        _ = try await prepareCellForRuntime(emitCell)
+        try await auditor.registerReference(emitCell)
+        await lifecycleTracker.touchPersistedCell(uuid: uuid)
+        return emitCell
     }
     private func loadCellFromPersistance(name: String) async -> Emit? {
         
@@ -1463,9 +1567,6 @@ public class CellResolver: CellResolverProtocol {
         return nil
     }
     
-    private func loadPersonalCellFromMemory(name: String, identity: Identity) async -> Emit? {
-        await auditor.loadIdentityCellInstance(name: name, identity: identity)
-    }
 
     private func shouldRefreshSharedCell(_ cell: Emit, for resolve: CellResolve?) async -> Bool {
         guard let resolve,
@@ -1544,6 +1645,9 @@ public class CellResolver: CellResolverProtocol {
         guard let resolve = await auditor.loadNamedResolve(endpoint) else {
             print("Error cell not found for: \(endpoint) at create and register personal cell")
             throw CellResolverError.cellNotFound
+        }
+        guard await requesterProvesSigningControl(identity) else {
+            throw CellSetupError.ownerAuthorityUnavailable
         }
         let instance = try await resolve.new(requester: identity)
         guard let cell = instance as? Emit else {
@@ -1769,6 +1873,14 @@ public class CellResolver: CellResolverProtocol {
     }
     
     public func registerNamedEmitCell(name: String, emitCell: Emit, scope: CellUsageScope = .scaffoldUnique /*, persistancy: Persistancy = .ephemeral */, identity: Identity) async throws {
+        if scope == .identityUnique {
+            guard case .valid = try await validateIdentityUniqueOwner(
+                emitCell,
+                requester: identity
+            ) else {
+                throw CellSetupError.ownerAuthorityUnavailable
+            }
+        }
         _ = try await prepareCellForRuntime(emitCell)
         switch scope {
         case .template:
@@ -1824,18 +1936,38 @@ public class CellResolver: CellResolverProtocol {
             return tasks
         }
         pendingTasks.forEach { $0.cancel() }
+        for task in pendingTasks {
+            _ = try? await task.value
+        }
         await auditor.resetRuntimeStateForTesting()
         await lifecycleTracker.resetRuntimeStateForTesting()
     }
 #endif
 
     public func loadTypedEmitCell(with reference: String) async throws -> Emit? {
+        try await loadTypedEmitCell(with: reference, requester: nil)
+    }
+
+    public func loadTypedEmitCell(with reference: String, requester: Identity) async throws -> Emit? {
+        try await loadTypedEmitCell(with: reference, requester: Optional(requester))
+    }
+
+    private func loadTypedEmitCell(with reference: String, requester: Identity?) async throws -> Emit? {
         guard
             let typedCellUtility = CellBase.typedCellUtility,
             let uuid = isUUID(reference) ? reference : await auditor.celluuid(for: reference), // should it throw so we can catch an error? A personal unique cell will always come as UUID
             let emitCell = typedCellUtility.loadTypedEmitCell(with: uuid)
         else {
             return nil
+        }
+        if emitCell.cellScope == .identityUnique {
+            guard let requester,
+                  case .valid = try await validateIdentityUniqueOwner(
+                    emitCell,
+                    requester: requester
+                  ) else {
+                throw CellSetupError.ownerAuthorityUnavailable
+            }
         }
         _ = try await prepareCellForRuntime(emitCell)
         try await auditor.registerReference(emitCell, endpoint: reference)
@@ -1853,6 +1985,49 @@ public class CellResolver: CellResolverProtocol {
         await lifecycleTracker.touchPersistedCell(uuid: uuid)
         return emitCell
     }
+
+    private func validateIdentityUniqueOwner(
+        _ emitCell: Emit,
+        requester: Identity
+    ) async throws -> IdentityUniqueOwnerValidation {
+        let storedOwner = try await emitCell.getOwner(requester: requester)
+        guard storedOwner.uuid == requester.uuid else {
+            return .mismatchedReference
+        }
+        guard storedOwner.signingPublicKeyFingerprint != nil,
+              storedOwner.signingPublicKeyFingerprint == requester.signingPublicKeyFingerprint else {
+            return .authorityUnproven
+        }
+        if let generalCell = emitCell as? GeneralCell {
+            return await generalCell.bindStoredOwnerToRuntimeIdentity(requester)
+                ? .valid
+                : .authorityUnproven
+        }
+        return await requesterProvesSigningControl(requester)
+            ? .valid
+            : .authorityUnproven
+    }
+
+    private func requesterProvesSigningControl(_ requester: Identity) async -> Bool {
+        guard let vault = requester.identityVault,
+              let challenge = await vault.randomBytes64(),
+              !challenge.isEmpty else {
+            return false
+        }
+        do {
+            let signature = try await vault.signMessageForIdentity(
+                messageData: challenge,
+                identity: requester
+            )
+            return try await vault.verifySignature(
+                signature: signature,
+                messageData: challenge,
+                for: requester
+            )
+        } catch {
+            return false
+        }
+    }
     
     public func loadTypedEmitCell(by name: String) async throws -> Emit? {
         
@@ -1863,6 +2038,9 @@ public class CellResolver: CellResolverProtocol {
             let emitCell = typedCellUtility.loadTypedEmitCell(with: uuid)
         else {
             return nil
+        }
+        if emitCell.cellScope == .identityUnique {
+            throw CellSetupError.ownerAuthorityUnavailable
         }
         _ = try await prepareCellForRuntime(emitCell)
         try await auditor.registerReference(emitCell, endpoint: uuid)
@@ -1970,5 +2148,19 @@ public class CellResolver: CellResolverProtocol {
     public func setIdentityNamedCells(_ identityNamedCells: [String : [String : String]], requester: Identity) async {
         
         await auditor.setIdentityNamedCells(identityNamedCells)
+    }
+
+    public func replaceIdentityNamedCells(
+        _ namedCells: [String: String],
+        requester: Identity
+    ) async throws {
+        guard await requesterProvesSigningControl(requester) else {
+            CellBase.diagnosticLog(
+                "Refusing identity mapping replacement without requester key proof identity=\(requester.uuid)",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+        await auditor.replaceIdentityNamedCells(namedCells, for: requester.uuid)
     }
 }

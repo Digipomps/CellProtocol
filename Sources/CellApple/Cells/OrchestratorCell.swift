@@ -612,9 +612,20 @@ public class OrchestratorCell: GeneralCell {
 //
         CellBase.diagnosticLog("Loaded identity named emitters identityCount=\(identityNamedEmitters.count)", domain: .resolver)
 
-        if let vault = CellBase.defaultIdentityVault,
-           let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
-            await resolver.setIdentityNamedCells(identityNamedEmitters, requester: requester)
+        guard let requester = await runtimeOwnerIdentity() else {
+            CellBase.diagnosticLog(
+                "Refused identity-named emitter restore without matching Porthole owner proof",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+
+        let ownerUUID = storedOwnerIdentity.uuid
+        if let ownerMappings = identityNamedEmitters[ownerUUID] {
+            try await resolver.replaceIdentityNamedCells(
+                ownerMappings,
+                requester: requester
+            )
         }
     }
     
@@ -624,14 +635,26 @@ public class OrchestratorCell: GeneralCell {
         }
         
 //        resolver.
-        if let vault = CellBase.defaultIdentityVault,
-           let requester = await vault.identity(for: "private", makeNewIfNotFound: true ) {
-            let encoder = JSONEncoder()
-            let identityNamedCells = await resolver.identityNamedCells(requester: requester)
-            let identityNamedCellsData = try encoder.encode(identityNamedCells)
-            CellBase.diagnosticLog("Saving identity named cells identityCount=\(identityNamedCells.count)", domain: .resolver)
-            
-            try await self.writeFileDataInCellDirectory(fileData: identityNamedCellsData, filename: identityNamedEmittersFilename)
+        guard let requester = await runtimeOwnerIdentity() else {
+            throw CellSetupError.ownerAuthorityUnavailable
         }
+        let encoder = JSONEncoder()
+        let identityNamedCells = await resolver.identityNamedCells(requester: requester)
+        let ownerUUID = storedOwnerIdentity.uuid
+        let ownerScopedMappings = identityNamedCells[ownerUUID].map { [ownerUUID: $0] } ?? [:]
+        let identityNamedCellsData = try encoder.encode(ownerScopedMappings)
+        CellBase.diagnosticLog("Saving owner-scoped identity named cells identityCount=\(ownerScopedMappings.count)", domain: .resolver)
+
+        try await self.writeFileDataInCellDirectory(fileData: identityNamedCellsData, filename: identityNamedEmittersFilename)
+    }
+
+    private func runtimeOwnerIdentity() async -> Identity? {
+        let descriptor = storedOwnerIdentity
+        guard let vault = CellBase.defaultIdentityVault,
+              let candidate = await vault.identity(forUUID: descriptor.uuid),
+              await bindStoredOwnerToRuntimeIdentity(candidate) else {
+            return nil
+        }
+        return candidate
     }
 }
