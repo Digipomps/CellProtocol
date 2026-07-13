@@ -56,6 +56,10 @@ public struct Permission : Codable, Equatable {
             setPermissions(permissionString: newValue)
         }
     }
+
+    var fullPermissionString: String {
+        Self.permissionString(for: group) + Self.permissionString(for: other)
+    }
     
     enum CodingKeys: String, CodingKey
     {
@@ -235,7 +239,16 @@ public struct Permission : Codable, Equatable {
         else {
             return false
         }
-        return matchPermission(permissionRequested: requested.group, permissionGranted: granted.group)
+        guard matchPermission(
+            permissionRequested: requested.group,
+            permissionGranted: granted.group
+        ) else {
+            return false
+        }
+        return requested.other == 0 || matchPermission(
+            permissionRequested: requested.other,
+            permissionGranted: granted.other
+        )
     }
     
     static func matchPermission(permissionRequested: Int, permissionGranted: Int) -> Bool {

@@ -308,8 +308,9 @@ final class CellSecurityKitTests: XCTestCase {
         agreement.conditions = [
             LookupCondition(keypath: "identity.contractApproval", expectedValue: .bool(true))
         ]
+        cell.agreementTemplate.conditions = agreement.conditions
 
-        let state = await cell.addAgreement(agreement, for: requester)
+        let state = await cell.addAgreement(agreement, for: requester, authorizedBy: owner)
 
         XCTAssertEqual(state, .rejected)
         let events = await sink.snapshot()

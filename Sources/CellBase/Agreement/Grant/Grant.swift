@@ -61,7 +61,10 @@ public struct Grant: Codable, Equatable {
     public func granted(_ grant: Grant) -> Bool {
         var granted = false
         if self.keypath == grant.keypath {
-            if (self.permission.matchGroupPermission(permission: grant.permission.group)) { // Must be implemented to match all
+            let groupGranted = self.permission.matchGroupPermission(permission: grant.permission.group)
+            let otherGranted = grant.permission.other == 0 ||
+                self.permission.matchOtherPermission(permission: grant.permission.other)
+            if groupGranted && otherGranted {
                 granted = true
             }
         }

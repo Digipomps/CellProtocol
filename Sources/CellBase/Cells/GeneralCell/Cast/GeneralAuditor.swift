@@ -17,6 +17,7 @@ import OpenCombine
 
 
 actor GeneralAuditor {
+    typealias AuthorizationSnapshot = (revision: Int, contracts: [Contract], members: [Identity])
     private var subscribedFeeds: [String: AnyPublisher<FlowElement, Error>] = [:]
     private var feedCancellables: [String: AnyCancellable] = [:]
     private var connectedCellEmitters: [String: Emit] = [:]
@@ -107,11 +108,15 @@ actor GeneralAuditor {
     
 
     private var contracts = [Contract]()
+    private var authorizationRevision = 0
     func loadContracts() -> [Contract] {
         return contracts
     }
     func addContract(_ contract: Contract) {
-        contracts.removeAll(where: { $0.uuid == contract.uuid })
+        contracts.removeAll(where: {
+            $0.uuid == contract.uuid ||
+                $0.authorizationDeduplicationKey == contract.authorizationDeduplicationKey
+        })
         contracts.append(contract)
     }
     func replaceContracts(_ contracts: [Contract]) {
@@ -122,8 +127,66 @@ actor GeneralAuditor {
             storedContract.uuid == contract.uuid
         })
     }
+
+    func removeContracts(subjectUUID: String) {
+        contracts.removeAll { $0.subject.uuid == subjectUUID }
+    }
     
     private var members = [Identity]()
+
+    func installAuthorization(
+        contract: Contract,
+        member: Identity,
+        restoring persisted: AuthorizationSnapshot
+    ) -> AuthorizationSnapshot {
+        hydrateAuthorizationIfEmpty(from: persisted)
+        addContract(contract)
+        addMember(member)
+        authorizationRevision += 1
+        return authorizationSnapshot()
+    }
+
+    func removeAuthorization(
+        subjectUUID: String,
+        restoring persisted: AuthorizationSnapshot
+    ) -> AuthorizationSnapshot {
+        hydrateAuthorizationIfEmpty(from: persisted)
+        contracts.removeAll { $0.subject.uuid == subjectUUID }
+        members.removeAll { $0.uuid == subjectUUID }
+        authorizationRevision += 1
+        return authorizationSnapshot()
+    }
+
+    func replaceAuthorization(
+        contracts: [Contract],
+        members: [Identity],
+        revision: Int
+    ) -> AuthorizationSnapshot {
+        guard revision >= authorizationRevision else {
+            return authorizationSnapshot()
+        }
+        self.contracts = contracts
+        self.members = members
+        authorizationRevision = max(authorizationRevision, revision)
+        return authorizationSnapshot()
+    }
+
+    private func hydrateAuthorizationIfEmpty(from persisted: AuthorizationSnapshot) {
+        guard contracts.isEmpty,
+              members.isEmpty,
+              authorizationRevision == 0,
+              persisted.revision >= authorizationRevision,
+              persisted.contracts.isEmpty == false || persisted.members.isEmpty == false else {
+            return
+        }
+        contracts = persisted.contracts
+        members = persisted.members
+        authorizationRevision = max(authorizationRevision, persisted.revision)
+    }
+
+    func authorizationSnapshot() -> AuthorizationSnapshot {
+        (authorizationRevision, contracts, members)
+    }
     
     func loadMembers() -> [Identity] {
         return members

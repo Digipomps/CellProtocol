@@ -128,16 +128,371 @@ final class GeneralCellInterfaceTests: XCTestCase {
         await cell.addInterceptForGet(requester: owner, key: "shared") { _, _ in
             return .string("shared-ok")
         }
+        cell.agreementTemplate.addGrant("r---", for: "shared")
 
         let agreement = Agreement(owner: owner)
         agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(other)
 
-        let state = await cell.addAgreement(agreement, for: other)
+        let state = await cell.addAgreement(agreement, for: other, authorizedBy: owner)
         XCTAssertEqual(state, .signed)
 
         let value = try await cell.get(keypath: "shared", requester: other)
         XCTAssertEqual(value, .string("shared-ok"))
+    }
+
+    func testRequesterCannotEscalateAgreementBeyondCellTemplate() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        cell.agreementTemplate.addGrant("r---", for: "published.state")
+
+        let attackerSuppliedAgreement = Agreement(owner: owner)
+        attackerSuppliedAgreement.addGrant("rwxs", for: "private.admin")
+
+        let state = await cell.addAgreement(attackerSuppliedAgreement, for: requester)
+        let attackerCanAdminister = await cell.validateAccess(
+            "rwxs",
+            at: "private.admin",
+            for: requester
+        )
+
+        XCTAssertEqual(state, .rejected)
+        XCTAssertFalse(
+            attackerCanAdminister,
+            "A requester must never mint authority outside the Cell owner's current Agreement template."
+        )
+    }
+
+    func testRequesterCannotEscalatePermissionOnPublishedTemplateKey() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "published.state")
+        cell.agreementAdmissionPolicy = .ownerPublishedRead
+
+        let request = Agreement(owner: owner)
+        request.addGrant("rwxs", for: "published.state")
+
+        let state = await cell.addAgreement(request, for: requester)
+        let requesterCanEscalate = await cell.validateAccess("rwxs", at: "published.state", for: requester)
+
+        XCTAssertEqual(state, .rejected)
+        XCTAssertFalse(requesterCanEscalate)
+    }
+
+    func testOwnerPublishedReadRejectsLatentOtherPermissionBits() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementAdmissionPolicy = .ownerPublishedRead
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = [Grant(keypath: "published.state", permission: "r---rwxs")]
+
+        let request = Agreement(owner: owner)
+        request.conditions = []
+        request.grants = [Grant(keypath: "published.state", permission: "r---rwxs")]
+
+        let state = await cell.addAgreement(request, for: requester)
+
+        XCTAssertEqual(state, .rejected)
+    }
+
+    func testDefaultAdmissionPolicyRejectsConditionlessAutomaticWriteContract() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = []
+        cell.agreementTemplate.addGrant("rw--", for: "state")
+
+        let request = Agreement(owner: owner)
+        request.conditions = []
+        request.grants = []
+        request.addGrant("rw--", for: "state")
+
+        let state = await cell.addAgreement(request, for: requester)
+        let requesterCanWrite = await cell.validateAccess("rw--", at: "state", for: requester)
+
+        XCTAssertEqual(state, .rejected)
+        XCTAssertFalse(requesterCanWrite)
+    }
+
+    func testExplicitOwnerPublishedReadPolicyAllowsOnlyTemplateBoundRead() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementAdmissionPolicy = .ownerPublishedRead
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = []
+        cell.agreementTemplate.addGrant("r---", for: "published.state")
+
+        let request = Agreement(owner: owner)
+        request.conditions = []
+        request.grants = []
+        request.addGrant("r---", for: "published.state")
+
+        let state = await cell.addAgreement(request, for: requester)
+        let requesterCanRead = await cell.validateAccess("r---", at: "published.state", for: requester)
+
+        XCTAssertEqual(state, .signed)
+        XCTAssertTrue(requesterCanRead)
+    }
+
+    func testCurrentAgreementTemplateRevokesPreviouslyIssuedGrant() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        let request = Agreement(owner: owner)
+        request.addGrant("r---", for: "shared")
+        let state = await cell.addAgreement(request, for: requester, authorizedBy: owner)
+        XCTAssertEqual(state, .signed)
+        let requesterCanReadBeforeRevocation = await cell.validateAccess("r---", at: "shared", for: requester)
+        XCTAssertTrue(requesterCanReadBeforeRevocation)
+
+        cell.agreementTemplate.grants.removeAll { $0.keypath == "shared" }
+
+        let requesterCanReadAfterRevocation = await cell.validateAccess("r---", at: "shared", for: requester)
+        XCTAssertFalse(requesterCanReadAfterRevocation)
+        let admissionAfterRevocation = await cell.admit(
+            context: ConnectContext(source: nil, target: cell, identity: requester)
+        )
+        XCTAssertEqual(admissionAfterRevocation, .signContract)
+        let encoded = try JSONEncoder().encode(cell)
+        let restored = try JSONDecoder().decode(GeneralCell.self, from: encoded)
+        let restoredAdmission = await restored.admit(
+            context: ConnectContext(source: nil, target: restored, identity: requester)
+        )
+        XCTAssertEqual(restoredAdmission, .signContract)
+    }
+
+    func testAgreementRequestCannotOutliveCurrentTemplate() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.duration = 60
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        let request = Agreement(owner: owner)
+        request.duration = 61
+        request.addGrant("r---", for: "shared")
+
+        let state = await cell.addAgreement(request, for: requester, authorizedBy: owner)
+        XCTAssertEqual(state, .rejected)
+    }
+
+    func testConcurrentRepeatedAgreementIssuanceIsIdempotent() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        let states = await withTaskGroup(of: AgreementState.self, returning: [AgreementState].self) { group in
+            for _ in 0..<40 {
+                group.addTask {
+                    let request = Agreement(owner: owner)
+                    request.addGrant("r---", for: "shared")
+                    return await cell.addAgreement(request, for: requester, authorizedBy: owner)
+                }
+            }
+            var values: [AgreementState] = []
+            for await state in group {
+                values.append(state)
+            }
+            return values
+        }
+
+        XCTAssertEqual(states.count, 40)
+        XCTAssertTrue(states.allSatisfy { $0 == .signed })
+        let encoded = try JSONEncoder().encode(cell)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let contracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(contracts.count, 1)
+    }
+
+    func testSequentialAttachRequestsDoNotMutatePublishedAgreementTemplate() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let first = await vault.identity(for: "first", makeNewIfNotFound: true)!
+        let second = await vault.identity(for: "second", makeNewIfNotFound: true)!
+        let source = await GeneralCell(owner: first)
+        let published = await GeneralCell(owner: owner)
+        published.agreementAdmissionPolicy = .ownerPublishedRead
+        published.agreementTemplate.conditions = []
+        published.agreementTemplate.grants = []
+        published.agreementTemplate.addGrant("r---", for: "published.state")
+
+        let firstState = try await source.attach(emitter: published, label: "first", requester: first)
+        let secondState = try await source.attach(emitter: published, label: "second", requester: second)
+
+        XCTAssertEqual(firstState, .connected)
+        XCTAssertEqual(secondState, .connected)
+        XCTAssertEqual(published.agreementTemplate.state, .template)
+        XCTAssertEqual(published.agreementTemplate.signatories.count, 1)
+        XCTAssertEqual(published.agreementTemplate.signatories.first, owner)
+        let firstCanRead = await published.validateAccess("r---", at: "published.state", for: first)
+        let secondCanRead = await published.validateAccess("r---", at: "published.state", for: second)
+        XCTAssertTrue(firstCanRead)
+        XCTAssertTrue(secondCanRead)
+    }
+
+    func testRemovingMemberRevokesContractsAcrossRestart() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        let request = Agreement(owner: owner)
+        request.addGrant("r---", for: "shared")
+        let state = await cell.addAgreement(request, for: requester, authorizedBy: owner)
+        XCTAssertEqual(state, .signed)
+
+        await cell.removeMember(member: requester, requester: owner)
+
+        let canRead = await cell.validateAccess("r---", at: "shared", for: requester)
+        let admission = await cell.admit(
+            context: ConnectContext(source: nil, target: cell, identity: requester)
+        )
+        XCTAssertFalse(canRead)
+        XCTAssertEqual(admission, .signContract)
+
+        let restored = try JSONDecoder().decode(
+            GeneralCell.self,
+            from: JSONEncoder().encode(cell)
+        )
+        let restoredCanRead = await restored.validateAccess("r---", at: "shared", for: requester)
+        let restoredAdmission = await restored.admit(
+            context: ConnectContext(source: nil, target: restored, identity: requester)
+        )
+        XCTAssertFalse(restoredCanRead)
+        XCTAssertEqual(restoredAdmission, .signContract)
+    }
+
+    func testFirstAgreementAfterRestartPreservesExistingAuthorizations() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let first = await vault.identity(for: "first", makeNewIfNotFound: true)!
+        let second = await vault.identity(for: "second", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        let firstRequest = Agreement(owner: owner)
+        firstRequest.addGrant("r---", for: "shared")
+        let firstState = await cell.addAgreement(firstRequest, for: first, authorizedBy: owner)
+        XCTAssertEqual(firstState, .signed)
+        let restored = try JSONDecoder().decode(
+            GeneralCell.self,
+            from: JSONEncoder().encode(cell)
+        )
+
+        let secondRequest = Agreement(owner: owner)
+        secondRequest.addGrant("r---", for: "shared")
+        let secondState = await restored.addAgreement(
+            secondRequest,
+            for: second,
+            authorizedBy: owner
+        )
+
+        XCTAssertEqual(secondState, .signed)
+        let firstCanRead = await restored.validateAccess("r---", at: "shared", for: first)
+        let secondCanRead = await restored.validateAccess("r---", at: "shared", for: second)
+        XCTAssertTrue(firstCanRead)
+        XCTAssertTrue(secondCanRead)
+        let encoded = try JSONEncoder().encode(restored)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let contracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(contracts.count, 2)
+    }
+
+    func testFirstRemovalAfterRestartPreservesOtherAuthorizations() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let first = await vault.identity(for: "first", makeNewIfNotFound: true)!
+        let second = await vault.identity(for: "second", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+
+        for subject in [first, second] {
+            let request = Agreement(owner: owner)
+            request.addGrant("r---", for: "shared")
+            let state = await cell.addAgreement(request, for: subject, authorizedBy: owner)
+            XCTAssertEqual(state, .signed)
+        }
+        let restored = try JSONDecoder().decode(
+            GeneralCell.self,
+            from: JSONEncoder().encode(cell)
+        )
+
+        await restored.removeMember(member: first, requester: owner)
+
+        let firstCanRead = await restored.validateAccess("r---", at: "shared", for: first)
+        let secondCanRead = await restored.validateAccess("r---", at: "shared", for: second)
+        XCTAssertFalse(firstCanRead)
+        XCTAssertTrue(secondCanRead)
+        let encoded = try JSONEncoder().encode(restored)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let contracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(contracts.count, 1)
+    }
+
+    func testConcurrentFirstRemovalAndAdditionAfterRestartDoNotResurrectRevokedContract() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let first = await vault.identity(for: "first", makeNewIfNotFound: true)!
+        let second = await vault.identity(for: "second", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+        let firstRequest = Agreement(owner: owner)
+        firstRequest.addGrant("r---", for: "shared")
+        let firstState = await cell.addAgreement(firstRequest, for: first, authorizedBy: owner)
+        XCTAssertEqual(firstState, .signed)
+
+        let restored = try JSONDecoder().decode(
+            GeneralCell.self,
+            from: JSONEncoder().encode(cell)
+        )
+        let secondRequest = Agreement(owner: owner)
+        secondRequest.addGrant("r---", for: "shared")
+
+        async let removal: Void = restored.removeMember(member: first, requester: owner)
+        async let addition = restored.addAgreement(secondRequest, for: second, authorizedBy: owner)
+        _ = await removal
+        let secondState = await addition
+
+        XCTAssertEqual(secondState, .signed)
+        let firstCanRead = await restored.validateAccess("r---", at: "shared", for: first)
+        let secondCanRead = await restored.validateAccess("r---", at: "shared", for: second)
+        XCTAssertFalse(firstCanRead)
+        XCTAssertTrue(secondCanRead)
+        let encoded = try JSONEncoder().encode(restored)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let contracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(contracts.count, 1)
     }
 
     func testStoragePermissionRequiresExplicitIdentityBoundSGrant() async throws {
@@ -147,17 +502,18 @@ final class GeneralCellInterfaceTests: XCTestCase {
         let reader = await vault.identity(for: "reader", makeNewIfNotFound: true)!
         let storer = await vault.identity(for: "storer", makeNewIfNotFound: true)!
         let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r--s", for: "shared")
 
         let readAgreement = Agreement(owner: owner)
         readAgreement.addGrant("r---", for: "shared")
         readAgreement.signatories.append(reader)
-        let readAgreementState = await cell.addAgreement(readAgreement, for: reader)
+        let readAgreementState = await cell.addAgreement(readAgreement, for: reader, authorizedBy: owner)
         XCTAssertEqual(readAgreementState, .signed)
 
         let storageAgreement = Agreement(owner: owner)
         storageAgreement.addGrant("r--s", for: "shared")
         storageAgreement.signatories.append(storer)
-        let storageAgreementState = await cell.addAgreement(storageAgreement, for: storer)
+        let storageAgreementState = await cell.addAgreement(storageAgreement, for: storer, authorizedBy: owner)
         XCTAssertEqual(storageAgreementState, .signed)
 
         let readerCanRead = await cell.validateAccess("r---", at: "shared", for: reader)
@@ -308,12 +664,13 @@ final class GeneralCellInterfaceTests: XCTestCase {
         await cell.addInterceptForGet(requester: owner, key: "shared") { _, _ in
             .string("shared-ok")
         }
+        cell.agreementTemplate.addGrant("r---", for: "shared")
 
         let agreement = Agreement(owner: owner)
         agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(member)
 
-        let state = await cell.addAgreement(agreement, for: member)
+        let state = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
         XCTAssertEqual(state, .signed)
 
         let memberCanRead = await cell.validateAccess("r---", at: "shared", for: member)
@@ -345,12 +702,13 @@ final class GeneralCellInterfaceTests: XCTestCase {
         let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
         let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
         let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.addGrant("r---", for: "shared")
 
         let agreement = Agreement(owner: owner)
         agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(member)
 
-        let state = await cell.addAgreement(agreement, for: member)
+        let state = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
         XCTAssertEqual(state, .signed)
 
         let encoded = try JSONEncoder().encode(cell)

@@ -125,6 +125,21 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertFalse(Permission.matchPermission(permissionRequested: "---S", permissionGranted: "rwxs"))
     }
 
+    func testGrantSubsetChecksIncludeOtherPermissionBits() {
+        let publicRead = Grant(keypath: "state", permission: "r---")
+        let latentOtherAuthority = Grant(keypath: "state", permission: "r---rwxs")
+        XCTAssertFalse(publicRead.granted(latentOtherAuthority))
+        XCTAssertFalse(Permission.matchPermission(
+            permissionRequested: "r---rwxs",
+            permissionGranted: "r---"
+        ))
+
+        let delegatedReadWrite = Grant(keypath: "state", permission: "r---rw--")
+        let delegatedRead = Grant(keypath: "state", permission: "r---r---")
+        XCTAssertTrue(delegatedReadWrite.granted(delegatedReadWrite))
+        XCTAssertTrue(delegatedReadWrite.granted(delegatedRead))
+    }
+
     func testAgreementSetAddsConditionWhenExistingConditionsAreEmpty() throws {
         let owner = Identity("agreement-owner-empty-conditions", displayName: "Agreement Owner", identityVault: nil)
         let agreement = Agreement(owner: owner)
@@ -165,6 +180,66 @@ final class AgreementCodingTests: XCTestCase {
         contract.agreement.addGrant("r---", for: "tampered")
         let tamperedSignature = await contract.verifySignature()
         XCTAssertFalse(tamperedSignature)
+    }
+
+    func testContractRejectsFutureExpiredOverlongAndWrongDomainBindings() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let subject = await vault.identity(for: "subject", makeNewIfNotFound: true)!
+        let agreement = Agreement(owner: owner)
+        agreement.conditions = []
+        agreement.grants = [Grant(keypath: "state", permission: "r---")]
+        agreement.signatories.append(subject)
+        agreement.state = .signed
+
+        let future = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private",
+            issuedAt: Date(timeIntervalSinceNow: Contract.allowedClockSkew + 1)
+        )
+        let futureValid = await future.verifySignature()
+        XCTAssertFalse(futureValid)
+
+        agreement.duration = 1
+        let expired = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private",
+            issuedAt: Date(timeIntervalSinceNow: -2)
+        )
+        let expiredValid = await expired.verifySignature()
+        XCTAssertFalse(expiredValid)
+
+        agreement.duration = Int(Contract.maximumDuration) + 1
+        let overlong = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private"
+        )
+        let overlongValid = await overlong.verifySignature()
+        XCTAssertFalse(overlongValid)
+
+        agreement.duration = 60
+        let bound = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private"
+        )
+        let wrongDomainValid = await bound.verifyAuthorizationBinding(
+            expectedIssuer: owner,
+            expectedSubject: subject,
+            expectedDomain: "other"
+        )
+        XCTAssertFalse(wrongDomainValid)
     }
 
     private func removingKeys<T: Encodable>(_ keys: [String], from value: T) throws -> Data {
