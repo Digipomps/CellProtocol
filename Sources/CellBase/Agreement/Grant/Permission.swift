@@ -3,17 +3,23 @@
 
 import Foundation
 
+/// A capability bitmask rendered canonically as `rwxs`.
+///
+/// `s` authorizes persistent retention of output. It is evidence carried by an
+/// identity-bound Agreement/Contract; it is not a technical copy-prevention
+/// mechanism and does not by itself authorize forwarding or redistribution.
 public struct Permission : Codable, Equatable {
     public var uuid: String
     
     
-    static let r = 0b00000100 // read 1
+    static let r = 0b00000100 // read 4
     static let w = 0b00000010 // write 2
-    static let x = 0b00000001 // execute 4
+    static let x = 0b00000001 // execute 1
+    static let s = 0b00001000 // storage 8
 
     static let rw = Permission.r | Permission.w
-    static let rwx = 0b00000111
-//    static let rwxs = 0b00001111
+    static let rwx = Permission.r | Permission.w | Permission.x
+    static let rwxs = Permission.r | Permission.w | Permission.x | Permission.s
     
     
 //    let user: Int
@@ -36,6 +42,11 @@ public struct Permission : Codable, Equatable {
             }
             if group & Permission.x == Permission.x {
                 perm += "x"
+            } else {
+                perm += "-"
+            }
+            if group & Permission.s == Permission.s {
+                perm += "s"
             } else {
                 perm += "-"
             }
@@ -98,14 +109,15 @@ public struct Permission : Codable, Equatable {
 
     static func parse(_ permissionDescription: String) -> (group: Int, other: Int)? {
         let trimmed = permissionDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Three- and six-character forms are legacy text compatibility paths.
+        // New code emits four/eight characters; legacy input never infers storage.
         if trimmed.count == 3 {
             guard let group = permissionTripletToInt(trimmed) else { return nil }
             return (group, 0)
         }
 
         if trimmed.count == 4,
-           trimmed.last == "-",
-           let group = permissionTripletToInt(String(trimmed.prefix(3))) {
+           let group = permissionQuadToInt(trimmed) {
             return (group, 0)
         }
 
@@ -114,6 +126,17 @@ public struct Permission : Codable, Equatable {
             guard
                 let group = permissionTripletToInt(String(trimmed.prefix(upTo: groupIndex))),
                 let other = permissionTripletToInt(String(trimmed[groupIndex...]))
+            else {
+                return nil
+            }
+            return (group, other)
+        }
+
+        if trimmed.count == 8 {
+            let groupIndex = trimmed.index(trimmed.startIndex, offsetBy: 4)
+            guard
+                let group = permissionQuadToInt(String(trimmed.prefix(upTo: groupIndex))),
+                let other = permissionQuadToInt(String(trimmed[groupIndex...]))
             else {
                 return nil
             }
@@ -160,6 +183,26 @@ public struct Permission : Codable, Equatable {
         switch permissionString[thirdIndex] {
         case "x":
             permission += Permission.x
+        case "-":
+            break
+        default:
+            return nil
+        }
+
+        return permission
+    }
+
+    private static func permissionQuadToInt(_ permissionString: String) -> Int? {
+        guard permissionString.count == 4 else { return nil }
+        let triplet = String(permissionString.prefix(3))
+        guard var permission = permissionTripletToInt(triplet) else {
+            return nil
+        }
+
+        let fourthIndex = permissionString.index(permissionString.startIndex, offsetBy: 3)
+        switch permissionString[fourthIndex] {
+        case "s":
+            permission += Permission.s
         case "-":
             break
         default:
@@ -224,6 +267,15 @@ public struct Permission : Codable, Equatable {
     }
     
     public func description() -> String {
-        return "user: rwx group: \(group) other: \(other)"
+        return "group: \(Permission.permissionString(for: group)) other: \(Permission.permissionString(for: other))"
+    }
+
+    private static func permissionString(for permission: Int) -> String {
+        var result = ""
+        result += permission & Permission.r == Permission.r ? "r" : "-"
+        result += permission & Permission.w == Permission.w ? "w" : "-"
+        result += permission & Permission.x == Permission.x ? "x" : "-"
+        result += permission & Permission.s == Permission.s ? "s" : "-"
+        return result
     }
 }

@@ -1504,7 +1504,7 @@ struct VaultIdentity: Codable {
             self.properties = [String: ValueType]()
         }
 
-        grants.append(Grant(keypath: "displayName", permission: "r--")) // For testing - later check policies
+        grants.append(Grant(keypath: "displayName", permission: "r---")) // For testing - later check policies
         
         publicKey = Data()
         privateKey = Data()
@@ -1523,7 +1523,7 @@ struct VaultIdentity: Codable {
         if self.properties == nil {
             self.properties = [String: ValueType]()
         }
-        grants.append(Grant(nil, keypath: "displayName", permission: "r--"))
+        grants.append(Grant(nil, keypath: "displayName", permission: "r---"))
         
         let keyMaterial = Self.makeSigningKeyMaterial(for: uuid)
         publicKey = keyMaterial.publicKey
@@ -1597,7 +1597,7 @@ struct VaultIdentity: Codable {
             self.properties = [String: ValueType]()
         }
         
-        grants.append(Grant(keypath: "displayName", permission: "r--"))
+        grants.append(Grant(keypath: "displayName", permission: "r---"))
     }
     
     init(identity: inout Identity) {

@@ -73,7 +73,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         if self.properties == nil {
             self.properties = [String: ValueType]()
         }
-        grants.append(Grant(nil, keypath: "displayName", permission: "r--")) // For testing - later check policies
+        grants.append(Grant(nil, keypath: "displayName", permission: "r---")) // For testing - later check policies
     }
     
     public init(_ uuid: String = UUID().uuidString, displayName: String, identityVault: IdentityVaultProtocol?) {
@@ -83,7 +83,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         if self.properties == nil {
             self.properties = [String: ValueType]()
         }
-        grants.append(Grant(nil, keypath: "displayName", permission: "r--"))
+        grants.append(Grant(nil, keypath: "displayName", permission: "r---"))
         self.identityVault = identityVault
     }
     
@@ -113,7 +113,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
             self.properties = [String: ValueType]()
         }
         
-        grants.append(Grant(keypath: "displayName", permission: "r--"))
+        grants.append(Grant(keypath: "displayName", permission: "r---"))
         
         self.identityVault = nil
     }

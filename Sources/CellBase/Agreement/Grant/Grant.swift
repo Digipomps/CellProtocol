@@ -25,7 +25,7 @@ public struct Grant: Codable, Equatable {
     public init() {
         uuid = UUID().uuidString
         name = "test grant"
-        permission = Permission("r--")
+        permission = Permission("r---")
         keypath =  "identity.displayName"
     }
     

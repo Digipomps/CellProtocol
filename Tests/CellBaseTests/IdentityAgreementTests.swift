@@ -68,7 +68,7 @@ final class IdentityAgreementTests: XCTestCase {
 
     func testGrantConditionMetForIdentityGrant() async {
         let identity = TestFixtures.makeIdentity(displayName: "user")
-        let condition = GrantCondition(requestedGrant: "identity.displayName", requestedPermission: "r--")
+        let condition = GrantCondition(requestedGrant: "identity.displayName", requestedPermission: "r---")
         let context = ConnectContext(source: nil, target: nil, identity: identity)
 
         let state = await condition.isMet(context: context)

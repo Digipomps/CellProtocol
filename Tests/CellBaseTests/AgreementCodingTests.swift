@@ -46,31 +46,83 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertEqual(decoded.permission.permissionString, grant.permission.permissionString)
     }
 
-    func testLegacyFourCharacterPermissionsNormalizeAndStaySeparated() throws {
+    func testCanonicalFourCharacterPermissionsPreserveStorageAndStaySeparated() throws {
         let read = Grant(keypath: "person", permission: "r---")
         let write = Grant(keypath: "person", permission: "-w--")
         let readWrite = Grant(keypath: "person", permission: "rw--")
         let execute = Grant(keypath: "person", permission: "--x-")
+        let storage = Grant(keypath: "person", permission: "---s")
+        let readStorage = Grant(keypath: "person", permission: "r--s")
+        let all = Grant(keypath: "person", permission: "rwxs")
 
-        XCTAssertEqual(read.permission.permissionString, "r--")
-        XCTAssertEqual(write.permission.permissionString, "-w-")
-        XCTAssertEqual(readWrite.permission.permissionString, "rw-")
-        XCTAssertEqual(execute.permission.permissionString, "--x")
+        XCTAssertEqual(read.permission.permissionString, "r---")
+        XCTAssertEqual(write.permission.permissionString, "-w--")
+        XCTAssertEqual(readWrite.permission.permissionString, "rw--")
+        XCTAssertEqual(execute.permission.permissionString, "--x-")
+        XCTAssertEqual(storage.permission.permissionString, "---s")
+        XCTAssertEqual(readStorage.permission.permissionString, "r--s")
+        XCTAssertEqual(all.permission.permissionString, "rwxs")
+        XCTAssertEqual(all.permission.description(), "group: rwxs other: ----")
 
         XCTAssertTrue(readWrite.granted(read))
         XCTAssertTrue(readWrite.granted(write))
         XCTAssertFalse(read.granted(write))
         XCTAssertFalse(write.granted(read))
         XCTAssertFalse(readWrite.granted(execute))
+        XCTAssertTrue(readStorage.granted(read))
+        XCTAssertTrue(readStorage.granted(storage))
+        XCTAssertFalse(read.granted(storage))
+        XCTAssertFalse(storage.granted(read))
+        XCTAssertTrue(all.granted(storage))
+        XCTAssertFalse(Permission.matchPermission(permissionRequested: "---s", permissionGranted: "rwx-"))
+        XCTAssertTrue(Permission.matchPermission(permissionRequested: "---s", permissionGranted: "rwxs"))
+    }
+
+    func testLegacyPermissionWidthsDecodeWithoutGrantingStorage() throws {
+        let legacyRead = Grant(keypath: "person", permission: "r--")
+        let legacyGroupAndOther = Permission("r---w-")
+
+        XCTAssertEqual(legacyRead.permission.permissionString, "r---")
+        XCTAssertFalse(legacyRead.permission.matchGroupPermission(permission: Permission.s))
+        XCTAssertEqual(legacyGroupAndOther.permissionString, "r---")
+        XCTAssertTrue(legacyGroupAndOther.matchOtherPermission(permission: Permission.w))
+        XCTAssertFalse(legacyGroupAndOther.matchOtherPermission(permission: Permission.s))
+    }
+
+    func testCanonicalGroupAndOtherPermissionsSupportStorage() throws {
+        let permission = Permission("r--s-w-s")
+
+        XCTAssertEqual(permission.permissionString, "r--s")
+        XCTAssertTrue(permission.matchGroupPermission(permission: Permission.r | Permission.s))
+        XCTAssertTrue(permission.matchOtherPermission(permission: Permission.w | Permission.s))
+        XCTAssertFalse(permission.matchOtherPermission(permission: Permission.x))
+    }
+
+    func testPermissionIntegerWireFormatRemainsBackwardCompatibleAndAddsStorageBit() throws {
+        let legacyJSON = Data(#"{"uuid":"legacy","group":4,"other":0}"#.utf8)
+        let legacy = try JSONDecoder().decode(Permission.self, from: legacyJSON)
+
+        XCTAssertEqual(legacy.permissionString, "r---")
+        XCTAssertFalse(legacy.matchGroupPermission(permission: Permission.s))
+
+        let storage = Permission("---s")
+        let encoded = try jsonObject(from: JSONEncoder().encode(storage))
+        XCTAssertEqual(encoded["group"] as? Int, 8)
+        XCTAssertEqual(encoded["other"] as? Int, 0)
+
+        let roundTripped = try JSONDecoder().decode(Permission.self, from: JSONEncoder().encode(storage))
+        XCTAssertEqual(roundTripped.permissionString, "---s")
     }
 
     func testInvalidPermissionRequestsDenyInsteadOfMatchingEverything() throws {
         let grant = Grant(keypath: "person", permission: "r---")
         let invalidRequest = Grant(keypath: "person", permission: "invalid")
 
-        XCTAssertEqual(invalidRequest.permission.permissionString, "---")
+        XCTAssertEqual(invalidRequest.permission.permissionString, "----")
         XCTAssertFalse(grant.granted(invalidRequest))
         XCTAssertFalse(Permission.matchPermission(permissionRequested: "invalid", permissionGranted: "r---"))
+        XCTAssertFalse(Permission.matchPermission(permissionRequested: "r--q", permissionGranted: "rwxs"))
+        XCTAssertFalse(Permission.matchPermission(permissionRequested: "---S", permissionGranted: "rwxs"))
     }
 
     func testAgreementSetAddsConditionWhenExistingConditionsAreEmpty() throws {

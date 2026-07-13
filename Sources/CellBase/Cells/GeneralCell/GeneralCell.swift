@@ -71,7 +71,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     public func connectedLabels(requester: Identity) async -> [String] {
 
-        if await validateAccess("r--", at: "connectedCellEmitters", for: requester) {
+        if await validateAccess("r---", at: "connectedCellEmitters", for: requester) {
             return  await auditor.connectedLabels()
         }
         return [String]()
@@ -79,7 +79,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     public func label(for uuid: String, requester: Identity) async -> String? {
         var label: String?
-        if await validateAccess("r--", at: "labelForUuid", for: requester) {
+        if await validateAccess("r---", at: "labelForUuid", for: requester) {
         for currentLabel in await auditor.connectedLabels() {
             if let emitCell = await auditor.loadConnectedCellEmitterForLabel(currentLabel) {
                 if emitCell.uuid == uuid {
@@ -795,7 +795,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
-        if await validateAccess("r--", at: "feed", for: requester) {
+        if await validateAccess("r---", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
             return feedPublisher.eraseToAnyPublisher()
         }

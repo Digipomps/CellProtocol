@@ -839,7 +839,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 self.properties = [String: ValueType]()
             }
 
-            grants.append(Grant(keypath: "identity.displayName", permission: "r--")) // For testing - later check policies
+            grants.append(Grant(keypath: "identity.displayName", permission: "r---")) // For testing - later check policies
             
             publicKey = Data()
             privateKey = Data()
@@ -854,7 +854,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             if self.properties == nil {
                 self.properties = [String: ValueType]()
             }
-            grants.append(Grant(nil, keypath: "identity.displayName", permission: "r--"))
+            grants.append(Grant(nil, keypath: "identity.displayName", permission: "r---"))
             
             let privateCryptoKitKey = Curve25519.Signing.PrivateKey()
             privateKey = privateCryptoKitKey.rawRepresentation
@@ -929,7 +929,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 self.properties = [String: ValueType]()
             }
             
-            grants.append(Grant(keypath: "displayName", permission: "r--"))
+            grants.append(Grant(keypath: "displayName", permission: "r---"))
         }
         
         init(identity: inout Identity) {

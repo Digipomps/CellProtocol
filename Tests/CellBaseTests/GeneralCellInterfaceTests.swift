@@ -130,7 +130,7 @@ final class GeneralCellInterfaceTests: XCTestCase {
         }
 
         let agreement = Agreement(owner: owner)
-        agreement.addGrant("r--", for: "shared")
+        agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(other)
 
         let state = await cell.addAgreement(agreement, for: other)
@@ -138,6 +138,40 @@ final class GeneralCellInterfaceTests: XCTestCase {
 
         let value = try await cell.get(keypath: "shared", requester: other)
         XCTAssertEqual(value, .string("shared-ok"))
+    }
+
+    func testStoragePermissionRequiresExplicitIdentityBoundSGrant() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let reader = await vault.identity(for: "reader", makeNewIfNotFound: true)!
+        let storer = await vault.identity(for: "storer", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        let readAgreement = Agreement(owner: owner)
+        readAgreement.addGrant("r---", for: "shared")
+        readAgreement.signatories.append(reader)
+        let readAgreementState = await cell.addAgreement(readAgreement, for: reader)
+        XCTAssertEqual(readAgreementState, .signed)
+
+        let storageAgreement = Agreement(owner: owner)
+        storageAgreement.addGrant("r--s", for: "shared")
+        storageAgreement.signatories.append(storer)
+        let storageAgreementState = await cell.addAgreement(storageAgreement, for: storer)
+        XCTAssertEqual(storageAgreementState, .signed)
+
+        let readerCanRead = await cell.validateAccess("r---", at: "shared", for: reader)
+        let readerCanStore = await cell.validateAccess("---s", at: "shared", for: reader)
+        let storerCanRead = await cell.validateAccess("r---", at: "shared", for: storer)
+        let storerCanStore = await cell.validateAccess("---s", at: "shared", for: storer)
+
+        XCTAssertTrue(readerCanRead)
+        XCTAssertFalse(
+            readerCanStore,
+            "Read authority must not imply permission to retain output."
+        )
+        XCTAssertTrue(storerCanRead)
+        XCTAssertTrue(storerCanStore)
     }
 
     func testPersistedOwnerProofUsesStoredPublicKeyNotUUID() async throws {
@@ -276,7 +310,7 @@ final class GeneralCellInterfaceTests: XCTestCase {
         }
 
         let agreement = Agreement(owner: owner)
-        agreement.addGrant("r--", for: "shared")
+        agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(member)
 
         let state = await cell.addAgreement(agreement, for: member)
@@ -313,7 +347,7 @@ final class GeneralCellInterfaceTests: XCTestCase {
         let cell = await GeneralCell(owner: owner)
 
         let agreement = Agreement(owner: owner)
-        agreement.addGrant("r--", for: "shared")
+        agreement.addGrant("r---", for: "shared")
         agreement.signatories.append(member)
 
         let state = await cell.addAgreement(agreement, for: member)
