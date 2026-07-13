@@ -94,6 +94,58 @@ public struct MatchHit: Codable, Equatable {
     }
 }
 
+public struct MatchDiagnostics: Codable, Equatable, Sendable {
+    public var framesEnqueued: Int
+    public var framesDequeued: Int
+    public var maxQueueLength: Int
+    public var edgesExamined: Int
+    public var edgesWithinTolerance: Int
+    public var hitsRecorded: Int
+    public var collectorRecords: Int
+    public var skippedByTolerance: Int
+    public var skippedByPathCycle: Int
+    public var skippedByCondition: Int
+    public var skippedByMinScore: Int
+    public var skippedByMaxHops: Int
+    public var skippedByRevisitPolicy: Int
+    public var uniqueVisitedCount: Int
+    public var uniqueHitCount: Int
+
+    public init(
+        framesEnqueued: Int = 0,
+        framesDequeued: Int = 0,
+        maxQueueLength: Int = 0,
+        edgesExamined: Int = 0,
+        edgesWithinTolerance: Int = 0,
+        hitsRecorded: Int = 0,
+        collectorRecords: Int = 0,
+        skippedByTolerance: Int = 0,
+        skippedByPathCycle: Int = 0,
+        skippedByCondition: Int = 0,
+        skippedByMinScore: Int = 0,
+        skippedByMaxHops: Int = 0,
+        skippedByRevisitPolicy: Int = 0,
+        uniqueVisitedCount: Int = 0,
+        uniqueHitCount: Int = 0
+    ) {
+        self.framesEnqueued = framesEnqueued
+        self.framesDequeued = framesDequeued
+        self.maxQueueLength = maxQueueLength
+        self.edgesExamined = edgesExamined
+        self.edgesWithinTolerance = edgesWithinTolerance
+        self.hitsRecorded = hitsRecorded
+        self.collectorRecords = collectorRecords
+        self.skippedByTolerance = skippedByTolerance
+        self.skippedByPathCycle = skippedByPathCycle
+        self.skippedByCondition = skippedByCondition
+        self.skippedByMinScore = skippedByMinScore
+        self.skippedByMaxHops = skippedByMaxHops
+        self.skippedByRevisitPolicy = skippedByRevisitPolicy
+        self.uniqueVisitedCount = uniqueVisitedCount
+        self.uniqueHitCount = uniqueHitCount
+    }
+}
+
 public struct MatchResult: Codable, Equatable {
     public var token: String
     public var hits: [MatchHit]
@@ -103,6 +155,7 @@ public struct MatchResult: Codable, Equatable {
     public var elapsedSeconds: Double
     public var expired: Bool
     public var maxDepthReached: Int
+    public var diagnostics: MatchDiagnostics
 
     public init(
         token: String,
@@ -112,7 +165,8 @@ public struct MatchResult: Codable, Equatable {
         localVariables: Object = [:],
         elapsedSeconds: Double,
         expired: Bool,
-        maxDepthReached: Int
+        maxDepthReached: Int,
+        diagnostics: MatchDiagnostics = MatchDiagnostics()
     ) {
         self.token = token
         self.hits = hits
@@ -122,6 +176,7 @@ public struct MatchResult: Codable, Equatable {
         self.elapsedSeconds = elapsedSeconds
         self.expired = expired
         self.maxDepthReached = maxDepthReached
+        self.diagnostics = diagnostics
     }
 
     public static func == (lhs: MatchResult, rhs: MatchResult) -> Bool {
@@ -132,7 +187,46 @@ public struct MatchResult: Codable, Equatable {
             encodedLocalVariables(lhs.localVariables) == encodedLocalVariables(rhs.localVariables) &&
             lhs.elapsedSeconds == rhs.elapsedSeconds &&
             lhs.expired == rhs.expired &&
-            lhs.maxDepthReached == rhs.maxDepthReached
+            lhs.maxDepthReached == rhs.maxDepthReached &&
+            lhs.diagnostics == rhs.diagnostics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case hits
+        case visitedRefs
+        case accumulatedEvidence
+        case localVariables
+        case elapsedSeconds
+        case expired
+        case maxDepthReached
+        case diagnostics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.token = try container.decode(String.self, forKey: .token)
+        self.hits = try container.decode([MatchHit].self, forKey: .hits)
+        self.visitedRefs = try container.decode([String].self, forKey: .visitedRefs)
+        self.accumulatedEvidence = try container.decode([MatchEvidence].self, forKey: .accumulatedEvidence)
+        self.localVariables = try container.decodeIfPresent(Object.self, forKey: .localVariables) ?? [:]
+        self.elapsedSeconds = try container.decode(Double.self, forKey: .elapsedSeconds)
+        self.expired = try container.decode(Bool.self, forKey: .expired)
+        self.maxDepthReached = try container.decode(Int.self, forKey: .maxDepthReached)
+        self.diagnostics = try container.decodeIfPresent(MatchDiagnostics.self, forKey: .diagnostics) ?? MatchDiagnostics()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(token, forKey: .token)
+        try container.encode(hits, forKey: .hits)
+        try container.encode(visitedRefs, forKey: .visitedRefs)
+        try container.encode(accumulatedEvidence, forKey: .accumulatedEvidence)
+        try container.encode(localVariables, forKey: .localVariables)
+        try container.encode(elapsedSeconds, forKey: .elapsedSeconds)
+        try container.encode(expired, forKey: .expired)
+        try container.encode(maxDepthReached, forKey: .maxDepthReached)
+        try container.encode(diagnostics, forKey: .diagnostics)
     }
 
     private static func encodedLocalVariables(_ value: Object) -> String? {
@@ -197,6 +291,7 @@ public struct SignalRunState {
     public private(set) var remainingHops: Int
     public private(set) var expired: Bool
     public private(set) var maxDepthReached: Int
+    public private(set) var diagnostics: MatchDiagnostics
 
     private var hitsByRef: [String: MatchHit]
 
@@ -212,6 +307,7 @@ public struct SignalRunState {
         self.remainingHops = configuration.maxHops
         self.expired = false
         self.maxDepthReached = 0
+        self.diagnostics = MatchDiagnostics(framesEnqueued: 1, maxQueueLength: 1)
         self.hitsByRef = [:]
     }
 
@@ -244,6 +340,7 @@ public struct SignalRunState {
         accumulatedScore = max(accumulatedScore, hit.score)
         remainingHops = max(0, remainingHops - 1)
         maxDepthReached = max(maxDepthReached, hit.depth)
+        diagnostics.hitsRecorded += 1
 
         if let existing = hitsByRef[hit.ref] {
             if hit.score > existing.score || (hit.score == existing.score && hit.depth < existing.depth) {
@@ -254,8 +351,56 @@ public struct SignalRunState {
         }
     }
 
+    mutating func recordFrameDequeued() {
+        diagnostics.framesDequeued += 1
+    }
+
+    mutating func recordFrameEnqueued(queueLength: Int) {
+        diagnostics.framesEnqueued += 1
+        diagnostics.maxQueueLength = max(diagnostics.maxQueueLength, queueLength)
+    }
+
+    mutating func recordEdgeExamined() {
+        diagnostics.edgesExamined += 1
+    }
+
+    mutating func recordEdgeWithinTolerance() {
+        diagnostics.edgesWithinTolerance += 1
+    }
+
+    mutating func recordCollectorRecord() {
+        diagnostics.collectorRecords += 1
+    }
+
+    mutating func recordSkippedByTolerance() {
+        diagnostics.skippedByTolerance += 1
+    }
+
+    mutating func recordSkippedByPathCycle() {
+        diagnostics.skippedByPathCycle += 1
+    }
+
+    mutating func recordSkippedByCondition() {
+        diagnostics.skippedByCondition += 1
+    }
+
+    mutating func recordSkippedByMinScore() {
+        diagnostics.skippedByMinScore += 1
+    }
+
+    mutating func recordSkippedByMaxHops() {
+        diagnostics.skippedByMaxHops += 1
+    }
+
+    mutating func recordSkippedByRevisitPolicy() {
+        diagnostics.skippedByRevisitPolicy += 1
+    }
+
     func result(maxHits: Int) -> MatchResult {
-        MatchResult(
+        var resultDiagnostics = diagnostics
+        resultDiagnostics.uniqueVisitedCount = visitedRefs.count
+        resultDiagnostics.uniqueHitCount = hits.count
+        return MatchResult(
             token: token,
             hits: Array(hits.prefix(maxHits)),
             visitedRefs: visitedRefs.sorted(),
@@ -263,7 +408,8 @@ public struct SignalRunState {
             localVariables: localVariables,
             elapsedSeconds: Date().timeIntervalSince(startedAt),
             expired: expired,
-            maxDepthReached: maxDepthReached
+            maxDepthReached: maxDepthReached,
+            diagnostics: resultDiagnostics
         )
     }
 }
@@ -290,28 +436,48 @@ public struct WeightedGraphRuntime {
             )
         ]
 
-        while !queue.isEmpty {
+        var queueCursor = 0
+        while queueCursor < queue.count {
             if Date() > state.deadline {
                 state.markExpired()
                 break
             }
 
-            let frame = queue.removeFirst()
-            guard frame.depth < configuration.maxHops else { continue }
+            let frame = queue[queueCursor]
+            queueCursor += 1
+            state.recordFrameDequeued()
+            guard frame.depth < configuration.maxHops else {
+                state.recordSkippedByMaxHops()
+                continue
+            }
 
             for relationship in configuration.relationships {
                 let edges = Self.weightedEdges(from: frame.node, relationship: relationship)
                 for weighted in edges {
-                    guard Self.isSignalMatch(weighted.weight, signal: signal) else { continue }
+                    state.recordEdgeExamined()
+                    guard Self.isSignalMatch(weighted.weight, signal: signal) else {
+                        state.recordSkippedByTolerance()
+                        continue
+                    }
+                    state.recordEdgeWithinTolerance()
                     let target = try await Self.resolve(weighted)
                     let targetRef = Self.nodeRef(target)
-                    guard !frame.path.contains(targetRef) else { continue }
-                    guard Self.conditionsAllow(target, context: configuration.conditionContext) else { continue }
+                    guard !frame.path.contains(targetRef) else {
+                        state.recordSkippedByPathCycle()
+                        continue
+                    }
+                    guard Self.conditionsAllow(target, context: configuration.conditionContext) else {
+                        state.recordSkippedByCondition()
+                        continue
+                    }
 
                     let targetAlreadyVisited = state.hasVisited(targetRef)
                     let contribution = Self.scoreContribution(edgeWeight: weighted.weight, signal: signal)
                     let accumulatedScore = frame.accumulatedScore * contribution
-                    guard accumulatedScore >= configuration.minScore else { continue }
+                    guard accumulatedScore >= configuration.minScore else {
+                        state.recordSkippedByMinScore()
+                        continue
+                    }
                     state.visit(targetRef)
 
                     let evidence = MatchEvidence(
@@ -335,12 +501,21 @@ public struct WeightedGraphRuntime {
                         evidence: frame.evidence + [evidence]
                     )
                     state.record(hit)
-                    await signal.collector?.record(hit)
+                    if let collector = signal.collector {
+                        await collector.record(hit)
+                        state.recordCollectorRecord()
+                    }
 
-                    guard frame.depth + 1 < configuration.maxHops else { continue }
+                    guard frame.depth + 1 < configuration.maxHops else {
+                        state.recordSkippedByMaxHops()
+                        continue
+                    }
                     switch configuration.revisitPolicy {
                     case .never:
-                        guard !targetAlreadyVisited else { continue }
+                        guard !targetAlreadyVisited else {
+                            state.recordSkippedByRevisitPolicy()
+                            continue
+                        }
                     case .oncePerPath:
                         break
                     }
@@ -355,6 +530,7 @@ public struct WeightedGraphRuntime {
                             depth: frame.depth + 1
                         )
                     )
+                    state.recordFrameEnqueued(queueLength: queue.count - queueCursor)
                 }
             }
         }

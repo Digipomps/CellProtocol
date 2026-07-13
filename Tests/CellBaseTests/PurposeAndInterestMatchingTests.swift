@@ -183,6 +183,14 @@ final class PurposeAndInterestMatchingTests: XCTestCase {
         XCTAssertEqual(evidence.to.reference, interest.reference)
         XCTAssertTrue(result.visitedRefs.contains("interest:\(interest.reference)"))
         XCTAssertEqual(collectorHit.ref, interest.reference)
+        XCTAssertEqual(result.diagnostics.framesEnqueued, 1)
+        XCTAssertEqual(result.diagnostics.framesDequeued, 1)
+        XCTAssertEqual(result.diagnostics.edgesExamined, 1)
+        XCTAssertEqual(result.diagnostics.edgesWithinTolerance, 1)
+        XCTAssertEqual(result.diagnostics.hitsRecorded, 1)
+        XCTAssertEqual(result.diagnostics.collectorRecords, 1)
+        XCTAssertEqual(result.diagnostics.uniqueVisitedCount, 2)
+        XCTAssertEqual(result.diagnostics.uniqueHitCount, 1)
     }
 
     func testWeightedGraphRuntimeTraversesMultipleRelationshipsAcrossHops() async throws {
@@ -220,6 +228,33 @@ final class PurposeAndInterestMatchingTests: XCTestCase {
         XCTAssertEqual(targetHit.path.map(\.reference), [source.reference, bridge.reference, target.reference])
         XCTAssertEqual(targetHit.evidence.map(\.relationship), [.interests, .purposes])
         XCTAssertEqual(result.maxDepthReached, 2)
+        XCTAssertEqual(result.diagnostics.framesEnqueued, 2)
+        XCTAssertEqual(result.diagnostics.framesDequeued, 2)
+        XCTAssertEqual(result.diagnostics.edgesExamined, 2)
+        XCTAssertEqual(result.diagnostics.hitsRecorded, 2)
+        XCTAssertEqual(result.diagnostics.skippedByMaxHops, 1)
+    }
+
+    func testMatchResultDecodesLegacyPayloadWithoutDiagnostics() throws {
+        let data = Data(
+            """
+            {
+              "token": "legacy-runtime-result",
+              "hits": [],
+              "visitedRefs": [],
+              "accumulatedEvidence": [],
+              "localVariables": {},
+              "elapsedSeconds": 0.0,
+              "expired": false,
+              "maxDepthReached": 0
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(MatchResult.self, from: data)
+
+        XCTAssertEqual(decoded.token, "legacy-runtime-result")
+        XCTAssertEqual(decoded.diagnostics, MatchDiagnostics())
     }
 
     func testWeightedGraphRuntimeDoesNotLoopThroughCycles() async throws {
