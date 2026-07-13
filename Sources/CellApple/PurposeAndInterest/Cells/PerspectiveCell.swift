@@ -7,7 +7,7 @@
 //
 //  Created by Kjetil Hustveit on 13/12/2024.
 //
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 
 
@@ -47,16 +47,7 @@ public class PerspectiveCell: GeneralCell {
         
         print("PerspectiveCell init. Owner: \(owner.uuid)")
     
-            await setupPermissions(owner: owner)
-            await setupKeys(owner: owner)
-
-        
-        
-        do {
-            try await loadPerspective()
-        } catch {
-            print("Loading perspective data failed with error: \(error)")
-        }
+        try? await ensureRuntimeReady()
 
     }
     
@@ -70,17 +61,13 @@ public class PerspectiveCell: GeneralCell {
 //        let tempStorage = try container.decodeIfPresent(Entity.self, forKey: .storage)
         self.context = Perspective()
         try super.init(from: decoder)
-        
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            try? await loadPerspective() // Consider decoding this in this method
-            let decodedOwner = self.storedOwnerIdentity
-            let setupOwner = await Self.vaultBackedOwner(matching: decodedOwner) ?? decodedOwner
-            await setupPermissions(owner: setupOwner)
-            await setupKeys(owner: setupOwner)
-            semaphore.signal()
-        }
-        _ = semaphore.wait(timeout: .now() + 5)
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        try await loadPerspective()
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
     
     deinit {
@@ -88,27 +75,11 @@ public class PerspectiveCell: GeneralCell {
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "advertisedPurpose")
-        self.agreementTemplate.addGrant("rw--", for: "activePurpose")
-        self.agreementTemplate.addGrant("rw--", for: "addPurpose")
-        self.agreementTemplate.addGrant("rw--", for: "matchPurpose")
-        self.agreementTemplate.addGrant("rw--", for: "perspective")
-    }
-
-    private static func vaultBackedOwner(matching identity: Identity) async -> Identity? {
-        guard let vault = CellBase.defaultIdentityVault,
-              let restoredOwner = await vault.identity(forUUID: identity.uuid)
-        else {
-            return nil
-        }
-
-        if let expectedFingerprint = identity.signingPublicKeyFingerprint,
-           let restoredFingerprint = restoredOwner.signingPublicKeyFingerprint,
-           expectedFingerprint != restoredFingerprint {
-            return nil
-        }
-
-        return restoredOwner
+        self.agreementTemplate.ensureGrant("rw--", for: "advertisedPurpose")
+        self.agreementTemplate.ensureGrant("rw--", for: "activePurpose")
+        self.agreementTemplate.ensureGrant("rw--", for: "addPurpose")
+        self.agreementTemplate.ensureGrant("rw--", for: "matchPurpose")
+        self.agreementTemplate.ensureGrant("rw--", for: "perspective")
     }
     
     private func setupKeys(owner: Identity) async  {
@@ -204,7 +175,11 @@ public class PerspectiveCell: GeneralCell {
         do {
             perspectiveJsonData = try await self.getFileDataInCellDirectory(filename: "Perspective.json")
         } catch {
-       
+            let nsError = error as NSError
+            guard (nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError)
+                    || (nsError.domain == NSPOSIXErrorDomain && nsError.code == ENOENT) else {
+                throw error
+            }
             let weightedPurposes = generateInitialPerspectiveData()
 //            context.
             let encoder = await context.pimpEncoder()
@@ -212,7 +187,6 @@ public class PerspectiveCell: GeneralCell {
             print("Loading perspectiveJsonData failed with error: \(error)")
         }
         try await self.context.setPurposeJsonData(data: perspectiveJsonData)
-        try await self.persistPerpective()
     }
     
     private func persistPerpective() async throws {

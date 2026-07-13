@@ -102,14 +102,14 @@ public struct Contract: Codable {
               abs((expiresAt - issuedAt) - TimeInterval(agreement.duration)) < 0.001 else {
             return false
         }
-        guard let verifier = issuer.identityVault ?? CellBase.defaultIdentityVault else {
+        guard let messageData = try? signingData() else {
             return false
         }
-        return (try? await verifier.verifySignature(
+        return IdentityPublicKeySignatureVerifier.verify(
             signature: signature,
-            messageData: signingData(),
-            for: issuer
-        )) ?? false
+            messageData: messageData,
+            identity: issuer
+        )
     }
 
     public func verifyAuthorizationBinding(

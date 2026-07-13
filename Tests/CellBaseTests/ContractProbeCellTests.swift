@@ -282,6 +282,65 @@ final class ContractProbeCellTests: XCTestCase {
         XCTAssertEqual(target.label, "nested-target")
     }
 
+    func testDecodedProbeSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+
+        let ownerCandidate = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
+        let original = await ContractProbeCell(owner: owner)
+        _ = try await original.set(
+            keypath: "probe.target",
+            value: .string("cell:///PersistedTarget"),
+            requester: owner
+        )
+        let encoded = try JSONEncoder().encode(original)
+
+        let immediate = try JSONDecoder().decode(ContractProbeCell.self, from: encoded)
+        let current = try await immediate.get(keypath: "probe.target.current", requester: owner)
+        guard case let .object(currentObject) = current else {
+            XCTFail("Expected the decoded probe target payload")
+            return
+        }
+        XCTAssertEqual(currentObject["configured"], .bool(true))
+        _ = try await immediate.set(
+            keypath: "probe.target",
+            value: .string("cell:///UpdatedTarget"),
+            requester: owner
+        )
+        let updated = try await immediate.get(keypath: "probe.target.current", requester: owner)
+        guard case let .object(updatedObject) = updated,
+              let updatedTargetValue = updatedObject["target"] else {
+            XCTFail("Expected the updated decoded probe target payload")
+            return
+        }
+        let updatedTarget: ContractProbeTarget = try decode(updatedTargetValue)
+        XCTAssertEqual(updatedTarget.endpoint, "cell:///UpdatedTarget")
+
+        let concurrent = try JSONDecoder().decode(ContractProbeCell.self, from: encoded)
+        let readiness = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<24 {
+                group.addTask {
+                    try await concurrent.ensureRuntimeReady()
+                    return try await concurrent.keys(requester: owner).contains("probe.run")
+                }
+            }
+            var results = [Bool]()
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+        XCTAssertEqual(readiness.count, 24)
+        XCTAssertTrue(readiness.allSatisfy { $0 })
+        XCTAssertEqual(
+            concurrent.agreementTemplate.grants.filter {
+                $0.keypath == "probe" && $0.permission.permissionString == "rw--"
+            }.count,
+            1
+        )
+    }
+
     func testProbeTargetRejectsAmbiguousCellConfiguration() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault

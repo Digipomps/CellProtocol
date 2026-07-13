@@ -17,6 +17,9 @@ import OpenCombine
 import Crypto
 #endif
 
+enum DIDIdentityVaultError: Error {
+    case signingUnsupported
+}
 
 actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
     
@@ -38,38 +41,16 @@ actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
     }
     
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
-        fatalError("Signing not yet implemented in DIDIdentityVault")
+        throw DIDIdentityVaultError.signingUnsupported
     }
     
     
     func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
-        var valid = false
-        if let publicSecureKey = identity.publicSecureKey {
-            switch publicSecureKey.curveType {
-            case .Curve25519:
-//                print("About to verify signature with Curve25519")
-                if let compressedKey = publicSecureKey.compressedKey {
-                    let key = try Curve25519.Signing.PublicKey(rawRepresentation: compressedKey)
-                    valid = key.isValidSignature(signature, for: messageData)
-                } else {
-                    CellBase.diagnosticLog("DIDIdentityVault missing compressed public key", domain: .credentials)
-                }
-            case .secp256k1, .P256:
-                CellBase.diagnosticLog("DIDIdentityVault verifying ECDSA P-256-compatible signature", domain: .credentials)
-                if let compressedKey = publicSecureKey.compressedKey,
-                   let publicKey = try? P256.Signing.PublicKey(x963Representation: compressedKey),
-                   let ecdsaSignature = try? P256.Signing.ECDSASignature(derRepresentation: signature) {
-                    if publicKey.isValidSignature(ecdsaSignature, for: messageData) {
-                        return true
-                    }
-                }
-            }
-            
-        } else {
-            CellBase.diagnosticLog("DIDIdentityVault missing public secure key", domain: .credentials)
-        }
-        return valid
-        
+        IdentityPublicKeySignatureVerifier.verify(
+            signature: signature,
+            messageData: messageData,
+            identity: identity
+        )
     }
     
     // Should this be part of IdentityVault protocol?
@@ -80,12 +61,14 @@ actor DIDIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol {
             
                 let key = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
                 return key.isValidSignature(signature, for: messageData)
-        case .secp256k1, .P256:
+        case .P256:
             CellBase.diagnosticLog("DIDIdentityVault verifying ECDSA P-256-compatible signature", domain: .credentials)
             if let publicSigningKey = try? P256.Signing.PublicKey(x963Representation: publicKey),
                let ecdsaSignature = try? P256.Signing.ECDSASignature(derRepresentation: signature) {
                 return publicSigningKey.isValidSignature(ecdsaSignature, for: messageData)
             }
+        case .secp256k1:
+            return false
         }
         
         

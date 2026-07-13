@@ -455,6 +455,15 @@ public class CellResolver: CellResolverProtocol {
         preferredTypeName: String? = nil,
         fallbackOwnerIdentityUUID: String? = nil
     ) async {
+        do {
+            _ = try await prepareCellForRuntime(cell)
+        } catch {
+            CellBase.diagnosticLog(
+                "Refused to persist Cell \(cell.uuid) before runtime readiness: \(error)",
+                domain: .lifecycle
+            )
+            return
+        }
         guard let tcUtility = self.tcUtility,
               let codableEmit = cell as? Codable else {
             return
@@ -971,6 +980,9 @@ public class CellResolver: CellResolverProtocol {
         requestedAccess: String,
         requester: Identity
     ) async throws {
+        if let runtimeReadyTarget = target as? CellRuntimeReady {
+            try await runtimeReadyTarget.ensureRuntimeReady()
+        }
         guard let authorizer = target as? CellAuthorizationDeciding else {
             return
         }
@@ -1050,14 +1062,16 @@ public class CellResolver: CellResolverProtocol {
     }
     
     public func emitCellAtEndpoint(endpointUrl: URL, endpoint:String, requester: Identity) async throws -> Emit {
+        let emitCell: Emit
         switch endpointUrl.scheme {
         case "ws", "wss":
-            return try await emitCellAtWSEndpoint(endpoint: endpoint, requester: requester) // TODO: Consider using only url
+            emitCell = try await emitCellAtWSEndpoint(endpoint: endpoint, requester: requester) // TODO: Consider using only url
         case "cell":
-            return try await emitCellAtCellEndpoint(endpointUrl: endpointUrl, requester: requester)
+            emitCell = try await emitCellAtCellEndpoint(endpointUrl: endpointUrl, requester: requester)
         default:
             throw CellResolverError.unsupportedUrlScheme
         }
+        return try await prepareCellForRuntime(emitCell)
     }
     
     private func emitCellAtWSEndpoint(endpoint: String, requester: Identity) async throws -> Emit {
@@ -1478,6 +1492,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(reference) at create cell(2)")
             throw CellResolverError.cellNotFound
         }
+        _ = try await prepareCellForRuntime(emitCell)
         try await auditor.registerReference(emitCell)
         return emitCell
     }
@@ -1494,6 +1509,7 @@ public class CellResolver: CellResolverProtocol {
         }
         cell.cellScope = resolve.cellScope
         cell.persistancy = resolve.cellPersistancy
+        _ = try await prepareCellForRuntime(cell)
         try await auditor.registerReference(cell, endpoint: reference)
         
         var flowElement = FlowElement(title: "Resolver event", content: .string("registered_named_cell"), properties: FlowElement.Properties(type: .event, contentType: .string))
@@ -1536,6 +1552,7 @@ public class CellResolver: CellResolverProtocol {
         }
         cell.cellScope = resolve.cellScope
         cell.persistancy = resolve.cellPersistancy
+        _ = try await prepareCellForRuntime(cell)
         try await auditor.registerPersonalReference(cell, endpoint: endpoint, identity: identity)
         // Push notification for updated personal cell register
         var flowElement = FlowElement(title: "Resolver event", content: .string("registered_identity_named_cell"), properties: FlowElement.Properties(type: .event, contentType: .string))
@@ -1752,6 +1769,7 @@ public class CellResolver: CellResolverProtocol {
     }
     
     public func registerNamedEmitCell(name: String, emitCell: Emit, scope: CellUsageScope = .scaffoldUnique /*, persistancy: Persistancy = .ephemeral */, identity: Identity) async throws {
+        _ = try await prepareCellForRuntime(emitCell)
         switch scope {
         case .template:
             try await auditor.registerReference(emitCell, endpoint: name)
@@ -1798,6 +1816,7 @@ public class CellResolver: CellResolverProtocol {
         else {
             return nil
         }
+        _ = try await prepareCellForRuntime(emitCell)
         try await auditor.registerReference(emitCell, endpoint: reference)
         let endpoint = isUUID(reference) ? await auditor.cellname(for: uuid) : reference
         if let endpoint,
@@ -1824,6 +1843,7 @@ public class CellResolver: CellResolverProtocol {
         else {
             return nil
         }
+        _ = try await prepareCellForRuntime(emitCell)
         try await auditor.registerReference(emitCell, endpoint: uuid)
         if let policy = (await auditor.loadNamedResolve(name))?.lifecyclePolicy,
            let persistedTTL = policy.persistedDataTTL,
@@ -1836,6 +1856,13 @@ public class CellResolver: CellResolverProtocol {
         }
         await lifecycleTracker.touchPersistedCell(uuid: uuid)
         return emitCell
+    }
+
+    private func prepareCellForRuntime(_ cell: Emit) async throws -> Emit {
+        if let runtimeReadyCell = cell as? CellRuntimeReady {
+            try await runtimeReadyCell.ensureRuntimeReady()
+        }
+        return cell
     }
 
     public func registerRemoteCellHost(_ host: String, route: RemoteCellHostRoute = RemoteCellHostRoute()) {
@@ -1881,8 +1908,8 @@ public class CellResolver: CellResolverProtocol {
     public func logReference(emitter: Emit) {
         Task {
             if let requester = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true) {
-                let anyCell = await emitter.advertise(for: requester)
                 do {
+                    let anyCell = try await emitter.advertise(for: requester)
                     let anyCSJsonData = try JSONEncoder().encode(anyCell)
                     CellBase.diagnosticLog(
                         "REF:\(String(data: anyCSJsonData, encoding: .utf8) ?? "nil")",

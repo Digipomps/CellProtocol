@@ -436,7 +436,7 @@ public enum AppInitializer {
             let portholeURL = getDocumentsDirectory().appending(path: "CellsContainer/\(portholeUUID)")
             
             if fileManager.fileExists(atPath: portholeURL.path()) {
-                if let porthole = resolver.tcUtility?.loadTypedEmitCell(at: "CellsContainer/\(portholeUUID)") as? OrchestratorCell {
+                if let porthole = try await resolver.tcUtility?.loadRuntimeReadyTypedEmitCell(at: "CellsContainer/\(portholeUUID)") as? OrchestratorCell {
                     do {
                         try await resolver.registerNamedEmitCell(name: "Porthole", emitCell: porthole, scope: .identityUnique, identity: identity)
                         self.scaffoldCellsDict["Porthole"] = porthole.uuid

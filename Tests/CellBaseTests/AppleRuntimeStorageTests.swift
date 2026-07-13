@@ -3,7 +3,7 @@
 
 import XCTest
 @testable import CellApple
-@testable import CellBase
+@_spi(HAVENRuntime) @testable import CellBase
 
 final class AppleRuntimeStorageTests: XCTestCase {
     private var previousDocumentRootPath: String?

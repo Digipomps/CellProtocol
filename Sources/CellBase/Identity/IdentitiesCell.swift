@@ -19,8 +19,7 @@ public class IdentitiesCell: GeneralCell {
         
         CellBase.diagnosticLog("IdentitiesCell init owner=\(owner.uuid)", domain: .identity)
     
-            await setupPermissions(owner: owner)
-            await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
 //        do {
 //            try await self.attachUniversalResolver()
 //        } catch {
@@ -38,19 +37,25 @@ public class IdentitiesCell: GeneralCell {
     
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        visitingIdentities = try container.decode([String : Identity].self, forKey: .visitingIdentities)
+        visitingIdentities = try container.decodeIfPresent([String : Identity].self, forKey: .visitingIdentities) ?? [:]
 
         try super.init(from: decoder)
         
-        // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
+    }
+
+    public override func encode(to encoder: Encoder) throws {
+        try super.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(visitingIdentities, forKey: .visitingIdentities)
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "identities")
+        self.agreementTemplate.ensureGrant("rw--", for: "identities")
     }
     
     private func setupKeys(owner: Identity) async  {

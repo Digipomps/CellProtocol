@@ -36,6 +36,24 @@ public struct CellJSONCoder {
         let typedCell = try decoder.decode(TypedCell.self , from: data)
         return typedCell.cell as? Emit
     }
+
+    public func decodeRuntimeReady(from data: Data) async throws -> Encodable {
+        let decoded = try decode(from: data)
+        if let runtimeReady = decoded as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return decoded
+    }
+
+    public func decodeRuntimeReadyEmitCell(from data: Data) async throws -> Emit? {
+        guard let cell = try decodeEmitCell(from: data) else {
+            return nil
+        }
+        if let runtimeReady = cell as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return cell
+    }
     
     public static func encodeCell(cellClassName: String, cell: Codable) throws -> Data {
         let typedCell = TypedCell(cellTypeString: cellClassName, cell: cell)

@@ -58,12 +58,10 @@ public class Agreement: Codable, Grantable {
         uuid = UUID.init().uuidString
         name = "Contract name here"
         state = .template
-        owner = Identity()
-        Task {
-            if let localOwner = await (CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true)) {
-                owner = localOwner
-            }
-        }
+        owner = await CellBase.defaultIdentityVault?.identity(
+            for: "private",
+            makeNewIfNotFound: true
+        ) ?? Identity()
         signatories = [owner]
         grants = [Grant(),Grant("Feed grant", keypath: "feed", permission: "r---")]
         conditions = [GrantCondition()]
@@ -146,6 +144,51 @@ public class Agreement: Codable, Grantable {
         try container.encode(grants, forKey: .grants)
         try container.encode(duration, forKey: .duration)
     }
+
+    /// Returns the Agreement descriptor that may cross a Cell boundary.
+    /// Runtime vault references and private Identity properties are removed
+    /// recursively while policy grants and conditions remain intact.
+    public func publicDescriptorSnapshot() throws -> Agreement {
+        let encoded = try JSONEncoder().encode(self)
+        let json = try JSONSerialization.jsonObject(with: encoded)
+        let sanitized = Self.sanitizePublicDescriptorJSON(json)
+        let sanitizedData = try JSONSerialization.data(withJSONObject: sanitized, options: [.sortedKeys])
+        let snapshot = try JSONDecoder().decode(Agreement.self, from: sanitizedData)
+        snapshot.owner = owner.publicIdentitySnapshot()
+        snapshot.signatories = signatories.map { $0.publicIdentitySnapshot() }
+        return snapshot
+    }
+
+    private static func sanitizePublicDescriptorJSON(_ value: Any) -> Any {
+        if let values = value as? [Any] {
+            return values.map(sanitizePublicDescriptorJSON)
+        }
+        guard var object = value as? [String: Any] else {
+            return value
+        }
+
+        let isIdentityDescriptor = object["uuid"] != nil
+            && object["displayName"] != nil
+            && (object["properties"] != nil
+                || object["homeVaultReference"] != nil
+                || object["publicSecureKey"] != nil
+                || object["publicKeyAgreementSecureKey"] != nil)
+        if isIdentityDescriptor {
+            object.removeValue(forKey: "properties")
+            object.removeValue(forKey: "homeVaultReference")
+            for key in ["publicSecureKey", "publicKeyAgreementSecureKey"] {
+                if let secureKey = object[key] as? [String: Any],
+                   secureKey["privateKey"] as? Bool == true {
+                    object.removeValue(forKey: key)
+                }
+            }
+        }
+
+        for (key, nestedValue) in object {
+            object[key] = sanitizePublicDescriptorJSON(nestedValue)
+        }
+        return object
+    }
     
     
     
@@ -154,8 +197,16 @@ public class Agreement: Codable, Grantable {
     }
     
     public func addGrant(_ permission: String, for key: String) {
-        let grant = Grant(keypath: key, permission: permission)
-        addGrant(grant)
+        ensureGrant(permission, for: key)
+    }
+
+    /// Installs a required capability without duplicating it after persistence
+    /// round trips or repeated runtime-binding preparation. An existing broader
+    /// grant for the same keypath already satisfies the request.
+    public func ensureGrant(_ permission: String, for key: String) {
+        let requiredGrant = Grant(keypath: key, permission: permission)
+        guard checkGrant(requestedGrant: requiredGrant) == false else { return }
+        addGrant(requiredGrant)
     }
     
     public func addGrant(_ grant: Grant) {

@@ -45,13 +45,17 @@ extension GeneralCell {
     }
     
     public func getFileDataInCellDirectory(filename: String) async throws -> Data {
-    
-       let directoryURL = try getCellDirectory()
+        let directoryURL = CellVapor.getCellsDocumentsDirectory().appending(path: self.name)
         let fileURL = directoryURL.appending(path: filename)
         let fileData = try Data(contentsOf: fileURL)
-//    try data.write(to: directoryURL.appendingPathComponent(dataFilename))
-    
         return fileData
+    }
+
+    public func fileExistsInCellDirectory(filename: String) -> Bool {
+        let fileURL = CellVapor.getCellsDocumentsDirectory()
+            .appending(path: self.name)
+            .appending(path: filename)
+        return FileManager.default.fileExists(atPath: fileURL.path)
     }
     
     public func writeFileDataInCellDirectory(fileData: Data, filename: String) async throws {

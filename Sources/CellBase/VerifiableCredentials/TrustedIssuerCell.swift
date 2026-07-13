@@ -4,6 +4,13 @@
 import Foundation
 
 public class TrustedIssuerCell: GeneralCell {
+    private static let supportedDidMethods: Set<String> = ["did:key"]
+
+    private enum RuntimeBindingError: Error {
+        case ownerAuthorityUnavailable
+        case installationIncomplete
+    }
+
     private struct ClaimSchema: Codable {
         var credentialType: String?
         var subjectPath: String
@@ -42,6 +49,7 @@ public class TrustedIssuerCell: GeneralCell {
         var acceptedIssuerKinds: [String]
         var acceptedDidMethods: [String]
         var timeDecayHalfLifeDays: Double
+        var maximumCredentialAgeSeconds: Double?
         var status: String
 
         func asObject() -> Object {
@@ -58,6 +66,9 @@ public class TrustedIssuerCell: GeneralCell {
                 "timeDecayHalfLifeDays": .float(timeDecayHalfLifeDays),
                 "status": .string(status)
             ]
+            if let maximumCredentialAgeSeconds {
+                object["maximumCredentialAgeSeconds"] = .float(maximumCredentialAgeSeconds)
+            }
             if let claimSchema {
                 object["claimSchema"] = .object(claimSchema.asObject())
             }
@@ -169,11 +180,20 @@ public class TrustedIssuerCell: GeneralCell {
         }
     }
 
+    private struct StateSnapshot {
+        var policiesByContext: [String: TrustPolicy]
+        var issuersById: [String: IssuerProfile]
+        var attestationsById: [String: TrustAttestation]
+        var evaluationCurrentByKey: [String: EvaluationRecord]
+        var evaluationHistory: [EvaluationRecord]
+    }
+
     private var policiesByContext: [String: TrustPolicy]
     private var issuersById: [String: IssuerProfile]
     private var attestationsById: [String: TrustAttestation]
     private var evaluationCurrentByKey: [String: EvaluationRecord]
     private var evaluationHistory: [EvaluationRecord]
+    private let stateLock = NSLock()
 
     required init(owner: Identity) async {
         policiesByContext = [:]
@@ -182,9 +202,14 @@ public class TrustedIssuerCell: GeneralCell {
         evaluationCurrentByKey = [:]
         evaluationHistory = []
         await super.init(owner: owner)
-
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            CellBase.diagnosticLog(
+                "TrustedIssuerCell runtime binding setup failed during initialization: \(error)",
+                domain: .lifecycle
+            )
+        }
     }
 
     enum CodingKeys: CodingKey {
@@ -205,25 +230,52 @@ public class TrustedIssuerCell: GeneralCell {
         evaluationHistory = (try? container.decode([EvaluationRecord].self, forKey: .evaluationHistory)) ?? []
 
         try super.init(from: decoder)
-
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
     }
 
     public override func encode(to encoder: Encoder) throws {
+        let state = stateSnapshot()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(policiesByContext, forKey: .policiesByContext)
-        try container.encode(issuersById, forKey: .issuersById)
-        try container.encode(attestationsById, forKey: .attestationsById)
-        try container.encode(evaluationCurrentByKey, forKey: .evaluationCurrentByKey)
-        try container.encode(evaluationHistory, forKey: .evaluationHistory)
+        try container.encode(state.policiesByContext, forKey: .policiesByContext)
+        try container.encode(state.issuersById, forKey: .issuersById)
+        try container.encode(state.attestationsById, forKey: .attestationsById)
+        try container.encode(state.evaluationCurrentByKey, forKey: .evaluationCurrentByKey)
+        try container.encode(state.evaluationHistory, forKey: .evaluationHistory)
         try super.encode(to: encoder)
     }
 
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let owner = try await runtimeBindingOwner()
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
+        let requiredKeys = Set([
+            "trustedIssuers.state",
+            "trustedIssuers.evaluate",
+            "trustedIssuers.policy.upsert"
+        ])
+        guard requiredKeys.isSubset(of: Set(schemaDict.keys)) else {
+            throw RuntimeBindingError.installationIncomplete
+        }
+    }
+
+    private func runtimeBindingOwner() async throws -> Identity {
+        if owner.identityVault != nil,
+           await verifyRequesterIdentityControl(owner) {
+            return owner
+        }
+        guard let vault = CellBase.defaultIdentityVault,
+              let restoredOwner = await vault.identity(forUUID: owner.uuid),
+              restoredOwner.referencesSameSigningIdentity(as: owner),
+              await verifyRequesterIdentityControl(restoredOwner) else {
+            throw RuntimeBindingError.ownerAuthorityUnavailable
+        }
+        return restoredOwner
+    }
+
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "trustedIssuers")
+        let requiredGrant = Grant(keypath: "trustedIssuers", permission: "rw--")
+        if agreementTemplate.checkGrant(requestedGrant: requiredGrant) == false {
+            agreementTemplate.addGrant(requiredGrant)
+        }
     }
 
     private func setupKeys(owner: Identity) async {
@@ -239,35 +291,39 @@ public class TrustedIssuerCell: GeneralCell {
             guard await self.validateAccess("r---", at: "trustedIssuers.policies", for: requester) else {
                 return .string("denied")
             }
-            return .list(self.policiesByContext.values.sorted(by: { $0.contextId < $1.contextId }).map { .object($0.asObject()) })
+            let policies = self.stateSnapshot().policiesByContext
+            return .list(policies.values.sorted(by: { $0.contextId < $1.contextId }).map { .object($0.asObject()) })
         }
         await addInterceptForGet(requester: owner, key: "trustedIssuers.issuers") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "trustedIssuers.issuers", for: requester) else {
                 return .string("denied")
             }
-            return .list(self.issuersById.values.sorted(by: { $0.issuerId < $1.issuerId }).map { .object($0.asObject()) })
+            let issuers = self.stateSnapshot().issuersById
+            return .list(issuers.values.sorted(by: { $0.issuerId < $1.issuerId }).map { .object($0.asObject()) })
         }
         await addInterceptForGet(requester: owner, key: "trustedIssuers.attestations") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "trustedIssuers.attestations", for: requester) else {
                 return .string("denied")
             }
-            return .list(self.attestationsById.values.sorted(by: { $0.attestationId < $1.attestationId }).map { .object($0.asObject()) })
+            let attestations = self.stateSnapshot().attestationsById
+            return .list(attestations.values.sorted(by: { $0.attestationId < $1.attestationId }).map { .object($0.asObject()) })
         }
         await addInterceptForGet(requester: owner, key: "trustedIssuers.evaluations.current") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "trustedIssuers.evaluations.current", for: requester) else {
                 return .string("denied")
             }
-            return .list(self.evaluationCurrentByKey.values.sorted(by: { $0.evaluationId < $1.evaluationId }).map { .object($0.asObject()) })
+            let evaluations = self.stateSnapshot().evaluationCurrentByKey
+            return .list(evaluations.values.sorted(by: { $0.evaluationId < $1.evaluationId }).map { .object($0.asObject()) })
         }
         await addInterceptForGet(requester: owner, key: "trustedIssuers.evaluations.history") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "trustedIssuers.evaluations.history", for: requester) else {
                 return .string("denied")
             }
-            return .list(self.evaluationHistory.map { .object($0.asObject()) })
+            return .list(self.stateSnapshot().evaluationHistory.map { .object($0.asObject()) })
         }
 
         await addInterceptForSet(requester: owner, key: "trustedIssuers.policy.upsert") { [weak self] _, value, requester in
@@ -324,16 +380,17 @@ public class TrustedIssuerCell: GeneralCell {
     }
 
     private func stateValue(requester: Identity) async -> ValueType {
-        let policyList = policiesByContext.values
+        let state = stateSnapshot()
+        let policyList = state.policiesByContext.values
             .sorted(by: { $0.contextId < $1.contextId })
             .map { ValueType.object($0.asObject()) }
-        let issuerList = issuersById.values
+        let issuerList = state.issuersById.values
             .sorted(by: { $0.issuerId < $1.issuerId })
             .map { ValueType.object($0.asObject()) }
-        let attestationList = attestationsById.values
+        let attestationList = state.attestationsById.values
             .sorted(by: { $0.attestationId < $1.attestationId })
             .map { ValueType.object($0.asObject()) }
-        let currentEvaluations = evaluationCurrentByKey.values
+        let currentEvaluations = state.evaluationCurrentByKey.values
             .sorted(by: { $0.evaluationId < $1.evaluationId })
             .map { ValueType.object($0.asObject()) }
 
@@ -342,7 +399,8 @@ public class TrustedIssuerCell: GeneralCell {
             "issuerCount": .integer(issuerList.count),
             "attestationCount": .integer(attestationList.count),
             "evaluationCurrentCount": .integer(currentEvaluations.count),
-            "evaluationHistoryCount": .integer(evaluationHistory.count),
+            "evaluationHistoryCount": .integer(state.evaluationHistory.count),
+            "supportedDidMethods": .list(Self.supportedDidMethods.sorted().map { .string($0) }),
             "policies": .list(policyList),
             "issuers": .list(issuerList),
             "attestations": .list(attestationList),
@@ -377,6 +435,16 @@ public class TrustedIssuerCell: GeneralCell {
             claimSchema = nil
         }
 
+        guard let maximumCredentialAgeSeconds = doubleValue(object["maximumCredentialAgeSeconds"]),
+              maximumCredentialAgeSeconds.isFinite,
+              maximumCredentialAgeSeconds > 0 else {
+            return .string("error: missing or invalid maximumCredentialAgeSeconds")
+        }
+        let acceptedDidMethods = stringList(object["acceptedDidMethods"])
+        let unsupportedDidMethods = acceptedDidMethods.filter { Self.supportedDidMethods.contains($0) == false }
+        guard unsupportedDidMethods.isEmpty else {
+            return .string("error: unsupported acceptedDidMethods: \(unsupportedDidMethods.sorted().joined(separator: ","))")
+        }
         let policy = TrustPolicy(
             contextId: contextId,
             displayName: stringValue(object["displayName"]) ?? contextId,
@@ -387,11 +455,14 @@ public class TrustedIssuerCell: GeneralCell {
             requireIndependentSources: max(0, intValue(object["requireIndependentSources"]) ?? 1),
             maxGraphDepth: max(0, intValue(object["maxGraphDepth"]) ?? 2),
             acceptedIssuerKinds: stringList(object["acceptedIssuerKinds"]),
-            acceptedDidMethods: stringList(object["acceptedDidMethods"]),
+            acceptedDidMethods: acceptedDidMethods,
             timeDecayHalfLifeDays: max(1.0, doubleValue(object["timeDecayHalfLifeDays"]) ?? 180.0),
+            maximumCredentialAgeSeconds: maximumCredentialAgeSeconds,
             status: stringValue(object["status"]) ?? "active"
         )
-        policiesByContext[contextId] = policy
+        withStateLock {
+            policiesByContext[contextId] = policy
+        }
         return .object(policy.asObject())
     }
 
@@ -402,7 +473,9 @@ public class TrustedIssuerCell: GeneralCell {
         guard let contextId = stringValue(object["contextId"]), !contextId.isEmpty else {
             return .string("error: missing contextId")
         }
-        let removed = policiesByContext.removeValue(forKey: contextId) != nil
+        let removed = withStateLock {
+            policiesByContext.removeValue(forKey: contextId) != nil
+        }
         return .object(["contextId": .string(contextId), "removed": .bool(removed)])
     }
 
@@ -423,7 +496,9 @@ public class TrustedIssuerCell: GeneralCell {
             status: stringValue(object["status"]) ?? "active",
             updatedAt: Date().timeIntervalSince1970
         )
-        issuersById[issuerId] = profile
+        withStateLock {
+            issuersById[issuerId] = profile
+        }
         return .object(profile.asObject())
     }
 
@@ -434,7 +509,9 @@ public class TrustedIssuerCell: GeneralCell {
         guard let issuerId = stringValue(object["issuerId"]), !issuerId.isEmpty else {
             return .string("error: missing issuerId")
         }
-        let removed = issuersById.removeValue(forKey: issuerId) != nil
+        let removed = withStateLock {
+            issuersById.removeValue(forKey: issuerId) != nil
+        }
         return .object(["issuerId": .string(issuerId), "removed": .bool(removed)])
     }
 
@@ -465,7 +542,9 @@ public class TrustedIssuerCell: GeneralCell {
             status: "active",
             createdAt: Date().timeIntervalSince1970
         )
-        attestationsById[attestationId] = attestation
+        withStateLock {
+            attestationsById[attestationId] = attestation
+        }
         return .object(attestation.asObject())
     }
 
@@ -476,11 +555,16 @@ public class TrustedIssuerCell: GeneralCell {
         guard let attestationId = stringValue(object["attestationId"]), !attestationId.isEmpty else {
             return .string("error: missing attestationId")
         }
-        guard var attestation = attestationsById[attestationId] else {
+        guard let attestation = withStateLock({ () -> TrustAttestation? in
+            guard var attestation = attestationsById[attestationId] else {
+                return nil
+            }
+            attestation.status = "revoked"
+            attestationsById[attestationId] = attestation
+            return attestation
+        }) else {
             return .string("error: attestation not found")
         }
-        attestation.status = "revoked"
-        attestationsById[attestationId] = attestation
         return .object(attestation.asObject())
     }
 
@@ -494,12 +578,19 @@ public class TrustedIssuerCell: GeneralCell {
         guard let issuerId = stringValue(object["issuerId"]), !issuerId.isEmpty else {
             return .string("error: missing issuerId")
         }
-        guard let policy = policiesByContext[contextId], policy.status == "active" else {
+        let state = stateSnapshot()
+        guard let policy = state.policiesByContext[contextId], policy.status == "active" else {
             return .string("error: no active policy for contextId")
         }
 
         let evaluationId = stringValue(object["evaluationId"]) ?? UUID().uuidString
-        let requesterId = stringValue(object["requesterId"])
+        guard let requesterId = try? requester.did() else {
+            return .string("error: requester has no verifiable DID")
+        }
+        if let suppliedRequesterId = stringValue(object["requesterId"]),
+           suppliedRequesterId != requesterId {
+            return .string("error: requesterId does not match authenticated requester")
+        }
         let nowDate = Date()
         let nowIso = iso8601(nowDate)
         var reasons = [String]()
@@ -511,7 +602,7 @@ public class TrustedIssuerCell: GeneralCell {
             "penalties": .float(0)
         ]
 
-        guard let issuerProfile = issuersById[issuerId], issuerProfile.status == "active" else {
+        guard let issuerProfile = state.issuersById[issuerId], issuerProfile.status == "active" else {
             let record = finalizeRecord(
                 evaluationId: evaluationId,
                 issuerId: issuerId,
@@ -531,8 +622,14 @@ public class TrustedIssuerCell: GeneralCell {
         if !policy.acceptedIssuerKinds.isEmpty && !policy.acceptedIssuerKinds.contains(issuerProfile.issuerKind) {
             reasons.append("issuer_kind_not_allowed")
         }
-        if !policy.acceptedDidMethods.isEmpty, let didMethod = didMethod(of: issuerId), !policy.acceptedDidMethods.contains(didMethod) {
-            reasons.append("issuer_did_method_not_allowed")
+        if let issuerDidMethod = didMethod(of: issuerId) {
+            if Self.supportedDidMethods.contains(issuerDidMethod) == false {
+                reasons.append("issuer_did_method_unsupported")
+            } else if !policy.acceptedDidMethods.isEmpty && !policy.acceptedDidMethods.contains(issuerDidMethod) {
+                reasons.append("issuer_did_method_not_allowed")
+            }
+        } else {
+            reasons.append("issuer_did_method_invalid")
         }
 
         guard let vcObject = objectValue(object["candidateVc"]) else {
@@ -577,7 +674,7 @@ public class TrustedIssuerCell: GeneralCell {
             return .object(record.asObject())
         }
 
-        let liveAttestations = attestationsById.values
+        let liveAttestations = state.attestationsById.values
             .filter { $0.subjectIssuerId == issuerId && $0.contextId == contextId && $0.status == "active" }
             .filter { attestationIsTimeValid($0, now: nowDate) }
             .sorted(by: { lhs, rhs in
@@ -615,7 +712,9 @@ public class TrustedIssuerCell: GeneralCell {
                 issuerId: attestation.issuer,
                 contextId: contextId,
                 maxDepth: policy.maxGraphDepth,
-                visited: Set([issuerId])
+                visited: Set([issuerId]),
+                state: state,
+                now: nowDate
             )
             let freshness = freshnessFactor(attestation: attestation, now: nowDate, halfLifeDays: halfLife)
             freshnessSamples.append(freshness)
@@ -681,14 +780,18 @@ public class TrustedIssuerCell: GeneralCell {
             reasons.append("vc_credential_subject_missing")
         }
 
-        if !credentialTimeWindowValid(vcObject) {
+        if !credentialTimeWindowValid(
+            vcObject,
+            maximumCredentialAgeSeconds: policy.maximumCredentialAgeSeconds
+        ) {
             reasons.append("vc_time_window_invalid")
         }
 
         if policy.requireRevocationCheck {
-            if !revocationStatusAllows(vcObject) {
-                reasons.append("revocation_check_failed")
-            }
+            // Embedded status is issuer-authored metadata, not a live status
+            // resolver. Until a status-list/resolver contract is configured,
+            // revocation-required policy must fail closed.
+            reasons.append("revocation_check_unsupported")
         }
 
         if let schema = policy.claimSchema {
@@ -732,38 +835,59 @@ public class TrustedIssuerCell: GeneralCell {
             "vc_credential_subject_missing",
             "vc_time_window_invalid",
             "revocation_check_failed",
+            "revocation_check_unsupported",
             "claim_subject_path_missing",
             "claim_predicate_not_met",
             "subject_binding_missing",
             "subject_binding_mismatch",
             "vc_signature_invalid",
             "vc_crypto_verification_error",
-            "credential_type_not_allowed"
+            "credential_type_not_allowed",
+            "issuer_did_method_unsupported",
+            "issuer_did_method_invalid",
+            "issuer_did_method_not_allowed"
         ]
         let failed = reasons.contains(where: { hardFailures.contains($0) })
         return (!failed, reasons)
     }
 
     private func cryptographicallyVerify(vcObject: Object) async throws -> Bool {
-        var normalized = vcObject
-        if normalized["issuanceDate"] == nil, let validFrom = normalized["validFrom"] {
-            normalized["issuanceDate"] = validFrom
-        }
-        if normalized["id"] == nil {
+        guard vcObject["id"] != nil,
+              vcObject["issuanceDate"] != nil else {
             return false
         }
-        let claimData = try JSONEncoder().encode(normalized)
+        let claimData = try JSONEncoder().encode(vcObject)
         let claim = try JSONDecoder().decode(VCClaim.self, from: claimData)
         return try await claim.verify()
     }
 
     private func storeEvaluation(record: EvaluationRecord) {
-        let key = "\(record.contextId)|\(record.issuerId)"
-        evaluationCurrentByKey[key] = record
-        evaluationHistory.append(record)
-        if evaluationHistory.count > 512 {
-            evaluationHistory.removeFirst(evaluationHistory.count - 512)
+        withStateLock {
+            let key = "\(record.contextId)|\(record.issuerId)"
+            evaluationCurrentByKey[key] = record
+            evaluationHistory.append(record)
+            if evaluationHistory.count > 512 {
+                evaluationHistory.removeFirst(evaluationHistory.count - 512)
+            }
         }
+    }
+
+    private func stateSnapshot() -> StateSnapshot {
+        withStateLock {
+            StateSnapshot(
+                policiesByContext: policiesByContext,
+                issuersById: issuersById,
+                attestationsById: attestationsById,
+                evaluationCurrentByKey: evaluationCurrentByKey,
+                evaluationHistory: evaluationHistory
+            )
+        }
+    }
+
+    private func withStateLock<T>(_ body: () throws -> T) rethrows -> T {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return try body()
     }
 
     private func finalizeRecord(
@@ -811,13 +935,19 @@ public class TrustedIssuerCell: GeneralCell {
         )
     }
 
-    private func sourceTrust(issuerId: String, contextId: String, maxDepth: Int, visited: Set<String>) -> Double {
+    private func sourceTrust(
+        issuerId: String,
+        contextId: String,
+        maxDepth: Int,
+        visited: Set<String>,
+        state: StateSnapshot,
+        now: Date
+    ) -> Double {
         guard !visited.contains(issuerId) else { return 0.0 }
-        let base = clamp(issuersById[issuerId]?.baseWeight ?? 0.0)
+        let base = clamp(state.issuersById[issuerId]?.baseWeight ?? 0.0)
         guard maxDepth > 0 else { return base }
 
-        let now = Date()
-        let incoming = attestationsById.values
+        let incoming = state.attestationsById.values
             .filter { $0.subjectIssuerId == issuerId && $0.contextId == contextId && $0.status == "active" }
             .filter { attestationIsTimeValid($0, now: now) }
             .sorted(by: { lhs, rhs in
@@ -830,14 +960,16 @@ public class TrustedIssuerCell: GeneralCell {
             return base
         }
 
-        let halfLife = max(1.0, policiesByContext[contextId]?.timeDecayHalfLifeDays ?? 180.0)
+        let halfLife = max(1.0, state.policiesByContext[contextId]?.timeDecayHalfLifeDays ?? 180.0)
         var recursiveSum = 0.0
         for attestation in incoming {
             let sourceDepthTrust = sourceTrust(
                 issuerId: attestation.issuer,
                 contextId: contextId,
                 maxDepth: maxDepth - 1,
-                visited: visited.union([issuerId])
+                visited: visited.union([issuerId]),
+                state: state,
+                now: now
             )
             let freshness = freshnessFactor(attestation: attestation, now: now, halfLifeDays: halfLife)
             recursiveSum += clamp(attestation.weight) * sourceDepthTrust * freshness
@@ -868,14 +1000,29 @@ public class TrustedIssuerCell: GeneralCell {
         return true
     }
 
-    private func credentialTimeWindowValid(_ vcObject: Object) -> Bool {
-        let now = Date()
-        let fromString = stringValue(vcObject["validFrom"]) ?? stringValue(vcObject["issuanceDate"])
-        if let fromString, let fromDate = parseDate(fromString), now < fromDate {
+    private func credentialTimeWindowValid(
+        _ vcObject: Object,
+        maximumCredentialAgeSeconds: Double?
+    ) -> Bool {
+        // These fields are not part of the current signed VCClaim wire model.
+        // Reject rather than trusting mutable envelope metadata.
+        if vcObject["validFrom"] != nil
+            || vcObject["validUntil"] != nil
+            || vcObject["expirationDate"] != nil {
             return false
         }
-        let untilString = stringValue(vcObject["validUntil"]) ?? stringValue(vcObject["expirationDate"])
-        if let untilString, let untilDate = parseDate(untilString), now > untilDate {
+        guard let claimData = try? JSONEncoder().encode(vcObject),
+              let claim = try? JSONDecoder().decode(VCClaim.self, from: claimData),
+              let maximumCredentialAgeSeconds,
+              maximumCredentialAgeSeconds.isFinite,
+              maximumCredentialAgeSeconds > 0 else {
+            return false
+        }
+        let now = Date()
+        if claim.issuanceDate > now.addingTimeInterval(IdentitySigningChallenge.allowedClockSkew) {
+            return false
+        }
+        if now.timeIntervalSince(claim.issuanceDate) > maximumCredentialAgeSeconds {
             return false
         }
         return true
@@ -1224,9 +1371,10 @@ public class TrustedIssuerCell: GeneralCell {
                 "acceptedIssuerKinds": ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                 "acceptedDidMethods": ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                 "timeDecayHalfLifeDays": ExploreContract.schema(type: "float"),
+                "maximumCredentialAgeSeconds": ExploreContract.schema(type: "float"),
                 "status": ExploreContract.schema(type: "string")
             ],
-            requiredKeys: ["contextId", "threshold", "status"],
+            requiredKeys: ["contextId", "threshold", "maximumCredentialAgeSeconds", "status"],
             description: "Trust policy for a credential evaluation context."
         )
     }
@@ -1299,12 +1447,13 @@ public class TrustedIssuerCell: GeneralCell {
                 "attestationCount": ExploreContract.schema(type: "integer"),
                 "evaluationCurrentCount": ExploreContract.schema(type: "integer"),
                 "evaluationHistoryCount": ExploreContract.schema(type: "integer"),
+                "supportedDidMethods": ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                 "policies": ExploreContract.listSchema(item: policySchema()),
                 "issuers": ExploreContract.listSchema(item: issuerSchema()),
                 "attestations": ExploreContract.listSchema(item: attestationSchema()),
                 "evaluationsCurrent": ExploreContract.listSchema(item: evaluationSchema())
             ],
-            requiredKeys: ["policyCount", "issuerCount", "attestationCount", "evaluationCurrentCount", "evaluationHistoryCount"],
+            requiredKeys: ["policyCount", "issuerCount", "attestationCount", "evaluationCurrentCount", "evaluationHistoryCount", "supportedDidMethods"],
             description: "Current trusted issuer registry state."
         )
     }
@@ -1323,9 +1472,10 @@ public class TrustedIssuerCell: GeneralCell {
                 "acceptedIssuerKinds": ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                 "acceptedDidMethods": ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                 "timeDecayHalfLifeDays": ExploreContract.schema(type: "float"),
+                "maximumCredentialAgeSeconds": ExploreContract.schema(type: "float"),
                 "status": ExploreContract.schema(type: "string")
             ],
-            requiredKeys: ["contextId"],
+            requiredKeys: ["contextId", "maximumCredentialAgeSeconds"],
             description: "Creates or updates a trust policy."
         )
     }

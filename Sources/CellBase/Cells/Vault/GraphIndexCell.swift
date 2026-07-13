@@ -24,8 +24,7 @@ public final class GraphIndexCell: GeneralCell {
         self.outgoing = [:]
         self.incoming = [:]
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -35,10 +34,11 @@ public final class GraphIndexCell: GeneralCell {
         self.incoming = try container.decodeIfPresent([String: Set<String>].self, forKey: .incoming) ?? [:]
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -50,7 +50,7 @@ public final class GraphIndexCell: GeneralCell {
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "graph")
+        agreementTemplate.ensureGrant("rw--", for: "graph")
     }
 
     private func setupKeys(owner: Identity) async {

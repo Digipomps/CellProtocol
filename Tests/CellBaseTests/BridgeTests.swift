@@ -499,6 +499,93 @@ final class BridgeTests: XCTestCase {
         }
     }
 
+    func testBridgeBaseSignMessageRejectsForgedResponseWhenIdentityVaultAlwaysApproves() async throws {
+        let transport = MockBridgeTransport()
+        let backingVault = MockIdentityVault()
+        let owner = await backingVault.identity(for: "owner", makeNewIfNotFound: true)!
+        let approvingVault = BridgeAlwaysTrueVerificationVault()
+        owner.identityVault = approvingVault
+        CellBase.defaultIdentityVault = approvingVault
+
+        let bridge = try await BridgeBase(
+            BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        )
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "always-true-vault")
+
+        let publisher = bridge.signMessageForIdentity(messageData: challenge, identity: owner)
+        async let signature = publisher.getOneWithTimeout(1)
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let request = try XCTUnwrap(sentCommands.first)
+
+        try await bridge.consumeResponse(
+            command: BridgeCommand(
+                cmd: Command.response.rawValue,
+                identity: owner,
+                payload: .signature(Data(repeating: 0xA5, count: 64)),
+                cid: request.cid
+            )
+        )
+
+        do {
+            _ = try await signature
+            XCTFail("Expected public-key verification to reject a forged response despite an approving vault")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("signingFailed"))
+        }
+    }
+
+    func testBridgeBaseSignMessageRejectsEd25519SignatureLabeledAsSecp256k1() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let signingKey = try XCTUnwrap(owner.publicSecureKey)
+        owner.publicSecureKey = SecureKey(
+            date: Date(),
+            privateKey: false,
+            use: .signature,
+            algorithm: .ECDSA,
+            size: signingKey.size,
+            curveType: .secp256k1,
+            x: signingKey.x,
+            y: signingKey.y,
+            compressedKey: signingKey.compressedKey
+        )
+
+        let bridge = try await BridgeBase(
+            BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        )
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "wrong-curve-metadata")
+        let ed25519Signature = try await vault.signMessageForIdentity(
+            messageData: challenge,
+            identity: owner
+        )
+
+        let publisher = bridge.signMessageForIdentity(messageData: challenge, identity: owner)
+        async let signature = publisher.getOneWithTimeout(1)
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let request = try XCTUnwrap(sentCommands.first)
+        try await bridge.consumeResponse(
+            command: BridgeCommand(
+                cmd: Command.response.rawValue,
+                identity: owner,
+                payload: .signature(ed25519Signature),
+                cid: request.cid
+            )
+        )
+
+        do {
+            _ = try await signature
+            XCTFail("Expected algorithm/curve metadata mismatch to be rejected")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("signingFailed"))
+        }
+    }
+
     func testBridgeBaseSignMessageRejectsRawPayloadBeforeSending() async throws {
         let transport = MockBridgeTransport()
         let owner = TestFixtures.makeIdentity(displayName: "owner")
@@ -1026,15 +1113,54 @@ final class BridgeTests: XCTestCase {
     }
 
     private func identityChallengeData(for identity: Identity, nonce: String) throws -> Data {
-        try IdentitySigningChallenge.signingData(
+        var nonceData = Data(nonce.utf8)
+        if nonceData.count < IdentitySigningChallenge.minimumNonceBytes {
+            nonceData.append(
+                Data(
+                    repeating: 0,
+                    count: IdentitySigningChallenge.minimumNonceBytes - nonceData.count
+                )
+            )
+        }
+        return try IdentitySigningChallenge.signingData(
             for: identity,
             trustedIdentity: identity,
             domain: "bridge-test",
             resource: "bridge",
             action: "sign",
             audience: "BridgeTests",
-            nonce: Data(nonce.utf8)
+            nonce: nonceData
         )
+    }
+}
+
+private actor BridgeAlwaysTrueVerificationVault: IdentityVaultProtocol {
+    func initialize() async -> IdentityVaultProtocol { self }
+
+    func addIdentity(identity: inout Identity, for identityContext: String) async {
+        identity.identityVault = self
+    }
+
+    func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
+        nil
+    }
+
+    func saveIdentity(_ identity: Identity) async {}
+
+    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        Data(repeating: 0xA5, count: 64)
+    }
+
+    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
+        true
+    }
+
+    func randomBytes64() async -> Data? {
+        Data(repeating: 0xA5, count: 64)
+    }
+
+    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) {
+        ("always-true-\(tag)", "always-true-iv")
     }
 }
 

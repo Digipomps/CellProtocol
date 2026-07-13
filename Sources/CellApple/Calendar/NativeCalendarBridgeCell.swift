@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 #if canImport(EventKit)
 import EventKit
@@ -16,18 +16,21 @@ public final class NativeCalendarBridgeCell: GeneralCell {
     public required init(owner: Identity) async {
         await super.init(owner: owner)
         self.identityDomain = "Calendar"
-        await setup(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
         try super.init(from: decoder)
-        Task { await self.setup(owner: self.storedOwnerIdentity) }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setup(owner: storedOwnerIdentity)
     }
 
     private func setup(owner: Identity) async {
-        agreementTemplate.addGrant("r---", for: CalendarContract.Keys.permissionStatus)
-        agreementTemplate.addGrant("rw--", for: CalendarContract.Keys.requestAccess)
-        agreementTemplate.addGrant("rw--", for: CalendarContract.Keys.createItem)
+        agreementTemplate.ensureGrant("r---", for: CalendarContract.Keys.permissionStatus)
+        agreementTemplate.ensureGrant("rw--", for: CalendarContract.Keys.requestAccess)
+        agreementTemplate.ensureGrant("rw--", for: CalendarContract.Keys.createItem)
 
         await registerGet(
             key: CalendarContract.Keys.permissionStatus,

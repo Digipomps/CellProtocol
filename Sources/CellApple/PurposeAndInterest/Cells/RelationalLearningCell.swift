@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 
 public final class RelationalLearningCell: GeneralCell {
@@ -10,9 +10,7 @@ public final class RelationalLearningCell: GeneralCell {
     public required init(owner: Identity) async {
         self.learningEngine = RelationalLearningEngine()
         await super.init(owner: owner)
-
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     private enum CodingKeys: CodingKey {
@@ -23,24 +21,25 @@ public final class RelationalLearningCell: GeneralCell {
         self.learningEngine = RelationalLearningEngine()
         try super.init(from: decoder)
 
-        Task {
-            let decodedOwner = self.storedOwnerIdentity
-            await setupPermissions(owner: decodedOwner)
-            await setupKeys(owner: decodedOwner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "purposeStarted")
-        agreementTemplate.addGrant("rw--", for: "purposeSucceeded")
-        agreementTemplate.addGrant("rw--", for: "purposeFailed")
-        agreementTemplate.addGrant("rw--", for: "contextTransition")
-        agreementTemplate.addGrant("rw--", for: "policyUpdate")
-        agreementTemplate.addGrant("rw--", for: "userPreference")
-        agreementTemplate.addGrant("rw--", for: "scorePurposes")
-        agreementTemplate.addGrant("rw--", for: "replay")
-        agreementTemplate.addGrant("r---", for: "edges")
-        agreementTemplate.addGrant("r---", for: "state")
+        agreementTemplate.ensureGrant("rw--", for: "purposeStarted")
+        agreementTemplate.ensureGrant("rw--", for: "purposeSucceeded")
+        agreementTemplate.ensureGrant("rw--", for: "purposeFailed")
+        agreementTemplate.ensureGrant("rw--", for: "contextTransition")
+        agreementTemplate.ensureGrant("rw--", for: "policyUpdate")
+        agreementTemplate.ensureGrant("rw--", for: "userPreference")
+        agreementTemplate.ensureGrant("rw--", for: "scorePurposes")
+        agreementTemplate.ensureGrant("rw--", for: "replay")
+        agreementTemplate.ensureGrant("r---", for: "edges")
+        agreementTemplate.ensureGrant("r---", for: "state")
     }
 
     private func setupKeys(owner: Identity) async {

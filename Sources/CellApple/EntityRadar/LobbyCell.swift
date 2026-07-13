@@ -7,7 +7,7 @@
 //
 //  Created by Kjetil Hustveit on 27/11/2024.
 //
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 
 /*
@@ -21,7 +21,7 @@ class LobbyCell: GeneralCell {
     
     var context: Perspective
     var perspectiveCell: PerspectiveCell?
-    private var publicPurposeDict = ["Test": "Test"]
+    private var publicPurposeDict = [String: String]()
     
     required init(owner: Identity) async {
         
@@ -30,93 +30,78 @@ class LobbyCell: GeneralCell {
         await super.init(owner: owner)
         
         print("LobbyCell init. Owner: \(owner.uuid)")
-        self.perspectiveCell = try? await getPerspectiveCell(requester: owner)
-        
-            await setupPermissions(owner: owner)
-            await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
     
     required init(from decoder: any Decoder) throws {
-        fatalError("LobbyCell init(from:) has not been implemented")
+        context = Perspective()
+        perspectiveCell = nil
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        publicPurposeDict = try container.decodeIfPresent([String: String].self, forKey: .publicPurposeDict) ?? [:]
+        running = try container.decodeIfPresent(Bool.self, forKey: .running) ?? false
+        try super.init(from: decoder)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case publicPurposeDict
+        case running
+    }
+
+    override func encode(to encoder: Encoder) throws {
+        try super.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(publicPurposeDict, forKey: .publicPurposeDict)
+        try container.encode(running, forKey: .running)
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
     
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "start")
-        self.agreementTemplate.addGrant("rw--", for: "stop")
+        self.agreementTemplate.ensureGrant("rw--", for: "start")
+        self.agreementTemplate.ensureGrant("rw--", for: "stop")
+        self.agreementTemplate.ensureGrant("rw--", for: "purposes")
     }
     
-    private func setupKeys(owner: Identity) async  {
-        await addInterceptForGet(requester: owner, key: "start", getValueIntercept:  { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            let resultString = "denied"
-            if await self.validateAccess("r---", at: "start", for: requester) {
-                try await self.startChatSimulation(requester: owner)
-                return .string("ok")
+    private func setupKeys(owner: Identity) async {
+        await addInterceptForGet(requester: owner, key: "start") { [weak self] _, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("r---", at: "start", for: requester) else {
+                return .string("denied")
             }
-            return .string(resultString)
-        })
-        
-        await addInterceptForGet(requester: owner, key: "stop", getValueIntercept:  { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            let resultString = "denied"
-            if await self.validateAccess("r---", at: "stop", for: requester) {
-                try await self.stopChatSimulation()
+            try await self.startChatSimulation(requester: requester)
+            return .string("ok")
+        }
+
+        await addInterceptForGet(requester: owner, key: "stop") { [weak self] _, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("r---", at: "stop", for: requester) else {
+                return .string("denied")
             }
-            return .string(resultString)
-        })
-        
-        await addInterceptForSet(requester: owner, key: "addMessage", setValueIntercept:  {
-            [weak self] keypath, value, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "addMessage", for: requester) {
-                print("Lobby cell addMessage. Keypath: \(keypath) value: \(try value.jsonString())")
-//                startConnectService()
+            try await self.stopChatSimulation()
+            return .string("ok")
+        }
+
+        await addInterceptForGet(requester: owner, key: "purposes") { [weak self] _, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("r---", at: "purposes", for: requester) else {
+                return .string("denied")
             }
-            
-            return nil
-        })
-        
-//        Public Purposes
-        await addInterceptForGet(requester: owner, key: "purposes", getValueIntercept:  { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            let resultString = "denied"
-            if await self.validateAccess("r---", at: "purposes", for: requester) {
-                try await self.stopChatSimulation()
+            return .object(self.getPublicPurposesValue())
+        }
+
+        await addInterceptForSet(requester: owner, key: "purposes") { [weak self] _, value, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("-w--", at: "purposes", for: requester) else {
+                return .string("denied")
             }
-            return .string(resultString)
-        })
-        
-        await addInterceptForSet(requester: owner, key: "purposes", setValueIntercept:  {
-            [weak self] keypath, value, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "purposes", for: requester) {
-                print("Lobby cell purposes. Keypath: \(keypath) value: \(try value.jsonString())")
-//                startConnectService()
-            }
-            
-            return nil
-        })
-        
-        // Administer scanning and advertising
-        await addInterceptForGet(requester: owner, key: "advertise", getValueIntercept:  { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            let resultString = "denied"
-            if await self.validateAccess("r---", at: "advertise", for: requester) {
-                try await self.stopChatSimulation()
-            }
-            return .string(resultString)
-        })
-        
-        await addInterceptForGet(requester: owner, key: "withhold", getValueIntercept:  { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            let resultString = "denied"
-            if await self.validateAccess("r---", at: "withhold", for: requester) {
-                try await self.stopChatSimulation()
-            }
-            return .string(resultString)
-        })
-        
+            try await self.setPublicPurposes(purposesValue: value)
+            return .string("ok")
+        }
     }
     
     func getPerspectiveCell(requester: Identity) async throws -> PerspectiveCell {

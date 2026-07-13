@@ -90,6 +90,7 @@ public struct VCClaim: Codable {
         self.issuanceDate = Date()
         
         self.credentialSubject = credentialSubject
+        self.credentialSubject["id"] = .string(try subjectIdentity.did())
         self.proof = VCProof(proofPurpose: .assertionMethod, issuerIdentity: issuerIdentity)
         
         
@@ -137,7 +138,13 @@ public struct VCClaim: Codable {
         RFC3339DateFormatter.locale = Locale(identifier: "en_US_POSIX")
         RFC3339DateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
         RFC3339DateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
-        issuanceDate = RFC3339DateFormatter.date(from: issuanceDateString)! // Should throw instead
+        guard let decodedIssuanceDate = RFC3339DateFormatter.date(from: issuanceDateString) else {
+            throw Swift.DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath + [CodingKeys.issuanceDate],
+                debugDescription: "VC issuanceDate must be a valid RFC3339 timestamp."
+            ))
+        }
+        issuanceDate = decodedIssuanceDate
 //        issuanceDate = try values.decode(Date.self, forKey: .issuanceDate)
         credentialSubject = try values.decode(Object.self, forKey: .credentialSubject)
         proof = try values.decode(VCProof.self, forKey: .proof)
@@ -174,26 +181,22 @@ public struct VCClaim: Codable {
     
     // to verify we need the issuers public key - let's embed this in issuerIdentity. Data and signature is embedded in the VCClaim
     public func verify(issuer issuerIdentity: Identity) async throws -> Bool {
-        // Should we verify that issuerIdentity is the same as in the claim?
-        
-        let encoder = JSONEncoder()
-        guard let userInfoKey = CodingUserInfoKey(rawValue: "skipProof") else {
-            throw DIDError.failedUserInfoKey
+        guard issuerReferences(identity: issuerIdentity),
+              proof.verificationMethod == issuerIdentity.uuid,
+              proof.proofPurpose == .assertionMethod,
+              proof.type == VCProof.proofType(for: issuerIdentity),
+              proof.signatureData.isEmpty == false,
+              proof.signatureData.count <= 512 else {
+            return false
         }
-        encoder.userInfo[userInfoKey] = true
-        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
-            
-            
-        let claimJsonData = try encoder.encode(self)
+
+        let claimJsonData = try canonicalUnsignedClaimData()
         CellBase.diagnosticLog("VCClaim verify encoded payload prepared", domain: .credentials)
-        encoder.userInfo[userInfoKey] = nil
-            
-        
-        guard let identityVault = issuerIdentity.identityVault else {
-            throw CellBaseError.noVault
-        }
-        return try await identityVault.verifySignature(signature: self.proof.signatureData, messageData: claimJsonData, for: issuerIdentity)
-        
+        return IdentityPublicKeySignatureVerifier.verify(
+            signature: proof.signatureData,
+            messageData: claimJsonData,
+            identity: issuerIdentity
+        )
     }
     
     public func verify(diDocument: DIDDocument) async throws -> Bool {
@@ -209,31 +212,44 @@ public struct VCClaim: Codable {
     }
 
     public func verify(issuer issuerPublicKey: Data, curveType: CurveType) async throws -> Bool {
-        // Should we verify that issuerIdentity is the same as in the claim?
-        
-//        let issuerIdentity = Identity()
-        
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
-        
-        
-        guard let userInfoKey = CodingUserInfoKey(rawValue: "skipProof") else {
-            throw DIDError.failedUserInfoKey
+        guard proof.proofPurpose == .assertionMethod,
+              proof.signatureData.isEmpty == false,
+              proof.signatureData.count <= 512 else {
+            return false
         }
-        encoder.userInfo[userInfoKey] = true
-        let claimJsonData = try encoder.encode(self)
-        encoder.userInfo[userInfoKey] = nil
-        
-        let identityVault = DIDIdentityVault()
-        var validated = false
-//        validated = try await identityVault.verifySignature(signature: self.proof.signatureData, messageData: messageData, for: issuerIdentity)
-        
-        
-        validated = try await identityVault.verifySignature(signature: self.proof.signatureData, messageData: claimJsonData, for: issuerPublicKey, curveType: curveType)
-        
-        
-        return validated
-        
+        let verificationMaterial = try await getIssuerVerificationMaterial()
+        guard verificationMaterial.publicKey == issuerPublicKey,
+              verificationMaterial.curveType == curveType else {
+            return false
+        }
+
+        let algorithm: CurveAlgorithm
+        let expectedProofType: ProofType
+        switch curveType {
+        case .Curve25519:
+            algorithm = .EdDSA
+            expectedProofType = .Ed25519Signature2020
+        case .P256:
+            algorithm = .ECDSA
+            expectedProofType = .EcdsaSecp256r1Signature2019
+        case .secp256k1:
+            return false
+        }
+        guard proof.type == expectedProofType else {
+            return false
+        }
+
+        let descriptor = IdentityPublicKeyDescriptor(
+            uuid: proof.verificationMethod,
+            publicKey: issuerPublicKey,
+            algorithm: algorithm,
+            curveType: curveType
+        )
+        return IdentityPublicKeySignatureVerifier.verify(
+            signature: proof.signatureData,
+            messageData: try canonicalUnsignedClaimData(),
+            descriptor: descriptor
+        )
     }
     
     public func verify() async throws -> Bool {
@@ -255,16 +271,16 @@ public struct VCClaim: Codable {
     
     
     mutating public func generateProof(issuerIdentity: Identity) async throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
-        
-        guard let userInfoKey = CodingUserInfoKey(rawValue: "skipProof") else {
-            throw DIDError.failedUserInfoKey
+        guard issuerReferences(identity: issuerIdentity),
+              proof.verificationMethod == issuerIdentity.uuid,
+              proof.proofPurpose == .assertionMethod,
+              let expectedProofType = VCProof.proofType(for: issuerIdentity),
+              proof.type == expectedProofType else {
+            throw IdentityVaultError.signingFailed
         }
-        encoder.userInfo[userInfoKey] = true
-        let claimJsonData = try encoder.encode(self)
+
+        let claimJsonData = try canonicalUnsignedClaimData()
         CellBase.diagnosticLog("VCClaim generateProof encoded payload prepared", domain: .credentials)
-        encoder.userInfo[userInfoKey] = nil
         if let signatureData = try await  issuerIdentity.sign(data: claimJsonData) {
             self.proof.signatureData = signatureData
         } else {
@@ -288,7 +304,26 @@ public struct VCClaim: Codable {
         }
         
         
-        return (Data(), .Curve25519)
+        throw DIDError.noVerificationMethod
+    }
+
+    private func issuerReferences(identity: Identity) -> Bool {
+        guard case let .reference(issuerDid) = issuer,
+              let expectedDid = try? identity.did(),
+              issuerDid == expectedDid else {
+            return false
+        }
+        return true
+    }
+
+    private func canonicalUnsignedClaimData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
+        guard let userInfoKey = CodingUserInfoKey(rawValue: "skipProof") else {
+            throw DIDError.failedUserInfoKey
+        }
+        encoder.userInfo[userInfoKey] = true
+        return try encoder.encode(self)
     }
     
     

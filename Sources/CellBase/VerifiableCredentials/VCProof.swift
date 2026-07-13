@@ -35,7 +35,7 @@ public class VCProof : Codable {
         self.proofPurpose = proofPurpose
         self.created = Date()
         self.verificationMethod = issuerIdentity.uuid
-        self.type = .EcdsaSecp256r1Signature2019 // Extract from identity
+        self.type = Self.proofType(for: issuerIdentity) ?? .EcdsaSecp256r1Signature2019
         
 //        self.signatureData /*= Data()*/
     }
@@ -78,7 +78,13 @@ public class VCProof : Codable {
         RFC3339DateFormatter.locale = Locale(identifier: "en_US_POSIX")
         RFC3339DateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
         RFC3339DateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
-        created = RFC3339DateFormatter.date(from: createdString)! // Should throw instead
+        guard let decodedCreated = RFC3339DateFormatter.date(from: createdString) else {
+            throw Swift.DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath + [CodingKeys.created],
+                debugDescription: "VC proof created must be a valid RFC3339 timestamp."
+            ))
+        }
+        created = decodedCreated
         proofPurpose = try values.decode(ProofPurpose.self, forKey: .proofPurpose)
         verificationMethod = try values.decode(String.self, forKey: .verificationMethod)
         signatureData = try values.decode(Data.self, forKey: .signatureData)
@@ -99,5 +105,21 @@ public class VCProof : Codable {
         try container.encode(proofPurpose, forKey: .proofPurpose)
         try container.encode(verificationMethod, forKey: .verificationMethod)
         try container.encode(signatureData, forKey: .signatureData)
+    }
+
+    static func proofType(for identity: Identity) -> ProofType? {
+        guard let key = identity.publicSecureKey,
+              key.privateKey == false,
+              key.use == .signature else {
+            return nil
+        }
+        switch (key.algorithm, key.curveType) {
+        case (.ECDSA, .P256):
+            return .EcdsaSecp256r1Signature2019
+        case (.EdDSA, .Curve25519):
+            return .Ed25519Signature2020
+        default:
+            return nil
+        }
     }
 }

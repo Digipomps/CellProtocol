@@ -22,6 +22,7 @@ final class ResolverTests: XCTestCase {
     private var previousPersistedCellMasterKey: Data?
     private var previousDocumentRootPath: String?
     private var previousTypedCellUtility: TypedCellUtility?
+    private var previousGlobalTypedCellUtility: TypedCellProtocol?
 
     override func setUp() {
         super.setUp()
@@ -30,6 +31,7 @@ final class ResolverTests: XCTestCase {
         previousScopedSecretProvider = CellBase.defaultScopedSecretProvider
         previousPersistedCellMasterKey = CellBase.persistedCellMasterKey
         previousDocumentRootPath = CellBase.documentRootPath
+        previousGlobalTypedCellUtility = CellBase.typedCellUtility
         CellBase.defaultIdentityVault = MockIdentityVault()
         CellBase.defaultCellResolver = CellResolver.sharedInstance
         previousTypedCellUtility = CellResolver.sharedInstance.tcUtility
@@ -41,6 +43,7 @@ final class ResolverTests: XCTestCase {
         CellBase.defaultScopedSecretProvider = previousScopedSecretProvider
         CellBase.persistedCellMasterKey = previousPersistedCellMasterKey
         CellBase.documentRootPath = previousDocumentRootPath
+        CellBase.typedCellUtility = previousGlobalTypedCellUtility
         CellResolver.sharedInstance.tcUtility = previousTypedCellUtility
         super.tearDown()
     }
@@ -164,6 +167,105 @@ final class ResolverTests: XCTestCase {
         }
     }
 
+    func testRegistrationWaitsForReadinessAndFailureNeverPublishesCell() async throws {
+        let resolver = CellResolver.sharedInstance
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-readiness",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let delayedName = "DelayedReadiness-\(UUID().uuidString)"
+        let delayedCell = await ResolverReadinessProbeCell(owner: owner)
+        let gate = ResolverReadinessGate()
+        delayedCell.readinessGate = gate
+
+        let registration = Task {
+            try await resolver.registerNamedEmitCell(
+                name: delayedName,
+                emitCell: delayedCell,
+                scope: .scaffoldUnique,
+                identity: owner
+            )
+        }
+
+        await gate.waitUntilInstallationStarts()
+        let installedBeforeRelease = await delayedCell.readinessState.isInstalled()
+        let publishedBeforeRelease = await resolver.cellUUID(for: delayedName)
+        XCTAssertFalse(installedBeforeRelease)
+        XCTAssertNil(
+            publishedBeforeRelease,
+            "A Cell must not be visible in the resolver while runtime bindings are still installing."
+        )
+
+        await gate.releaseInstallation()
+        try await registration.value
+        let installedAfterRelease = await delayedCell.readinessState.isInstalled()
+        let publishedAfterRelease = await resolver.cellUUID(for: delayedName)
+        XCTAssertTrue(installedAfterRelease)
+        XCTAssertEqual(publishedAfterRelease, delayedCell.uuid)
+
+        let failingName = "FailingReadiness-\(UUID().uuidString)"
+        let failingCell = await ResolverReadinessProbeCell(owner: owner)
+        failingCell.failInstallation = true
+        do {
+            try await resolver.registerNamedEmitCell(
+                name: failingName,
+                emitCell: failingCell,
+                scope: .scaffoldUnique,
+                identity: owner
+            )
+            XCTFail("Expected readiness failure")
+        } catch ResolverReadinessProbeError.installationFailed {
+            // Expected: registration must fail before resolver publication.
+        }
+        let failingPublishedUUID = await resolver.cellUUID(for: failingName)
+        XCTAssertNil(failingPublishedUUID)
+
+        await resolver.unregisterEmitCell(uuid: delayedCell.uuid)
+    }
+
+    func testResolverPreparesFreshAndDecodedCellsBeforeReturningThem() async throws {
+        let resolver = CellResolver.sharedInstance
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-ready-return",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+
+        let templateName = "ReadyTemplate-\(UUID().uuidString)"
+        try await resolver.addCellResolve(
+            name: templateName,
+            cellScope: .template,
+            identityDomain: "resolver-ready-return",
+            type: ResolverReadinessProbeCell.self
+        )
+        let resolvedFresh = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(templateName)",
+            requester: owner
+        )
+        let fresh = try XCTUnwrap(resolvedFresh as? ResolverReadinessProbeCell)
+        let freshInstalled = await fresh.readinessState.isInstalled()
+        XCTAssertTrue(freshInstalled)
+
+        let persistedSource = await ResolverReadinessProbeCell(owner: owner)
+        let rawDecoded = try JSONDecoder().decode(
+            ResolverReadinessProbeCell.self,
+            from: JSONEncoder().encode(persistedSource)
+        )
+        let rawDecodedInstalled = await rawDecoded.readinessState.isInstalled()
+        XCTAssertFalse(rawDecodedInstalled)
+        CellBase.typedCellUtility = FixedDecodedCellUtility(cell: rawDecoded)
+
+        let resolvedLoaded = try await resolver.loadTypedEmitCell(with: rawDecoded.uuid)
+        let loaded = try XCTUnwrap(resolvedLoaded as? ResolverReadinessProbeCell)
+        let loadedInstalled = await loaded.readinessState.isInstalled()
+        XCTAssertTrue(
+            loadedInstalled,
+            "Resolver persistence APIs must not return a raw decoded Cell before runtime bindings are installed."
+        )
+        await resolver.unregisterEmitCell(uuid: loaded.uuid)
+    }
+
     func testScopedSecretProviderSeedsPersistedCellMasterKeyBeforeLegacyVaultAPI() async throws {
 #if canImport(CellVapor)
         let resolver = CellResolver.sharedInstance
@@ -217,6 +319,108 @@ private actor FixedScopedSecretProvider: ScopedSecretProviderProtocol {
         }
         return secretData + Data(repeating: 0x00, count: minimumLength - secretData.count)
     }
+}
+
+private enum ResolverReadinessProbeError: Error {
+    case installationFailed
+}
+
+private actor ResolverReadinessState {
+    private var installed = false
+
+    func markInstalled() {
+        installed = true
+    }
+
+    func isInstalled() -> Bool {
+        installed
+    }
+}
+
+private actor ResolverReadinessGate {
+    private var installationStarted = false
+    private var installationReleased = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilInstallationStarts() async {
+        if installationStarted { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func blockInstallationUntilReleased() async {
+        installationStarted = true
+        let pendingStartWaiters = startWaiters
+        startWaiters.removeAll()
+        pendingStartWaiters.forEach { $0.resume() }
+
+        if installationReleased { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func releaseInstallation() {
+        installationReleased = true
+        let pendingReleaseWaiters = releaseWaiters
+        releaseWaiters.removeAll()
+        pendingReleaseWaiters.forEach { $0.resume() }
+    }
+}
+
+private final class ResolverReadinessProbeCell: GeneralCell {
+    let readinessState = ResolverReadinessState()
+    var readinessGate: ResolverReadinessGate?
+    var failInstallation = false
+
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    override func installCellRuntimeBindingsForAccess() async throws {
+        if failInstallation {
+            throw ResolverReadinessProbeError.installationFailed
+        }
+        if let readinessGate {
+            await readinessGate.blockInstallationUntilReleased()
+        }
+        await readinessState.markInstalled()
+    }
+}
+
+private final class FixedDecodedCellUtility: TypedCellProtocol {
+    private let cell: Emit?
+
+    init(cell: Emit) {
+        self.cell = cell
+    }
+
+    required init(storage: CellStorage) {
+        cell = nil
+    }
+
+    func loadTypedEmitCell(with uuid: String) -> Emit? {
+        cell?.uuid == uuid ? cell : nil
+    }
+
+    func loadTypedEmitCell(at path: String) -> Emit? {
+        cell
+    }
+
+    func storeAsTypedCell(cellName: String, cell: Codable, uuid: String) {}
+
+    func storeAsTypedCell(
+        cellName: String,
+        cell: Codable,
+        uuid: String,
+        options: CellStorageWriteOptions
+    ) {}
 }
 
 private actor CountingLegacyKeyVault: IdentityVaultProtocol {

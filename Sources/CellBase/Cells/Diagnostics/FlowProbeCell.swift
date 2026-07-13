@@ -94,6 +94,11 @@ public struct FlowProbeTrace: Codable {
 public final class FlowProbeCell: GeneralCell {
     private static let traceHistoryLimit = 20
 
+    private enum RuntimeBindingError: Error {
+        case ownerAuthorityUnavailable
+        case installationIncomplete
+    }
+
     private var configuredTarget: FlowProbeTarget?
     private var configuredFilter = FlowProbeFilter()
     private var currentStatus: FlowProbeRunState = .idle
@@ -114,8 +119,14 @@ public final class FlowProbeCell: GeneralCell {
 
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            CellBase.diagnosticLog(
+                "FlowProbeCell runtime binding setup failed during initialization: \(error)",
+                domain: .lifecycle
+            )
+        }
     }
 
     public required init(from decoder: Decoder) throws {
@@ -126,11 +137,6 @@ public final class FlowProbeCell: GeneralCell {
         self.currentTrace = try container.decodeIfPresent(FlowProbeTrace.self, forKey: .currentTrace)
         self.traceHistory = try container.decodeIfPresent([FlowProbeTrace].self, forKey: .traceHistory) ?? []
         try super.init(from: decoder)
-
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
     }
 
     deinit {
@@ -156,8 +162,39 @@ public final class FlowProbeCell: GeneralCell {
         try container.encode(snapshot.history, forKey: .traceHistory)
     }
 
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let owner = try await runtimeBindingOwner()
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
+        let requiredKeys = Set([
+            "flowProbe.status",
+            "flowProbe.target",
+            "flowProbe.start"
+        ])
+        guard requiredKeys.isSubset(of: Set(schemaDict.keys)) else {
+            throw RuntimeBindingError.installationIncomplete
+        }
+    }
+
+    private func runtimeBindingOwner() async throws -> Identity {
+        if owner.identityVault != nil,
+           await verifyRequesterIdentityControl(owner) {
+            return owner
+        }
+        guard let vault = CellBase.defaultIdentityVault,
+              let restoredOwner = await vault.identity(forUUID: owner.uuid),
+              restoredOwner.referencesSameSigningIdentity(as: owner),
+              await verifyRequesterIdentityControl(restoredOwner) else {
+            throw RuntimeBindingError.ownerAuthorityUnavailable
+        }
+        return restoredOwner
+    }
+
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "flowProbe")
+        let requiredGrant = Grant(keypath: "flowProbe", permission: "rw--")
+        if agreementTemplate.checkGrant(requestedGrant: requiredGrant) == false {
+            agreementTemplate.addGrant(requiredGrant)
+        }
     }
 
     private func setupKeys(owner: Identity) async {

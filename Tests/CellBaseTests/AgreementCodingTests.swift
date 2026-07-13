@@ -5,6 +5,39 @@ import XCTest
 @testable import CellBase
 
 final class AgreementCodingTests: XCTestCase {
+    func testAsyncAgreementInitializesOwnerAndSignatoryAtomically() async {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let agreement = await Agreement()
+
+        XCTAssertEqual(agreement.signatories.count, 1)
+        XCTAssertEqual(agreement.owner.uuid, agreement.signatories[0].uuid)
+        XCTAssertEqual(
+            agreement.owner.signingPublicKeyFingerprint,
+            agreement.signatories[0].signingPublicKeyFingerprint
+        )
+        XCTAssertNotNil(agreement.owner.identityVault)
+    }
+
+    func testAsyncAgreementHasDeterministicFallbackWithoutVault() async {
+        let previousVault = CellBase.defaultIdentityVault
+        CellBase.defaultIdentityVault = nil
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let agreement = await Agreement()
+
+        XCTAssertEqual(agreement.signatories.count, 1)
+        XCTAssertEqual(agreement.owner.uuid, agreement.signatories[0].uuid)
+        XCTAssertEqual(
+            agreement.owner.signingPublicKeyFingerprint,
+            agreement.signatories[0].signingPublicKeyFingerprint
+        )
+        XCTAssertNil(agreement.owner.identityVault)
+    }
+
     func testAgreementDecodesLegacyPayloadWithoutUUIDStateOrDurationAsTemplate() throws {
         let owner = Identity("agreement-owner", displayName: "Agreement Owner", identityVault: nil)
         let agreement = Agreement(owner: owner)
@@ -44,6 +77,20 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertEqual(decoded.name, grant.name)
         XCTAssertEqual(decoded.keypath, grant.keypath)
         XCTAssertEqual(decoded.permission.permissionString, grant.permission.permissionString)
+    }
+
+    func testEnsureGrantIsIdempotentAndAcceptsBroaderExistingCapability() {
+        let agreement = Agreement(owner: Identity())
+        agreement.grants = []
+
+        agreement.ensureGrant("r---", for: "state")
+        agreement.ensureGrant("r---", for: "state")
+        agreement.ensureGrant("rw--", for: "state")
+        agreement.ensureGrant("r---", for: "state")
+
+        XCTAssertEqual(agreement.grants.count, 2)
+        XCTAssertEqual(agreement.grants[0].permission.permissionString, "r---")
+        XCTAssertEqual(agreement.grants[1].permission.permissionString, "rw--")
     }
 
     func testCanonicalFourCharacterPermissionsPreserveStorageAndStaySeparated() throws {
@@ -180,6 +227,36 @@ final class AgreementCodingTests: XCTestCase {
         contract.agreement.addGrant("r---", for: "tampered")
         let tamperedSignature = await contract.verifySignature()
         XCTAssertFalse(tamperedSignature)
+    }
+
+    func testDecodedContractVerifiesWithoutIssuerOrGlobalVault() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let subject = await vault.identity(for: "subject", makeNewIfNotFound: true)!
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "state")
+        agreement.signatories.append(subject)
+        agreement.state = .signed
+        let contract = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private"
+        )
+
+        let decoded = try JSONDecoder().decode(
+            Contract.self,
+            from: JSONEncoder().encode(contract)
+        )
+        CellBase.defaultIdentityVault = nil
+
+        XCTAssertNil(decoded.issuer.identityVault)
+        let verified = await decoded.verifySignature()
+        XCTAssertTrue(verified)
     }
 
     func testContractRejectsFutureExpiredOverlongAndWrongDomainBindings() async throws {

@@ -271,7 +271,7 @@ final class RealCellContractTests: XCTestCase {
         XCTAssertTrue(manifest.markdown.contains("Declared purposes: `purpose.commons-taxonomy-governance`"))
         XCTAssertTrue(manifest.markdown.contains("## `taxonomy.validate.purposeTree`"))
 
-        let advertised = await cell.advertise(for: owner)
+        let advertised = try await cell.advertise(for: owner)
         let advertisedManifest = try XCTUnwrap(advertised.exploreManifest)
         XCTAssertEqual(advertisedManifest.intent.purposeRefs, manifest.intent.purposeRefs)
         XCTAssertEqual(advertisedManifest.operations.count, manifest.operations.count)

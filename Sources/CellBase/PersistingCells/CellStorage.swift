@@ -24,6 +24,22 @@ public protocol CellStorage {
 }
 
 public extension CellStorage {
+    func loadRuntimeReadyEmitCell(with uuid: String, decoder: CellJSONCoder) async throws -> Emit {
+        let cell = try loadEmitCell(with: uuid, decoder: decoder)
+        if let runtimeReady = cell as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return cell
+    }
+
+    func loadRuntimeReadyEmitCell(at path: String, decoder: CellJSONCoder) async throws -> Emit {
+        let cell = try loadEmitCell(at: path, decoder: decoder)
+        if let runtimeReady = cell as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return cell
+    }
+
     func storeCell(cellName: String, cell: Codable, uuid: String, options: CellStorageWriteOptions) throws {
         try storeCell(cellName: cellName, cell: cell, uuid: uuid)
     }

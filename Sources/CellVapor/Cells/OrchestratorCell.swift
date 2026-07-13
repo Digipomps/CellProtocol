@@ -9,7 +9,7 @@
 //
 
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 enum OrchestratorError: Error {
     case noConfiguration
@@ -47,30 +47,32 @@ class OrchestratorCell: GeneralCell {
     
     required init(owner: Identity) async {
         await super.init(owner: owner)
+        try? await ensureRuntimeReady()
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        try await setup(owner: storedOwnerIdentity)
+    }
+
+    private func setup(owner: Identity) async throws {
         
         print("Orchestrator (Porthole vapor) cell init")
         
         self.name = "Porthole"
         
-        self.agreementTemplate.addGrant("r---", for: "skeleton")
-        self.agreementTemplate.addGrant("r---", for: "connectedCellEmitters")
-        self.agreementTemplate.addGrant("r---", for: "flow")
+        self.agreementTemplate.ensureGrant("r---", for: "skeleton")
+        self.agreementTemplate.ensureGrant("r---", for: "connectedCellEmitters")
+        self.agreementTemplate.ensureGrant("r---", for: "flow")
         
         
-        do {
+        if fileExistsInCellDirectory(filename: namedEmittersFilename) {
             try await loadNamedEmitters(requester: owner)
-        } catch {
-            print("Initial loading of namedEmitters failed with error: \(error) uuid: ")
         }
-        do {
+        if fileExistsInCellDirectory(filename: identityNamedEmittersFilename) {
             try await loadIdentityNamedEmitters(requester: owner)
-                } catch {
-                    print("Initial loading of identityNamedEmitters failed with error: \(error) uuid: ")
-                }
-        do {
+        }
+        if fileExistsInCellDirectory(filename: cellConfigurationFilename) {
             try await loadCellConfiguration(requester: owner)
-        } catch {
-            print("Initial loading of cellConfiguration failed with error: \(error) uuid: ")
         }
         
         buildOutwardMenuCellConfigurations()
@@ -278,13 +280,14 @@ class OrchestratorCell: GeneralCell {
     
     required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        cellConfiguration = try container.decode(CellConfiguration.self, forKey: .cellConfig)
-        let superDecoder = try container.superDecoder()
+        cellConfiguration = try container.decodeIfPresent(CellConfiguration.self, forKey: .cellConfig)
+        let superDecoder = try container.superDecoder(forKey: .generalCell)
         try super.init(from: superDecoder)
     }
     
     override func encode(to encoder: Encoder) throws {
       var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encodeIfPresent(cellConfiguration, forKey: .cellConfig)
 //      try container.encode(label, forKey: .label)
       
       let baseEncoder = container.superEncoder(forKey: .generalCell) // TODO: Look into where this should reside
@@ -381,24 +384,8 @@ class OrchestratorCell: GeneralCell {
     
     private func loadCellConfiguration(requester: Identity) async throws {
         print("++++++++++ Load cell configuration ++++++++++++++")
-        var cellConfigurationData = Data()
-        do {
-            cellConfigurationData = try await self.getFileDataInCellDirectory(filename: cellConfigurationFilename)
-//            print("Cell configuration:\n\(String(describing: String(data:cellConfigurationData, encoding: .utf8 )))")
-        } catch {
-            print("Getting cell configuration file data failed with error: \(error)")
-            let encoder = JSONEncoder()
-            var eventEmitterReference = CellReference(endpoint: "cell:///EventEmitter", label: "eventTest") //
-            eventEmitterReference.addKeyAndValue(KeyValue(key: "start", value: nil))
-            
-            self.cellConfiguration = CellConfiguration(name: "Preview", cellReferences:   [eventEmitterReference])
-            
-            let cellConfigurationData = try encoder.encode(self.cellConfiguration)
-            
-            try await self.writeFileDataInCellDirectory(fileData: cellConfigurationData, filename: cellConfigurationFilename)
-            
-            try await self.executeCellConfiguration(requester: requester)
-        }
+        _ = requester
+        let cellConfigurationData = try await self.getFileDataInCellDirectory(filename: cellConfigurationFilename)
         let decoder = JSONDecoder()
         self.cellConfiguration = try decoder.decode(CellConfiguration.self, from: cellConfigurationData)
     }

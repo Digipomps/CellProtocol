@@ -130,6 +130,134 @@ final class FlowInspectionCellsTests: XCTestCase {
         XCTAssertEqual(snapshot.items.first(where: { $0.key == "state" })?.status, .ok)
     }
 
+    func testDecodedFlowProbeSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+
+        let ownerCandidate = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
+        let original = await FlowProbeCell(owner: owner)
+        _ = try await original.set(
+            keypath: "flowProbe.target",
+            value: .string("cell:///PersistedFlowSource"),
+            requester: owner
+        )
+        let encoded = try JSONEncoder().encode(original)
+
+        let immediate = try JSONDecoder().decode(FlowProbeCell.self, from: encoded)
+        let target = try await immediate.get(keypath: "flowProbe.target.current", requester: owner)
+        guard case let .object(targetObject) = target else {
+            XCTFail("Expected the decoded flow probe target payload")
+            return
+        }
+        XCTAssertEqual(targetObject["configured"], .bool(true))
+        _ = try await immediate.set(
+            keypath: "flowProbe.filters",
+            value: .object([
+                "topics": .list([.string("persisted.updated")]),
+                "limit": .integer(7)
+            ]),
+            requester: owner
+        )
+        let filters = try await immediate.get(keypath: "flowProbe.filters.current", requester: owner)
+        let filterPayload = try extractObject(from: filters, key: "filter")
+        let decodedFilter: FlowProbeFilter = try decode(filterPayload)
+        XCTAssertEqual(decodedFilter.topics, ["persisted.updated"])
+        XCTAssertEqual(decodedFilter.limit, 7)
+
+        let concurrent = try JSONDecoder().decode(FlowProbeCell.self, from: encoded)
+        let readiness = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<24 {
+                group.addTask {
+                    try await concurrent.ensureRuntimeReady()
+                    return try await concurrent.keys(requester: owner).contains("flowProbe.start")
+                }
+            }
+            var results = [Bool]()
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+        XCTAssertEqual(readiness.count, 24)
+        XCTAssertTrue(readiness.allSatisfy { $0 })
+        XCTAssertEqual(
+            concurrent.agreementTemplate.grants.filter {
+                $0.keypath == "flowProbe" && $0.permission.permissionString == "rw--"
+            }.count,
+            1
+        )
+    }
+
+    func testDecodedStateSnapshotSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+
+        let ownerCandidate = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
+        let original = await StateSnapshotCell(owner: owner)
+        _ = try await original.set(
+            keypath: "stateSnapshot.target",
+            value: .string("cell:///PersistedSnapshotSource"),
+            requester: owner
+        )
+        _ = try await original.set(
+            keypath: "stateSnapshot.keys",
+            value: .list([.string("state")]),
+            requester: owner
+        )
+        let encoded = try JSONEncoder().encode(original)
+
+        let immediate = try JSONDecoder().decode(StateSnapshotCell.self, from: encoded)
+        let target = try await immediate.get(keypath: "stateSnapshot.target.current", requester: owner)
+        guard case let .object(targetObject) = target else {
+            XCTFail("Expected the decoded state snapshot target payload")
+            return
+        }
+        XCTAssertEqual(targetObject["configured"], .bool(true))
+        _ = try await immediate.set(
+            keypath: "stateSnapshot.keys",
+            value: .list([.string("details"), .string("state")]),
+            requester: owner
+        )
+        let keys = try await immediate.get(keypath: "stateSnapshot.keys.current", requester: owner)
+        guard case let .object(keysObject) = keys else {
+            XCTFail("Expected the decoded state snapshot key payload")
+            return
+        }
+        guard case let .list(keyValues)? = keysObject["keys"] else {
+            XCTFail("Expected the decoded state snapshot key list")
+            return
+        }
+        XCTAssertEqual(keyValues.compactMap {
+            guard case let .string(key) = $0 else { return nil }
+            return key
+        }, ["details", "state"])
+
+        let concurrent = try JSONDecoder().decode(StateSnapshotCell.self, from: encoded)
+        let readiness = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<24 {
+                group.addTask {
+                    try await concurrent.ensureRuntimeReady()
+                    return try await concurrent.keys(requester: owner).contains("stateSnapshot.capture")
+                }
+            }
+            var results = [Bool]()
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+        XCTAssertEqual(readiness.count, 24)
+        XCTAssertTrue(readiness.allSatisfy { $0 })
+        XCTAssertEqual(
+            concurrent.agreementTemplate.grants.filter {
+                $0.keypath == "stateSnapshot" && $0.permission.permissionString == "rw--"
+            }.count,
+            1
+        )
+    }
+
     private func extractObject(from value: ValueType, key: String) throws -> ValueType {
         guard case let .object(object) = value, let nested = object[key] else {
             throw NSError(domain: "FlowInspectionCellsTests", code: 1)

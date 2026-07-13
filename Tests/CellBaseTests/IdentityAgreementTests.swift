@@ -113,6 +113,39 @@ final class IdentityAgreementTests: XCTestCase {
         XCTAssertEqual(descriptor?.helperCellConfiguration?.discovery?.sourceCellEndpoint, "cell:///AgreementWorkbench")
     }
 
+    func testProvedClaimConditionRejectsPrimitiveEntityAssertion() async throws {
+        let vault = MockIdentityVault()
+        let resolver = MockCellResolver()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = resolver
+
+        let requester = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let anchor = TestEmitCell(owner: requester, uuid: "entity-anchor")
+        _ = try await anchor.set(
+            keypath: "claims.ageProof",
+            value: .bool(true),
+            requester: requester
+        )
+        try await resolver.registerNamedEmitCell(
+            name: "EntityAnchor",
+            emitCell: anchor,
+            scope: .identityUnique,
+            identity: requester
+        )
+
+        let target = TestEmitCell(owner: requester, uuid: "target-cell")
+        let condition = ProvedClaimCondition(
+            name: "age_over_18",
+            statement: "identity.claims.ageProof = true"
+        )
+
+        let state = await condition.isMet(
+            context: ConnectContext(source: nil, target: target, identity: requester)
+        )
+
+        XCTAssertEqual(state, .unresolved)
+    }
+
     func testLookupConditionMetViaIdentityGet() async throws {
         let vault = MockIdentityVault()
         let resolver = MockCellResolver()

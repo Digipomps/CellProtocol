@@ -12,12 +12,14 @@ import OpenCombine
 
 public enum AnyCellError : Error {
     case noOwner
+    case unsupportedOperation(String)
 }
 
 public class AnyCell: Emit, Codable {
     public func getOwner(requester: Identity) async throws -> Identity {
+        _ = requester
         if let owner = self.owner {
-            return owner
+            return owner.publicIdentitySnapshot()
         }
         throw AnyCellError.noOwner
     }
@@ -46,11 +48,15 @@ public class AnyCell: Emit, Codable {
     }
     
     func connect(identity: Identity) -> AnyPublisher<ConnectState, Error> {
-        return PassthroughSubject<ConnectState, Error>().eraseToAnyPublisher()
+        Just(ConnectState.denied)
+            .setFailureType(to: Error.self)
+            .eraseToAnyPublisher()
     }
     
     public func addContract(_ contract: Agreement, for identity: Identity) -> AnyPublisher<AgreementState, Error> {
-        return PassthroughSubject<AgreementState, Error>().eraseToAnyPublisher()
+        Just(AgreementState.rejected)
+            .setFailureType(to: Error.self)
+            .eraseToAnyPublisher()
     }
     
     public func advertise(for identity: Identity) -> AnyCell {
@@ -58,7 +64,7 @@ public class AnyCell: Emit, Codable {
     }
     
     public func state(requester: Identity) async throws -> ValueType {
-        return .string("not implemented")
+        throw AnyCellError.unsupportedOperation("state")
     }
     
     public var uuid: String
@@ -159,29 +165,31 @@ public class AnyCell: Emit, Codable {
     }
     
     public func feed(requester: Identity) -> AnyPublisher<FlowElement, Error> {
-        fatalError("NOT IMPLEMENTED")
-
+        Fail<FlowElement, Error>(error: AnyCellError.unsupportedOperation("feed"))
+            .eraseToAnyPublisher()
     }
     
     public func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, any Error> {
-        fatalError("NOT IMPLEMENTED")
+        throw AnyCellError.unsupportedOperation("flow")
     }
     
     public func startFeed(requester: Identity) {
-        fatalError("NOT IMPLEMENTED")
+        CellBase.diagnosticLog("AnyCell does not support startFeed", domain: .flow)
     }
     
     public func getFeedPublisher() -> AnyPublisher<FlowElement, Error> {
-        fatalError("NOT IMPLEMENTED")
+        Fail<FlowElement, Error>(error: AnyCellError.unsupportedOperation("getFeedPublisher"))
+            .eraseToAnyPublisher()
     }
     
     public func connect(context: ConnectContext) -> AnyPublisher<ConnectState, Error> {
-        fatalError("NOT IMPLEMENTED")
+        Just(ConnectState.denied)
+            .setFailureType(to: Error.self)
+            .eraseToAnyPublisher()
     }
     
     func addContract(contract: Agreement, context: ConnectContext) -> AgreementState {
-        fatalError("NOT IMPLEMENTED")
-        return AgreementState.template
+        AgreementState.rejected
     }
     
     func isMember(identity: Identity) -> Bool {

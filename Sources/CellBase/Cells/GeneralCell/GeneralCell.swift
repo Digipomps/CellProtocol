@@ -20,11 +20,65 @@ public enum AgreementAdmissionPolicy: String, Codable, Sendable {
     case ownerPublishedRead
 }
 
+public protocol CellRuntimeReady: AnyObject {
+    func ensureRuntimeReady() async throws
+}
 
-open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizationDeciding {
+private actor CellRuntimeReadinessCoordinator {
+    private var installed = false
+    private var installation: Task<Void, Error>?
+
+    func ensure(_ install: @escaping () async throws -> Void) async throws {
+        if installed {
+            return
+        }
+        if let installation {
+            return try await installation.value
+        }
+
+        let task = Task {
+            try await install()
+        }
+        installation = task
+        do {
+            try await task.value
+            installed = true
+            installation = nil
+        } catch {
+            installation = nil
+            throw error
+        }
+    }
+}
+
+private final class CellRuntimeBindingInstallationToken: @unchecked Sendable {
+    private let cellIdentifier: ObjectIdentifier
+    private let lock = NSLock()
+    private var active = true
+
+    init(cell: GeneralCell) {
+        cellIdentifier = ObjectIdentifier(cell)
+    }
+
+    func authorizes(_ cell: GeneralCell) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active && cellIdentifier == ObjectIdentifier(cell)
+    }
+
+    func invalidate() {
+        lock.lock()
+        active = false
+        lock.unlock()
+    }
+}
+
+
+open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizationDeciding, CellRuntimeReady {
     private static let missingIdentityVaultLogLock = NSLock()
     nonisolated(unsafe) private static var missingIdentityVaultLoggedUUIDs: Set<String> = []
     @TaskLocal private static var isEvaluatingAuthorizationConditions = false
+    @TaskLocal private static var runtimeBindingInstallationToken: CellRuntimeBindingInstallationToken?
 
     var ttl = 7776000 // 90 days
     var schemaDict = Object()
@@ -43,12 +97,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func keys(requester: Identity) async throws -> [String] {
+        try await ensureRuntimeReady()
         // validate permissions
         
         return Array(schemaDict.keys)
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
         // validate permissions
         guard let schema = schemaDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
@@ -58,6 +114,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
 
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
         guard let description = schemaDescriptionDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -119,6 +176,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private var persistedMembers = [Identity]()
     private var persistedAuthorizationRevision = 0
     private let persistedAuthorizationLock = NSLock()
+    private let runtimeReadinessCoordinator = CellRuntimeReadinessCoordinator()
     
     
     
@@ -137,12 +195,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func getOwner(requester: Identity) async throws  -> Identity {
-        // test access throw denied
-        return owner
+        _ = requester
+        return owner.publicIdentitySnapshot()
     }
 
     public var storedOwnerIdentity: Identity {
-        owner
+        owner.publicIdentitySnapshot()
+    }
+
+    /// Reattaches the persisted owner descriptor to a local runtime vault only
+    /// after the candidate proves control of the same signing key.
+    @_spi(HAVENRuntime) @discardableResult
+    public func bindStoredOwnerToRuntimeIdentity(_ runtimeOwner: Identity) async -> Bool {
+        guard identitiesReferenceSame(owner, runtimeOwner),
+              runtimeOwner.identityVault != nil,
+              await checkIdentityOrigin(runtimeOwner, against: owner) else {
+            return false
+        }
+        owner.identityVault = runtimeOwner.identityVault
+        owner.homeVaultReference = runtimeOwner.homeVaultReference
+        return true
     }
     
     public init() async { // This should only be used while we are developing
@@ -201,7 +273,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         
         owner = try values.decode(Identity.self, forKey: .owner)
         
-        agreementTemplate = try! values.decode(Agreement.self, forKey: .contractTemplate)
+        agreementTemplate = try values.decode(Agreement.self, forKey: .contractTemplate)
         agreementAdmissionPolicy = try values.decodeIfPresent(
             AgreementAdmissionPolicy.self,
             forKey: .agreementAdmissionPolicy
@@ -295,6 +367,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 // Cell Absorb functions
     
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
+        try await ensureRuntimeReady()
+        if let runtimeReadyEmitter = emitter as? CellRuntimeReady {
+            try await runtimeReadyEmitter.ensureRuntimeReady()
+        }
         let connectContext = ConnectContext(source: self, target: emitter, identity: requester)
         let connectState = await emitter.admit(context: connectContext )
         CellBase.diagnosticLog("attach label=\(label) connectState=\(connectState)", domain: .flow)
@@ -750,9 +826,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     // change to absorb flow
     public func absorbFlow(label: String, requester: Identity) async throws {  
+        try await ensureRuntimeReady()
 //        Task { [weak self] in
 //            guard let self = self else { return }
             if let emitCell = await self.auditor.loadConnectedCellEmitterForLabel(label) {
+                if let runtimeReadyEmitter = emitCell as? CellRuntimeReady {
+                    try await runtimeReadyEmitter.ensureRuntimeReady()
+                }
                 if await self.auditor.loadSubscribedFeedsForLabel(label) == nil {
                     let subscribeFeedPublisher = try await emitCell.flow(requester: requester)
                     await self.auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: subscribeFeedPublisher)
@@ -813,6 +893,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
+        try await ensureRuntimeReady()
         if await validateAccess("r---", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
             return feedPublisher.eraseToAnyPublisher()
@@ -821,6 +902,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func admit(context: ConnectContext) async -> ConnectState {
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            CellBase.diagnosticLog(
+                "Runtime binding preparation failed before admission: \(error)",
+                domain: .lifecycle
+            )
+            return .denied
+        }
 //        let connectStatePublisher = PassthroughSubject<ConnectState, Error>()
         var connectState = ConnectState.notConnected
        if let identity = context.identity {
@@ -861,6 +951,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         for identity: Identity,
         authorizedBy authority: Identity
     ) async -> AgreementState {
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            await recordContractRejected(
+                identity: identity,
+                reasonCode: "runtime_bindings_unavailable",
+                message: "Contract admission requires initialized runtime bindings."
+            )
+            return .rejected
+        }
         let context = ConnectContext(source: nil, target: self, identity: identity)
         guard await checkIdentityOrigin(identity, against: identity) else {
             await recordContractRejected(
@@ -959,9 +1059,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
     }
 
-    private func isAuthorizationEnforcingCondition(_ condition: any Condition) -> Bool {
-        if condition is ProvedClaimCondition {
-            return true
+    func isAuthorizationEnforcingCondition(_ condition: any Condition) -> Bool {
+        if let proved = condition as? ProvedClaimCondition {
+            let credentialType = proved.requiredCredentialType?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let claimPath = proved.subjectClaimPath?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Automatic admission requires an explicit credential type and an
+            // exact subject claim comparison. A generic trusted signature is
+            // not authorization for an unrelated statement.
+            return credentialType.isEmpty == false && claimPath.isEmpty == false
         }
         if let lookup = condition as? LookupCondition {
             let keypath = lookup.keypath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1114,13 +1221,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return resolved
     }
     
-    open func advertise(for identity: Identity) async -> AnyCell {
-        let manifest = try? await self.exploreManifest(requester: identity)
+    open func advertise(for identity: Identity) async throws -> AnyCell {
+        try await ensureRuntimeReady()
+        let manifest = try await self.exploreManifest(requester: identity)
+        let template = try publicAgreementTemplateSnapshot()
         return AnyCell(
             uuid: self.uuid,
             name: "",
-            contractTemplate: self.agreementTemplate,
-            owner: self.owner,
+            contractTemplate: template,
+            owner: self.owner.publicIdentitySnapshot(),
             experiences: nil,
             feedEndpoint: nil,
             feedProperties: nil,
@@ -1128,8 +1237,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             exploreManifest: manifest
         )
     }
+
+    private func publicAgreementTemplateSnapshot() throws -> Agreement {
+        try agreementTemplate.publicDescriptorSnapshot()
+    }
     
     open func state(requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
         return .string("not implemented")
     }
     
@@ -1141,6 +1255,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func get(keypath: String, requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
         
@@ -1249,6 +1364,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        try await ensureRuntimeReady()
         
         
         var response: ValueType?
@@ -1310,6 +1426,23 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         
         return response
+    }
+
+    public final func ensureRuntimeReady() async throws {
+        try await runtimeReadinessCoordinator.ensure { [weak self] in
+            guard let self else { return }
+            let token = CellRuntimeBindingInstallationToken(cell: self)
+            defer { token.invalidate() }
+            try await Self.$runtimeBindingInstallationToken.withValue(token) {
+                try await self.installCellRuntimeBindingsForAccess()
+            }
+        }
+    }
+
+    /// Subclasses with non-Codable intercepts, schemas, or runtime sources
+    /// override this hook. `ensureRuntimeReady()` serializes installation and
+    /// guarded Cell entrypoints await it before use.
+    open func installCellRuntimeBindingsForAccess() async throws {
     }
     
     
@@ -1520,6 +1653,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         await checkIdentityOrigin(identity, against: identity)
     }
 
+    /// Proves that the presented requester controls the private key matching
+    /// its public identity descriptor. This exposes the existing origin check
+    /// without exposing the trusted-identity overload to hosted cells.
+    public func verifyRequesterIdentityControl(_ identity: Identity) async -> Bool {
+        await checkIdentityOrigin(identity, against: identity)
+    }
+
     func checkIdentityOrigin(_ identity: Identity, against trustedIdentity: Identity) async -> Bool {
         if CellBase.debugValidateAccessForEverything {return true}
         guard let identityVault = identity.identityVault else {
@@ -1555,11 +1695,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             print("Got no signed data!")
             return false
         }
-        guard let verificationVault = trustedIdentity.identityVault ?? identity.identityVault ?? CellBase.defaultIdentityVault else {
-            print("No vault available to verify identity: \(trustedIdentity.uuid)")
-            return false
-        }
-        return (try? await verificationVault.verifySignature(signature: signedData, messageData: challengeData, for: trustedIdentity)) ?? false
+        return IdentityPublicKeySignatureVerifier.verify(
+            signature: signedData,
+            messageData: challengeData,
+            identity: trustedIdentity
+        )
     }
 
     private static func logMissingIdentityVaultOnce(for identity: Identity) {
@@ -1607,6 +1747,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private func isAllowedToSetupIntercepts(requester: Identity) async -> Bool { // TODO: change permission chack to something more meaningful
         guard identitiesReferenceSame(owner, requester) else {
             return false
+        }
+        if Self.runtimeBindingInstallationToken?.authorizes(self) == true {
+            return true
         }
         return await checkIdentityOrigin(requester, against: owner)
     }

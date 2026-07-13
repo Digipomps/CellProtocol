@@ -26,8 +26,7 @@ public final class TrustPacketCell: GeneralCell {
         disclosures = []
         privacyOverreachBlocks = 0
         await super.init(owner: owner)
-        await setupPermissions()
-        await setupKeys()
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -39,10 +38,11 @@ public final class TrustPacketCell: GeneralCell {
         privacyOverreachBlocks = try container.decodeIfPresent(Int.self, forKey: .privacyOverreachBlocks) ?? 0
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions()
-            await setupKeys()
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions()
+        await setupKeys()
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -56,7 +56,7 @@ public final class TrustPacketCell: GeneralCell {
     }
 
     private func setupPermissions() async {
-        agreementTemplate.addGrant("rw--", for: "trustPacket")
+        agreementTemplate.ensureGrant("rw--", for: "trustPacket")
     }
 
     private func setupKeys() async {

@@ -117,6 +117,51 @@ final class EntityAtlasInspectorCellTests: XCTestCase {
         XCTAssertFalse(markdown.contains("Keep the atlas redacted and deterministic."))
     }
 
+    func testDecodedInspectorSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        CellBase.debugValidateAccessForEverything = false
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = MockCellResolver()
+
+        let ownerCandidate = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
+        let original = await EntityAtlasInspectorCell(owner: owner)
+        let encoded = try JSONEncoder().encode(original)
+
+        let immediate = try JSONDecoder().decode(EntityAtlasInspectorCell.self, from: encoded)
+        let status = try await immediate.get(keypath: "atlas.status", requester: owner)
+        XCTAssertEqual(string(object(status)["cell"]), "EntityAtlasInspectorCell")
+        let snapshot = try await immediate.set(
+            keypath: "atlas.snapshot",
+            value: .null,
+            requester: owner
+        )
+        XCTAssertEqual(string(object(snapshot ?? .null)["status"]), "ok")
+
+        let concurrent = try JSONDecoder().decode(EntityAtlasInspectorCell.self, from: encoded)
+        let readiness = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<24 {
+                group.addTask {
+                    try await concurrent.ensureRuntimeReady()
+                    return try await concurrent.keys(requester: owner).contains("atlas.query.coverage")
+                }
+            }
+            var results = [Bool]()
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+        XCTAssertEqual(readiness.count, 24)
+        XCTAssertTrue(readiness.allSatisfy { $0 })
+        XCTAssertEqual(
+            concurrent.agreementTemplate.grants.filter {
+                $0.keypath == "atlas" && $0.permission.permissionString == "rw--"
+            }.count,
+            1
+        )
+    }
+
     private func object(_ value: ValueType, file: StaticString = #filePath, line: UInt = #line) -> Object {
         guard case let .object(object) = value else {
             XCTFail("Expected object ValueType", file: file, line: line)

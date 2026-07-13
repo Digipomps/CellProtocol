@@ -35,11 +35,7 @@ struct Itinerary: Equatable {
     @Guide(description: "An exciting name for the trip.")
     let title: String
     @Guide(description: "An exciting name for the trip.")
-#if canImport(FoundationModels)
-    @Guide(.anyOf(ModelData.landmarkNames))
-#else
     @Guide(description: "The destination name.")
-#endif
     let destinationName: String
     let description: String
     @Guide(description: "An explanation of how the itinerary meets the user's special requests.")

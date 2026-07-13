@@ -7,7 +7,7 @@
 //
 //  Created by Kjetil Hustveit on 27/05/2025.
 //
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 
 
@@ -31,19 +31,18 @@ public class EntityAnchorCell: GeneralCell {
         print("Initing Entity Anchor (Apple) cell for owner: \(owner.uuid)")
        
         
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "person")
-        self.agreementTemplate.addGrant("rw--", for: "purposes") // I think this is the one that should hold realations and Interests too?
-        self.agreementTemplate.addGrant("rw--", for: "relations")
-        self.agreementTemplate.addGrant("rw--", for: "agreements")
-        self.agreementTemplate.addGrant("rw--", for: "signedAgreementEntity")
-        self.agreementTemplate.addGrant("rw--", for: "entityRepresentation")
-        self.agreementTemplate.addGrant("rw--", for: "chronicle")
-        self.agreementTemplate.addGrant("rw--", for: "identityLinks")
+        self.agreementTemplate.ensureGrant("rw--", for: "person")
+        self.agreementTemplate.ensureGrant("rw--", for: "purposes") // I think this is the one that should hold realations and Interests too?
+        self.agreementTemplate.ensureGrant("rw--", for: "relations")
+        self.agreementTemplate.ensureGrant("rw--", for: "agreements")
+        self.agreementTemplate.ensureGrant("rw--", for: "signedAgreementEntity")
+        self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
+        self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
+        self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         
@@ -420,31 +419,12 @@ public class EntityAnchorCell: GeneralCell {
         }
         try super.init(from: decoder)
         
-        // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
-        Task {
-            await initialLoading()
-            let requester = await restoredOwnerForDecodedCell()
-            await setupPermissions(owner: requester)
-            await setupKeys(owner: requester)
-        }
-        
     }
 
-    private func restoredOwnerForDecodedCell() async -> Identity {
-        let decodedOwner = storedOwnerIdentity
-        guard
-            let vault = CellBase.defaultIdentityVault,
-            let vaultOwner = await vault.identity(forUUID: decodedOwner.uuid)
-        else {
-            return decodedOwner
-        }
-        guard let decodedFingerprint = decodedOwner.signingPublicKeyFingerprint else {
-            return vaultOwner
-        }
-        if decodedFingerprint == vaultOwner.signingPublicKeyFingerprint {
-            return vaultOwner
-        }
-        return decodedOwner
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
     
     public override func encode(to encoder: Encoder) throws {

@@ -10,17 +10,17 @@ public final class FileCryptoCell: GeneralCell {
 
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -28,7 +28,7 @@ public final class FileCryptoCell: GeneralCell {
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "fileCrypto")
+        agreementTemplate.ensureGrant("rw--", for: "fileCrypto")
     }
 
     private func setupKeys(owner: Identity) async {

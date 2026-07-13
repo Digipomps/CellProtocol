@@ -36,7 +36,7 @@ open class CalendarStoreCell: GeneralCell {
         self.lastExportStatus = "No calendar export has run yet."
         await super.init(owner: owner)
         self.identityDomain = "Calendar"
-        await setup(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -47,8 +47,10 @@ open class CalendarStoreCell: GeneralCell {
         self.lastImportStatus = try container.decodeIfPresent(String.self, forKey: .lastImportStatus) ?? "No calendar import has run yet."
         self.lastExportStatus = try container.decodeIfPresent(String.self, forKey: .lastExportStatus) ?? "No calendar export has run yet."
         try super.init(from: decoder)
-        let restoredOwner = try? container.decodeIfPresent(Identity.self, forKey: .owner)
-        Task { await self.setup(owner: restoredOwner ?? self.storedOwnerIdentity) }
+    }
+
+    open override func installCellRuntimeBindingsForAccess() async throws {
+        await setup(owner: owner)
     }
 
     open override func encode(to encoder: Encoder) throws {
@@ -78,7 +80,7 @@ open class CalendarStoreCell: GeneralCell {
             CalendarContract.Keys.occurrences,
             CalendarContract.Keys.permissionStatus
         ] {
-            agreementTemplate.addGrant("r---", for: key)
+            agreementTemplate.ensureGrant("r---", for: key)
         }
         for key in [
             CalendarContract.Keys.queryOccurrences,
@@ -88,7 +90,7 @@ open class CalendarStoreCell: GeneralCell {
             CalendarContract.Keys.importCalendar,
             CalendarContract.Keys.exportCalendar
         ] {
-            agreementTemplate.addGrant("rw--", for: key)
+            agreementTemplate.ensureGrant("rw--", for: key)
         }
 
         await registerGet(
@@ -551,17 +553,20 @@ open class CalendarImportExportCell: GeneralCell {
     public required init(owner: Identity) async {
         await super.init(owner: owner)
         self.identityDomain = "Calendar"
-        await setup(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
         try super.init(from: decoder)
-        Task { await self.setup(owner: self.storedOwnerIdentity) }
+    }
+
+    open override func installCellRuntimeBindingsForAccess() async throws {
+        await setup(owner: owner)
     }
 
     private func setup(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: CalendarContract.Keys.importCalendar)
-        agreementTemplate.addGrant("rw--", for: CalendarContract.Keys.exportCalendar)
+        agreementTemplate.ensureGrant("rw--", for: CalendarContract.Keys.importCalendar)
+        agreementTemplate.ensureGrant("rw--", for: CalendarContract.Keys.exportCalendar)
 
         await registerSet(
             key: CalendarContract.Keys.importCalendar,

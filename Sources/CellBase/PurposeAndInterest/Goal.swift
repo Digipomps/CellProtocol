@@ -22,7 +22,8 @@ public class Goal: GeneralCell {
 //    }
     
     required public init(owner: Identity) async {
-        fatalError("init(owner:) has not been implemented")
+        goalDefinitionString = ""
+        await super.init(owner: owner)
     }
     
     enum CodingKeys: CodingKey {
@@ -40,6 +41,12 @@ public class Goal: GeneralCell {
 //            await setupPermissions(owner: getOwner())
 //            await setupKeys(owner: getOwner())
 //        }
+    }
+
+    public override func encode(to encoder: Encoder) throws {
+        try super.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(goalDefinitionString, forKey: .goalDefinitionString)
     }
     
     public func setName(name: String) {

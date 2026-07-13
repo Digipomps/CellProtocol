@@ -116,7 +116,48 @@ internal final class CellRuntimeEnvironment: @unchecked Sendable {
 
     var debugValidateAccessForEverything: Bool {
         get { withLock { storedDebugValidateAccessForEverything } }
-        set { withLock { storedDebugValidateAccessForEverything = newValue } }
+        set {
+            let permitted = newValue == false || Self.isRunningUnderTestHarness(
+                arguments: CommandLine.arguments,
+                environment: ProcessInfo.processInfo.environment
+            )
+            withLock {
+                storedDebugValidateAccessForEverything = permitted ? newValue : false
+            }
+            if newValue && !permitted {
+                CellBase.diagnosticLog(
+                    "Rejected debugValidateAccessForEverything outside a test harness",
+                    domain: .identity
+                )
+            }
+        }
+    }
+
+    static func isRunningUnderTestHarness(
+        arguments: [String],
+        environment: [String: String],
+        testFrameworkPresent: Bool? = nil
+    ) -> Bool {
+        let frameworkPresent: Bool
+        if let testFrameworkPresent {
+            frameworkPresent = testFrameworkPresent
+        } else {
+#if canImport(ObjectiveC)
+            frameworkPresent = NSClassFromString("XCTestCase") != nil
+                || NSClassFromString("XCTest.XCTestCase") != nil
+#else
+            frameworkPresent = false
+#endif
+        }
+        if frameworkPresent {
+            return true
+        }
+        if arguments.first?.contains(".xctest") == true {
+            return true
+        }
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["SWIFT_TESTING_ENABLED"] == "1"
     }
 
     var webSocketSecurityPolicy: CellBase.WebSocketSecurityPolicy {

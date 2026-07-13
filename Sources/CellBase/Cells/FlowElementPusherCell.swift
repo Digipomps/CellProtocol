@@ -11,7 +11,8 @@ import OpenCombine
 // helper Cell used in resolver when calling pushFlowElement()
 public class FlowElementPusherCell: Emit {
     public func getOwner(requester: Identity) async throws -> Identity {
-        return self.owner
+        _ = requester
+        return owner.publicIdentitySnapshot()
     }
     
     public func getEmitterWithUUID(_ uuid: String, requester: Identity) async -> (any Emit)? {

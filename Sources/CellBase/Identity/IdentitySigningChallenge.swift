@@ -15,6 +15,8 @@ public enum IdentitySigningChallengeError: Error {
     case issuedInFuture
     case missingNonce
     case missingChallengeScope
+    case invalidValidity
+    case payloadTooLarge
 }
 
 public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
@@ -23,6 +25,10 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
     public static let identityOriginProofPurpose = "identity-origin-proof"
     public static let defaultValidity: TimeInterval = 60
     public static let allowedClockSkew: TimeInterval = 300
+    public static let maximumEncodedBytes = 8 * 1024
+    public static let minimumNonceBytes = 32
+    public static let maximumNonceBytes = 128
+    public static let maximumScopeCharacters = 512
 
     public var type: String
     public var version: Int
@@ -96,6 +102,9 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
         for identity: Identity,
         now: Date = Date()
     ) throws -> IdentitySigningChallenge {
+        guard data.count <= Self.maximumEncodedBytes else {
+            throw IdentitySigningChallengeError.payloadTooLarge
+        }
         let challenge: IdentitySigningChallenge
         do {
             challenge = try JSONDecoder().decode(IdentitySigningChallenge.self, from: data)
@@ -124,14 +133,25 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
               expectedFingerprint == presentedFingerprint else {
             throw IdentitySigningChallengeError.publicKeyMismatch
         }
-        guard challenge.nonce.isEmpty == false else {
+        guard challenge.nonce.count >= Self.minimumNonceBytes else {
             throw IdentitySigningChallengeError.missingNonce
+        }
+        guard challenge.nonce.count <= Self.maximumNonceBytes else {
+            throw IdentitySigningChallengeError.payloadTooLarge
         }
         guard !challenge.domain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !challenge.resource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !challenge.action.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !challenge.audience.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw IdentitySigningChallengeError.missingChallengeScope
+        }
+        guard [challenge.domain, challenge.resource, challenge.action, challenge.audience]
+            .allSatisfy({ $0.count <= Self.maximumScopeCharacters }) else {
+            throw IdentitySigningChallengeError.payloadTooLarge
+        }
+        guard challenge.expiresAt >= challenge.issuedAt,
+              challenge.expiresAt - challenge.issuedAt <= Self.defaultValidity else {
+            throw IdentitySigningChallengeError.invalidValidity
         }
 
         let nowInterval = now.timeIntervalSince1970
@@ -142,6 +162,50 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
             throw IdentitySigningChallengeError.expired
         }
         return challenge
+    }
+
+    public static func proveControl(
+        of identity: Identity,
+        domain: String,
+        resource: String,
+        action: String,
+        audience: String,
+        now: Date = Date()
+    ) async -> Bool {
+        guard let vault = identity.identityVault,
+              let homeVaultReference = identity.homeVaultReference,
+              await vault.identityVaultReference() == homeVaultReference,
+              identity.signingPublicKeyFingerprint != nil,
+              await vault.identityExistInVault(identity),
+              let nonce = await vault.randomBytes64(),
+              nonce.count >= Self.minimumNonceBytes,
+              nonce.count <= Self.maximumNonceBytes else {
+            return false
+        }
+
+        do {
+            let data = try signingData(
+                for: identity,
+                trustedIdentity: identity,
+                domain: domain,
+                resource: resource,
+                action: action,
+                audience: audience,
+                nonce: nonce,
+                issuedAt: now
+            )
+            _ = try validateSigningData(data, for: identity, now: now)
+            guard let signature = try await identity.sign(data: data) else {
+                return false
+            }
+            return IdentityPublicKeySignatureVerifier.verify(
+                signature: signature,
+                messageData: data,
+                identity: identity
+            )
+        } catch {
+            return false
+        }
     }
 
     private static func canonicalEncoder() -> JSONEncoder {

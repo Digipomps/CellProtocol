@@ -54,6 +54,50 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         return lhsFingerprint == rhsFingerprint
     }
 
+    public func referencesSameSigningIdentity(as other: Identity) -> Bool {
+        guard uuid == other.uuid,
+              let fingerprint = signingPublicKeyFingerprint,
+              let otherFingerprint = other.signingPublicKeyFingerprint else {
+            return false
+        }
+        return fingerprint == otherFingerprint
+    }
+
+    /// A non-authoritative descriptor safe to return across a Cell boundary.
+    /// It deliberately carries no vault, private entity state, or grants.
+    public func publicIdentitySnapshot() -> Identity {
+        let snapshot = Identity(uuid, displayName: displayName, identityVault: nil)
+        snapshot.publicSecureKey = publicOnlySnapshot(of: publicSecureKey)
+        snapshot.publicKeyAgreementSecureKey = publicOnlySnapshot(of: publicKeyAgreementSecureKey)
+        snapshot.grants = []
+        snapshot.properties = nil
+        snapshot.homeVaultReference = nil
+        return snapshot
+    }
+
+    private func publicOnlySnapshot(of key: SecureKey?) -> SecureKey? {
+        guard let key,
+              key.privateKey == false,
+              let compressedKey = key.compressedKey,
+              compressedKey.isEmpty == false,
+              compressedKey.count <= 256,
+              (key.x?.count ?? 0) <= 256,
+              (key.y?.count ?? 0) <= 256 else {
+            return nil
+        }
+        return SecureKey(
+            date: key.date,
+            privateKey: false,
+            use: key.use,
+            algorithm: key.algorithm,
+            size: key.size,
+            curveType: key.curveType,
+            x: key.x,
+            y: key.y,
+            compressedKey: compressedKey
+        )
+    }
+
     
     enum CodingKeys: String, CodingKey
     {
@@ -197,27 +241,37 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     }
     
     public func sign(data messageData: Data) async throws -> Data? {
-        var signedData: Data?
-        if let currentIdentityVault = self.identityVault {
-            if let expectedVault = homeVaultReference {
-                guard await currentIdentityVault.identityVaultReference() == expectedVault else {
-                    throw IdentityVaultError.wrongVault
-                }
-            }
-            signedData =  try await currentIdentityVault.signMessageForIdentity(messageData: messageData, identity: self)
+        guard let currentIdentityVault = identityVault else {
+            throw IdentityVaultError.noVaultIdentity
         }
-        return signedData
+        if let expectedVault = homeVaultReference {
+            guard await currentIdentityVault.identityVaultReference() == expectedVault else {
+                throw IdentityVaultError.wrongVault
+            }
+        }
+        guard signingPublicKeyFingerprint != nil else {
+            throw IdentityVaultError.signingFailed
+        }
+        let signature = try await currentIdentityVault.signMessageForIdentity(
+            messageData: messageData,
+            identity: self
+        )
+        guard IdentityPublicKeySignatureVerifier.verify(
+            signature: signature,
+            messageData: messageData,
+            identity: self
+        ) else {
+            throw IdentityVaultError.signingFailed
+        }
+        return signature
     }
     
     public func verify(signature signatureData: Data, for messageData: Data) async -> Bool {
-        if let currentIdentityVault = self.identityVault {
-            do {
-                return try await currentIdentityVault.verifySignature(signature: signatureData, messageData: messageData, for: self)
-            } catch {
-                CellBase.diagnosticLog("Identity signature verification failed for uuid=\(uuid): \(error)", domain: .identity)
-            }
-    }
-     return false
+        IdentityPublicKeySignatureVerifier.verify(
+            signature: signatureData,
+            messageData: messageData,
+            identity: self
+        )
     }
     
     public func get(keypath: String, requester: Identity) async throws -> ValueType {

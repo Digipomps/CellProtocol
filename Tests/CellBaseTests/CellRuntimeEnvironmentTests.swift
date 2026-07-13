@@ -79,6 +79,37 @@ final class CellRuntimeEnvironmentTests: XCTestCase {
         XCTAssertFalse(CellBase.diagnosticLoggingEnabled(for: .flow))
     }
 
+    func testDebugAccessBypassDetectionRejectsOrdinaryHosts() {
+        XCTAssertFalse(
+            CellRuntimeEnvironment.isRunningUnderTestHarness(
+                arguments: ["/usr/local/bin/haven-service"],
+                environment: [:],
+                testFrameworkPresent: false
+            )
+        )
+        XCTAssertTrue(
+            CellRuntimeEnvironment.isRunningUnderTestHarness(
+                arguments: ["/tmp/CellProtocolPackageTests.xctest/Contents/MacOS/tests"],
+                environment: [:],
+                testFrameworkPresent: false
+            )
+        )
+        XCTAssertTrue(
+            CellRuntimeEnvironment.isRunningUnderTestHarness(
+                arguments: ["/tmp/tests"],
+                environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"],
+                testFrameworkPresent: false
+            )
+        )
+        XCTAssertTrue(
+            CellRuntimeEnvironment.isRunningUnderTestHarness(
+                arguments: ["/tmp/tests"],
+                environment: [:],
+                testFrameworkPresent: true
+            )
+        )
+    }
+
     func testDiagnosticLogStillUsesPublicHandlerAndDomainFilter() {
         var received = [(CellBase.DiagnosticLogDomain, String)]()
         var renderedHiddenMessage = false

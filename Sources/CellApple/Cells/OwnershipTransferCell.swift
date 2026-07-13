@@ -8,7 +8,7 @@
 //  Created by Kjetil Hustveit on 31/07/2025.
 //
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 
 
@@ -38,19 +38,23 @@ class OwnershipTransferCell: GeneralCell {
         print("Initing Ownership transfer cell for owner: \(owner.uuid)")
        
         
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
     
     required init(from decoder: any Decoder) throws {
-        fatalError("init(from:) has not been implemented")
+        targetCell = nil
+        targetIdentity = nil
+        sourceIdentity = nil
+        try super.init(from: decoder)
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "configure")
-        self.agreementTemplate.addGrant("rw--", for: "addCondition")
-        
-        
     }
     
     private func setupKeys(owner: Identity) async  {

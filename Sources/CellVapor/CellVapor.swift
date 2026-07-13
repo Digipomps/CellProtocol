@@ -3,6 +3,7 @@
 
 import Foundation
 import Vapor
+import CellBase
 
 public struct CellVapor {
     public private(set) var text = "Hello, World!"
@@ -11,6 +12,9 @@ public struct CellVapor {
     }
     
     public static func getDocumentsDirectory() -> URL {
+        if let configuredRoot = CellBase.documentRootPath {
+            return URL(fileURLWithPath: configuredRoot, isDirectory: true)
+        }
         if let home = Environment.get("HOME") {
             return URL(fileURLWithPath: home)
         }
@@ -22,4 +26,3 @@ public struct CellVapor {
         getDocumentsDirectory().appendingPathComponent("CellsContainer")
     }
 }
-

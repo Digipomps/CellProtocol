@@ -23,8 +23,7 @@ public final class VaultCell: GeneralCell {
         self.stateVersion = 0
         self.updatedAtEpochMs = 0
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -35,10 +34,11 @@ public final class VaultCell: GeneralCell {
         self.updatedAtEpochMs = try container.decodeIfPresent(Int.self, forKey: .updatedAtEpochMs) ?? 0
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -51,8 +51,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "vault")
-        agreementTemplate.addGrant("rw--", for: "feed")
+        agreementTemplate.ensureGrant("rw--", for: "vault")
+        agreementTemplate.ensureGrant("rw--", for: "feed")
     }
 
     private func setupKeys(owner: Identity) async {

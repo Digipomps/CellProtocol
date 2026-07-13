@@ -17,9 +17,7 @@ public final class CommonsTaxonomyCell: GeneralCell {
 
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
-        reloadService()
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -27,11 +25,12 @@ public final class CommonsTaxonomyCell: GeneralCell {
         self.commonsRootPath = try container.decodeIfPresent(String.self, forKey: .commonsRootPath)
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-            self.reloadService()
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
+        reloadService()
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -41,7 +40,7 @@ public final class CommonsTaxonomyCell: GeneralCell {
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "taxonomy")
+        agreementTemplate.ensureGrant("rw--", for: "taxonomy")
     }
 
     private func setupKeys(owner: Identity) async {

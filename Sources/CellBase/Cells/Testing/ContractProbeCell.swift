@@ -159,6 +159,11 @@ public struct ContractProbeReport: Codable {
 public final class ContractProbeCell: GeneralCell {
     private static let reportHistoryLimit = 20
 
+    private enum RuntimeBindingError: Error {
+        case ownerAuthorityUnavailable
+        case installationIncomplete
+    }
+
     private var configuredTarget: ContractProbeTarget?
     private var expectedContracts = Object()
     private var currentStatus: ContractProbeRunState = .idle
@@ -176,8 +181,14 @@ public final class ContractProbeCell: GeneralCell {
 
     public required init(owner: Identity) async {
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            CellBase.diagnosticLog(
+                "ContractProbeCell runtime binding setup failed during initialization: \(error)",
+                domain: .lifecycle
+            )
+        }
     }
 
     public required init(from decoder: Decoder) throws {
@@ -188,11 +199,6 @@ public final class ContractProbeCell: GeneralCell {
         self.reportHistory = try container.decodeIfPresent([ContractProbeReport].self, forKey: .reportHistory) ?? []
         self.lastReport = try container.decodeIfPresent(ContractProbeReport.self, forKey: .lastReport)
         try super.init(from: decoder)
-
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -205,8 +211,39 @@ public final class ContractProbeCell: GeneralCell {
         try container.encodeIfPresent(lastReport, forKey: .lastReport)
     }
 
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let owner = try await runtimeBindingOwner()
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
+        let requiredKeys = Set([
+            "probe.status",
+            "probe.target",
+            "probe.run"
+        ])
+        guard requiredKeys.isSubset(of: Set(schemaDict.keys)) else {
+            throw RuntimeBindingError.installationIncomplete
+        }
+    }
+
+    private func runtimeBindingOwner() async throws -> Identity {
+        if owner.identityVault != nil,
+           await verifyRequesterIdentityControl(owner) {
+            return owner
+        }
+        guard let vault = CellBase.defaultIdentityVault,
+              let restoredOwner = await vault.identity(forUUID: owner.uuid),
+              restoredOwner.referencesSameSigningIdentity(as: owner),
+              await verifyRequesterIdentityControl(restoredOwner) else {
+            throw RuntimeBindingError.ownerAuthorityUnavailable
+        }
+        return restoredOwner
+    }
+
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "probe")
+        let requiredGrant = Grant(keypath: "probe", permission: "rw--")
+        if agreementTemplate.checkGrant(requestedGrant: requiredGrant) == false {
+            agreementTemplate.addGrant(requiredGrant)
+        }
     }
 
     private func setupKeys(owner: Identity) async {

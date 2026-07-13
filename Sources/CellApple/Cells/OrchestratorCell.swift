@@ -9,7 +9,7 @@
 //
 
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 
 enum OrchestratorError: Error {
@@ -52,35 +52,33 @@ public class OrchestratorCell: GeneralCell {
         
         
         
-        do {
-            try await loadNamedEmitters()
-        } catch {
-            CellBase.diagnosticLog("Initial loading of namedEmitters failed with error: \(error)", domain: .resolver)
-            try? await self.saveNamedEmitters()
-        }
-        do {
-            try await loadIdentityNamedEmitters()
-                } catch {
-                    CellBase.diagnosticLog("Initial loading of identityNamedEmitters failed with error: \(error)", domain: .resolver)
-                    try? await self.saveIdentityNamedEmitters()
-                }
-        do {
-            try await loadStoredCellConfiguration()
-        } catch {
-            CellBase.diagnosticLog("Initial loading of cellConfiguration failed with error: \(error)", domain: .skeleton)
-            
-        }
-        
+        try? await ensureRuntimeReady()
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        try await prepareRuntimeSources()
         buildOutwardMenuCellConfigurations()
-        
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
+    }
+
+    private func prepareRuntimeSources() async throws {
+        if fileExistsInCellDirectory(filename: namedEmittersFilename) {
+            try await loadNamedEmitters()
+        }
+        if fileExistsInCellDirectory(filename: identityNamedEmittersFilename) {
+            try await loadIdentityNamedEmitters()
+        }
+        if fileExistsInCellDirectory(filename: cellConfigurationFilename) {
+            try await loadStoredCellConfiguration()
+        }
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("r---", for: "skeleton")
-        self.agreementTemplate.addGrant("r---", for: "connectedCellEmitters")
-        self.agreementTemplate.addGrant("r---", for: "flow")
+        self.agreementTemplate.ensureGrant("r---", for: "skeleton")
+        self.agreementTemplate.ensureGrant("r---", for: "connectedCellEmitters")
+        self.agreementTemplate.ensureGrant("r---", for: "flow")
         
     }
     
@@ -279,31 +277,6 @@ public class OrchestratorCell: GeneralCell {
     
     required init(from decoder: Decoder) throws {
         try super.init(from: decoder)
-        
-        Task {
-            let decodedOwner = self.storedOwnerIdentity
-            await setupPermissions(owner: decodedOwner)
-            await setupKeys(owner: decodedOwner)
-            
-            do {
-                try await loadNamedEmitters()
-            } catch {
-                CellBase.diagnosticLog("Initial loading of namedEmitters failed with error: \(error)", domain: .resolver)
-                try? await self.saveNamedEmitters()
-            }
-            do {
-                try await loadIdentityNamedEmitters()
-                    } catch {
-                        CellBase.diagnosticLog("Initial loading of identityNamedEmitters failed with error: \(error)", domain: .resolver)
-                        try? await self.saveIdentityNamedEmitters()
-                    }
-            do {
-                try await loadStoredCellConfiguration()
-            } catch {
-                CellBase.diagnosticLog("Initial loading of cellConfiguration failed with error: \(error)", domain: .skeleton)
-                
-            }
-        }
         CellBase.diagnosticLog("Decoded Orchestrator", domain: .lifecycle)
     }
     
@@ -418,31 +391,12 @@ public class OrchestratorCell: GeneralCell {
     
     private func loadStoredCellConfiguration() async throws {
         CellBase.diagnosticLog("Load cell configuration", domain: .skeleton)
-        var cellConfigurationData = Data()
-        do {
-            cellConfigurationData = try await self.getFileDataInCellDirectory(filename: cellConfigurationFilename)
-//            print("Cell configuration:\n\(String(describing: String(data:cellConfigurationData, encoding: .utf8 )))")
-        } catch {
-            CellBase.diagnosticLog("Getting cell configuration file data failed with error: \(error)", domain: .skeleton)
-            let encoder = JSONEncoder()
-//            var eventEmitterReference = CellReference(endpoint: "cell:///EventEmitter", label: "eventTest") //
-//            eventEmitterReference.addKeyAndValue(KeyValue(key: "start", value: nil))
-//            
-//            self.cellConfiguration = CellConfiguration(name: "Preview", cellReferences:   [eventEmitterReference])
-//
-            self.cellConfiguration = try await loadSkeletonExamples().first
-            let cellConfigurationData = try encoder.encode(self.cellConfiguration)
-            
-            try await self.writeFileDataInCellDirectory(fileData: cellConfigurationData, filename: cellConfigurationFilename)
-            
-            try await self.executeCellConfiguration()
-        }
+        let cellConfigurationData = try await self.getFileDataInCellDirectory(filename: cellConfigurationFilename)
         CellBase.diagnosticLog("Decoding stored cell configuration bytes=\(cellConfigurationData.count)", domain: .skeleton)
         let decoder = JSONDecoder()
         var decodedConfiguration = try decoder.decode(CellConfiguration.self, from: cellConfigurationData)
         if migrateLegacyTextToSpeechReferenceIfNeeded(in: &decodedConfiguration) {
             self.cellConfiguration = decodedConfiguration
-            try await self.saveCellConfiguration()
         } else {
             self.cellConfiguration = decodedConfiguration
         }

@@ -8,7 +8,7 @@
 //  Created by Kjetil Hustveit on 27/09/2024.
 //
 
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 import MultipeerConnectivity
 #if canImport(UIKit)
@@ -65,26 +65,31 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
         CellBase.diagnosticLog("EntityScannerCell init owner=\(owner.uuid)", domain: .lifecycle)
 
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     required init(from decoder: any Decoder) throws {
-        fatalError("Entity Scanner Cell init(from:) has not been implemented")
+        try super.init(from: decoder)
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
 
     private func setupPermissions(owner: Identity) async {
-        self.agreementTemplate.addGrant("rw--", for: "start")
-        self.agreementTemplate.addGrant("rw--", for: "stop")
-        self.agreementTemplate.addGrant("rw--", for: "invite")
-        self.agreementTemplate.addGrant("rw--", for: "requestContact")
-        self.agreementTemplate.addGrant("rw--", for: "acceptContact")
-        self.agreementTemplate.addGrant("rw--", for: "exportEncounter")
-        self.agreementTemplate.addGrant("rw--", for: "exportEncounterJSON")
-        self.agreementTemplate.addGrant("rw--", for: "sharedToken")
-        self.agreementTemplate.addGrant("r---", for: "verificationMethods")
-        self.agreementTemplate.addGrant("r---", for: "capabilities")
-        self.agreementTemplate.addGrant("r---", for: "encounters")
+        self.agreementTemplate.ensureGrant("rw--", for: "start")
+        self.agreementTemplate.ensureGrant("rw--", for: "stop")
+        self.agreementTemplate.ensureGrant("rw--", for: "invite")
+        self.agreementTemplate.ensureGrant("rw--", for: "requestContact")
+        self.agreementTemplate.ensureGrant("rw--", for: "acceptContact")
+        self.agreementTemplate.ensureGrant("rw--", for: "exportEncounter")
+        self.agreementTemplate.ensureGrant("rw--", for: "exportEncounterJSON")
+        self.agreementTemplate.ensureGrant("rw--", for: "sharedToken")
+        self.agreementTemplate.ensureGrant("r---", for: "verificationMethods")
+        self.agreementTemplate.ensureGrant("r---", for: "capabilities")
+        self.agreementTemplate.ensureGrant("r---", for: "encounters")
     }
 
     private func setupKeys(owner: Identity) async {

@@ -7,7 +7,7 @@
 //
 //  Created by Kjetil Hustveit on 29/07/2025.
 //
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 import Foundation
 
 
@@ -32,8 +32,7 @@ public class ShoppingHandlerCell: GeneralCell {
         print("Initing Shopping Handler cell for owner: \(owner.uuid)")
         
         
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
     
     enum CodingKeys: CodingKey {
@@ -44,13 +43,12 @@ public class ShoppingHandlerCell: GeneralCell {
     required init(from decoder: any Decoder) throws {
         try super.init(from: decoder)
         
-        // NB! This may not always work and could end up biting us in the butt at some point BEWARE!!!
-        Task {
-            let decodedOwner = self.storedOwnerIdentity
-            await setupPermissions(owner: decodedOwner)
-            await setupKeys(owner: decodedOwner)
-        }
-        
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
     
     public override func encode(to encoder: Encoder) throws {
@@ -58,11 +56,6 @@ public class ShoppingHandlerCell: GeneralCell {
     }
     
     private func setupPermissions(owner: Identity) async  {
-        self.agreementTemplate.addGrant("rw--", for: "loadShopCell")
-        self.agreementTemplate.addGrant("rw--", for: "getFromShop")
-        self.agreementTemplate.addGrant("rw--", for: "setInShop")
-        self.agreementTemplate.addGrant("rw--", for: "buyProductInShop")
-        
         // Execute get or set in subscribed cell and store result at keypath
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         

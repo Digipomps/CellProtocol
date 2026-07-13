@@ -430,8 +430,7 @@ public final class ChatCell: GeneralCell {
     public required init(owner: Identity) async {
         await super.init(owner: owner)
         initializeMembershipTrackingIfNeeded(reason: "initialized")
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -473,13 +472,11 @@ public final class ChatCell: GeneralCell {
         normalizeInvitationArtifactLedger()
         initializeMembershipTrackingIfNeeded(reason: "decoded")
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-            if self.running {
-                await self.resumeEmitterIfNeeded()
-            }
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
 
     deinit {
@@ -512,12 +509,13 @@ public final class ChatCell: GeneralCell {
     }
 
     public override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
+        let publisher = try await super.flow(requester: requester)
         let update = observeParticipant(requester: requester, action: "subscribed")
         if update.shouldPublish {
             publishParticipantEvent(update.record, requester: requester)
             publishStatusEvent(requester: requester)
         }
-        return try await super.flow(requester: requester)
+        return publisher
     }
 
     private func setupPermissions(owner: Identity) async {
@@ -2629,6 +2627,11 @@ public final class ChatCell: GeneralCell {
 
     private func startEmitter(requester: Identity) async -> ValueType {
         if running {
+            if emitterTask == nil {
+                await resumeEmitterIfNeeded()
+                publishStatusEvent(requester: requester)
+                return .string("resumed")
+            }
             publishStatusEvent(requester: requester)
             return .string("already running")
         }
@@ -2661,6 +2664,10 @@ public final class ChatCell: GeneralCell {
                 _ = self.storeMessage(generated, requester: self.owner)
             }
         }
+    }
+
+    var runtimeEmitterIsActive: Bool {
+        emitterTask != nil
     }
 
     private static func timestampString(_ date: Date = Date()) -> String {

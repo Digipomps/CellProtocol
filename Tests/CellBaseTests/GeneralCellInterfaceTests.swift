@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
-@testable import CellBase
+@_spi(HAVENRuntime) @testable import CellBase
 
 final class GeneralCellInterfaceTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
@@ -58,6 +58,33 @@ final class GeneralCellInterfaceTests: XCTestCase {
             requester: owner,
             expectedValue: .string("ok")
         )
+    }
+
+    func testOwnerLookupReturnsPublicDescriptorWithoutAuthority() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "requester", makeNewIfNotFound: true)!
+        owner.properties = ["private": .string("must-not-leak")]
+        let cell = await GeneralCell(owner: owner)
+
+        let exposed = try await cell.getOwner(requester: requester)
+
+        XCTAssertEqual(exposed.uuid, owner.uuid)
+        XCTAssertEqual(exposed.signingPublicKeyFingerprint, owner.signingPublicKeyFingerprint)
+        XCTAssertNil(exposed.identityVault)
+        XCTAssertNil(exposed.homeVaultReference)
+        XCTAssertNil(exposed.properties)
+        XCTAssertTrue(exposed.grants.isEmpty)
+        XCTAssertFalse(exposed.publicSecureKey?.privateKey ?? true)
+        let ownerControlVerified = await cell.verifyRequesterIdentityControl(owner)
+        XCTAssertTrue(ownerControlVerified)
+
+        let forged = Identity(owner.uuid, displayName: "forged", identityVault: requester.identityVault)
+        forged.publicSecureKey = requester.publicSecureKey
+        forged.homeVaultReference = requester.homeVaultReference
+        let forgedControlVerified = await cell.verifyRequesterIdentityControl(forged)
+        XCTAssertFalse(forgedControlVerified)
     }
 
     func testSetInterceptRegistersSchemaAndReturnsValue() async throws {
@@ -225,6 +252,25 @@ final class GeneralCellInterfaceTests: XCTestCase {
 
         XCTAssertEqual(state, .rejected)
         XCTAssertFalse(requesterCanWrite)
+    }
+
+    func testAutomaticAdmissionRequiresPredicateBoundProvedClaim() async throws {
+        let vault = MockIdentityVault()
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        let generic = ProvedClaimCondition(
+            name: "generic trusted credential",
+            statement: "identity.claims.admin = true"
+        )
+        let bound = ProvedClaimCondition(
+            name: "bound admin credential",
+            statement: "identity.claims.admin = true",
+            requiredCredentialType: "AdminCredential",
+            subjectClaimPath: "admin"
+        )
+
+        XCTAssertFalse(cell.isAuthorizationEnforcingCondition(generic))
+        XCTAssertTrue(cell.isAuthorizationEnforcingCondition(bound))
     }
 
     func testExplicitOwnerPublishedReadPolicyAllowsOnlyTemplateBoundRead() async throws {
@@ -713,7 +759,9 @@ final class GeneralCellInterfaceTests: XCTestCase {
 
         let encoded = try JSONEncoder().encode(cell)
         let restored = try JSONDecoder().decode(GeneralCell.self, from: encoded)
+        CellBase.defaultIdentityVault = nil
 
+        XCTAssertNil(restored.storedOwnerIdentity.identityVault)
         let memberCanRead = await restored.validateAccess("r---", at: "shared", for: member)
         XCTAssertTrue(memberCanRead)
     }
@@ -1179,6 +1227,45 @@ final class GeneralCellInterfaceTests: XCTestCase {
 
         cancellable.cancel()
     }
+
+    func testDecodedAbsorbCellInstallsFeedBindingBeforeAttachmentAndSubscription() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let source = await DecodedFeedBindingProbeCell(owner: owner)
+        let encoded = try JSONEncoder().encode(source)
+        let restored = try JSONDecoder().decode(DecodedFeedBindingProbeCell.self, from: encoded)
+        let emitter = FlowElementPusherCell(owner: owner)
+
+        let transformedEvent = expectation(description: "decoded feed binding transformed event")
+        let cancellable = restored.getFeedPublisher().sink(
+            receiveCompletion: { _ in },
+            receiveValue: { event in
+                guard event.title == "runtime-bound:source-event" else { return }
+                transformedEvent.fulfill()
+            }
+        )
+
+        let connectState = try await restored.attach(
+            emitter: emitter,
+            label: "decoded-source",
+            requester: owner
+        )
+        XCTAssertEqual(connectState, .connected)
+        try await restored.absorbFlow(label: "decoded-source", requester: owner)
+
+        emitter.pushFlowElement(
+            FlowElement(
+                title: "source-event",
+                content: .string("payload"),
+                properties: .init(type: .content, contentType: .string)
+            ),
+            requester: owner
+        )
+
+        await fulfillment(of: [transformedEvent], timeout: 1.0)
+        cancellable.cancel()
+    }
 }
 
 private final class CellSpecificAccessHarnessCell: GeneralCell {
@@ -1243,5 +1330,24 @@ private actor AuthorizationDecisionCounter {
 
     func value() -> Int {
         count
+    }
+}
+
+private final class DecodedFeedBindingProbeCell: GeneralCell {
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    override func installCellRuntimeBindingsForAccess() async throws {
+        agreementTemplate.ensureGrant("r---", for: "feed")
+        await addIntercept(requester: storedOwnerIdentity) { event, _ in
+            var transformed = event
+            transformed.title = "runtime-bound:\(event.title)"
+            return transformed
+        }
     }
 }

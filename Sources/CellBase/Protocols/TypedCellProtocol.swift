@@ -13,6 +13,28 @@ public protocol TypedCellProtocol {
 }
 
 public extension TypedCellProtocol {
+    func loadRuntimeReadyTypedEmitCell(with uuid: String) async throws -> Emit? {
+        guard let cell = loadTypedEmitCell(with: uuid) else {
+            return nil
+        }
+        if let runtimeReady = cell as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return cell
+    }
+
+    func loadRuntimeReadyTypedEmitCell(at path: String) async throws -> Emit? {
+        guard let cell = loadTypedEmitCell(at: path) else {
+            return nil
+        }
+        if let runtimeReady = cell as? CellRuntimeReady {
+            try await runtimeReady.ensureRuntimeReady()
+        }
+        return cell
+    }
+}
+
+public extension TypedCellProtocol {
     func storeAsTypedCell(cellName: String, cell: Codable, uuid: String, options: CellStorageWriteOptions) {
         storeAsTypedCell(cellName: cellName, cell: cell, uuid: uuid)
     }

@@ -18,6 +18,57 @@ import Crypto
 final class ChatCellTests: XCTestCase {
     private var cancellables = Set<AnyCancellable>()
 
+    func testDecodedRunningChatRequiresExplicitResumeAction() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let startResult = try await cell.get(keypath: "start", requester: owner)
+        XCTAssertEqual(startResult, .string("ok"))
+        XCTAssertTrue(cell.runtimeEmitterIsActive)
+
+        let restored = try await roundTrip(cell)
+        XCTAssertFalse(restored.runtimeEmitterIsActive)
+        _ = try await restored.keys(requester: owner)
+        _ = try await restored.get(keypath: "state", requester: owner)
+        XCTAssertFalse(restored.runtimeEmitterIsActive)
+
+        let resumeResult = try await restored.get(keypath: "start", requester: owner)
+        XCTAssertEqual(resumeResult, .string("resumed"))
+        XCTAssertTrue(restored.runtimeEmitterIsActive)
+        _ = try await restored.get(keypath: "stop", requester: owner)
+    }
+
+    func testDeniedFlowDoesNotMutateParticipantState() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+        let unprovedOwner = owner.publicIdentitySnapshot()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(cell)
+
+        do {
+            _ = try await cell.flow(requester: unprovedOwner)
+            XCTFail("An unproved requester must not subscribe")
+        } catch {
+            // Expected access failure.
+        }
+
+        let after = try encoder.encode(cell)
+        XCTAssertEqual(after, before)
+    }
+
     func testSendMessageUpdatesMessagesParticipantsAndFlow() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true
@@ -1098,7 +1149,7 @@ final class ChatCellTests: XCTestCase {
             invitationID: "invitation-1",
             createdAt: "2026-01-01T00:00:00Z",
             expiresAt: "2999-01-01T00:00:00Z",
-            nonce: Data("invitation-nonce".utf8)
+            nonce: Data(repeating: 0x11, count: 64)
         )
 
         let forgedVault = ChatCellTestIdentityVault()
@@ -1113,12 +1164,256 @@ final class ChatCellTests: XCTestCase {
                 invitee: forgedInvitee,
                 acceptanceID: "acceptance-1",
                 createdAt: "2026-01-01T00:00:01Z",
-                nonce: Data("acceptance-nonce".utf8)
+                nonce: Data(repeating: 0x12, count: 64)
             )
             XCTFail("Expected invitation acceptance to reject same UUID with a different invitee key.")
         } catch ChatInvitationProofUtilityError.inviteeMismatch {
         } catch {
             XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testInvitationAndAcceptanceVerificationRejectForgedProofsWhenVaultAlwaysApproves() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        let artifact = try await ChatInvitationProofUtility.generateInvitationArtifact(
+            chatCellUUID: "chat-cell",
+            topic: "general",
+            audienceMode: "invited",
+            suiteID: "suite",
+            persistenceMode: "local",
+            inviter: owner,
+            invited: invitee,
+            invitationID: "invitation-public-verifier",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2999-01-01T00:00:00Z",
+            nonce: Data(repeating: 0x21, count: 64)
+        )
+        let acceptance = try await ChatInvitationProofUtility.generateAcceptance(
+            for: artifact,
+            invitee: invitee,
+            acceptanceID: "acceptance-public-verifier",
+            createdAt: "2026-01-01T00:00:01Z",
+            nonce: Data(repeating: 0x22, count: 64)
+        )
+        let approvingVault = ChatAlwaysTrueVerificationVault()
+
+        var forgedArtifact = artifact
+        forgedArtifact.proof?.signature = Data(repeating: 0x5A, count: 64)
+        do {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(
+                forgedArtifact,
+                identityVault: approvingVault
+            )
+            XCTFail("Expected forged invitation proof to be rejected independently of the provided vault")
+        } catch ChatInvitationProofUtilityError.invalidArtifactProof {
+        } catch {
+            XCTFail("Unexpected invitation verification error: \(error)")
+        }
+
+        var forgedAcceptance = acceptance
+        forgedAcceptance.proof?.signature = Data(repeating: 0xA5, count: 64)
+        do {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(
+                forgedAcceptance,
+                for: artifact,
+                identityVault: approvingVault
+            )
+            XCTFail("Expected forged acceptance proof to be rejected independently of the provided vault")
+        } catch ChatInvitationProofUtilityError.invalidAcceptanceProof {
+        } catch {
+            XCTFail("Unexpected acceptance verification error: \(error)")
+        }
+    }
+
+    func testInvitationVerificationRejectsEd25519SignatureLabeledAsSecp256k1() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        var artifact = try await ChatInvitationProofUtility.generateInvitationArtifact(
+            chatCellUUID: "chat-cell",
+            topic: "general",
+            audienceMode: "invited",
+            suiteID: "suite",
+            persistenceMode: "local",
+            inviter: owner,
+            invited: invitee,
+            invitationID: "invitation-wrong-curve",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2999-01-01T00:00:00Z",
+            nonce: Data(repeating: 0x31, count: 64)
+        )
+
+        artifact.inviterIdentity.algorithm = .ECDSA
+        artifact.inviterIdentity.curveType = .secp256k1
+        artifact.proof?.algorithm = .ECDSA
+        artifact.proof?.curveType = .secp256k1
+        let mislabeledSignature = try await vault.signMessageForIdentity(
+            messageData: try artifact.canonicalPayloadData(),
+            identity: owner
+        )
+        artifact.proof?.signature = mislabeledSignature
+
+        do {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(
+                artifact,
+                identityVault: vault
+            )
+            XCTFail("Expected Ed25519 bytes labeled as secp256k1/ECDSA to be rejected")
+        } catch ChatInvitationProofUtilityError.invalidArtifactProof {
+        } catch {
+            XCTFail("Unexpected curve-metadata verification error: \(error)")
+        }
+    }
+
+    func testInvitationVerificationFailsClosedForSignedInvalidSemantics() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        let validArtifact = try await ChatInvitationProofUtility.generateInvitationArtifact(
+            chatCellUUID: "chat-cell",
+            topic: "general",
+            audienceMode: "invited",
+            suiteID: "suite",
+            persistenceMode: "local",
+            inviter: owner,
+            invited: invitee,
+            invitationID: "invitation-semantics",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2999-01-01T00:00:00Z",
+            nonce: Data(repeating: 0x41, count: 64)
+        )
+
+        var wrongVersion = validArtifact
+        wrongVersion.version = 2
+        wrongVersion = try await resigned(wrongVersion, signer: owner, vault: vault)
+        await assertChatProofError(.unsupportedVersion) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(wrongVersion)
+        }
+
+        var wrongPurpose = validArtifact
+        wrongPurpose.purpose = "authorize_chat_admin"
+        wrongPurpose = try await resigned(wrongPurpose, signer: owner, vault: vault)
+        await assertChatProofError(.invalidPurpose) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(wrongPurpose)
+        }
+
+        var wrongProofType = validArtifact
+        wrongProofType.proof?.type = "delegation"
+        await assertChatProofError(.invalidProofType) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(wrongProofType)
+        }
+
+        var malformedExpiry = validArtifact
+        malformedExpiry.expiresAt = "not-a-timestamp"
+        malformedExpiry = try await resigned(malformedExpiry, signer: owner, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(malformedExpiry)
+        }
+
+        var reversedWindow = validArtifact
+        reversedWindow.createdAt = "2026-01-02T00:00:00Z"
+        reversedWindow.expiresAt = "2026-01-01T00:00:00Z"
+        reversedWindow = try await resigned(reversedWindow, signer: owner, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(reversedWindow)
+        }
+
+        var futureCreatedAt = validArtifact
+        futureCreatedAt.createdAt = ISO8601DateFormatter().string(
+            from: Date().addingTimeInterval(IdentitySigningChallenge.allowedClockSkew + 60)
+        )
+        futureCreatedAt = try await resigned(futureCreatedAt, signer: owner, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(futureCreatedAt)
+        }
+
+        var shortNonce = validArtifact
+        shortNonce.nonce = Data(repeating: 0x42, count: 31)
+        shortNonce = try await resigned(shortNonce, signer: owner, vault: vault)
+        await assertChatProofError(.invalidNonce) {
+            _ = try await ChatInvitationProofUtility.verifyInvitationArtifact(shortNonce)
+        }
+    }
+
+    func testAcceptanceVerificationFailsClosedForSignedInvalidSemantics() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        let artifact = try await ChatInvitationProofUtility.generateInvitationArtifact(
+            chatCellUUID: "chat-cell",
+            topic: "general",
+            audienceMode: "invited",
+            suiteID: "suite",
+            persistenceMode: "local",
+            inviter: owner,
+            invited: invitee,
+            invitationID: "acceptance-semantics",
+            createdAt: "2026-01-01T00:00:00Z",
+            expiresAt: "2999-01-01T00:00:00Z",
+            nonce: Data(repeating: 0x51, count: 64)
+        )
+        let validAcceptance = try await ChatInvitationProofUtility.generateAcceptance(
+            for: artifact,
+            invitee: invitee,
+            acceptanceID: "acceptance-semantics",
+            createdAt: "2026-01-01T00:00:01Z",
+            nonce: Data(repeating: 0x52, count: 64)
+        )
+
+        var wrongVersion = validAcceptance
+        wrongVersion.version = 2
+        wrongVersion = try await resigned(wrongVersion, signer: invitee, vault: vault)
+        await assertChatProofError(.unsupportedVersion) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(wrongVersion, for: artifact)
+        }
+
+        var wrongPurpose = validAcceptance
+        wrongPurpose.purpose = "accept_admin_delegation"
+        wrongPurpose = try await resigned(wrongPurpose, signer: invitee, vault: vault)
+        await assertChatProofError(.invalidPurpose) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(wrongPurpose, for: artifact)
+        }
+
+        var wrongProofType = validAcceptance
+        wrongProofType.proof?.type = "delegation"
+        await assertChatProofError(.invalidProofType) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(wrongProofType, for: artifact)
+        }
+
+        var malformedCreatedAt = validAcceptance
+        malformedCreatedAt.createdAt = "not-a-timestamp"
+        malformedCreatedAt = try await resigned(malformedCreatedAt, signer: invitee, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(malformedCreatedAt, for: artifact)
+        }
+
+        var futureCreatedAt = validAcceptance
+        futureCreatedAt.createdAt = ISO8601DateFormatter().string(
+            from: Date().addingTimeInterval(IdentitySigningChallenge.allowedClockSkew + 60)
+        )
+        futureCreatedAt = try await resigned(futureCreatedAt, signer: invitee, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(futureCreatedAt, for: artifact)
+        }
+
+        var beforeInvitation = validAcceptance
+        beforeInvitation.createdAt = "2025-12-31T23:00:00Z"
+        beforeInvitation = try await resigned(beforeInvitation, signer: invitee, vault: vault)
+        await assertChatProofError(.invalidTimestamp) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(beforeInvitation, for: artifact)
+        }
+
+        var oversizedNonce = validAcceptance
+        oversizedNonce.nonce = Data(repeating: 0x53, count: 129)
+        oversizedNonce = try await resigned(oversizedNonce, signer: invitee, vault: vault)
+        await assertChatProofError(.invalidNonce) {
+            _ = try await ChatInvitationProofUtility.verifyAcceptance(oversizedNonce, for: artifact)
         }
     }
 
@@ -1795,11 +2090,85 @@ final class ChatCellTests: XCTestCase {
         XCTAssertEqual(ledgerObject["acceptanceAllowed"], .bool(false))
     }
 
+    private func assertChatProofError(
+        _ expected: ChatInvitationProofUtilityError,
+        operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            XCTFail("Expected Chat proof verification error \(expected)")
+        } catch let error as ChatInvitationProofUtilityError {
+            XCTAssertEqual(error, expected)
+        } catch {
+            XCTFail("Unexpected Chat proof verification error: \(error)")
+        }
+    }
+
+    private func resigned(
+        _ artifact: ChatInvitationArtifact,
+        signer: Identity,
+        vault: IdentityVaultProtocol
+    ) async throws -> ChatInvitationArtifact {
+        var result = artifact
+        let payload = try result.canonicalPayloadData()
+        let signature = try await vault.signMessageForIdentity(
+            messageData: payload,
+            identity: signer
+        )
+        result.proof?.signature = signature
+        return result
+    }
+
+    private func resigned(
+        _ acceptance: ChatInvitationAcceptance,
+        signer: Identity,
+        vault: IdentityVaultProtocol
+    ) async throws -> ChatInvitationAcceptance {
+        var result = acceptance
+        let payload = try result.canonicalPayloadData()
+        let signature = try await vault.signMessageForIdentity(
+            messageData: payload,
+            identity: signer
+        )
+        result.proof?.signature = signature
+        return result
+    }
+
     private func roundTrip(_ cell: ChatCell) async throws -> ChatCell {
         let data = try JSONEncoder().encode(cell)
         let restored = try JSONDecoder().decode(ChatCell.self, from: data)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        try await restored.ensureRuntimeReady()
         return restored
+    }
+}
+
+private actor ChatAlwaysTrueVerificationVault: IdentityVaultProtocol {
+    func initialize() async -> IdentityVaultProtocol { self }
+
+    func addIdentity(identity: inout Identity, for identityContext: String) async {
+        identity.identityVault = self
+    }
+
+    func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
+        nil
+    }
+
+    func saveIdentity(_ identity: Identity) async {}
+
+    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        Data(repeating: 0x5A, count: 64)
+    }
+
+    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
+        true
+    }
+
+    func randomBytes64() async -> Data? {
+        Data(repeating: 0x5A, count: 64)
+    }
+
+    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) {
+        ("always-true-\(tag)", "always-true-iv")
     }
 }
 
@@ -1863,12 +2232,18 @@ private actor ChatCellTestIdentityVault: IdentityVaultProtocol, IdentityKeyRoleP
     }
 
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
-        messageData + identity.uuid.data(using: .utf8, allowLossyConversion: false)!
+        guard let privateKey = signingKeysByIdentityUUID[identity.uuid] else {
+            throw IdentityVaultError.signingFailed
+        }
+        return try privateKey.signature(for: messageData)
     }
 
     func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool {
-        let expected = messageData + identity.uuid.data(using: .utf8, allowLossyConversion: false)!
-        return signature == expected
+        guard let compressedKey = identity.publicSecureKey?.compressedKey else {
+            return false
+        }
+        let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: compressedKey)
+        return publicKey.isValidSignature(signature, for: messageData)
     }
 
     func randomBytes64() async -> Data? {

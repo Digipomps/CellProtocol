@@ -9,6 +9,7 @@ A class that provides landmark data for the app.
 */
 
 import Foundation
+import CellBase
 @preconcurrency import MapKit
 import CoreLocation
 import Synchronization
@@ -18,23 +19,34 @@ import Synchronization
 class ModelData {
     @MainActor
     static let shared = ModelData()
-    nonisolated static let landmarks: [Landmark] = parseLandmarks(fileName: "landmarkData.json")
-    nonisolated static var landmarkNames: [String] {
-        landmarks.map(\.name)
+    nonisolated static let landmarkLoadResult = Result {
+        try parseLandmarks(fileName: "landmarkData.json")
     }
     
     var landmarksByContinent: [String: [Landmark]] = [:]
     var featuredLandmark: Landmark?
     var landmarksByID: [Int: Landmark] = [:]
+    private(set) var loadError: Error?
         
     private init() {
         loadLandmarks()
     }
     
     func loadLandmarks() {
-        landmarksByContinent = landmarksByContinent(from: ModelData.landmarks)
+        let landmarks: [Landmark]
+        switch ModelData.landmarkLoadResult {
+        case .success(let loadedLandmarks):
+            landmarks = loadedLandmarks
+            loadError = nil
+        case .failure(let error):
+            landmarks = []
+            loadError = error
+            CellBase.diagnosticLog("Landmark fixture unavailable: \(error)", domain: .lifecycle)
+        }
+
+        landmarksByContinent = landmarksByContinent(from: landmarks)
         
-        for landmark in ModelData.landmarks {
+        for landmark in landmarks {
             landmarksByID[landmark.id] = landmark
         }
 
@@ -51,17 +63,12 @@ class ModelData {
         return landmarksByContinent
     }
     
-    static func parseLandmarks(fileName: String) -> [Landmark] {
+    static func parseLandmarks(fileName: String) throws -> [Landmark] {
         guard let file = Bundle.main.url(forResource: fileName, withExtension: nil) else {
-            fatalError("Couldn't find \(fileName) in main bundle.")
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: fileName])
         }
 
-        do {
-            let data: Data = try Data(contentsOf: file)
-            let decoder = JSONDecoder()
-            return try decoder.decode([Landmark].self, from: data)
-        } catch {
-            fatalError("Couldn't parse \(fileName):\n\(error)")
-        }
+        let data = try Data(contentsOf: file)
+        return try JSONDecoder().decode([Landmark].self, from: data)
     }
 }

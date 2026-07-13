@@ -51,15 +51,24 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
      credentialSubject.name = Hanna Herwitz | is valid (signed) |
      */
     
-    public init(name: String, statement: String) {
+    public init(
+        name: String,
+        statement: String,
+        requiredCredentialType: String? = nil,
+        subjectClaimPath: String? = nil
+    ) {
         self.uuid = UUID().uuidString
         self.name = name
         self.statement = statement // person.age > 18 or relations,smi. ...how to express that some sum is paid
+        self.requiredCredentialType = requiredCredentialType
+        self.subjectClaimPath = subjectClaimPath
         // statement must express that
     }
 
     public var name: String
     public var statement: String
+    public var requiredCredentialType: String?
+    public var subjectClaimPath: String?
 //    public var targetKeypath: String = "target.addClaim" // Target keypath could also be cell://
     
     public func isMet(context: ConnectContext) async -> ConditionState {
@@ -73,13 +82,16 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
         {
             do {
                 let value = try await getValueAtConditionKeypath(keypathExpression: keypathExpression, connectContext: context)
-                guard let targetOwner = try await context.target?.getOwner(requester: identity) else {// Is this a requirement? Aka should we use guard?
-                    throw CellBaseError.noIdentity
-                }
-                
                 switch value {
                 case .object( let vCClaimObject):
                     let claim = try convertToClaim( vCClaimObject) // Catch error and report
+                    guard claimSubjectMatchesRequester(claim, requester: identity) else {
+                        CellBase.diagnosticLog(
+                            "ProvedClaimCondition rejected credential with wrong or missing subject binding",
+                            domain: .agreement
+                        )
+                        return .unresolved
+                    }
                     if try await claim.verify() { //
                         CellBase.diagnosticLog("ProvedClaimCondition claim verified", domain: .agreement)
 
@@ -90,9 +102,22 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                             requester: identity
                         )
 
-                        // Backward-compatible fallback while trust policy rollout happens.
-                        let trustedByOwner = await issuerIsTargetOwner(claim: claim, owner: targetOwner, requester: identity)
-                        if !trustedByPolicy && !trustedByOwner {
+                        // A target owner is not an implicit credential authority.
+                        // Issuer trust, validity, and revocation policy must be
+                        // evaluated by the TrustedIssuer runtime.
+                        if !trustedByPolicy {
+                            return .unresolved
+                        }
+
+                        guard credentialSatisfiesDeclaredRequirement(
+                            claim,
+                            expression: keypathExpression,
+                            trustedByPolicy: trustedByPolicy
+                        ) else {
+                            CellBase.diagnosticLog(
+                                "ProvedClaimCondition rejected credential not bound to declared type/claim/keypath",
+                                domain: .agreement
+                            )
                             return .unresolved
                         }
                         
@@ -107,135 +132,15 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                         // VC did exist but was not valid
                     }
                     
-                case .string(let string): // For all the following we need to find the corresponding Verifible Credential
-                    CellBase.diagnosticLog("ProvedClaimCondition comparing string value", domain: .agreement)
-                
-                    switch keypathExpression.operatorString {
-                    case "=":
-                        if case let .string(statementString) = keypathExpression.value {
-                            if string == statementString {
-                                state = .met
-                                break
-                            }
-                        }
-                    default:
-                        print("Operator not relevant for String: \(keypathExpression.operatorString)")
-                    }
-                    
-                    
-                case .bool(let bool):
-                    CellBase.diagnosticLog("ProvedClaimCondition comparing bool value", domain: .agreement)
-                    switch keypathExpression.operatorString {
-                    case "=":
-                        if case let .bool(statementBool) = keypathExpression.value {
-                            if bool == statementBool {
-                                state = .met
-                                break
-                            }
-                        }
-                    default:
-                        print("Operator not relevant for Bool: \(keypathExpression.operatorString)")
-                    }
-                    
-                case .number(let int):
-                    CellBase.diagnosticLog("ProvedClaimCondition comparing number value", domain: .agreement)
-                    switch keypathExpression.operatorString {
-                    case "=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int == statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case "<":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int < statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                        
-                    case ">":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int > statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case "<=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int <= statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case ">=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if  int >= statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                    default:
-                        print("Operator not relevant for number: \(keypathExpression.operatorString)")
-                    }
-                    
-                case .integer(let int):
-                    CellBase.diagnosticLog("ProvedClaimCondition comparing integer value", domain: .agreement)
-                    switch keypathExpression.operatorString {
-                    case "=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int == statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case "<":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int < statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                        
-                    case ">":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int > statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case "<=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if int <= statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                        
-                    case ">=":
-                        if case let .int(statementInteger) = keypathExpression.value {
-                            if  int >= statementInteger {
-                                state = .met
-                                break
-                            }
-                        }
-                    default:
-                        print("Operator not relevant for Integer: \(keypathExpression.operatorString)")
-                    }
-                    
-                case .float(_):
-                    CellBase.diagnosticLog("ProvedClaimCondition comparing float value", domain: .agreement)
-                    
                 default:
-                    print("Got unsupported statement value: \(value)")
+                    // Primitive Entity values are assertions made by the Entity
+                    // owner, not cryptographic proof. Only a verified credential
+                    // envelope may satisfy ProvedClaimCondition.
+                    CellBase.diagnosticLog(
+                        "ProvedClaimCondition rejected non-credential value",
+                        domain: .agreement
+                    )
+                    return .unresolved
                     
                 }
                 
@@ -263,18 +168,156 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
     }
     
     func issuerIsTargetOwner(claim: VCClaim, owner: Identity, requester: Identity) async -> Bool {
-        do {
-            let ownerUuidValue = try await requester.get(keypath: "relations.issuers.\(claim.issuer)", requester: requester)
-            if case let .string(ownerUuid) = ownerUuidValue {
-                if ownerUuid == owner.uuid {
-                    return true
-                }
-            }
-            
-        } catch {
-            print("Getting ownerUuid from issuer failed with error: \(error)")
+        _ = requester
+        guard let ownerDID = try? owner.did() else {
+            return false
         }
-        return false
+        return issuerReference(claim.issuer) == ownerDID
+    }
+
+    private func claimSubjectMatchesRequester(_ claim: VCClaim, requester: Identity) -> Bool {
+        guard case .string(let subjectID)? = claim.credentialSubject["id"],
+              !subjectID.isEmpty else {
+            return false
+        }
+        guard let requesterDID = try? requester.did() else {
+            return false
+        }
+        return subjectID == requesterDID
+    }
+
+    private func credentialSatisfiesDeclaredRequirement(
+        _ claim: VCClaim,
+        expression: AnyKeypathExpression,
+        trustedByPolicy: Bool
+    ) -> Bool {
+        let normalizedType = requiredCredentialType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedType, normalizedType.isEmpty == false,
+           claim.type.contains(normalizedType) == false {
+            return false
+        }
+
+        let normalizedClaimPath = subjectClaimPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedClaimPath, normalizedClaimPath.isEmpty == false {
+            guard let subjectValue = credentialSubjectValue(
+                in: claim.credentialSubject,
+                path: normalizedClaimPath
+            ), parsedComparison(
+                subjectValue,
+                operatorString: expression.operatorString,
+                expected: expression.value
+            ) else {
+                return false
+            }
+        } else if trustedByPolicy == false {
+            // A target-owner signature alone cannot turn an unrelated credential
+            // into proof for an arbitrary condition.
+            return false
+        }
+
+        let explicitBinding = stringValue(claim.credentialSubject["proofKeypath"])
+            ?? stringValue(claim.credentialSubject["roleKeypath"])
+        if let explicitBinding {
+            let normalizedBinding = explicitBinding.trimmingCharacters(in: .whitespacesAndNewlines)
+            let acceptedBindings = Set([
+                expression.keypath,
+                expression.shortenendKeypath,
+                deletePrefix("identity.", from: expression.keypath)
+            ].filter { $0.isEmpty == false })
+            guard acceptedBindings.contains(normalizedBinding) else {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private func stringValue(_ value: ValueType?) -> String? {
+        guard case let .string(string)? = value else { return nil }
+        return string
+    }
+
+    private func credentialSubjectValue(in subject: Object, path: String) -> ValueType? {
+        var components = path.split(separator: ".").map(String.init)
+        if components.first == "credentialSubject" {
+            components.removeFirst()
+        }
+        guard let first = components.first, var current = subject[first] else {
+            return nil
+        }
+        for component in components.dropFirst() {
+            guard case let .object(object) = current,
+                  let nested = object[component] else {
+                return nil
+            }
+            current = nested
+        }
+        return current
+    }
+
+    private func parsedComparison(
+        _ actual: ValueType,
+        operatorString: String,
+        expected: ParsedValue
+    ) -> Bool {
+        if operatorString == "IN", case let .array(values) = expected {
+            return values.contains { parsedComparison(actual, operatorString: "=", expected: $0) }
+        }
+
+        let equals = parsedValuesEqual(actual, expected)
+        switch operatorString {
+        case "=", "==":
+            return equals
+        case "!=":
+            return !equals
+        case ">", ">=", "<", "<=":
+            guard let actualNumber = numericValue(actual),
+                  let expectedNumber = numericValue(expected) else {
+                return false
+            }
+            switch operatorString {
+            case ">": return actualNumber > expectedNumber
+            case ">=": return actualNumber >= expectedNumber
+            case "<": return actualNumber < expectedNumber
+            default: return actualNumber <= expectedNumber
+            }
+        default:
+            return false
+        }
+    }
+
+    private func parsedValuesEqual(_ actual: ValueType, _ expected: ParsedValue) -> Bool {
+        switch (actual, expected) {
+        case let (.bool(lhs), .bool(rhs)):
+            return lhs == rhs
+        case let (.string(lhs), .string(rhs)):
+            return lhs == rhs
+        case let (.string(lhs), .date(rhs)):
+            return ISO8601DateFormatter().date(from: lhs) == rhs
+        default:
+            guard let lhs = numericValue(actual), let rhs = numericValue(expected) else {
+                return false
+            }
+            return lhs == rhs
+        }
+    }
+
+    private func numericValue(_ value: ValueType) -> Double? {
+        switch value {
+        case .number(let number), .integer(let number): return Double(number)
+        case .float(let number): return number
+        default: return nil
+        }
+    }
+
+    private func numericValue(_ value: ParsedValue) -> Double? {
+        switch value {
+        case .int(let number): return Double(number)
+        case .double(let number): return number
+        default: return nil
+        }
     }
     
     func getValueAtConditionKeypath(keypathExpression: AnyKeypathExpression, connectContext: ConnectContext) async throws -> ValueType {
@@ -376,35 +419,34 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                    
                     if case let .object(vCClaimObject) = value {
                         let claim = try convertToClaim( vCClaimObject)
-                        // The identity here is representing the user og is the basis for whats allowed
-                        guard let targetOwner = try await context.target?.getOwner(requester: identity) else {
-                            throw ConditionError.noTargetOwner
+                        guard claimSubjectMatchesRequester(claim, requester: identity),
+                              try await claim.verify() else {
+                            CellBase.diagnosticLog(
+                                "ProvedClaimCondition.resolve rejected invalid or wrongly bound credential",
+                                domain: .agreement
+                            )
+                            return
                         }
-                        
-                        if !(await issuerIsTargetOwner(claim: claim, owner: targetOwner, requester: identity)) {
-//                            return .unresolved
+
+                        let trustedByPolicy = await evaluateIssuerTrust(
+                            claim: claim,
+                            contextId: trustContextId(keypathExpression: keypathExpression),
+                            requester: identity
+                        )
+                        guard trustedByPolicy,
+                              credentialSatisfiesDeclaredRequirement(
+                                  claim,
+                                  expression: keypathExpression,
+                                  trustedByPolicy: trustedByPolicy
+                              ) else {
+                            CellBase.diagnosticLog(
+                                "ProvedClaimCondition.resolve rejected untrusted or unrelated credential",
+                                domain: .agreement
+                            )
+                            return
                         }
-                        
-                        if try await claim.verify() { //
-                            // We are in identity now - so lookup there. get context target as meddle later on...
-                            CellBase.diagnosticLog("ProvedClaimCondition.resolve claim verified", domain: .agreement)
-//                            if let targetMeddle = try await context.target as? Meddle {
-//                                let targetShortenedKeypath = deletePrefix("target.", from: targetKeypath)
-//                                let response = try await targetMeddle.set(keypath: targetShortenedKeypath, value: value, requester: identity)
-//                            }
-                            
-                            // set claim in target keypath? f.ex source.claims
-                            
-                            // check statement
-                            //
-                            // ensure that there's sufficient grants to reach
-                            // if user need to be involded send flowItem via ... Identity?
-                            
-                            CellBase.diagnosticLog("ProvedClaimCondition.resolve state=met", domain: .agreement)
-                        } else {
-                          // get vc for keypath
-                            CellBase.diagnosticLog("Value at keypath not valid VC", domain: .agreement)
-                        }
+
+                        CellBase.diagnosticLog("ProvedClaimCondition.resolve claim verified", domain: .agreement)
                     } else {
                         CellBase.diagnosticLog("No claim objectValue", domain: .agreement)
                         
@@ -471,7 +513,9 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
 
         do {
             let claimObject = try convertClaimToObject(claim)
-            let requesterId = (try? requester.did()) ?? requester.uuid
+            guard let requesterId = try? requester.did() else {
+                return false
+            }
             let payload: Object = [
                 "issuerId": .string(issuerReference(claim.issuer)),
                 "contextId": .string(contextId),
@@ -518,14 +562,12 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
     init() {
         name = "Test Proved Claim Condition"
         statement = "identity.person.human = true"
+        requiredCredentialType = nil
+        subjectClaimPath = nil
         uuid = UUID().uuidString
         
     }
 
-    func validateVerifiablePresentation(_ verifiablePresentation: VCPresentation ) -> Bool {
-        return true
-    }
-        
     // Experimental method..
     // F.ex this statement: identity.proofs.smi.products.purchased.<prodnum>"
     // Checks for unresolved condition that requires user interaction

@@ -21,8 +21,7 @@ public final class GoalEvaluationCell: GeneralCell {
         self.observations = []
         self.lastEvaluation = nil
         await super.init(owner: owner)
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
@@ -32,10 +31,11 @@ public final class GoalEvaluationCell: GeneralCell {
         self.lastEvaluation = try container.decodeIfPresent(GoalEvaluation.self, forKey: .lastEvaluation)
         try super.init(from: decoder)
 
-        Task {
-            await setupPermissions(owner: self.owner)
-            await setupKeys(owner: self.owner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        await setupPermissions(owner: owner)
+        await setupKeys(owner: owner)
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -47,7 +47,7 @@ public final class GoalEvaluationCell: GeneralCell {
     }
 
     private func setupPermissions(owner: Identity) async {
-        agreementTemplate.addGrant("rw--", for: "goal")
+        agreementTemplate.ensureGrant("rw--", for: "goal")
     }
 
     private func setupKeys(owner: Identity) async {

@@ -19,6 +19,10 @@ private func bridgeLog(_ message: @autoclosure () -> String) {
     CellBase.diagnosticLog(message(), domain: .bridge)
 }
 
+public enum BridgeOperationError: Error, Equatable {
+    case unsupportedOperation(String)
+}
+
 public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private typealias ConnectPromise = (Result<ConnectState, Error>) -> Void
     private typealias ContractPromise = (Result<AgreementState, Error>) -> Void
@@ -160,7 +164,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         self.owner = owner
         agreementTemplate = Agreement(owner: owner)
         identityDomain = "bridge" // Must be changed to reflect remote side 
-        fatalError("Bridge Base Init owner: NOT IMPLEMENTED")
+        cellScope = .template
+        persistancy = .ephemeral
     }
 
     deinit {
@@ -563,35 +568,24 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     
-    public func advertise(for requester: Identity) -> AnyCell {
-        // TODO: check what is to be revealed for supplied Identity
-        let announcedCell = AnyCell(uuid: self.uuid, name: self.name ?? "CBCSP", contractTemplate: self.agreementTemplate, owner: self.owner, experiences: self.experiences, feedEndpoint: self.feedEndpoint, feedProperties: self.feedProperties, identityDomain: self.identityDomain)
-        
-        return announcedCell
+    public func advertise(for requester: Identity) async throws -> AnyCell {
+        _ = requester
+        let publicOwner = self.owner?.publicIdentitySnapshot()
+        let publicAgreement = try self.agreementTemplate.publicDescriptorSnapshot()
+        return AnyCell(uuid: self.uuid, name: self.name ?? "CBCSP", contractTemplate: publicAgreement, owner: publicOwner, experiences: self.experiences, feedEndpoint: self.feedEndpoint, feedProperties: self.feedProperties, identityDomain: self.identityDomain)
     }
     
     public func state(requester: Identity) async throws -> ValueType {
-        var stateType: ValueType = .string("error")
-        self.stateCallbackDataPublisher = PassthroughSubject<ValueType, Error>()
-        
-        
-        if let stateCallbackDataPublisher = self.stateCallbackDataPublisher {
-            stateType = try await stateCallbackDataPublisher.getOneWithTimeout(5)
-        }
-        
-        
-        
-        return stateType
+        _ = requester
+        throw BridgeOperationError.unsupportedOperation("state")
     }
     
     public func getOwner(requester: Identity) async throws -> Identity {
-        // Chect access
+        _ = requester
         if let owner = self.owner {
-            return owner
+            return owner.publicIdentitySnapshot()
         }
         throw BridgeError.noOwner
-        
-        // throw BridgeError.denied on no access
     }
     
     public func getEmitterWithUUID(_ uuid: String, requester: Identity) async -> (any Emit)? {
@@ -676,18 +670,20 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public func keys(requester: Identity) async throws -> [String] {
-        return ["Not yet implemented (BridgeBase)"]
-//        let keysPublisher = PassthroughSubject<SetValueState, Error>()
-        
-        
+        _ = requester
+        throw BridgeOperationError.unsupportedOperation("keys")
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
-        return .string("Not yet implemented (BridgeBase)")
+        _ = requester
+        throw BridgeOperationError.unsupportedOperation("typeForKey:\(key)")
     }
     
     public func isMember(identity: Identity, requester: Identity) -> Bool {
-        return true //TODO: do the actual method
+        _ = identity
+        _ = requester
+        // Transport cannot manufacture protocol membership locally.
+        return false
     }
     
     public func detach(label: String, requester: Identity) {
@@ -829,7 +825,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 //    }
     
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
-        let advertisedEmitter = await emitter.advertise(for: requester)
+        let advertisedEmitter = try await emitter.advertise(for: requester)
         let payload: Object = ["label": .string(label), "publisher": .description(advertisedEmitter)]
         let commandID = await auditor.getNewCommandId()
         let callbackPublisher = PassthroughSubject<ConnectState, Error>()
@@ -1390,7 +1386,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return
         }
         do {
-            let advertisedPublisher = await publisher.advertise(for: identity)
+            let advertisedPublisher = try await publisher.advertise(for: identity)
             let payload = ValueType.description(advertisedPublisher)
             let response = BridgeCommand(cmd: "response", payload: payload, cid: command.cid)
             
@@ -1556,12 +1552,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         bridgeLog("No pending sign request for response cid=\(command.cid)")
                         break
                     }
-                    let verifier = signRequest.identity.identityVault ?? CellBase.defaultIdentityVault ?? BridgeIdentityVault()
-                    let verified = (try? await verifier.verifySignature(
+                    let verified = IdentityPublicKeySignatureVerifier.verify(
                         signature: value,
                         messageData: signRequest.messageData,
-                        for: signRequest.identity
-                    )) ?? false
+                        identity: signRequest.identity
+                    )
                     guard verified else {
                         bridgeLog("Bridge sign response failed verification for cid=\(command.cid)")
                         signRequest.promise(.failure(IdentityVaultError.signingFailed))

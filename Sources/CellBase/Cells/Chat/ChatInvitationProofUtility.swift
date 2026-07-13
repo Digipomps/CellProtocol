@@ -8,7 +8,7 @@ import CryptoKit
 import Crypto
 #endif
 
-public enum ChatInvitationProofUtilityError: Error {
+public enum ChatInvitationProofUtilityError: Error, Equatable {
     case missingIdentityVault
     case missingSigningKey
     case missingRandomness
@@ -20,6 +20,11 @@ public enum ChatInvitationProofUtilityError: Error {
     case expiredArtifact
     case invalidArtifactProof
     case invalidAcceptanceProof
+    case unsupportedVersion
+    case invalidPurpose
+    case invalidProofType
+    case invalidTimestamp
+    case invalidNonce
 }
 
 public struct ChatInvitationArtifactProof: Codable, Equatable, Sendable {
@@ -244,6 +249,7 @@ public enum ChatInvitationProofUtility {
                 curveType: inviterDescriptor.curveType
             )
         )
+        try validateInvitationPayload(artifact)
 
         let signature = try await vault.signMessageForIdentity(
             messageData: try artifact.canonicalPayloadData(),
@@ -259,6 +265,10 @@ public enum ChatInvitationProofUtility {
         expectedInviterUUID: String? = nil,
         identityVault: IdentityVaultProtocol? = nil
     ) async throws -> Bool {
+        // Retained for source compatibility. Verification is deliberately
+        // independent of caller-provided or process-global signing authority.
+        _ = identityVault
+        try validateInvitationPayload(artifact)
         if let expectedChatCellUUID, artifact.chatCellUUID != expectedChatCellUUID {
             throw ChatInvitationProofUtilityError.chatCellMismatch
         }
@@ -273,17 +283,19 @@ public enum ChatInvitationProofUtility {
             throw ChatInvitationProofUtilityError.missingSignature
         }
         guard proof.byIdentityUUID == artifact.inviterIdentity.uuid,
+              proof.type == "signature",
               proof.algorithm == artifact.inviterIdentity.algorithm,
               proof.curveType == artifact.inviterIdentity.curveType else {
+            if proof.type != "signature" {
+                throw ChatInvitationProofUtilityError.invalidProofType
+            }
             throw ChatInvitationProofUtilityError.inviterMismatch
         }
 
-        let vault = try Self.identityVault(for: identityVault)
-        let inviterIdentity = identity(from: artifact.inviterIdentity, identityVault: vault)
-        let verified = try await vault.verifySignature(
+        let verified = IdentityPublicKeySignatureVerifier.verify(
             signature: signature,
             messageData: try artifact.canonicalPayloadData(),
-            for: inviterIdentity
+            descriptor: artifact.inviterIdentity
         )
         guard verified else {
             throw ChatInvitationProofUtilityError.invalidArtifactProof
@@ -328,6 +340,7 @@ public enum ChatInvitationProofUtility {
                 curveType: inviteeDescriptor.curveType
             )
         )
+        try validateAcceptancePayload(acceptance, for: artifact)
 
         let signature = try await vault.signMessageForIdentity(
             messageData: try acceptance.canonicalPayloadData(),
@@ -349,6 +362,7 @@ public enum ChatInvitationProofUtility {
             expectedInviterUUID: acceptance.inviterIdentityUUID,
             identityVault: identityVault
         )
+        try validateAcceptancePayload(acceptance, for: artifact)
 
         guard acceptance.invitationID == artifact.invitationID else {
             throw ChatInvitationProofUtilityError.invitationHashMismatch
@@ -368,17 +382,19 @@ public enum ChatInvitationProofUtility {
             throw ChatInvitationProofUtilityError.missingSignature
         }
         guard proof.byIdentityUUID == acceptance.inviteeIdentity.uuid,
+              proof.type == "signature",
               proof.algorithm == acceptance.inviteeIdentity.algorithm,
               proof.curveType == acceptance.inviteeIdentity.curveType else {
+            if proof.type != "signature" {
+                throw ChatInvitationProofUtilityError.invalidProofType
+            }
             throw ChatInvitationProofUtilityError.inviteeMismatch
         }
 
-        let vault = try Self.identityVault(for: identityVault)
-        let inviteeIdentity = identity(from: acceptance.inviteeIdentity, identityVault: vault)
-        let verified = try await vault.verifySignature(
+        let verified = IdentityPublicKeySignatureVerifier.verify(
             signature: signature,
             messageData: try acceptance.canonicalPayloadData(),
-            for: inviteeIdentity
+            descriptor: acceptance.inviteeIdentity
         )
         guard verified else {
             throw ChatInvitationProofUtilityError.invalidAcceptanceProof
@@ -393,16 +409,6 @@ public enum ChatInvitationProofUtility {
         throw ChatInvitationProofUtilityError.missingIdentityVault
     }
 
-    private static func identityVault(for explicitVault: IdentityVaultProtocol?) throws -> IdentityVaultProtocol {
-        if let explicitVault {
-            return explicitVault
-        }
-        if let vault = CellBase.defaultIdentityVault {
-            return vault
-        }
-        throw ChatInvitationProofUtilityError.missingIdentityVault
-    }
-
     private static func randomNonce(using vault: IdentityVaultProtocol) async throws -> Data {
         guard let nonce = await vault.randomBytes64() else {
             throw ChatInvitationProofUtilityError.missingRandomness
@@ -411,16 +417,71 @@ public enum ChatInvitationProofUtility {
     }
 
     public static func isExpired(_ timestamp: String) -> Bool {
+        guard let date = date(from: timestamp) else {
+            return true
+        }
+        return date < Date()
+    }
+
+    private static func validateInvitationPayload(
+        _ artifact: ChatInvitationArtifact,
+        now: Date = Date()
+    ) throws {
+        guard artifact.version == 1 else {
+            throw ChatInvitationProofUtilityError.unsupportedVersion
+        }
+        guard artifact.purpose == "chat_invitation" else {
+            throw ChatInvitationProofUtilityError.invalidPurpose
+        }
+        try validateNonce(artifact.nonce)
+        guard let createdAt = date(from: artifact.createdAt),
+              let expiresAt = date(from: artifact.expiresAt),
+              expiresAt > createdAt,
+              createdAt <= now.addingTimeInterval(IdentitySigningChallenge.allowedClockSkew) else {
+            throw ChatInvitationProofUtilityError.invalidTimestamp
+        }
+        guard expiresAt >= now else {
+            throw ChatInvitationProofUtilityError.expiredArtifact
+        }
+    }
+
+    private static func validateAcceptancePayload(
+        _ acceptance: ChatInvitationAcceptance,
+        for artifact: ChatInvitationArtifact,
+        now: Date = Date()
+    ) throws {
+        guard acceptance.version == 1 else {
+            throw ChatInvitationProofUtilityError.unsupportedVersion
+        }
+        guard acceptance.purpose == "accept_chat_invitation" else {
+            throw ChatInvitationProofUtilityError.invalidPurpose
+        }
+        try validateNonce(acceptance.nonce)
+        guard let invitationCreatedAt = date(from: artifact.createdAt),
+              let invitationExpiresAt = date(from: artifact.expiresAt),
+              let acceptanceCreatedAt = date(from: acceptance.createdAt),
+              acceptanceCreatedAt >= invitationCreatedAt.addingTimeInterval(-IdentitySigningChallenge.allowedClockSkew),
+              acceptanceCreatedAt <= invitationExpiresAt,
+              acceptanceCreatedAt <= now.addingTimeInterval(IdentitySigningChallenge.allowedClockSkew) else {
+            throw ChatInvitationProofUtilityError.invalidTimestamp
+        }
+    }
+
+    private static func validateNonce(_ nonce: Data) throws {
+        guard nonce.count >= IdentitySigningChallenge.minimumNonceBytes,
+              nonce.count <= IdentitySigningChallenge.maximumNonceBytes else {
+            throw ChatInvitationProofUtilityError.invalidNonce
+        }
+    }
+
+    private static func date(from timestamp: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = formatter.date(from: timestamp) {
-            return date < Date()
+            return date
         }
         formatter.formatOptions = [.withInternetDateTime]
-        guard let fallbackDate = formatter.date(from: timestamp) else {
-            return false
-        }
-        return fallbackDate < Date()
+        return formatter.date(from: timestamp)
     }
 
     private static func hash(data: Data) -> Data {

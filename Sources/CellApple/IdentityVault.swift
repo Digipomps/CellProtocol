@@ -310,15 +310,12 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     
     func saveIdentities() async {
         let identities = Array(identitiesUUIDDictionary.values)
-        
-        
-        let serializedIdentites = try! JSONEncoder().encode(identities )
-        
         do {
-            
+            let serializedIdentites = try JSONEncoder().encode(identities)
             try await saveIdentities(jsonData: serializedIdentites)
-        
-        } catch { CellBase.diagnosticLog("Serializing identities failed with error: \(error)", domain: .identity) }
+        } catch {
+            CellBase.diagnosticLog("Serializing identities failed with error: \(error)", domain: .identity)
+        }
     }
     
     public func identityExistInVault(_ identity: Identity) async -> Bool {

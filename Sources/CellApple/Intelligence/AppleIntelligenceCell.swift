@@ -9,7 +9,7 @@
 //
 
 import Foundation
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -60,8 +60,7 @@ public class AppleIntelligenceCell: GeneralCell {
         await self.ensurePurpose(perspective: Perspective(), requester: owner)
         await self.buildCluster(requester: owner)
 //        registerBindings()
-        await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try? await ensureRuntimeReady()
 #if canImport(FoundationModels)
         let tool = GetConfigurationsTool( cell: self, requester: owner)
         self.tools = [tool]
@@ -75,11 +74,12 @@ public class AppleIntelligenceCell: GeneralCell {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try super.init(from: decoder)
 //        registerBindings()
-        Task {
-            let decodedOwner = self.storedOwnerIdentity
-            await setupPermissions(owner: decodedOwner)
-            await setupKeys(owner: decodedOwner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        let bindingOwner = storedOwnerIdentity
+        await setupPermissions(owner: bindingOwner)
+        await setupKeys(owner: bindingOwner)
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -120,8 +120,8 @@ public class AppleIntelligenceCell: GeneralCell {
 
     private func setupPermissions(owner: Identity) async {
         // Allow skeleton and flow to read AI state from this cell
-        self.agreementTemplate.addGrant("rw--", for: AIKeys.root)
-        self.agreementTemplate.addGrant("r---", for: "flow")
+        self.agreementTemplate.ensureGrant("rw--", for: AIKeys.root)
+        self.agreementTemplate.ensureGrant("r---", for: "flow")
     }
 
     private func setupKeys(owner: Identity) async {

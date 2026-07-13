@@ -158,15 +158,36 @@ public struct VCPresentation: Codable {
               domain == expectedDomain,
               let holderBinding,
               proof.proofPurpose == .authentication,
+              proof.verificationMethod == holderBinding.uuid,
               proof.signatureData.isEmpty == false else {
             return false
         }
-        let didIdentityVault = DIDIdentityVault()
-        return try await didIdentityVault.verifySignature(
+
+        let descriptorIdentity = Identity(
+            holderBinding.uuid,
+            displayName: holderBinding.displayName ?? holderBinding.uuid,
+            identityVault: nil
+        )
+        descriptorIdentity.publicSecureKey = SecureKey(
+            date: Date(timeIntervalSince1970: 0),
+            privateKey: false,
+            use: .signature,
+            algorithm: holderBinding.algorithm,
+            size: holderBinding.publicKey.count * 8,
+            curveType: holderBinding.curveType,
+            x: nil,
+            y: nil,
+            compressedKey: holderBinding.publicKey
+        )
+        guard case let .reference(holderDID) = holder,
+              holderDID == (try? descriptorIdentity.did()),
+              proof.type == VCProof.proofType(for: descriptorIdentity) else {
+            return false
+        }
+        return IdentityPublicKeySignatureVerifier.verify(
             signature: proof.signatureData,
-            messageData: canonicalPayloadData(),
-            for: holderBinding.publicKey,
-            curveType: holderBinding.curveType
+            messageData: try canonicalPayloadData(),
+            descriptor: holderBinding
         )
     }
 

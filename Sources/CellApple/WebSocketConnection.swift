@@ -46,6 +46,7 @@ public protocol WebSocketConnection2 {
 enum WebSocketConnectionError: Error {
     case NoTask
     case NoConnection
+    case UnsupportedMessage
 }
 
 protocol WebSocketConnectionDelegate: AnyObject {
@@ -134,7 +135,9 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
                 case .data(let data):
                     self.delegate?.onMessage(connection: self, data: data)
                 @unknown default:
-                    fatalError()
+                    self.delegate?.onError(connection: self, error: WebSocketConnectionError.UnsupportedMessage)
+                    try? self.disconnect()
+                    return
                 }
                 
                 try? self.listen()
@@ -273,7 +276,9 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
                     case .data(let data):
                         await self.delegate?.onMessage(connection: self, data: data)
                     @unknown default:
-                        fatalError()
+                        await self.delegate?.onError(connection: self, error: WebSocketConnectionError.UnsupportedMessage)
+                        try? await self.disconnect()
+                        return
                     }
                     
                     try? await self.listen()

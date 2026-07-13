@@ -28,7 +28,7 @@ public protocol Emit: AnyObject {
     func admit(context: ConnectContext) async -> ConnectState 
     func close(requester: Identity)
     func addAgreement(_ contract: Agreement, for identity: Identity) async throws -> AgreementState
-    func advertise(for requester: Identity) async -> AnyCell
+    func advertise(for requester: Identity) async throws -> AnyCell
     func state(requester: Identity) async throws -> ValueType
     var uuid: String { get }
     var agreementTemplate: Agreement { get set } // Must be protected with access control
