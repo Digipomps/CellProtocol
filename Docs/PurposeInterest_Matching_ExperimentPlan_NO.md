@@ -580,14 +580,32 @@ Foerste verktøy for dette finnes naa i `haven-commons benchmark purpose-interes
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown
 ./.build/debug/haven-commons benchmark purpose-interest --format markdown --tuning Docs/benchmarks/purpose_interest_local_tuning_example.json
 ./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --iterations 100 --format markdown
+./.build/debug/haven-commons benchmark purpose-interest --scale --profiles 20,200,2000 --iterations 10 --format markdown
 ```
 
 Runtime-sammenligningen legger til `weightedSignal`, som bruker
 `WeightedGraphRuntime` over forhaandsvektede Interest -> Purpose-kanter og
-rangerer paa edge-weight-evidens. `cosine` i denne benchmarken er fortsatt en
-sparse cosine-kontroll over deterministiske interest-id vectors, ikke en ekstern
-word-vector/embedding-baseline. Ekte ordvektor-cosine boer komme som separat
-fixture med modellnavn, dimensjon, normalisering og vektorhash.
+rangerer paa edge-weight-evidens. Scale-modusen maaler i tillegg
+`weightedSignalIndexed`, som gjenbruker en forhaandsbygd Interest -> Purpose
+adjacency-indeks for System 1-lignende matching. `cosine` i denne benchmarken er
+fortsatt en sparse cosine-kontroll over deterministiske interest-id vectors, ikke
+en ekstern word-vector/embedding-baseline. Ekte ordvektor-cosine boer komme som
+separat fixture med modellnavn, dimensjon, normalisering og vektorhash.
+
+Skaleringsmodusen `--scale` lager syntetiske, deterministiske datasett der hver
+profil har en unik anchor-interesse pluss delte/forgrenede interesser. Den bygger
+adjacency-indeksen en gang per profilsett og sammenlikner indexed signal, vanlig
+signal-runtime og sparse cosine. Dermed kan vi maale latency/RSS for
+20/200/2000+ profiler samtidig som top-1/top-3 fortsatt er en enkel
+kvalitetskontroll. Juster `--profiles`, `--branch-factor`,
+`--case-count` og `--active-interests` for tyngre stresspass.
+
+Scale-rapporten inkluderer ogsaa en `MatchStrategyPlanner`-seksjon. Den skiller
+mellom System 1-lignende prekonfigurerte ruter (`cachedWeightedSignal`,
+`sparseVectorFilter`, `layeredSignal`) og System 2-lignende rekonfigurering
+(`deepReconfiguration`). GPU markeres forelopig som egnet plassering for
+data-parallelle vektor-/embeddingsteg og store batcher, ikke som et krav om at
+dagens benchmark faktisk kjoerer paa GPU.
 
 Det finnes naa ogsaa et storre konferansedatasett i
 `PurposeInterestBenchmarkSupport`:

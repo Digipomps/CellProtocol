@@ -146,14 +146,14 @@ struct HavenCommonsCLI {
 
     private func runBenchmark(_ args: [String]) async throws {
         guard let domain = args.first else {
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--scale] [--iterations <n>] [--output <path>]")
         }
 
         switch domain {
         case "purpose-interest":
             try await runPurposeInterestBenchmark(Array(args.dropFirst()))
         default:
-            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]")
+            throw CLIError.usage("Usage: haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--scale] [--iterations <n>] [--output <path>]")
         }
     }
 
@@ -176,6 +176,22 @@ struct HavenCommonsCLI {
             report = try await PerspectiveMatchingScenarioSupport.buildConferenceSwarmReport(
                 format: format,
                 iterations: iterations
+            )
+        } else if hasFlag("--scale", in: args) {
+            let iterations = try positiveIntOption("--iterations", in: args) ?? 10
+            let profileCounts = try optionalOptionValue("--profiles", in: args)
+                .map { try positiveIntList($0, optionName: "--profiles") }
+                ?? [20, 200, 2_000]
+            let branchFactor = try positiveIntOption("--branch-factor", in: args) ?? 12
+            let caseCount = try positiveIntOption("--case-count", in: args) ?? 24
+            let activeInterestsPerCase = try positiveIntOption("--active-interests", in: args) ?? 4
+            report = try await PerspectiveMatchingScenarioSupport.buildScaleRuntimeComparisonReport(
+                format: format,
+                profileCounts: profileCounts,
+                iterations: iterations,
+                branchFactor: branchFactor,
+                caseCount: caseCount,
+                activeInterestsPerCase: activeInterestsPerCase
             )
         } else if hasFlag("--runtime-comparison", in: args) {
             let useConferenceDataset = hasFlag("--conference-dataset", in: args)
@@ -315,6 +331,32 @@ struct HavenCommonsCLI {
         return try JSONDecoder().decode(ScenarioWeightTuningConfig.self, from: data)
     }
 
+    private func positiveIntOption(_ name: String, in args: [String]) throws -> Int? {
+        guard let rawValue = try optionalOptionValue(name, in: args) else {
+            return nil
+        }
+        guard let value = Int(rawValue), value > 0 else {
+            throw CLIError.invalidArgument("\(name) \(rawValue)")
+        }
+        return value
+    }
+
+    private func positiveIntList(_ rawValue: String, optionName: String) throws -> [Int] {
+        let values = rawValue
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !values.isEmpty else {
+            throw CLIError.invalidArgument("\(optionName) \(rawValue)")
+        }
+
+        return try values.map { value in
+            guard let intValue = Int(value), intValue > 0 else {
+                throw CLIError.invalidArgument("\(optionName) \(rawValue)")
+            }
+            return intValue
+        }
+    }
+
     private func resolvedOutputURL(for outputPath: String) -> URL {
         let expandedPath = (outputPath as NSString).expandingTildeInPath
         if expandedPath.hasPrefix("/") {
@@ -334,7 +376,7 @@ struct HavenCommonsCLI {
           haven-commons resolve keypath --entity <id> --path <path> [--role <owner|member|sponsor|service|unknown>] [--consent <token1,token2>]
           haven-commons resolve term --id <term_id> --lang <locale> [--namespace <namespace>]
           haven-commons resolve guidance --namespace <namespace>
-          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--iterations <n>] [--output <path>]
+          haven-commons benchmark purpose-interest [--format <markdown|json>] [--tuning <path>] [--runtime-comparison] [--conference-dataset] [--conference-swarm] [--scale] [--iterations <n>] [--output <path>]
         """
     }
 

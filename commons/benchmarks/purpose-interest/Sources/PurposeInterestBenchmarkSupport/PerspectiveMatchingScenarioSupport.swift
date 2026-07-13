@@ -28,6 +28,7 @@ public struct PurposeScenarioProfile: Sendable {
 public enum ScenarioRankingMethod: String, Codable, CaseIterable, Sendable {
     case weightedRaw
     case weightedSignal
+    case weightedSignalIndexed
     case cosine
 }
 
@@ -330,6 +331,105 @@ public struct ScenarioRuntimeComparisonArtifact: Codable, Sendable {
         self.schemaVersion = schemaVersion
         self.notes = notes
         self.measurements = measurements
+    }
+}
+
+public struct ScenarioScaleMethodMeasurement: Codable, Sendable {
+    public var method: ScenarioRankingMethod
+    public var profileCount: Int
+    public var interestCount: Int
+    public var caseCount: Int
+    public var branchFactor: Int
+    public var activeInterestsPerCase: Int
+    public var iterations: Int
+    public var rankingCount: Int
+    public var totalElapsedNanoseconds: UInt64
+    public var averageNanosecondsPerCase: Double
+    public var top1Correct: Int
+    public var top3Correct: Int
+    public var meanReciprocalRank: Double
+    public var rssBeforeBytes: UInt64?
+    public var rssAfterBytes: UInt64?
+    public var rssDeltaBytes: Int64?
+
+    public init(
+        method: ScenarioRankingMethod,
+        profileCount: Int,
+        interestCount: Int,
+        caseCount: Int,
+        branchFactor: Int,
+        activeInterestsPerCase: Int,
+        iterations: Int,
+        rankingCount: Int,
+        totalElapsedNanoseconds: UInt64,
+        averageNanosecondsPerCase: Double,
+        top1Correct: Int,
+        top3Correct: Int,
+        meanReciprocalRank: Double,
+        rssBeforeBytes: UInt64?,
+        rssAfterBytes: UInt64?,
+        rssDeltaBytes: Int64?
+    ) {
+        self.method = method
+        self.profileCount = profileCount
+        self.interestCount = interestCount
+        self.caseCount = caseCount
+        self.branchFactor = branchFactor
+        self.activeInterestsPerCase = activeInterestsPerCase
+        self.iterations = iterations
+        self.rankingCount = rankingCount
+        self.totalElapsedNanoseconds = totalElapsedNanoseconds
+        self.averageNanosecondsPerCase = averageNanosecondsPerCase
+        self.top1Correct = top1Correct
+        self.top3Correct = top3Correct
+        self.meanReciprocalRank = meanReciprocalRank
+        self.rssBeforeBytes = rssBeforeBytes
+        self.rssAfterBytes = rssAfterBytes
+        self.rssDeltaBytes = rssDeltaBytes
+    }
+}
+
+public struct ScenarioScaleStrategyRecommendation: Codable, Sendable {
+    public var profileCount: Int
+    public var interestCount: Int
+    public var caseCount: Int
+    public var activeInterestsPerCase: Int
+    public var cpuPlan: MatchStrategyPlan
+    public var gpuAvailablePlan: MatchStrategyPlan
+
+    public init(
+        profileCount: Int,
+        interestCount: Int,
+        caseCount: Int,
+        activeInterestsPerCase: Int,
+        cpuPlan: MatchStrategyPlan,
+        gpuAvailablePlan: MatchStrategyPlan
+    ) {
+        self.profileCount = profileCount
+        self.interestCount = interestCount
+        self.caseCount = caseCount
+        self.activeInterestsPerCase = activeInterestsPerCase
+        self.cpuPlan = cpuPlan
+        self.gpuAvailablePlan = gpuAvailablePlan
+    }
+}
+
+public struct ScenarioScaleComparisonArtifact: Codable, Sendable {
+    public var schemaVersion: String
+    public var notes: [String]
+    public var measurements: [ScenarioScaleMethodMeasurement]
+    public var strategyRecommendations: [ScenarioScaleStrategyRecommendation]
+
+    public init(
+        schemaVersion: String,
+        notes: [String],
+        measurements: [ScenarioScaleMethodMeasurement],
+        strategyRecommendations: [ScenarioScaleStrategyRecommendation] = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.notes = notes
+        self.measurements = measurements
+        self.strategyRecommendations = strategyRecommendations
     }
 }
 
@@ -1172,6 +1272,20 @@ public enum PerspectiveMatchingScenarioSupport {
         method: ScenarioRankingMethod,
         profiles: [PurposeScenarioProfile]
     ) async -> [ScenarioRankedPurpose] {
+        await rankedPurposes(
+            interests: interests,
+            method: method,
+            profiles: profiles,
+            adjacencyIndex: nil
+        )
+    }
+
+    private static func rankedPurposes(
+        interests: [String],
+        method: ScenarioRankingMethod,
+        profiles: [PurposeScenarioProfile],
+        adjacencyIndex: PurposeInterestAdjacencyIndex?
+    ) async -> [ScenarioRankedPurpose] {
         switch method {
         case .weightedRaw:
             let scores = await weightedScores(interests: interests, profiles: profiles)
@@ -1189,6 +1303,12 @@ public enum PerspectiveMatchingScenarioSupport {
             return await weightedSignalRankings(
                 interests: interests,
                 profiles: profiles
+            )
+        case .weightedSignalIndexed:
+            let index = adjacencyIndex ?? purposeInterestAdjacencyIndex(profiles: profiles)
+            return indexedWeightedSignalRankings(
+                interests: interests,
+                index: index
             )
         case .cosine:
             return cosineRankings(
@@ -1575,6 +1695,148 @@ public enum PerspectiveMatchingScenarioSupport {
         return try renderRuntimeComparisonReport(artifact, format: format)
     }
 
+    public static func buildScaleRuntimeComparisonArtifact(
+        profileCounts: [Int] = [20, 200, 2_000],
+        iterations: Int = 10,
+        branchFactor: Int = 12,
+        caseCount: Int = 24,
+        activeInterestsPerCase: Int = 4,
+        methods: [ScenarioRankingMethod] = [.weightedSignalIndexed, .weightedSignal, .cosine]
+    ) async -> ScenarioScaleComparisonArtifact {
+        let sanitizedProfileCounts = Array(Set(profileCounts.map { max(1, $0) })).sorted()
+        let sanitizedIterations = max(1, iterations)
+        let sanitizedBranchFactor = max(1, branchFactor)
+        let sanitizedCaseCount = max(1, caseCount)
+        let sanitizedActiveInterestsPerCase = max(1, activeInterestsPerCase)
+        var measurements = [ScenarioScaleMethodMeasurement]()
+        var strategyRecommendations = [ScenarioScaleStrategyRecommendation]()
+        let planner = MatchStrategyPlanner()
+
+        for profileCount in sanitizedProfileCounts {
+            let profiles = syntheticScaleProfiles(
+                profileCount: profileCount,
+                branchFactor: sanitizedBranchFactor
+            )
+            let adjacencyIndex = purposeInterestAdjacencyIndex(profiles: profiles)
+            let cases = syntheticScaleCases(
+                profiles: profiles,
+                requestedCaseCount: sanitizedCaseCount,
+                activeInterestsPerCase: sanitizedActiveInterestsPerCase
+            )
+            let interestCount = Set(profiles.flatMap { $0.interestWeights.keys }).count
+            let cpuTask = scaleTaskProfile(
+                profileCount: profileCount,
+                activeInterestsPerCase: sanitizedActiveInterestsPerCase,
+                caseCount: cases.count,
+                gpuAvailable: false
+            )
+            let gpuTask = scaleTaskProfile(
+                profileCount: profileCount,
+                activeInterestsPerCase: sanitizedActiveInterestsPerCase,
+                caseCount: cases.count,
+                gpuAvailable: true
+            )
+            strategyRecommendations.append(
+                ScenarioScaleStrategyRecommendation(
+                    profileCount: profileCount,
+                    interestCount: interestCount,
+                    caseCount: cases.count,
+                    activeInterestsPerCase: sanitizedActiveInterestsPerCase,
+                    cpuPlan: planner.plan(for: cpuTask),
+                    gpuAvailablePlan: planner.plan(for: gpuTask)
+                )
+            )
+
+            for method in methods {
+                let quality = await evaluateScaleCases(
+                    cases: cases,
+                    profiles: profiles,
+                    method: method,
+                    adjacencyIndex: adjacencyIndex
+                )
+
+                for benchmarkCase in cases {
+                    _ = await rankedPurposes(
+                        interests: benchmarkCase.interests,
+                        method: method,
+                        profiles: profiles,
+                        adjacencyIndex: adjacencyIndex
+                    )
+                }
+
+                let rssBefore = currentResidentMemoryBytes()
+                let started = DispatchTime.now().uptimeNanoseconds
+                var rankingCount = 0
+
+                for _ in 0..<sanitizedIterations {
+                    for benchmarkCase in cases {
+                        let rankings = await rankedPurposes(
+                            interests: benchmarkCase.interests,
+                            method: method,
+                            profiles: profiles,
+                            adjacencyIndex: adjacencyIndex
+                        )
+                        rankingCount += rankings.count
+                    }
+                }
+
+                let elapsed = DispatchTime.now().uptimeNanoseconds - started
+                let rssAfter = currentResidentMemoryBytes()
+                let operations = max(1, sanitizedIterations * cases.count)
+                measurements.append(
+                    ScenarioScaleMethodMeasurement(
+                        method: method,
+                        profileCount: profileCount,
+                        interestCount: interestCount,
+                        caseCount: cases.count,
+                        branchFactor: sanitizedBranchFactor,
+                        activeInterestsPerCase: sanitizedActiveInterestsPerCase,
+                        iterations: sanitizedIterations,
+                        rankingCount: rankingCount,
+                        totalElapsedNanoseconds: elapsed,
+                        averageNanosecondsPerCase: Double(elapsed) / Double(operations),
+                        top1Correct: quality.top1Correct,
+                        top3Correct: quality.top3Correct,
+                        meanReciprocalRank: stableNumber(quality.meanReciprocalRank),
+                        rssBeforeBytes: rssBefore,
+                        rssAfterBytes: rssAfter,
+                        rssDeltaBytes: rssDeltaBytes(before: rssBefore, after: rssAfter)
+                    )
+                )
+            }
+        }
+
+        return ScenarioScaleComparisonArtifact(
+            schemaVersion: "1.1",
+            notes: [
+                "Synthetic scale dataset uses deterministic Purpose/Interest profiles with one unique anchor interest per profile plus shared and branch interests.",
+                "`weightedSignalIndexed` reuses a precomputed Interest -> Purpose adjacency index; `weightedSignal` rebuilds active graph edges and traverses them through `WeightedGraphRuntime`; `cosine` is still sparse cosine over interest-id vectors, not external word vectors.",
+                "RSS is resident set size sampled before and after each warmed method loop, not peak allocation.",
+                "Strategy planner recommendations model both CPU-only and GPU-available placement with precomputed adjacency available for the scale fixture."
+            ],
+            measurements: measurements,
+            strategyRecommendations: strategyRecommendations
+        )
+    }
+
+    public static func buildScaleRuntimeComparisonReport(
+        format: ScenarioBenchmarkReportFormat,
+        profileCounts: [Int] = [20, 200, 2_000],
+        iterations: Int = 10,
+        branchFactor: Int = 12,
+        caseCount: Int = 24,
+        activeInterestsPerCase: Int = 4
+    ) async throws -> String {
+        let artifact = await buildScaleRuntimeComparisonArtifact(
+            profileCounts: profileCounts,
+            iterations: iterations,
+            branchFactor: branchFactor,
+            caseCount: caseCount,
+            activeInterestsPerCase: activeInterestsPerCase
+        )
+        return try renderScaleRuntimeComparisonReport(artifact, format: format)
+    }
+
     public static func resolveConferenceLayeredScenario(
         _ scenario: ConferenceLayeredScenario
     ) async throws -> ConferenceLayeredScenarioResult {
@@ -1739,6 +2001,18 @@ public enum PerspectiveMatchingScenarioSupport {
         }
     }
 
+    public static func renderScaleRuntimeComparisonReport(
+        _ artifact: ScenarioScaleComparisonArtifact,
+        format: ScenarioBenchmarkReportFormat
+    ) throws -> String {
+        switch format {
+        case .json:
+            return try encodeJSON(artifact)
+        case .markdown:
+            return markdownScaleRuntimeComparisonReport(artifact)
+        }
+    }
+
     public static func encodeJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1856,6 +2130,58 @@ public enum PerspectiveMatchingScenarioSupport {
             lines.append(
                 "- `\(measurement.method.rawValue)`: avg `\(average)`/case, total `\(total)`, rankings `\(measurement.rankingCount)`, RSS delta `\(rssDelta)`, RSS after `\(rssAfter)`"
             )
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func markdownScaleRuntimeComparisonReport(_ artifact: ScenarioScaleComparisonArtifact) -> String {
+        var lines = [String]()
+        lines.append("# Purpose/Interest Scale Runtime Comparison")
+        lines.append("")
+        lines.append("- Schema version: `\(artifact.schemaVersion)`")
+        let profileCounts = Set(artifact.measurements.map(\.profileCount)).sorted()
+        if !profileCounts.isEmpty {
+            lines.append("- Profile counts: `\(profileCounts.map(String.init).joined(separator: "`, `"))`")
+        }
+        if let first = artifact.measurements.first {
+            lines.append("- Cases per profile size: `\(first.caseCount)`")
+            lines.append("- Iterations per method: `\(first.iterations)`")
+            lines.append("- Branch factor: `\(first.branchFactor)`")
+            lines.append("- Active interests per case: `\(first.activeInterestsPerCase)`")
+        }
+        lines.append("")
+        lines.append("## Notes")
+        for note in artifact.notes {
+            lines.append("- \(note)")
+        }
+        lines.append("")
+        lines.append("## Measurements")
+        lines.append("| Profiles | Method | Interests | Top-1 | Top-3 | MRR | Avg/case | Total | Rankings | RSS delta | RSS after |")
+        lines.append("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for measurement in artifact.measurements {
+            let average = formattedNanoseconds(measurement.averageNanosecondsPerCase)
+            let total = formattedNanoseconds(Double(measurement.totalElapsedNanoseconds))
+            let rssDelta = formattedSignedBytes(measurement.rssDeltaBytes)
+            let rssAfter = formattedBytes(measurement.rssAfterBytes)
+            lines.append(
+                "| `\(measurement.profileCount)` | `\(measurement.method.rawValue)` | `\(measurement.interestCount)` | `\(measurement.top1Correct)/\(measurement.caseCount)` | `\(measurement.top3Correct)/\(measurement.caseCount)` | `\(formatted(measurement.meanReciprocalRank))` | `\(average)` | `\(total)` | `\(measurement.rankingCount)` | `\(rssDelta)` | `\(rssAfter)` |"
+            )
+        }
+        if !artifact.strategyRecommendations.isEmpty {
+            lines.append("")
+            lines.append("## Strategy Planner")
+            lines.append("| Profiles | CPU primary | CPU mode | GPU-available primary | GPU placement | Escalate on |")
+            lines.append("| ---: | --- | --- | --- | --- | --- |")
+            for recommendation in artifact.strategyRecommendations {
+                let cpuPrimary = recommendation.cpuPlan.primary
+                let gpuPrimary = recommendation.gpuAvailablePlan.primary
+                let triggers = recommendation.cpuPlan.escalationTriggers
+                    .map(\.rawValue)
+                    .joined(separator: ", ")
+                lines.append(
+                    "| `\(recommendation.profileCount)` | `\(cpuPrimary.kind.rawValue)` | `\(cpuPrimary.cognitiveMode.rawValue)` | `\(gpuPrimary.kind.rawValue)` | `\(gpuPrimary.computePlacement.rawValue)` | \(triggers) |"
+                )
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -2038,6 +2364,12 @@ public enum PerspectiveMatchingScenarioSupport {
         var includeChallengeDecoys: Bool
     }
 
+    private struct ScenarioScaleCase {
+        var caseID: String
+        var expectedPurposeID: String
+        var interests: [String]
+    }
+
     private static func runtimeComparisonCases(
         repositoryRoot: URL,
         includeChallengeCases: Bool
@@ -2068,6 +2400,138 @@ public enum PerspectiveMatchingScenarioSupport {
         }
 
         return cases
+    }
+
+    private static func syntheticScaleProfiles(
+        profileCount: Int,
+        branchFactor: Int
+    ) -> [PurposeScenarioProfile] {
+        let sanitizedProfileCount = max(1, profileCount)
+        let sanitizedBranchFactor = max(1, branchFactor)
+        let sharedBucketCount = max(4, min(64, sanitizedProfileCount / 4))
+        let topicBucketCount = max(4, min(128, sanitizedProfileCount / 3))
+        let branchPoolCount = max(sanitizedProfileCount, sanitizedBranchFactor * 32)
+
+        return (0..<sanitizedProfileCount).map { index in
+            var weights = [String: Double]()
+            weights["interest.scale.anchor.\(index)"] = 1.0
+
+            if sanitizedBranchFactor > 1 {
+                weights["interest.scale.topic.\(index % topicBucketCount)"] = 0.86
+            }
+            if sanitizedBranchFactor > 2 {
+                weights["interest.scale.shared.\(index % sharedBucketCount)"] = 0.72
+            }
+
+            var offset = 0
+            while weights.count < sanitizedBranchFactor {
+                let branchIndex = (index * 31 + offset * 17) % branchPoolCount
+                let interestID = "interest.scale.branch.\(branchIndex)"
+                if weights[interestID] == nil {
+                    weights[interestID] = max(0.05, 0.64 - (Double(offset) * 0.025))
+                }
+                offset += 1
+            }
+
+            return PurposeScenarioProfile(
+                purposeId: "purpose.scale.\(sanitizedProfileCount).\(index)",
+                interestWeights: weights
+            )
+        }
+    }
+
+    private static func syntheticScaleCases(
+        profiles: [PurposeScenarioProfile],
+        requestedCaseCount: Int,
+        activeInterestsPerCase: Int
+    ) -> [ScenarioScaleCase] {
+        guard !profiles.isEmpty else {
+            return []
+        }
+
+        let sanitizedCaseCount = max(1, min(requestedCaseCount, profiles.count))
+        let sanitizedActiveInterestsPerCase = max(1, activeInterestsPerCase)
+        return (0..<sanitizedCaseCount).map { caseIndex in
+            let profileIndex = (caseIndex * profiles.count) / sanitizedCaseCount
+            let profile = profiles[profileIndex]
+            let interests = profile.interestWeights
+                .sorted {
+                    if $0.value == $1.value {
+                        return $0.key < $1.key
+                    }
+                    return $0.value > $1.value
+                }
+                .prefix(sanitizedActiveInterestsPerCase)
+                .map(\.key)
+
+            return ScenarioScaleCase(
+                caseID: "scale.\(profiles.count).\(caseIndex)",
+                expectedPurposeID: profile.purposeId,
+                interests: Array(interests)
+            )
+        }
+    }
+
+    private static func scaleTaskProfile(
+        profileCount: Int,
+        activeInterestsPerCase: Int,
+        caseCount: Int,
+        gpuAvailable: Bool
+    ) -> MatchTaskProfile {
+        MatchTaskProfile(
+            candidateCount: profileCount,
+            activeInterestCount: activeInterestsPerCase,
+            preconfiguredGraphAvailable: true,
+            precomputedAdjacencyAvailable: true,
+            localVariableLayerCount: 1,
+            requiresNewKnowledgeExtraction: false,
+            requiresExplanation: false,
+            privacySensitivity: 0.20,
+            ambiguity: 0.10,
+            latencyBudgetMilliseconds: nil,
+            batchSize: caseCount,
+            gpuAvailable: gpuAvailable
+        )
+    }
+
+    private static func evaluateScaleCases(
+        cases: [ScenarioScaleCase],
+        profiles: [PurposeScenarioProfile],
+        method: ScenarioRankingMethod,
+        adjacencyIndex: PurposeInterestAdjacencyIndex? = nil
+    ) async -> (top1Correct: Int, top3Correct: Int, meanReciprocalRank: Double) {
+        guard !cases.isEmpty else {
+            return (0, 0, 0.0)
+        }
+
+        var top1Correct = 0
+        var top3Correct = 0
+        var reciprocalRankSum = 0.0
+
+        for benchmarkCase in cases {
+            let rankings = await rankedPurposes(
+                interests: benchmarkCase.interests,
+                method: method,
+                profiles: profiles,
+                adjacencyIndex: adjacencyIndex
+            )
+            if rankings.first?.purposeId == benchmarkCase.expectedPurposeID {
+                top1Correct += 1
+            }
+            if rankings.prefix(3).contains(where: { $0.purposeId == benchmarkCase.expectedPurposeID }) {
+                top3Correct += 1
+            }
+            reciprocalRankSum += reciprocalRank(
+                expectedPurposeID: benchmarkCase.expectedPurposeID,
+                in: rankings
+            )
+        }
+
+        return (
+            top1Correct,
+            top3Correct,
+            reciprocalRankSum / Double(cases.count)
+        )
     }
 
     private static func apply(
@@ -2125,6 +2589,35 @@ public enum PerspectiveMatchingScenarioSupport {
                 return $0.purposeId < $1.purposeId
             }
             return $0.explain.rawScore > $1.explain.rawScore
+        }
+    }
+
+    public static func purposeInterestAdjacencyIndex(
+        profiles: [PurposeScenarioProfile]
+    ) -> PurposeInterestAdjacencyIndex {
+        let purposeRefs = profiles.map(\.purposeId)
+        let edges = profiles.flatMap { profile in
+            profile.interestWeights.map { interestID, weight in
+                PurposeInterestAdjacencyIndex.Edge(
+                    interestRef: interestID,
+                    purposeRef: profile.purposeId,
+                    weight: weight
+                )
+            }
+        }
+        return PurposeInterestAdjacencyIndex(purposeRefs: purposeRefs, edges: edges)
+    }
+
+    private static func indexedWeightedSignalRankings(
+        interests: [String],
+        index: PurposeInterestAdjacencyIndex
+    ) -> [ScenarioRankedPurpose] {
+        index.rankedPurposes(for: interests).map { ranking in
+            ScenarioRankedPurpose(
+                purposeId: ranking.purposeRef,
+                score: ranking.score,
+                matchedInterestRefs: ranking.matchedInterestRefs
+            )
         }
     }
 

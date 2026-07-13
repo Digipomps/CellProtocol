@@ -27,6 +27,7 @@ I dette miljøet er kjøring via bygget binær mest robust:
 ./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --iterations 100 --format markdown
 ./.build/debug/haven-commons benchmark purpose-interest --runtime-comparison --conference-dataset --iterations 100 --format markdown
 ./.build/debug/haven-commons benchmark purpose-interest --conference-swarm --iterations 100 --format markdown
+./.build/debug/haven-commons benchmark purpose-interest --scale --profiles 20,200,2000 --iterations 10 --format markdown
 ```
 
 Alternativt:
@@ -55,5 +56,9 @@ swift run haven-commons lint keypaths
   - `--runtime-comparison` sammenlikner `weightedSignal`, sparse `cosine` og `weightedRaw` med latency/RSS-sampling
   - `--conference-dataset` kjører runtime-sammenligningen mot et større deterministisk konferansedatasett
   - `--conference-swarm` kjører den deterministiske konferanse-swarm-fixturen med privacy- og capability-kontrakt
+  - `--scale` lager syntetiske deterministiske datasett med flere profilstørrelser, unike anchor-interesser, latency/RSS og top-1/top-3-kvalitet
+  - scale-modus sammenlikner `weightedSignalIndexed`, `weightedSignal` og `cosine`; den indekserte varianten bygger Interest -> Purpose adjacency en gang per profilsett
+  - `--profiles 20,200,2000`, `--branch-factor <n>`, `--case-count <n>` og `--active-interests <n>` styrer skaleringsdatasettet
+  - scale-rapporten viser også en Strategy Planner-tabell for CPU-only og GPU-available plassering; GPU her betyr foreløpig egnethet/anbefalt plassering, ikke at benchmarken krever faktisk GPU
   - `--iterations <n>` styrer antall gjennomløp for runtime-sammenligningen
   - rapporten viser felles guardrails (`purpose.human-equal-worth`, `purpose.net-positive-contribution`) og eventuelle top-resultatendringer
