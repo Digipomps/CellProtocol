@@ -340,6 +340,46 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(mappings[owner.uuid]?[name], replacement.uuid)
     }
 
+    func testScaffoldMappingSurvivesUnavailableEncryptedPersistenceWithoutReplacement() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = resolver
+        let resolvedOwner = await vault.identity(
+            for: "shared-storage-failure-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let name = "SharedStorageFailure-\(UUID().uuidString)"
+        let mappedUUID = UUID().uuidString
+        let registrationUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        resolver.tcUtility = registrationUtility
+
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "shared-storage-failure-owner",
+            type: GeneralCell.self
+        )
+        await resolver.setNamedCells([name: mappedUUID], requester: owner)
+        CellBase.typedCellUtility = StatusDecodedCellUtility(result: .unavailable)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)",
+                requester: owner
+            )
+        }
+        let mappings = await resolver.namedCells(requester: owner)
+        XCTAssertEqual(
+            mappings[name],
+            mappedUUID,
+            "Unreadable encrypted persistence must not be replaced with a fresh shared Cell."
+        )
+    }
+
     func testConcurrentOwnerScopedMappingReplacementPreservesEveryOwner() async throws {
         let resolver = CellResolver.sharedInstance
         await resolver.resetRuntimeStateForTesting()
@@ -559,6 +599,65 @@ final class ResolverTests: XCTestCase {
         throw XCTSkip("CellVapor-backed file storage is unavailable in this test environment")
 #endif
     }
+
+    func testEncryptedPersistedLoadRestoresScopedMasterKeyAfterProcessReset() async throws {
+#if canImport(CellVapor)
+        let resolver = CellResolver.sharedInstance
+        let secretSeed = Data(repeating: 0x63, count: 48)
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resolver-cold-restore-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultScopedSecretProvider = FixedScopedSecretProvider(secretData: secretSeed)
+        CellBase.documentRootPath = tempRoot.appendingPathComponent("CellsContainer").path
+        let utility = TypedCellUtility(storage: FileSystemCellStorage())
+        try utility.register(name: "GeneralCell", type: GeneralCell.self)
+        resolver.tcUtility = utility
+        CellBase.typedCellUtility = utility
+
+        let resolvedOwner = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(resolvedOwner)
+        let source = await GeneralCell(owner: owner)
+        source.cellScope = .scaffoldUnique
+        source.persistancy = .persistant
+        CellBase.configurePersistedCellMasterKey(seedData: secretSeed)
+        utility.storeAsTypedCell(
+            cellName: "GeneralCell",
+            cell: source,
+            uuid: source.uuid,
+            options: CellStorageWriteOptions(
+                ownerIdentityUUID: owner.uuid,
+                encryptedAtRestRequired: true
+            )
+        )
+
+        let persistedURL = tempRoot
+            .appendingPathComponent("CellsContainer")
+            .appendingPathComponent(source.uuid)
+            .appendingPathComponent("typedCell.json")
+        XCTAssertTrue(
+            CellPersistenceCrypto.isEncryptedEnvelope(try Data(contentsOf: persistedURL))
+        )
+
+        // Simulate a new process: the in-memory key is gone, while the scoped
+        // provider and encrypted container remain.
+        CellBase.persistedCellMasterKey = nil
+        let restored = try await resolver.loadTypedEmitCell(with: source.uuid)
+        let loaded = try XCTUnwrap(restored as? GeneralCell)
+        XCTAssertEqual(
+            CellBase.persistedCellMasterKey,
+            Data(SHA256.hash(data: secretSeed))
+        )
+        let loadedOwner = try await loaded.getOwner(requester: owner)
+        XCTAssertEqual(loadedOwner.uuid, owner.uuid)
+        _ = try await loaded.keys(requester: owner)
+#else
+        throw XCTSkip("CellVapor-backed file storage is unavailable in this test environment")
+#endif
+    }
 }
 
 private actor FixedScopedSecretProvider: ScopedSecretProviderProtocol {
@@ -706,6 +805,22 @@ private final class StatusDecodedCellUtility: TypedCellProtocol {
         uuid: String,
         options: CellStorageWriteOptions
     ) {}
+}
+
+private struct ResolverTestCellStorage: CellStorage {
+    enum StorageError: Error {
+        case unavailable
+    }
+
+    func loadEmitCell(with uuid: String, decoder: CellJSONCoder) throws -> Emit {
+        throw StorageError.unavailable
+    }
+
+    func loadEmitCell(at path: String, decoder: CellJSONCoder) throws -> Emit {
+        throw StorageError.unavailable
+    }
+
+    func storeCell(cellName: String, cell: Codable, uuid: String) throws {}
 }
 
 private actor CountingLegacyKeyVault: IdentityVaultProtocol {

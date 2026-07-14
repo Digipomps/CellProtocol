@@ -1325,7 +1325,7 @@ public class CellResolver: CellResolverProtocol {
                 }
                 return cell
             }
-            if let cell = await loadCellFromPersistance(uuid: reference, requester: identity) {
+            if let cell = try await loadCellFromPersistance(uuid: reference, requester: identity) {
                 if let endpoint = await auditor.cellname(for: cell.uuid),
                    let resolve = await auditor.loadNamedResolve(endpoint) {
                     await applyLifecycleTrackingIfNeeded(
@@ -1368,7 +1368,7 @@ public class CellResolver: CellResolverProtocol {
             }
             
             if resolve?.cellPersistancy == .persistant,
-               let cell = await loadCellFromPersistance(uuid: reference) {
+               let cell = try await loadCellFromPersistance(uuid: reference) {
                 if await shouldRefreshSharedCell(cell, for: resolve) {
                     _ = deletePersistedCellData(uuid: cell.uuid)
                     await auditor.unregisterSharedReference(endpoint: reference)
@@ -1384,11 +1384,22 @@ public class CellResolver: CellResolverProtocol {
                 }
             }
 
-            let emitter = try await cellLoadingSequence(key: reference, loaders: [
-                loadCellFromMemory(name:),
-                loadCellFromPersistance(uuid:),
-                createAndRegisterCell(reference:)
-            ])
+            let emitter: Emit
+            if resolve?.cellPersistancy == .persistant {
+                emitter = try await cellLoadingSequence(key: reference, loaders: [
+                    loadCellFromMemory(name:),
+                    loadCellFromPersistance(uuid:),
+                    createAndRegisterCell(reference:)
+                ])
+            } else {
+                // A transient shared Cell has no persistence contract. An
+                // unrelated unavailable storage backend must therefore not
+                // prevent recreation after lifecycle eviction.
+                emitter = try await cellLoadingSequence(key: reference, loaders: [
+                    loadCellFromMemory(name:),
+                    createAndRegisterCell(reference:)
+                ])
+            }
             await applyLifecycleTrackingIfNeeded(
                 cell: emitter,
                 resolve: resolve,
@@ -1503,30 +1514,20 @@ public class CellResolver: CellResolverProtocol {
     private func loadCellFromMemory(uuid: String) async -> Emit? {
         await auditor.loadCellInstance(forUUID: uuid)
     }
-    private func loadCellFromPersistance(uuid: String) async -> Emit? {
-        do {
-            return try await loadTypedEmitCell(with: uuid)
-        } catch {
-            print("loadTypedEmitCell with uuid: \(uuid) failed with error: \(error)")
-        }
-        return nil
+    private func loadCellFromPersistance(uuid: String) async throws -> Emit? {
+        try await loadTypedEmitCell(with: uuid)
     }
 
-    private func loadCellFromPersistance(uuid: String, requester: Identity) async -> Emit? {
-        do {
-            return try await loadTypedEmitCell(with: uuid, requester: requester)
-        } catch {
-            print("loadTypedEmitCell with uuid: \(uuid) failed with error: \(error)")
-        }
-        return nil
+    private func loadCellFromPersistance(uuid: String, requester: Identity) async throws -> Emit? {
+        try await loadTypedEmitCell(with: uuid, requester: requester)
     }
     private func loadPersonalCellFromPersistance(name: String, identity: Identity) async throws -> Emit {
         guard let uuid = await auditor.loadIdentityCellUuid(name: name, identity: identity),
-              let typedCellUtility = CellBase.typedCellUtility else {
+              tcUtility != nil || CellBase.typedCellUtility != nil else {
             throw PersonalCellPersistenceLoadError.unavailable
         }
         let emitCell: Emit
-        switch typedCellUtility.loadTypedEmitCellResult(with: uuid) {
+        switch await loadTypedEmitCellResult(with: uuid) {
         case .loaded(let loaded):
             emitCell = loaded
         case .missing:
@@ -1557,14 +1558,8 @@ public class CellResolver: CellResolverProtocol {
         await lifecycleTracker.touchPersistedCell(uuid: uuid)
         return emitCell
     }
-    private func loadCellFromPersistance(name: String) async -> Emit? {
-        
-        do {
-            return try await loadTypedEmitCell(with: name)
-        } catch {
-            print("loadTypedEmitCell with name: \(name) failed with error: \(error)")
-        }
-        return nil
+    private func loadCellFromPersistance(name: String) async throws -> Emit? {
+        try await loadTypedEmitCell(with: name)
     }
     
 
@@ -1952,13 +1947,30 @@ public class CellResolver: CellResolverProtocol {
         try await loadTypedEmitCell(with: reference, requester: Optional(requester))
     }
 
+    /// Loads persisted bytes only after restoring the process-local encryption
+    /// key from the configured scoped secret provider. The tri-state result is
+    /// retained so callers never replace an unreadable encrypted Cell as if it
+    /// were missing.
+    public func loadTypedEmitCellResult(with uuid: String) async -> TypedCellLoadResult {
+        await ensurePersistedCellMasterKeyLoaded()
+        guard let typedCellUtility = CellBase.typedCellUtility ?? tcUtility else {
+            return .unavailable
+        }
+        return typedCellUtility.loadTypedEmitCellResult(with: uuid)
+    }
+
     private func loadTypedEmitCell(with reference: String, requester: Identity?) async throws -> Emit? {
-        guard
-            let typedCellUtility = CellBase.typedCellUtility,
-            let uuid = isUUID(reference) ? reference : await auditor.celluuid(for: reference), // should it throw so we can catch an error? A personal unique cell will always come as UUID
-            let emitCell = typedCellUtility.loadTypedEmitCell(with: uuid)
-        else {
+        guard let uuid = isUUID(reference) ? reference : await auditor.celluuid(for: reference) else {
             return nil
+        }
+        let emitCell: Emit
+        switch await loadTypedEmitCellResult(with: uuid) {
+        case .loaded(let loaded):
+            emitCell = loaded
+        case .missing:
+            return nil
+        case .unavailable:
+            throw CellSetupError.persistedCellUnavailable
         }
         if emitCell.cellScope == .identityUnique {
             guard let requester,
@@ -2032,12 +2044,17 @@ public class CellResolver: CellResolverProtocol {
     public func loadTypedEmitCell(by name: String) async throws -> Emit? {
         
         
-        guard
-            let uuid = await auditor.celluuid(for: name),
-            let typedCellUtility = CellBase.typedCellUtility,
-            let emitCell = typedCellUtility.loadTypedEmitCell(with: uuid)
-        else {
+        guard let uuid = await auditor.celluuid(for: name) else {
             return nil
+        }
+        let emitCell: Emit
+        switch await loadTypedEmitCellResult(with: uuid) {
+        case .loaded(let loaded):
+            emitCell = loaded
+        case .missing:
+            return nil
+        case .unavailable:
+            throw CellSetupError.persistedCellUnavailable
         }
         if emitCell.cellScope == .identityUnique {
             throw CellSetupError.ownerAuthorityUnavailable
