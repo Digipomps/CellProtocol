@@ -3,6 +3,8 @@
 Date: 2026-02-16
 Scope: API and scoring model for scaffold-local trusted issuers.
 
+Implementation status (2026-07-14): this is a target proposal with a partially implemented VC evaluator. The current runtime accepts `candidateVc`, uses server time, verifies the supported direct VC path, applies active context/kind/DID policy, and keeps bounded local evaluation caches. VP/holder challenge and domain verification, caller-supplied evaluation options, attestation-proof verification, fixed-time deterministic replay, signed append-only audit, and a separately persisted audit reference are not implemented or not proven.
+
 ## Goal
 
 Add a dedicated cell that evaluates issuer trust per context, while keeping Verifiable Credentials aligned with W3C VC Data Model.
@@ -12,15 +14,15 @@ This proposal covers:
 1. Concrete `TrustedIssuerCell` keypath API and payload contracts.
 2. Deterministic credibility scoring algorithm and test matrix.
 
-## Design Principles
+## Proposed Design Principles
 
 - Context-local trust only. No global reputation score.
-- Deterministic and replayable evaluation.
+- Deterministic and replayable evaluation is a target; current wall-clock evaluation and cache history do not prove replay determinism.
 - Explicit grants/capabilities for all reads/writes.
 - W3C VC-compliant evidence handling: we verify VC/VP; we do not invent custom VC fields.
 - Trust policy is external to VC (stored in `TrustedIssuerCell`), so VC format remains standard.
 
-## W3C VC Interop Profile (Required)
+## Target W3C VC Interop Profile
 
 The cell should accept and verify credentials/presentations that follow W3C VC Data Model fields.
 
@@ -59,7 +61,7 @@ Suggested capabilities:
 - `trustedIssuers.evaluate`
 - `trustedIssuers.audit.read`
 
-Owner has explicit bypass, consistent with existing agreement-template behavior.
+Owner access still requires verified control of the owner identity; renderer, transport, and cookie state do not confer authority.
 
 ## Keypath API Contract
 
@@ -78,7 +80,7 @@ All command-style operations use `SET <keypath>` with payload object, same style
 - `GET trustedIssuers.evaluations.current`
   - Returns latest evaluation results per `(issuer, context)`.
 - `GET trustedIssuers.evaluations.history`
-  - Returns immutable decision snapshots for audit/replay.
+  - The current implementation returns a bounded 512-record local decision cache. It is not an immutable or durable audit/replay log; signed append-only audit evidence remains separate and not proven.
 
 ### Write endpoints
 
@@ -112,17 +114,20 @@ The payloads below are written as JSON-like objects and map directly to `ValueTy
   "requireIndependentSources": 2,
   "maxGraphDepth": 2,
   "acceptedIssuerKinds": ["institution", "company", "person", "community"],
-  "acceptedDidMethods": ["did:key", "did:web"],
+  "acceptedDidMethods": ["did:key"],
   "timeDecayHalfLifeDays": 180,
   "status": "active"
 }
 ```
 
+Active issuer profiles must declare at least one `contexts` entry. Context, issuer, attestation, and evaluation identifiers are limited to 512 UTF-8 bytes; empty contexts are deny-all rather than global trust.
+The current evaluator implements `did:key`; `did:web` remains a future interoperability target.
+
 ### `SET trustedIssuers.issuer.upsert`
 
 ```json
 {
-  "issuerId": "did:web:nav.no",
+  "issuerId": "did:key:z6MkExampleIssuer",
   "displayName": "NAV",
   "issuerKind": "institution",
   "baseWeight": 0.85,
@@ -164,6 +169,8 @@ Attestation is not a replacement for VC. It is trust evidence about issuer credi
 
 ### `SET trustedIssuers.evaluate`
 
+`candidateVc` is limited to 1,048,576 bytes of encoded JSON before cryptographic verification.
+
 ```json
 {
   "evaluationId": "auto-id",
@@ -203,7 +210,7 @@ Attestation is not a replacement for VC. It is trust evidence about issuer credi
     "diversityFactor": 1.0,
     "penalties": 0.0
   },
-  "snapshotHash": "base64",
+  "snapshotHash": "64-character lowercase SHA-256 hex digest",
   "createdAt": "2026-02-16T18:15:00Z"
 }
 ```
@@ -306,4 +313,3 @@ For VC-based condition evaluation:
 3. Add capability checks and audit events per operation.
 4. Add unit tests for matrix T1-T12.
 5. Wire `ProvedClaimCondition` to call `trustedIssuers.evaluate` for issuer trust decision.
-

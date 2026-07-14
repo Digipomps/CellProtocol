@@ -349,6 +349,690 @@ final class TrustedIssuerCellTests: XCTestCase {
         XCTAssertEqual(decision, "trusted")
     }
 
+    func testIssuerAndAttestationSourceTrustStayWithinActiveContexts() async throws {
+        CellBase.debugValidateAccessForEverything = false
+        let vault = Curve25519TestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.makeIdentity(displayName: "context-owner")
+        let candidateIssuer = await vault.makeIdentity(displayName: "context-candidate")
+        let sourceIssuer = await vault.makeIdentity(displayName: "context-source")
+        let cell = await TrustedIssuerCell(owner: owner)
+        let contextA = "context-a"
+        let contextB = "context-b"
+
+        for contextID in [contextA, contextB] {
+            _ = try await cell.set(
+                keypath: "trustedIssuers.policy.upsert",
+                value: .object([
+                    "contextId": .string(contextID),
+                    "threshold": .float(0.5),
+                    "maximumCredentialAgeSeconds": .float(86_400),
+                    "requireRevocationCheck": .bool(false),
+                    "requireSubjectBinding": .bool(true),
+                    "requireIndependentSources": .integer(contextID == contextB ? 1 : 0),
+                    "acceptedIssuerKinds": .list([.string("institution")]),
+                    "acceptedDidMethods": .list([.string("did:key")])
+                ]),
+                requester: owner
+            )
+        }
+
+        let candidateIssuerID = try candidateIssuer.did()
+        let sourceIssuerID = try sourceIssuer.did()
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(candidateIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(0.9),
+                "contexts": .list([.string(contextA)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+
+        var candidateClaim = try await VCClaim(
+            type: "ContextCredential",
+            issuerIdentity: candidateIssuer,
+            subjectIdentity: owner,
+            credentialSubject: ["scope": .string("test")]
+        )
+        try await candidateClaim.generateProof(issuerIdentity: candidateIssuer)
+        let candidateObject = try JSONDecoder().decode(
+            Object.self,
+            from: JSONEncoder().encode(candidateClaim)
+        )
+
+        func evaluate(
+            issuerID: String,
+            contextID: String,
+            candidateVc: Object,
+            evaluationID: String
+        ) async throws -> Object {
+            let result = try await cell.set(
+                keypath: "trustedIssuers.evaluate",
+                value: .object([
+                    "evaluationId": .string(evaluationID),
+                    "issuerId": .string(issuerID),
+                    "contextId": .string(contextID),
+                    "candidateVc": .object(candidateVc)
+                ]),
+                requester: owner
+            )
+            guard let result, case let .object(record) = result else {
+                XCTFail("Expected evaluation record")
+                return [:]
+            }
+            return record
+        }
+
+        let allowed = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextA,
+            candidateVc: candidateObject,
+            evaluationID: "candidate-allowed"
+        )
+        XCTAssertEqual(allowed["decision"], .string("trusted"))
+
+        let wrongContext = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextB,
+            candidateVc: candidateObject,
+            evaluationID: "candidate-wrong-context"
+        )
+        XCTAssertEqual(wrongContext["decision"], .string("untrusted"))
+        guard case let .list(wrongContextReasons)? = wrongContext["reasons"] else {
+            return XCTFail("Expected context rejection reasons")
+        }
+        XCTAssertTrue(wrongContextReasons.contains(.string("issuer_context_not_allowed")))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(candidateIssuerID),
+                "issuerKind": .string("person"),
+                "baseWeight": .float(0.9),
+                "contexts": .list([.string(contextA)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        let wrongKind = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextA,
+            candidateVc: candidateObject,
+            evaluationID: "candidate-wrong-kind"
+        )
+        XCTAssertEqual(wrongKind["decision"], .string("untrusted"))
+        guard case let .list(wrongKindReasons)? = wrongKind["reasons"] else {
+            return XCTFail("Expected issuer-kind rejection reasons")
+        }
+        XCTAssertTrue(wrongKindReasons.contains(.string("issuer_kind_not_allowed")))
+        let wrongKindRestored = try JSONDecoder().decode(
+            TrustedIssuerCell.self,
+            from: JSONEncoder().encode(cell)
+        )
+        let wrongKindRestoredState = try await wrongKindRestored.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(wrongKindRestoredObject) = wrongKindRestoredState,
+              case let .list(wrongKindCurrent)? = wrongKindRestoredObject["evaluationsCurrent"],
+              case let .object(wrongKindRecord) = wrongKindCurrent.first else {
+            return XCTFail("Expected wrong-kind evaluation to survive restart")
+        }
+        XCTAssertEqual(wrongKindRestoredObject["evaluationCurrentCount"], .integer(1))
+        XCTAssertEqual(wrongKindRecord["decision"], .string("untrusted"))
+        XCTAssertEqual(wrongKindRecord["evaluationId"], .string("candidate-wrong-kind"))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(candidateIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(0.5),
+                "contexts": .list([.string(contextB)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        let invalidatedState = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(invalidatedObject) = invalidatedState else {
+            return XCTFail("Expected state after issuer policy change")
+        }
+        XCTAssertEqual(invalidatedObject["evaluationCurrentCount"], .integer(0))
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(sourceIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(1.0),
+                "contexts": .list([.string(contextA)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        _ = try await cell.set(
+            keypath: "trustedIssuers.attestation.publish",
+            value: .object([
+                "attestationId": .string("cross-context-source"),
+                "subjectIssuerId": .string(candidateIssuerID),
+                "contextId": .string(contextB),
+                "weight": .float(1.0),
+                "issuer": .string(sourceIssuerID)
+            ]),
+            requester: owner
+        )
+
+        let sourceWrongContext = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextB,
+            candidateVc: candidateObject,
+            evaluationID: "source-wrong-context"
+        )
+        XCTAssertEqual(sourceWrongContext["decision"], .string("untrusted"))
+        guard case let .object(wrongContextComponents)? = sourceWrongContext["components"] else {
+            return XCTFail("Expected scoring components")
+        }
+        XCTAssertEqual(wrongContextComponents["endorsementContribution"], .float(0))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(sourceIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(1.0),
+                "contexts": .list([.string(contextB)]),
+                "status": .string("inactive")
+            ]),
+            requester: owner
+        )
+        let sourceInactive = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextB,
+            candidateVc: candidateObject,
+            evaluationID: "source-inactive"
+        )
+        XCTAssertEqual(sourceInactive["decision"], .string("untrusted"))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(sourceIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(1.0),
+                "contexts": .list([.string(contextB)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        let sourceAllowed = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextB,
+            candidateVc: candidateObject,
+            evaluationID: "source-allowed"
+        )
+        XCTAssertEqual(sourceAllowed["decision"], .string("trusted"))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(sourceIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(1.0),
+                "contexts": .list([.string(contextB)]),
+                "status": .string("inactive")
+            ]),
+            requester: owner
+        )
+        let stateAfterSourceInvalidation = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(sourceInvalidatedObject) = stateAfterSourceInvalidation else {
+            return XCTFail("Expected state after source invalidation")
+        }
+        XCTAssertEqual(sourceInvalidatedObject["evaluationCurrentCount"], .integer(0))
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(sourceIssuerID),
+                "issuerKind": .string("institution"),
+                "baseWeight": .float(1.0),
+                "contexts": .list([.string(contextB)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        let sourceAllowedAgain = try await evaluate(
+            issuerID: candidateIssuerID,
+            contextID: contextB,
+            candidateVc: candidateObject,
+            evaluationID: "source-allowed-again"
+        )
+        XCTAssertEqual(sourceAllowedAgain["decision"], .string("trusted"))
+        _ = try await cell.set(
+            keypath: "trustedIssuers.attestation.revoke",
+            value: .object(["attestationId": .string("cross-context-source")]),
+            requester: owner
+        )
+        let stateAfterAttestationRevocation = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(attestationInvalidatedObject) = stateAfterAttestationRevocation else {
+            return XCTFail("Expected state after attestation revocation")
+        }
+        XCTAssertEqual(attestationInvalidatedObject["evaluationCurrentCount"], .integer(0))
+    }
+
+    func testEvaluationCachesAreBoundedAndColdRestoreCanonicalizesPersistedKeys() async throws {
+        CellBase.debugValidateAccessForEverything = false
+        let vault = Curve25519TestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.makeIdentity(displayName: "bounded-owner")
+        let evaluator = await vault.makeIdentity(displayName: "bounded-evaluator")
+        let cell = await TrustedIssuerCell(owner: owner)
+        let contextID = "bounded-cache"
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.policy.upsert",
+            value: .object([
+                "contextId": .string(contextID),
+                "threshold": .float(0.5),
+                "maximumCredentialAgeSeconds": .float(86_400),
+                "requireIndependentSources": .integer(0)
+            ]),
+            requester: owner
+        )
+
+        for index in 0...512 {
+            let result = try await cell.set(
+                keypath: "trustedIssuers.evaluate",
+                value: .object([
+                    "evaluationId": .string(String(format: "unregistered-%04d", index)),
+                    "issuerId": .string(String(format: "did:key:unregistered-%04d", index)),
+                    "contextId": .string(contextID)
+                ]),
+                requester: evaluator
+            )
+            guard let result, case let .object(record) = result else {
+                return XCTFail("Expected bounded unregistered evaluation record")
+            }
+            XCTAssertEqual(record["decision"], .string("untrusted"))
+        }
+
+        let unregisteredStateValue = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        var state = try XCTUnwrap(unregisteredStateValue)
+        guard case let .object(unregisteredState) = state else {
+            return XCTFail("Expected TrustedIssuer state")
+        }
+        XCTAssertEqual(unregisteredState["evaluationHistoryCount"], .integer(512))
+        XCTAssertEqual(unregisteredState["evaluationCurrentCount"], .integer(0))
+
+        let unregisteredHistory = try await cell.get(
+            keypath: "trustedIssuers.evaluations.history",
+            requester: owner
+        )
+        guard case let .list(unregisteredRecords) = unregisteredHistory,
+              case let .object(firstUnregistered) = unregisteredRecords.first,
+              case let .object(lastUnregistered) = unregisteredRecords.last else {
+            return XCTFail("Expected bounded evaluation history")
+        }
+        XCTAssertEqual(firstUnregistered["evaluationId"], .string("unregistered-0001"))
+        XCTAssertEqual(lastUnregistered["evaluationId"], .string("unregistered-0512"))
+
+        for index in 0...512 {
+            let issuerID = String(format: "did:key:registered-%04d", index)
+            _ = try await cell.set(
+                keypath: "trustedIssuers.issuer.upsert",
+                value: .object([
+                    "issuerId": .string(issuerID),
+                    "baseWeight": .float(0.5),
+                    "contexts": .list([.string(contextID)]),
+                    "status": .string("active")
+                ]),
+                requester: owner
+            )
+        }
+        for index in 0...512 {
+            let issuerID = String(format: "did:key:registered-%04d", index)
+            let result = try await cell.set(
+                keypath: "trustedIssuers.evaluate",
+                value: .object([
+                    "evaluationId": .string(String(format: "registered-%04d", index)),
+                    "issuerId": .string(issuerID),
+                    "contextId": .string(contextID)
+                ]),
+                requester: evaluator
+            )
+            guard let result, case .object = result else {
+                return XCTFail("Expected registered evaluation record")
+            }
+        }
+
+        let boundedStateValue = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        state = try XCTUnwrap(boundedStateValue)
+        guard case let .object(boundedState) = state,
+              case let .list(currentRecords)? = boundedState["evaluationsCurrent"] else {
+            return XCTFail("Expected bounded current evaluations")
+        }
+        XCTAssertEqual(boundedState["evaluationHistoryCount"], .integer(512))
+        XCTAssertEqual(boundedState["evaluationCurrentCount"], .integer(512))
+        let currentEvaluationIDs = Set(currentRecords.compactMap { value -> String? in
+            guard case let .object(record) = value,
+                  case let .string(evaluationID)? = record["evaluationId"] else {
+                return nil
+            }
+            return evaluationID
+        })
+        XCTAssertFalse(currentEvaluationIDs.contains("registered-0000"))
+        XCTAssertTrue(currentEvaluationIDs.contains("registered-0512"))
+
+        let encoded = try JSONEncoder().encode(cell)
+        var persisted = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        var persistedCurrent = try XCTUnwrap(
+            persisted["evaluationCurrentByKey"] as? [String: Any]
+        )
+        var persistedHistory = try XCTUnwrap(
+            persisted["evaluationHistory"] as? [[String: Any]]
+        )
+        var injectedRecord = try XCTUnwrap(persistedHistory.last)
+        injectedRecord["evaluationId"] = "persisted-newest"
+        injectedRecord["issuerId"] = "did:key:registered-0000"
+        injectedRecord["contextId"] = contextID
+        injectedRecord["createdAt"] = "9999-12-31T23:59:59Z"
+        var legacySnapshot = injectedRecord
+        legacySnapshot.removeValue(forKey: "snapshotHash")
+        let legacySnapshotData = try JSONSerialization.data(
+            withJSONObject: legacySnapshot,
+            options: [.sortedKeys]
+        )
+        injectedRecord["snapshotHash"] = legacySnapshotData.base64EncodedString()
+        var corruptedRecord = injectedRecord
+        corruptedRecord["evaluationId"] = "persisted-corrupt"
+        corruptedRecord["issuerId"] = "did:key:registered-0001"
+        corruptedRecord["createdAt"] = "9999-12-31T23:59:59Z"
+        corruptedRecord["snapshotHash"] = "corrupt-snapshot"
+        persistedCurrent["hostile-noncanonical-key"] = injectedRecord
+        persistedCurrent["hostile-corrupt-key"] = corruptedRecord
+        persistedHistory.append(injectedRecord)
+        persistedHistory.append(corruptedRecord)
+        persisted["evaluationCurrentByKey"] = persistedCurrent
+        persisted["evaluationHistory"] = persistedHistory
+
+        let hostileData = try JSONSerialization.data(withJSONObject: persisted)
+        let restored = try JSONDecoder().decode(TrustedIssuerCell.self, from: hostileData)
+        let restoredState = try await restored.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(restoredObject) = restoredState,
+              case let .list(restoredCurrent)? = restoredObject["evaluationsCurrent"] else {
+            return XCTFail("Expected restored bounded state")
+        }
+        XCTAssertEqual(restoredObject["evaluationHistoryCount"], .integer(512))
+        XCTAssertEqual(restoredObject["evaluationCurrentCount"], .integer(512))
+        XCTAssertTrue(restoredCurrent.contains { value in
+            guard case let .object(record) = value else { return false }
+            return record["evaluationId"] == .string("persisted-newest")
+        })
+        XCTAssertFalse(restoredCurrent.contains { value in
+            guard case let .object(record) = value else { return false }
+            return record["evaluationId"] == .string("persisted-corrupt")
+        })
+        let restoredHistory = try await restored.get(
+            keypath: "trustedIssuers.evaluations.history",
+            requester: owner
+        )
+        guard case let .list(restoredHistoryRecords) = restoredHistory else {
+            return XCTFail("Expected restored evaluation history")
+        }
+        XCTAssertFalse(restoredHistoryRecords.contains { value in
+            guard case let .object(record) = value else { return false }
+            return record["evaluationId"] == .string("persisted-corrupt")
+        })
+
+        let restarted = try JSONDecoder().decode(
+            TrustedIssuerCell.self,
+            from: JSONEncoder().encode(restored)
+        )
+        let restartedState = try await restarted.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(restartedObject) = restartedState else {
+            return XCTFail("Expected restarted bounded state")
+        }
+        func evaluationIDs(_ value: ValueType?) -> Set<String> {
+            guard case let .list(records)? = value else { return [] }
+            return Set(records.compactMap { recordValue in
+                guard case let .object(record) = recordValue,
+                      case let .string(evaluationID)? = record["evaluationId"] else {
+                    return nil
+                }
+                return evaluationID
+            })
+        }
+        XCTAssertEqual(
+            evaluationIDs(restartedObject["evaluationsCurrent"]),
+            evaluationIDs(restoredObject["evaluationsCurrent"])
+        )
+        XCTAssertEqual(restartedObject["evaluationHistoryCount"], .integer(512))
+    }
+
+    func testEvaluationIdentifiersAreSizeBoundedAndSnapshotUsesCanonicalSHA256() async throws {
+        CellBase.debugValidateAccessForEverything = false
+        let vault = Curve25519TestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.makeIdentity(displayName: "snapshot-owner")
+        let issuer = await vault.makeIdentity(displayName: "snapshot-issuer")
+        let cell = await TrustedIssuerCell(owner: owner)
+        let contextID = "snapshot-context"
+        let issuerID = try issuer.did()
+
+        _ = try await cell.set(
+            keypath: "trustedIssuers.policy.upsert",
+            value: .object([
+                "contextId": .string(contextID),
+                "threshold": .float(0.5),
+                "maximumCredentialAgeSeconds": .float(86_400),
+                "requireIndependentSources": .integer(0)
+            ]),
+            requester: owner
+        )
+        _ = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string(issuerID),
+                "contexts": .list([.string(contextID)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+
+        let result = try await cell.set(
+            keypath: "trustedIssuers.evaluate",
+            value: .object([
+                "evaluationId": .string("canonical-hash"),
+                "issuerId": .string(issuerID),
+                "contextId": .string(contextID)
+            ]),
+            requester: owner
+        )
+        guard let result,
+              case let .object(record) = result,
+              case let .string(snapshotHash)? = record["snapshotHash"] else {
+            return XCTFail("Expected evaluation snapshot hash")
+        }
+        XCTAssertEqual(snapshotHash.count, 64)
+        XCTAssertTrue(snapshotHash.allSatisfy { "0123456789abcdef".contains($0) })
+
+        var canonicalRecord = record
+        canonicalRecord["snapshotHash"] = nil
+        let canonicalEncoder = JSONEncoder()
+        canonicalEncoder.outputFormatting = [.sortedKeys]
+        let expectedHash = FlowHasher.sha256Hex(try canonicalEncoder.encode(canonicalRecord))
+        XCTAssertEqual(snapshotHash, expectedHash)
+
+        let oversized = String(repeating: "x", count: 513)
+        for payload: Object in [
+            [
+                "evaluationId": .string(oversized),
+                "issuerId": .string(issuerID),
+                "contextId": .string(contextID)
+            ],
+            [
+                "evaluationId": .string("oversized-issuer"),
+                "issuerId": .string(oversized),
+                "contextId": .string(contextID)
+            ],
+            [
+                "evaluationId": .string("oversized-context"),
+                "issuerId": .string(issuerID),
+                "contextId": .string(oversized)
+            ]
+        ] {
+            let rejected = try await cell.set(
+                keypath: "trustedIssuers.evaluate",
+                value: .object(payload),
+                requester: owner
+            )
+            guard case let .string(error) = rejected else {
+                return XCTFail("Expected oversized identifier rejection")
+            }
+            XCTAssertTrue(error.contains("at most 512 UTF-8 bytes"))
+        }
+
+        let oversizedConfigurationWrites: [(String, Object)] = [
+            (
+                "trustedIssuers.policy.upsert",
+                [
+                    "contextId": .string(oversized),
+                    "maximumCredentialAgeSeconds": .float(86_400)
+                ]
+            ),
+            (
+                "trustedIssuers.policy.delete",
+                ["contextId": .string(oversized)]
+            ),
+            (
+                "trustedIssuers.issuer.upsert",
+                [
+                    "issuerId": .string(oversized),
+                    "contexts": .list([.string(contextID)])
+                ]
+            ),
+            (
+                "trustedIssuers.issuer.delete",
+                ["issuerId": .string(oversized)]
+            ),
+            (
+                "trustedIssuers.attestation.publish",
+                [
+                    "attestationId": .string(oversized),
+                    "subjectIssuerId": .string(issuerID),
+                    "contextId": .string(contextID)
+                ]
+            ),
+            (
+                "trustedIssuers.attestation.revoke",
+                ["attestationId": .string(oversized)]
+            )
+        ]
+        for (keypath, payload) in oversizedConfigurationWrites {
+            let rejected = try await cell.set(
+                keypath: keypath,
+                value: .object(payload),
+                requester: owner
+            )
+            guard case let .string(error) = rejected else {
+                return XCTFail("Expected oversized configuration identifier rejection at \(keypath)")
+            }
+            XCTAssertTrue(error.contains("at most 512 UTF-8 bytes"))
+        }
+        let missingContexts = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string("did:key:missing-contexts"),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            missingContexts,
+            .string("error: an active issuer must declare at least one allowed context")
+        )
+        let mixedContexts = try await cell.set(
+            keypath: "trustedIssuers.issuer.upsert",
+            value: .object([
+                "issuerId": .string("did:key:mixed-contexts"),
+                "contexts": .list([.string(contextID), .integer(1)]),
+                "status": .string("active")
+            ]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            mixedContexts,
+            .string("error: issuer contexts must be non-empty and each fit the identifier limit")
+        )
+        let nonFinitePolicyInteger = try await cell.set(
+            keypath: "trustedIssuers.policy.upsert",
+            value: .object([
+                "contextId": .string("non-finite-policy"),
+                "maximumCredentialAgeSeconds": .float(86_400),
+                "requireIndependentSources": .float(.nan)
+            ]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            nonFinitePolicyInteger,
+            .string("error: requireIndependentSources must be a non-negative integer")
+        )
+
+        let oversizedCandidate = try await cell.set(
+            keypath: "trustedIssuers.evaluate",
+            value: .object([
+                "evaluationId": .string("oversized-candidate"),
+                "issuerId": .string(issuerID),
+                "contextId": .string(contextID),
+                "candidateVc": .object([
+                    "padding": .string(String(repeating: "v", count: 1_048_577))
+                ])
+            ]),
+            requester: owner
+        )
+        guard let oversizedCandidate,
+              case let .object(oversizedCandidateRecord) = oversizedCandidate,
+              case let .list(oversizedCandidateReasons)? = oversizedCandidateRecord["reasons"] else {
+            return XCTFail("Expected oversized candidate rejection record")
+        }
+        XCTAssertEqual(oversizedCandidateRecord["decision"], .string("untrusted"))
+        XCTAssertTrue(oversizedCandidateReasons.contains(.string("candidate_vc_too_large")))
+
+        let finalState = try await cell.get(
+            keypath: "trustedIssuers.state",
+            requester: owner
+        )
+        guard case let .object(finalObject) = finalState else {
+            return XCTFail("Expected final TrustedIssuer state")
+        }
+        XCTAssertEqual(finalObject["evaluationHistoryCount"], .integer(2))
+        XCTAssertEqual(finalObject["evaluationCurrentCount"], .integer(1))
+    }
+
     func testProvedClaimConditionUsesTrustedIssuerEvaluation() async throws {
         CellBase.debugValidateAccessForEverything = false
 

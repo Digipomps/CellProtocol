@@ -5,6 +5,10 @@ import Foundation
 
 public class TrustedIssuerCell: GeneralCell {
     private static let supportedDidMethods: Set<String> = ["did:key"]
+    private static let maximumEvaluationRecords = 512
+    private static let maximumEvaluationIdentifierUTF8Bytes = 512
+    private static let maximumEncodedEvaluationRecordBytes = 65_536
+    private static let maximumCandidateCredentialBytes = 1_048_576
 
     private enum RuntimeBindingError: Error {
         case ownerAuthorityUnavailable
@@ -230,6 +234,13 @@ public class TrustedIssuerCell: GeneralCell {
         evaluationHistory = (try? container.decode([EvaluationRecord].self, forKey: .evaluationHistory)) ?? []
 
         try super.init(from: decoder)
+
+        evaluationHistory = Self.boundedEvaluationHistory(evaluationHistory)
+        evaluationCurrentByKey = Self.boundedCurrentEvaluations(
+            evaluationCurrentByKey.values,
+            policiesByContext: policiesByContext,
+            issuersById: issuersById
+        )
     }
 
     public override func encode(to encoder: Encoder) throws {
@@ -434,6 +445,9 @@ public class TrustedIssuerCell: GeneralCell {
         guard let contextId = stringValue(object["contextId"]), !contextId.isEmpty else {
             return .string("error: missing contextId")
         }
+        guard Self.evaluationIdentifierIsBounded(contextId) else {
+            return .string(Self.identifierLimitError)
+        }
 
         let claimSchema: ClaimSchema?
         if case .object(let claimObject)? = object["claimSchema"] {
@@ -464,6 +478,24 @@ public class TrustedIssuerCell: GeneralCell {
         guard unsupportedDidMethods.isEmpty else {
             return .string("error: unsupported acceptedDidMethods: \(unsupportedDidMethods.sorted().joined(separator: ","))")
         }
+        let requireIndependentSources: Int
+        if let rawIndependentSources = object["requireIndependentSources"] {
+            guard let parsed = intValue(rawIndependentSources), parsed >= 0 else {
+                return .string("error: requireIndependentSources must be a non-negative integer")
+            }
+            requireIndependentSources = parsed
+        } else {
+            requireIndependentSources = 1
+        }
+        let maxGraphDepth: Int
+        if let rawGraphDepth = object["maxGraphDepth"] {
+            guard let parsed = intValue(rawGraphDepth), parsed >= 0 else {
+                return .string("error: maxGraphDepth must be a non-negative integer")
+            }
+            maxGraphDepth = parsed
+        } else {
+            maxGraphDepth = 2
+        }
         let policy = TrustPolicy(
             contextId: contextId,
             displayName: stringValue(object["displayName"]) ?? contextId,
@@ -471,8 +503,8 @@ public class TrustedIssuerCell: GeneralCell {
             threshold: clamp(doubleValue(object["threshold"]) ?? 0.7),
             requireRevocationCheck: boolValue(object["requireRevocationCheck"], default: false),
             requireSubjectBinding: boolValue(object["requireSubjectBinding"], default: true),
-            requireIndependentSources: max(0, intValue(object["requireIndependentSources"]) ?? 1),
-            maxGraphDepth: max(0, intValue(object["maxGraphDepth"]) ?? 2),
+            requireIndependentSources: requireIndependentSources,
+            maxGraphDepth: maxGraphDepth,
             acceptedIssuerKinds: stringList(object["acceptedIssuerKinds"]),
             acceptedDidMethods: acceptedDidMethods,
             timeDecayHalfLifeDays: max(1.0, doubleValue(object["timeDecayHalfLifeDays"]) ?? 180.0),
@@ -481,6 +513,9 @@ public class TrustedIssuerCell: GeneralCell {
         )
         withStateLock {
             policiesByContext[contextId] = policy
+            evaluationCurrentByKey = evaluationCurrentByKey.filter {
+                $0.value.contextId != contextId
+            }
         }
         return .object(policy.asObject())
     }
@@ -492,8 +527,15 @@ public class TrustedIssuerCell: GeneralCell {
         guard let contextId = stringValue(object["contextId"]), !contextId.isEmpty else {
             return .string("error: missing contextId")
         }
+        guard Self.evaluationIdentifierIsBounded(contextId) else {
+            return .string(Self.identifierLimitError)
+        }
         let removed = withStateLock {
-            policiesByContext.removeValue(forKey: contextId) != nil
+            let removed = policiesByContext.removeValue(forKey: contextId) != nil
+            evaluationCurrentByKey = evaluationCurrentByKey.filter {
+                $0.value.contextId != contextId
+            }
+            return removed
         }
         return .object(["contextId": .string(contextId), "removed": .bool(removed)])
     }
@@ -505,18 +547,43 @@ public class TrustedIssuerCell: GeneralCell {
         guard let issuerId = stringValue(object["issuerId"]), !issuerId.isEmpty else {
             return .string("error: missing issuerId")
         }
+        guard Self.evaluationIdentifierIsBounded(issuerId) else {
+            return .string(Self.identifierLimitError)
+        }
+        let status = stringValue(object["status"]) ?? "active"
+        guard case let .list(contextValues)? = object["contexts"] else {
+            if status == "active" {
+                return .string("error: an active issuer must declare at least one allowed context")
+            }
+            return .string("error: issuer contexts must be supplied as a list")
+        }
+        let contexts = contextValues.compactMap { value -> String? in
+            guard case let .string(context) = value else { return nil }
+            return context
+        }
+        guard contexts.count == contextValues.count,
+              contexts.allSatisfy({ !$0.isEmpty && Self.evaluationIdentifierIsBounded($0) }) else {
+            return .string("error: issuer contexts must be non-empty and each fit the identifier limit")
+        }
+        let normalizedContexts = Array(Set(contexts)).sorted()
+        guard status != "active" || !normalizedContexts.isEmpty else {
+            return .string("error: an active issuer must declare at least one allowed context")
+        }
         let profile = IssuerProfile(
             issuerId: issuerId,
             displayName: stringValue(object["displayName"]) ?? issuerId,
             issuerKind: stringValue(object["issuerKind"]) ?? "person",
             baseWeight: clamp(doubleValue(object["baseWeight"]) ?? 0.5),
-            contexts: stringList(object["contexts"]),
+            contexts: normalizedContexts,
             metadata: objectValue(object["metadata"]) ?? [:],
-            status: stringValue(object["status"]) ?? "active",
+            status: status,
             updatedAt: Date().timeIntervalSince1970
         )
         withStateLock {
             issuersById[issuerId] = profile
+            // Issuers may be recursive attestation sources for any candidate.
+            // Clear the cache rather than leaving downstream trust snapshots stale.
+            evaluationCurrentByKey.removeAll(keepingCapacity: true)
         }
         return .object(profile.asObject())
     }
@@ -528,8 +595,13 @@ public class TrustedIssuerCell: GeneralCell {
         guard let issuerId = stringValue(object["issuerId"]), !issuerId.isEmpty else {
             return .string("error: missing issuerId")
         }
+        guard Self.evaluationIdentifierIsBounded(issuerId) else {
+            return .string(Self.identifierLimitError)
+        }
         let removed = withStateLock {
-            issuersById.removeValue(forKey: issuerId) != nil
+            let removed = issuersById.removeValue(forKey: issuerId) != nil
+            evaluationCurrentByKey.removeAll(keepingCapacity: true)
+            return removed
         }
         return .object(["issuerId": .string(issuerId), "removed": .bool(removed)])
     }
@@ -545,6 +617,11 @@ public class TrustedIssuerCell: GeneralCell {
             return .string("error: missing contextId")
         }
         let attestationId = stringValue(object["attestationId"]) ?? UUID().uuidString
+        let attestationIssuer = stringValue(object["issuer"]) ?? requester.uuid
+        guard [subjectIssuerId, contextId, attestationId, attestationIssuer]
+            .allSatisfy(Self.evaluationIdentifierIsBounded) else {
+            return .string(Self.identifierLimitError)
+        }
         let attestation = TrustAttestation(
             attestationId: attestationId,
             subjectIssuerId: subjectIssuerId,
@@ -556,13 +633,16 @@ public class TrustedIssuerCell: GeneralCell {
             validFrom: stringValue(object["validFrom"]),
             validUntil: stringValue(object["validUntil"]),
             evidenceRef: stringValue(object["evidenceRef"]),
-            issuer: stringValue(object["issuer"]) ?? requester.uuid,
+            issuer: attestationIssuer,
             proof: objectValue(object["proof"]),
             status: "active",
             createdAt: Date().timeIntervalSince1970
         )
         withStateLock {
             attestationsById[attestationId] = attestation
+            evaluationCurrentByKey = evaluationCurrentByKey.filter {
+                $0.value.contextId != contextId
+            }
         }
         return .object(attestation.asObject())
     }
@@ -574,12 +654,18 @@ public class TrustedIssuerCell: GeneralCell {
         guard let attestationId = stringValue(object["attestationId"]), !attestationId.isEmpty else {
             return .string("error: missing attestationId")
         }
+        guard Self.evaluationIdentifierIsBounded(attestationId) else {
+            return .string(Self.identifierLimitError)
+        }
         guard let attestation = withStateLock({ () -> TrustAttestation? in
             guard var attestation = attestationsById[attestationId] else {
                 return nil
             }
             attestation.status = "revoked"
             attestationsById[attestationId] = attestation
+            evaluationCurrentByKey = evaluationCurrentByKey.filter {
+                $0.value.contextId != attestation.contextId
+            }
             return attestation
         }) else {
             return .string("error: attestation not found")
@@ -597,12 +683,19 @@ public class TrustedIssuerCell: GeneralCell {
         guard let issuerId = stringValue(object["issuerId"]), !issuerId.isEmpty else {
             return .string("error: missing issuerId")
         }
+        let evaluationId = stringValue(object["evaluationId"]) ?? UUID().uuidString
+        guard Self.evaluationIdentifierIsBounded(contextId),
+              Self.evaluationIdentifierIsBounded(issuerId),
+              Self.evaluationIdentifierIsBounded(evaluationId) else {
+            return .string(
+                "error: contextId, issuerId, and evaluationId must each be at most \(Self.maximumEvaluationIdentifierUTF8Bytes) UTF-8 bytes"
+            )
+        }
         let state = stateSnapshot()
         guard let policy = state.policiesByContext[contextId], policy.status == "active" else {
             return .string("error: no active policy for contextId")
         }
 
-        let evaluationId = stringValue(object["evaluationId"]) ?? UUID().uuidString
         guard let requesterId = try? requester.did() else {
             return .string("error: requester has no verifiable DID")
         }
@@ -634,14 +727,31 @@ public class TrustedIssuerCell: GeneralCell {
                 components: components,
                 createdAt: nowIso
             )
-            storeEvaluation(record: record)
+            storeEvaluation(record: record, updateCurrent: false)
+            return .object(record.asObject())
+        }
+
+        guard issuerProfile.contexts.contains(contextId) else {
+            let record = finalizeRecord(
+                evaluationId: evaluationId,
+                issuerId: issuerId,
+                contextId: contextId,
+                requesterId: requesterId,
+                score: 0.0,
+                threshold: policy.threshold,
+                decision: "untrusted",
+                reasons: ["issuer_context_not_allowed"],
+                components: components,
+                createdAt: nowIso
+            )
+            storeEvaluation(record: record, updateCurrent: false)
             return .object(record.asObject())
         }
 
         if !policy.acceptedIssuerKinds.isEmpty && !policy.acceptedIssuerKinds.contains(issuerProfile.issuerKind) {
             reasons.append("issuer_kind_not_allowed")
         }
-        if let issuerDidMethod = didMethod(of: issuerId) {
+        if let issuerDidMethod = Self.didMethod(of: issuerId) {
             if Self.supportedDidMethods.contains(issuerDidMethod) == false {
                 reasons.append("issuer_did_method_unsupported")
             } else if !policy.acceptedDidMethods.isEmpty && !policy.acceptedDidMethods.contains(issuerDidMethod) {
@@ -649,6 +759,23 @@ public class TrustedIssuerCell: GeneralCell {
             }
         } else {
             reasons.append("issuer_did_method_invalid")
+        }
+
+        if !reasons.isEmpty {
+            let record = finalizeRecord(
+                evaluationId: evaluationId,
+                issuerId: issuerId,
+                contextId: contextId,
+                requesterId: requesterId,
+                score: 0.0,
+                threshold: policy.threshold,
+                decision: "untrusted",
+                reasons: reasons.sorted(),
+                components: components,
+                createdAt: nowIso
+            )
+            storeEvaluation(record: record)
+            return .object(record.asObject())
         }
 
         guard let vcObject = objectValue(object["candidateVc"]) else {
@@ -662,6 +789,23 @@ public class TrustedIssuerCell: GeneralCell {
                 threshold: policy.threshold,
                 decision: "untrusted",
                 reasons: reasons.sorted(),
+                components: components,
+                createdAt: nowIso
+            )
+            storeEvaluation(record: record)
+            return .object(record.asObject())
+        }
+        guard let encodedCandidate = try? JSONEncoder().encode(vcObject),
+              encodedCandidate.count <= Self.maximumCandidateCredentialBytes else {
+            let record = finalizeRecord(
+                evaluationId: evaluationId,
+                issuerId: issuerId,
+                contextId: contextId,
+                requesterId: requesterId,
+                score: 0.0,
+                threshold: policy.threshold,
+                decision: "untrusted",
+                reasons: ["candidate_vc_too_large"],
                 components: components,
                 createdAt: nowIso
             )
@@ -696,6 +840,16 @@ public class TrustedIssuerCell: GeneralCell {
         let liveAttestations = state.attestationsById.values
             .filter { $0.subjectIssuerId == issuerId && $0.contextId == contextId && $0.status == "active" }
             .filter { attestationIsTimeValid($0, now: nowDate) }
+            .filter { attestation in
+                guard let sourceIssuer = state.issuersById[attestation.issuer] else {
+                    return false
+                }
+                return Self.issuerAllowsTrust(
+                    sourceIssuer,
+                    in: contextId,
+                    under: policy
+                )
+            }
             .sorted(by: { lhs, rhs in
                 if lhs.issuer == rhs.issuer {
                     return lhs.attestationId < rhs.attestationId
@@ -880,15 +1034,191 @@ public class TrustedIssuerCell: GeneralCell {
         return try await claim.verify()
     }
 
-    private func storeEvaluation(record: EvaluationRecord) {
+    private func storeEvaluation(record: EvaluationRecord, updateCurrent: Bool = true) {
         withStateLock {
-            let key = "\(record.contextId)|\(record.issuerId)"
-            evaluationCurrentByKey[key] = record
+            if updateCurrent {
+                let key = Self.currentEvaluationKey(for: record)
+                evaluationCurrentByKey[key] = record
+                if evaluationCurrentByKey.count > Self.maximumEvaluationRecords,
+                   let oldestKey = evaluationCurrentByKey.min(by: { lhs, rhs in
+                       if Self.evaluationRecordPrecedes(lhs.value, rhs.value) {
+                           return true
+                       }
+                       if Self.evaluationRecordPrecedes(rhs.value, lhs.value) {
+                           return false
+                       }
+                       return lhs.key < rhs.key
+                   })?.key {
+                    evaluationCurrentByKey.removeValue(forKey: oldestKey)
+                }
+            }
             evaluationHistory.append(record)
-            if evaluationHistory.count > 512 {
-                evaluationHistory.removeFirst(evaluationHistory.count - 512)
+            if evaluationHistory.count > Self.maximumEvaluationRecords {
+                evaluationHistory.removeFirst(
+                    evaluationHistory.count - Self.maximumEvaluationRecords
+                )
             }
         }
+    }
+
+    private static func evaluationIdentifierIsBounded(_ value: String) -> Bool {
+        value.utf8.count <= maximumEvaluationIdentifierUTF8Bytes
+    }
+
+    private static var identifierLimitError: String {
+        "error: identifiers must each be at most \(maximumEvaluationIdentifierUTF8Bytes) UTF-8 bytes"
+    }
+
+    private static func currentEvaluationKey(for record: EvaluationRecord) -> String {
+        "\(record.contextId.utf8.count):\(record.contextId)\(record.issuerId)"
+    }
+
+    private static func issuerAllowsTrust(
+        _ issuer: IssuerProfile,
+        in contextId: String,
+        under policy: TrustPolicy? = nil
+    ) -> Bool {
+        guard issuer.status == "active", issuer.contexts.contains(contextId) else {
+            return false
+        }
+        guard let policy else { return true }
+        if !policy.acceptedIssuerKinds.isEmpty,
+           !policy.acceptedIssuerKinds.contains(issuer.issuerKind) {
+            return false
+        }
+        guard let method = didMethod(of: issuer.issuerId),
+              supportedDidMethods.contains(method) else {
+            return false
+        }
+        return policy.acceptedDidMethods.isEmpty || policy.acceptedDidMethods.contains(method)
+    }
+
+    private static func boundedEvaluationHistory(
+        _ records: [EvaluationRecord]
+    ) -> [EvaluationRecord] {
+        Array(
+            records
+                .filter(Self.evaluationRecordIsBounded)
+                .suffix(maximumEvaluationRecords)
+        )
+    }
+
+    private static func boundedCurrentEvaluations<S: Sequence>(
+        _ records: S,
+        policiesByContext: [String: TrustPolicy],
+        issuersById: [String: IssuerProfile]
+    ) -> [String: EvaluationRecord] where S.Element == EvaluationRecord {
+        var newestByKey = [String: EvaluationRecord]()
+        for record in records where evaluationRecordIsBounded(record) {
+            guard let policy = policiesByContext[record.contextId], policy.status == "active",
+                  let issuer = issuersById[record.issuerId],
+                  issuerAllowsTrust(issuer, in: record.contextId) else {
+                continue
+            }
+            let key = currentEvaluationKey(for: record)
+            if let existing = newestByKey[key],
+               evaluationRecordPrecedes(record, existing) {
+                continue
+            }
+            newestByKey[key] = record
+        }
+
+        if newestByKey.count > maximumEvaluationRecords {
+            let keysToRemove = newestByKey
+                .sorted { lhs, rhs in
+                    if evaluationRecordPrecedes(lhs.value, rhs.value) {
+                        return true
+                    }
+                    if evaluationRecordPrecedes(rhs.value, lhs.value) {
+                        return false
+                    }
+                    return lhs.key < rhs.key
+                }
+                .prefix(newestByKey.count - maximumEvaluationRecords)
+                .map(\.key)
+            for key in keysToRemove {
+                newestByKey.removeValue(forKey: key)
+            }
+        }
+        return newestByKey
+    }
+
+    private static func evaluationRecordIdentifiersAreBounded(
+        _ record: EvaluationRecord
+    ) -> Bool {
+        evaluationIdentifierIsBounded(record.evaluationId)
+            && evaluationIdentifierIsBounded(record.contextId)
+            && evaluationIdentifierIsBounded(record.issuerId)
+    }
+
+    private static func evaluationRecordIsBounded(_ record: EvaluationRecord) -> Bool {
+        evaluationRecordIdentifiersAreBounded(record)
+            && canonicalEvaluationData(record).count <= maximumEncodedEvaluationRecordBytes
+            && evaluationRecordHashIsValid(record)
+    }
+
+    private static func evaluationRecordHashIsValid(_ record: EvaluationRecord) -> Bool {
+        guard let canonicalData = canonicalSnapshotData(for: record) else { return false }
+        let hash = record.snapshotHash
+        let isLowercaseSHA256 = hash.utf8.count == 64
+            && hash.utf8.allSatisfy { byte in
+                (48...57).contains(byte) || (97...102).contains(byte)
+            }
+        if isLowercaseSHA256 {
+            return hash == FlowHasher.sha256Hex(canonicalData)
+        }
+
+        guard let legacyData = Data(base64Encoded: hash),
+              let legacyObject = try? JSONDecoder().decode(Object.self, from: legacyData),
+              let normalizedLegacyData = canonicalJSONData(legacyObject) else {
+            return false
+        }
+        return normalizedLegacyData == canonicalData
+    }
+
+    private static func canonicalSnapshotData(for record: EvaluationRecord) -> Data? {
+        canonicalJSONData([
+            "evaluationId": .string(record.evaluationId),
+            "issuerId": .string(record.issuerId),
+            "contextId": .string(record.contextId),
+            "requesterId": record.requesterId.map { .string($0) } ?? .null,
+            "score": .float(record.score),
+            "threshold": .float(record.threshold),
+            "decision": .string(record.decision),
+            "reasons": .list(record.reasons.map { .string($0) }),
+            "components": .object(record.components),
+            "createdAt": .string(record.createdAt)
+        ])
+    }
+
+    private static func canonicalJSONData(_ object: Object) -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(object)
+    }
+
+    private static func evaluationRecordPrecedes(
+        _ lhs: EvaluationRecord,
+        _ rhs: EvaluationRecord
+    ) -> Bool {
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt < rhs.createdAt
+        }
+        if lhs.evaluationId != rhs.evaluationId {
+            return lhs.evaluationId < rhs.evaluationId
+        }
+        let lhsKey = currentEvaluationKey(for: lhs)
+        let rhsKey = currentEvaluationKey(for: rhs)
+        if lhsKey != rhsKey {
+            return lhsKey < rhsKey
+        }
+        return canonicalEvaluationData(lhs).lexicographicallyPrecedes(canonicalEvaluationData(rhs))
+    }
+
+    private static func canonicalEvaluationData(_ record: EvaluationRecord) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(record)) ?? Data()
     }
 
     private func stateSnapshot() -> StateSnapshot {
@@ -935,8 +1265,8 @@ public class TrustedIssuerCell: GeneralCell {
             "createdAt": .string(createdAt)
         ]
         let snapshotHash: String = {
-            guard let data = try? JSONEncoder().encode(canonicalObject) else { return "" }
-            return data.base64EncodedString()
+            guard let data = Self.canonicalJSONData(canonicalObject) else { return "" }
+            return FlowHasher.sha256Hex(data)
         }()
 
         return EvaluationRecord(
@@ -962,8 +1292,14 @@ public class TrustedIssuerCell: GeneralCell {
         state: StateSnapshot,
         now: Date
     ) -> Double {
-        guard !visited.contains(issuerId) else { return 0.0 }
-        let base = clamp(state.issuersById[issuerId]?.baseWeight ?? 0.0)
+        guard !visited.contains(issuerId),
+              let issuer = state.issuersById[issuerId],
+              let policy = state.policiesByContext[contextId],
+              policy.status == "active",
+              Self.issuerAllowsTrust(issuer, in: contextId, under: policy) else {
+            return 0.0
+        }
+        let base = clamp(issuer.baseWeight)
         guard maxDepth > 0 else { return base }
 
         let incoming = state.attestationsById.values
@@ -1174,7 +1510,7 @@ public class TrustedIssuerCell: GeneralCell {
         }
     }
 
-    private func didMethod(of did: String) -> String? {
+    private static func didMethod(of did: String) -> String? {
         guard did.hasPrefix("did:") else { return nil }
         let parts = did.split(separator: ":")
         guard parts.count >= 2 else { return nil }
@@ -1205,7 +1541,7 @@ public class TrustedIssuerCell: GeneralCell {
         case .number(let number):
             return number
         case .float(let float):
-            return Int(float)
+            return Int(exactly: float)
         default:
             return nil
         }
@@ -1410,7 +1746,7 @@ public class TrustedIssuerCell: GeneralCell {
                 "status": ExploreContract.schema(type: "string"),
                 "updatedAt": ExploreContract.schema(type: "float")
             ],
-            requiredKeys: ["issuerId", "issuerKind", "baseWeight", "status"],
+            requiredKeys: ["issuerId", "issuerKind", "baseWeight", "contexts", "status"],
             description: "Trusted issuer profile."
         )
     }
@@ -1510,7 +1846,7 @@ public class TrustedIssuerCell: GeneralCell {
                 "metadata": ExploreContract.schema(type: "object"),
                 "status": ExploreContract.schema(type: "string")
             ],
-            requiredKeys: ["issuerId"],
+            requiredKeys: ["issuerId", "contexts"],
             description: "Creates or updates a trusted issuer profile."
         )
     }
@@ -1584,10 +1920,13 @@ public class TrustedIssuerCell: GeneralCell {
                 "issuerId": ExploreContract.schema(type: "string"),
                 "contextId": ExploreContract.schema(type: "string"),
                 "requesterId": ExploreContract.schema(type: "string"),
-                "candidateVc": ExploreContract.schema(type: "object")
+                "candidateVc": ExploreContract.schema(
+                    type: "object",
+                    description: "Candidate VC; maximum encoded JSON size is 1,048,576 bytes."
+                )
             ],
             requiredKeys: ["issuerId", "contextId", "candidateVc"],
-            description: "Evaluates a candidate credential against trust policy."
+            description: "Evaluates a candidate credential against trust policy; candidateVc is limited to 1 MiB of encoded JSON."
         )
     }
 
