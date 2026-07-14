@@ -20,8 +20,13 @@ final class ChatCellTests: XCTestCase {
 
     func testDecodedRunningChatRequiresExplicitResumeAction() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        let previousExploreMode = CellBase.exploreContractEnforcementMode
         CellBase.debugValidateAccessForEverything = true
-        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+        CellBase.exploreContractEnforcementMode = .strict
+        defer {
+            CellBase.debugValidateAccessForEverything = previousDebugFlag
+            CellBase.exploreContractEnforcementMode = previousExploreMode
+        }
 
         let vault = ChatCellTestIdentityVault()
         CellBase.defaultIdentityVault = vault
@@ -266,8 +271,13 @@ final class ChatCellTests: XCTestCase {
 
     func testExploreContractsAdvertiseMessageAndComposerSchemas() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        let previousExploreMode = CellBase.exploreContractEnforcementMode
         CellBase.debugValidateAccessForEverything = false
-        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+        CellBase.exploreContractEnforcementMode = .strict
+        defer {
+            CellBase.debugValidateAccessForEverything = previousDebugFlag
+            CellBase.exploreContractEnforcementMode = previousExploreMode
+        }
 
         let vault = ChatCellTestIdentityVault()
         CellBase.defaultIdentityVault = vault
@@ -311,6 +321,19 @@ final class ChatCellTests: XCTestCase {
             input: .string("hei"),
             requester: outsider
         )
+
+        let sent = try await cell.set(
+            keypath: "sendMessage",
+            value: .object([
+                "content": .string("Strict contract dispatch"),
+                "contentType": .string("text/plain")
+            ]),
+            requester: owner
+        )
+        guard case let .object(sentObject)? = sent else {
+            return XCTFail("Strict Explore mode advertised sendMessage but did not dispatch it")
+        }
+        XCTAssertEqual(sentObject["status"], .string("sent"))
     }
 
     func testCryptoStateDeclaresBootstrapPolicyAndPreferredSuite() async throws {

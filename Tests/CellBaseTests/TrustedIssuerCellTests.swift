@@ -141,18 +141,21 @@ final class TrustedIssuerCellTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousDebugFlag: Bool = false
+    private var previousExploreMode: CellBase.ExploreContractEnforcementMode = .permissive
 
     override func setUp() {
         super.setUp()
         previousVault = CellBase.defaultIdentityVault
         previousResolver = CellBase.defaultCellResolver
         previousDebugFlag = CellBase.debugValidateAccessForEverything
+        previousExploreMode = CellBase.exploreContractEnforcementMode
     }
 
     override func tearDown() {
         CellBase.defaultIdentityVault = previousVault
         CellBase.defaultCellResolver = previousResolver
         CellBase.debugValidateAccessForEverything = previousDebugFlag
+        CellBase.exploreContractEnforcementMode = previousExploreMode
         super.tearDown()
     }
 
@@ -1035,6 +1038,7 @@ final class TrustedIssuerCellTests: XCTestCase {
 
     func testProvedClaimConditionUsesTrustedIssuerEvaluation() async throws {
         CellBase.debugValidateAccessForEverything = false
+        CellBase.exploreContractEnforcementMode = .strict
 
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
@@ -1433,6 +1437,7 @@ final class TrustedIssuerCellTests: XCTestCase {
 
     func testDecodedTrustedIssuerAwaitsSingleRuntimeInstallAndSerializesConcurrentState() async throws {
         CellBase.debugValidateAccessForEverything = false
+        CellBase.exploreContractEnforcementMode = .strict
         let vault = Curve25519TestIdentityVault()
         CellBase.defaultIdentityVault = vault
         let owner = await vault.makeIdentity(displayName: "runtime-owner")

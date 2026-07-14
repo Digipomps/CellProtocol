@@ -573,6 +573,11 @@ public final class ChatCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        // Strict Explore mode rejects handler registration unless the complete
+        // contract is already present. Keep contract publication and dispatch
+        // installation in the same readiness transaction, in that order.
+        await registerContracts(requester: owner)
+
         await registerGet(key: "status", owner: owner) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.canRead(requester, keypath: "status") else { return .string("denied") }
@@ -957,7 +962,6 @@ public final class ChatCell: GeneralCell {
             return .object(self.draft(for: requester).objectValue())
         }
 
-        await registerContracts(requester: owner)
     }
 
     private func canRead(_ requester: Identity, keypath: String) async -> Bool {
@@ -2686,7 +2690,6 @@ public final class ChatCell: GeneralCell {
             ),
             permissions: ["r---"],
             required: false,
-            flowEffects: [Self.flowEffect(topic: "chat.status")],
             description: .string("Returns the current chat summary including message and participant counts.")
         )
 
@@ -2701,7 +2704,6 @@ public final class ChatCell: GeneralCell {
             ),
             permissions: ["r---"],
             required: false,
-            flowEffects: [Self.flowEffect(topic: "chat.status")],
             description: .string("Returns the full chat state including participants, messages, composer state, and format metadata.")
         )
 
@@ -3368,7 +3370,7 @@ public final class ChatCell: GeneralCell {
                 returns: ExploreContract.schema(type: "string", description: "Operation status such as `ok` or `already running`."),
                 permissions: ["-w--"],
                 required: false,
-                flowEffects: [Self.flowEffect(topic: "chat.status")],
+                flowEffects: [ExploreContract.flowEffect(trigger: .get, topic: "chat.status", contentType: "object")],
                 description: .string(key == "start" ? "Starts background chat event generation." : "Stops background chat event generation.")
             )
         }

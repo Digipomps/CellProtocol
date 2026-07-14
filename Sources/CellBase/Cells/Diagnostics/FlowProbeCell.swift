@@ -198,65 +198,166 @@ public final class FlowProbeCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
-        await addInterceptForGet(requester: owner, key: "flowProbe.status") { [weak self] _, requester in
+        await registerGet(
+            key: "flowProbe.status",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns FlowProbe status and the active target summary.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.statusPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "flowProbe.target.current") { [weak self] _, requester in
+        await registerGet(
+            key: "flowProbe.target.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the currently configured FlowProbe target.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.targetPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "flowProbe.filters.current") { [weak self] _, requester in
+        await registerGet(
+            key: "flowProbe.filters.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the active FlowProbe filter.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.filterPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "flowProbe.trace.current") { [weak self] _, requester in
+        await registerGet(
+            key: "flowProbe.trace.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the current FlowProbe trace.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.currentTracePayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "flowProbe.traces") { [weak self] _, requester in
+        await registerGet(
+            key: "flowProbe.traces",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns bounded FlowProbe trace history.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.traceHistoryPayload()
         }
 
-        await addInterceptForSet(requester: owner, key: "flowProbe.target") { [weak self] _, value, requester in
+        await registerSet(
+            key: "flowProbe.target",
+            owner: owner,
+            input: Self.targetInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Configures the Cell endpoint observed by FlowProbe.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.configureTarget(value: value)
         }
 
-        await addInterceptForSet(requester: owner, key: "flowProbe.filters") { [weak self] _, value, requester in
+        await registerSet(
+            key: "flowProbe.filters",
+            owner: owner,
+            input: Self.filterInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Configures topic, origin, title and result-limit filters.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.configureFilter(value: value)
         }
 
-        await addInterceptForSet(requester: owner, key: "flowProbe.start") { [weak self] _, value, requester in
+        await registerSet(
+            key: "flowProbe.start",
+            owner: owner,
+            input: Self.startInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Starts observing the configured Cell flow.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "flowProbe", for: requester) else { return .string("denied") }
             return await self.startProbe(value: value, requester: requester)
         }
 
-        await addInterceptForSet(requester: owner, key: "flowProbe.stop") { [weak self] _, _, requester in
+        await registerSet(
+            key: "flowProbe.stop",
+            owner: owner,
+            input: .null,
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Stops the current observation and retains its trace.")
+        ) { [weak self] requester, _ in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.finishTrace(status: .stopped, errorMessage: nil, emitEvent: true)
         }
 
-        await addInterceptForSet(requester: owner, key: "flowProbe.clear") { [weak self] _, _, requester in
+        await registerSet(
+            key: "flowProbe.clear",
+            owner: owner,
+            input: .null,
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Clears the current and historical FlowProbe traces.")
+        ) { [weak self] requester, _ in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "flowProbe", for: requester) else { return .string("denied") }
             return self.clearProbe()
         }
+    }
+
+    private static func operationResultSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [ExploreContract.schema(type: "object"), ExploreContract.schema(type: "string")],
+            description: "Returns a structured FlowProbe result or a denial/failure string."
+        )
+    }
+
+    private static func targetInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "string"),
+                ExploreContract.schema(type: "object"),
+                ExploreContract.schema(type: "cellConfiguration")
+            ],
+            description: "Cell endpoint, target object, or CellConfiguration source."
+        )
+    }
+
+    private static func filterInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [ExploreContract.schema(type: "object"), ExploreContract.schema(type: "null")],
+            description: "Flow filter object or null for the default filter."
+        )
+    }
+
+    private static func startInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "null"),
+                ExploreContract.schema(type: "string"),
+                ExploreContract.schema(type: "object")
+            ],
+            description: "Optional inline target/filter configuration."
+        )
     }
 
     private func configureTarget(value: ValueType) -> ValueType {

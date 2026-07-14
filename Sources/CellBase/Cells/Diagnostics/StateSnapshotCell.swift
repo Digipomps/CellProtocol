@@ -212,77 +212,203 @@ public final class StateSnapshotCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.status") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.status",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns StateSnapshot status and retained counts.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.statusPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.target.current") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.target.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the configured snapshot target.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.targetPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.keys.current") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.keys.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the configured snapshot key list.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.keysPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.current") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the latest captured snapshot.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.currentSnapshotPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.history") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.history",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns bounded snapshot history.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.snapshotHistoryPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.diff.current") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.diff.current",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns the latest snapshot diff.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.currentDiffPayload()
         }
 
-        await addInterceptForGet(requester: owner, key: "stateSnapshot.diffs") { [weak self] _, requester in
+        await registerGet(
+            key: "stateSnapshot.diffs",
+            owner: owner,
+            returns: Self.operationResultSchema(),
+            permissions: ["r---"],
+            description: .string("Returns bounded snapshot diff history.")
+        ) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.diffHistoryPayload()
         }
 
-        await addInterceptForSet(requester: owner, key: "stateSnapshot.target") { [weak self] _, value, requester in
+        await registerSet(
+            key: "stateSnapshot.target",
+            owner: owner,
+            input: Self.targetInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Configures the Cell endpoint to snapshot.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.configureTarget(value: value)
         }
 
-        await addInterceptForSet(requester: owner, key: "stateSnapshot.keys") { [weak self] _, value, requester in
+        await registerSet(
+            key: "stateSnapshot.keys",
+            owner: owner,
+            input: Self.keysInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Configures the keypaths captured from the target Cell.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.configureKeys(value: value)
         }
 
-        await addInterceptForSet(requester: owner, key: "stateSnapshot.capture") { [weak self] _, value, requester in
+        await registerSet(
+            key: "stateSnapshot.capture",
+            owner: owner,
+            input: Self.captureInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Captures configured state from the target Cell.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return await self.captureSnapshot(value: value, requester: requester)
         }
 
-        await addInterceptForSet(requester: owner, key: "stateSnapshot.diff") { [weak self] _, value, requester in
+        await registerSet(
+            key: "stateSnapshot.diff",
+            owner: owner,
+            input: Self.diffInputSchema(),
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Diffs two retained snapshots or the latest pair.")
+        ) { [weak self] requester, value in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.diffSnapshots(value: value)
         }
 
-        await addInterceptForSet(requester: owner, key: "stateSnapshot.clear") { [weak self] _, _, requester in
+        await registerSet(
+            key: "stateSnapshot.clear",
+            owner: owner,
+            input: .null,
+            returns: Self.operationResultSchema(),
+            permissions: ["-w--"],
+            description: .string("Clears all retained snapshots and diffs.")
+        ) { [weak self] requester, _ in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "stateSnapshot", for: requester) else { return .string("denied") }
             return self.clearSnapshots()
         }
+    }
+
+    private static func operationResultSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [ExploreContract.schema(type: "object"), ExploreContract.schema(type: "string")],
+            description: "Returns a structured StateSnapshot result or a denial/failure string."
+        )
+    }
+
+    private static func targetInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "string"),
+                ExploreContract.schema(type: "object"),
+                ExploreContract.schema(type: "cellConfiguration")
+            ],
+            description: "Cell endpoint, target object, or CellConfiguration source."
+        )
+    }
+
+    private static func keysInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "null"),
+                ExploreContract.schema(type: "string"),
+                ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
+                ExploreContract.schema(type: "object")
+            ],
+            description: "One key, a key list, an object containing keys, or null."
+        )
+    }
+
+    private static func captureInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "null"),
+                ExploreContract.schema(type: "string"),
+                ExploreContract.schema(type: "object"),
+                ExploreContract.schema(type: "cellConfiguration")
+            ],
+            description: "Optional inline target and key configuration."
+        )
+    }
+
+    private static func diffInputSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [ExploreContract.schema(type: "null"), ExploreContract.schema(type: "object")],
+            description: "Optional leftSnapshotID/rightSnapshotID selection."
+        )
     }
 
     private func configureTarget(value: ValueType) -> ValueType {

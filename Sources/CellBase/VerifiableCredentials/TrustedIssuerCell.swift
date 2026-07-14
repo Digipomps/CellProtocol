@@ -309,6 +309,11 @@ public class TrustedIssuerCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        // TrustedIssuer participates in Agreement admission. Under strict
+        // Explore enforcement every contract must exist before its handler is
+        // installed or proof evaluation can be advertised but not dispatchable.
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "trustedIssuers.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "trustedIssuers.state", for: requester) else {
@@ -406,7 +411,6 @@ public class TrustedIssuerCell: GeneralCell {
             return try await self.handleEvaluate(payload: value, requester: requester)
         }
 
-        await registerContracts(requester: owner)
     }
 
     private func stateValue(requester: Identity) async -> ValueType {
@@ -1578,27 +1582,75 @@ public class TrustedIssuerCell: GeneralCell {
             description: .string("Returns the full trusted issuer state with counts and current collections.")
         )
 
-        for (key, itemSchema, summary) in [
-            ("trustedIssuers.policies", Self.policySchema(), "Lists trust policies keyed by evaluation context."),
-            ("trustedIssuers.issuers", Self.issuerSchema(), "Lists issuer profiles known to the trust registry."),
-            ("trustedIssuers.attestations", Self.attestationSchema(), "Lists trust attestations published for issuers."),
-            ("trustedIssuers.evaluations.current", Self.evaluationSchema(), "Lists the latest evaluation per issuer/context pair."),
-            ("trustedIssuers.evaluations.history", Self.evaluationSchema(), "Lists historical trust evaluation records.")
-        ] {
-            await registerExploreContract(
-                requester: requester,
-                key: key,
-                method: .get,
-                input: .null,
-                returns: ExploreContract.oneOfSchema(
-                    options: [ExploreContract.listSchema(item: itemSchema), ExploreContract.schema(type: "string")],
-                    description: "Returns the requested trusted issuer collection or a failure string."
-                ),
-                permissions: ["r---"],
-                required: false,
-                description: .string(summary)
-            )
-        }
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.policies",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.policySchema()), ExploreContract.schema(type: "string")],
+                description: "Returns trust policies or a failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists trust policies keyed by evaluation context.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.issuers",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.issuerSchema()), ExploreContract.schema(type: "string")],
+                description: "Returns issuer profiles or a failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists issuer profiles known to the trust registry.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.attestations",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.attestationSchema()), ExploreContract.schema(type: "string")],
+                description: "Returns trust attestations or a failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists trust attestations published for issuers.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.evaluations.current",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.evaluationSchema()), ExploreContract.schema(type: "string")],
+                description: "Returns current evaluation records or a failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists the latest evaluation per issuer/context pair.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.evaluations.history",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.evaluationSchema()), ExploreContract.schema(type: "string")],
+                description: "Returns historical evaluation records or a failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists historical trust evaluation records.")
+        )
 
         await registerExploreContract(
             requester: requester,

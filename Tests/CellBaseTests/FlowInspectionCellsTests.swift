@@ -12,17 +12,105 @@ import OpenCombine
 final class FlowInspectionCellsTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
+    private var previousExploreMode: CellBase.ExploreContractEnforcementMode = .permissive
 
     override func setUp() {
         super.setUp()
         previousVault = CellBase.defaultIdentityVault
         previousResolver = CellBase.defaultCellResolver
+        previousExploreMode = CellBase.exploreContractEnforcementMode
     }
 
     override func tearDown() {
         CellBase.defaultIdentityVault = previousVault
         CellBase.defaultCellResolver = previousResolver
+        CellBase.exploreContractEnforcementMode = previousExploreMode
         super.tearDown()
+    }
+
+    func testStrictExploreModeKeepsDecodedDiagnosticHandlersDispatchable() async throws {
+        CellBase.exploreContractEnforcementMode = .strict
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+
+        let flowProbe = try JSONDecoder().decode(
+            FlowProbeCell.self,
+            from: JSONEncoder().encode(await FlowProbeCell(owner: owner))
+        )
+        guard case .object = try await flowProbe.get(
+            keypath: "flowProbe.status",
+            requester: owner
+        ) else {
+            return XCTFail("Strict decoded FlowProbe status handler was not installed")
+        }
+        let configuredFlowTarget = try await flowProbe.set(
+            keypath: "flowProbe.target",
+            value: .string("cell:///StrictProbeSource"),
+            requester: owner
+        )
+        guard case .object = configuredFlowTarget else {
+            return XCTFail("Strict decoded FlowProbe target action was not installed")
+        }
+        try await CellContractHarness.assertAdvertisedKey(
+            on: flowProbe,
+            key: "flowProbe.target",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "oneOf",
+            expectedReturnType: "oneOf"
+        )
+        try await CellContractHarness.assertPermissions(
+            on: flowProbe,
+            key: "flowProbe.target",
+            requester: owner,
+            expected: ["-w--"]
+        )
+
+        let snapshot = try JSONDecoder().decode(
+            StateSnapshotCell.self,
+            from: JSONEncoder().encode(await StateSnapshotCell(owner: owner))
+        )
+        guard case .object = try await snapshot.get(
+            keypath: "stateSnapshot.status",
+            requester: owner
+        ) else {
+            return XCTFail("Strict decoded StateSnapshot status handler was not installed")
+        }
+        let configuredSnapshotTarget = try await snapshot.set(
+            keypath: "stateSnapshot.target",
+            value: .string("cell:///StrictSnapshotSource"),
+            requester: owner
+        )
+        guard case .object = configuredSnapshotTarget else {
+            return XCTFail("Strict decoded StateSnapshot target action was not installed")
+        }
+        try await CellContractHarness.assertAdvertisedKey(
+            on: snapshot,
+            key: "stateSnapshot.capture",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "oneOf",
+            expectedReturnType: "oneOf"
+        )
+        try await CellContractHarness.assertPermissions(
+            on: snapshot,
+            key: "stateSnapshot.capture",
+            requester: owner,
+            expected: ["-w--"]
+        )
+        try await CellContractHarness.assertSetDenied(
+            on: flowProbe,
+            key: "flowProbe.clear",
+            input: .null,
+            requester: outsider
+        )
+        try await CellContractHarness.assertGetDenied(
+            on: snapshot,
+            key: "stateSnapshot.history",
+            requester: outsider
+        )
     }
 
     func testFlowProbeCapturesMatchingFlowElements() async throws {
@@ -35,6 +123,7 @@ final class FlowInspectionCellsTests: XCTestCase {
         let source = await ProbeSourceCell(owner: owner)
         try await resolver.registerNamedEmitCell(name: "ProbeSource", emitCell: source, scope: .template, identity: owner)
 
+        CellBase.exploreContractEnforcementMode = .strict
         let flowProbe = await FlowProbeCell(owner: owner)
         _ = try await flowProbe.set(keypath: "flowProbe.target", value: .string("cell:///ProbeSource"), requester: owner)
         _ = try await flowProbe.set(
@@ -93,6 +182,7 @@ final class FlowInspectionCellsTests: XCTestCase {
         let source = await ProbeSourceCell(owner: owner)
         try await resolver.registerNamedEmitCell(name: "SnapshotSource", emitCell: source, scope: .template, identity: owner)
 
+        CellBase.exploreContractEnforcementMode = .strict
         let snapshotCell = await StateSnapshotCell(owner: owner)
         _ = try await snapshotCell.set(keypath: "stateSnapshot.target", value: .string("cell:///SnapshotSource"), requester: owner)
         _ = try await snapshotCell.set(
@@ -131,6 +221,7 @@ final class FlowInspectionCellsTests: XCTestCase {
     }
 
     func testDecodedFlowProbeSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        CellBase.exploreContractEnforcementMode = .strict
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
 
@@ -190,6 +281,7 @@ final class FlowInspectionCellsTests: XCTestCase {
     }
 
     func testDecodedStateSnapshotSupportsImmediateReadAndActionAndConcurrentReadiness() async throws {
+        CellBase.exploreContractEnforcementMode = .strict
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
 
