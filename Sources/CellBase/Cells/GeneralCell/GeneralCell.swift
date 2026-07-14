@@ -1844,6 +1844,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     /// must use this waitable form instead of racing the legacy fire-and-forget
     /// protocol requirement.
     public func detachAndWait(label: String, requester: Identity) async {
+        guard await validateAccess("-w--", at: label, for: requester) else {
+            CellBase.diagnosticLog("detach denied label=\(label)", domain: .flow)
+            return
+        }
         await dropFlowAndWait(label: label, requester: requester)
         if await auditor.loadConnectedCellEmitterForLabel(label) != nil {
             // The connection label is local to this Absorb Cell. The target's
@@ -1863,7 +1867,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 
     /// Completes only after the subscription and its cancellable are removed.
     public func dropFlowAndWait(label: String, requester: Identity) async {
-        _ = requester
+        guard await validateAccess("-w--", at: label, for: requester) else {
+            CellBase.diagnosticLog("dropFlow denied label=\(label)", domain: .flow)
+            return
+        }
         if (await auditor.loadConnectedCellEmitterForLabel(label)) != nil {
             await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
             await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)

@@ -348,4 +348,36 @@ final class IntegrationTests: XCTestCase {
         statuses = try await cell.attachedStatuses(requester: owner)
         XCTAssertTrue(statuses.isEmpty)
     }
+
+    func testWaitableFlowDisconnectRejectsOutsiderWithoutMutatingOwnerConnection() async throws {
+        let priorDebugAccess = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = priorDebugAccess }
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = nil
+        let owner = await vault.identity(for: "waitable-disconnect-owner", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "waitable-disconnect-outsider", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        let pusher = FlowElementPusherCell(owner: owner)
+
+        let state = try await cell.attach(emitter: pusher, label: "source", requester: owner)
+        XCTAssertEqual(state, .connected)
+        try await cell.absorbFlow(label: "source", requester: owner)
+
+        await cell.dropFlowAndWait(label: "source", requester: outsider)
+        var status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertTrue(status.connected)
+        XCTAssertTrue(status.active)
+
+        await cell.detachAndWait(label: "source", requester: outsider)
+        status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertTrue(status.connected)
+        XCTAssertTrue(status.active)
+
+        await cell.detachAndWait(label: "source", requester: owner)
+        status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertFalse(status.connected)
+        XCTAssertFalse(status.active)
+    }
 }

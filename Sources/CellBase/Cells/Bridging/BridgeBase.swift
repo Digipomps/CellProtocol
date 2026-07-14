@@ -688,14 +688,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func detach(label: String, requester: Identity) {
         Task {
-            await sendCommand(command: .removeConnecion, identity: requester, payload: nil)
+            await sendCommand(command: .removeConnecion, identity: requester, payload: .string(label))
         }
         
     }
     
     public func dropFlow(label: String, requester: Identity) {
         Task {
-            await sendCommand(command: .dropFlow, identity: requester, payload: nil)
+            await sendCommand(command: .dropFlow, identity: requester, payload: .string(label))
         }
     }
     

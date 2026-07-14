@@ -175,6 +175,24 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(second.command, .get)
     }
 
+    func testBridgeBaseDisconnectCommandsPreserveConnectionLabels() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let bridge = try await BridgeBase(config)
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+
+        bridge.detach(label: "remote-source", requester: owner)
+        bridge.dropFlow(label: "remote-feed", requester: owner)
+
+        let commands = try await waitUntilTransportHasSent(2, transport: transport)
+        let detach = try XCTUnwrap(commands.first(where: { $0.command == .removeConnecion }))
+        let drop = try XCTUnwrap(commands.first(where: { $0.command == .dropFlow }))
+        XCTAssertEqual(detach.payload, .string("remote-source"))
+        XCTAssertEqual(drop.payload, .string("remote-feed"))
+    }
+
     func testBridgeBaseAuditorTakesCommandsAndPurgesExpiredEntries() async throws {
         let auditor = BridgeBaseAuditor(commandRetentionSeconds: 1)
         let identity = TestFixtures.makeIdentity(displayName: "auditor")
