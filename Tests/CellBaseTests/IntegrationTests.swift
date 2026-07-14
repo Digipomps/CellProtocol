@@ -6,6 +6,34 @@ import XCTest
 @_spi(Testing) import CellApple
 
 final class IntegrationTests: XCTestCase {
+    private actor OneShotAccessGate {
+        private var attempts = 0
+
+        func allowOnlyFirstAttempt() -> Bool {
+            attempts += 1
+            return attempts == 1
+        }
+
+        func attemptCount() -> Int {
+            attempts
+        }
+    }
+
+    private final class OneShotDisconnectAccessCell: GeneralCell {
+        let accessGate = OneShotAccessGate()
+
+        override func validateCellSpecificAccess(
+            _ requestedAccess: String,
+            at keypath: String,
+            for identity: Identity
+        ) async -> Bool {
+            guard requestedAccess == "-w--", keypath == "source" else {
+                return false
+            }
+            return await accessGate.allowOnlyFirstAttempt()
+        }
+    }
+
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousDocumentRoot: String?
@@ -379,5 +407,55 @@ final class IntegrationTests: XCTestCase {
         status = try await cell.attachedStatus(for: "source", requester: owner)
         XCTAssertFalse(status.connected)
         XCTAssertFalse(status.active)
+    }
+
+    func testWaitableDetachUsesOneAuthorizationDecisionAndLeavesNoHiddenSubscription() async throws {
+        let priorDebugAccess = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = priorDebugAccess }
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = nil
+        let owner = await vault.identity(for: "one-shot-disconnect-owner", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "one-shot-disconnect-requester", makeNewIfNotFound: true)!
+        let cell = await OneShotDisconnectAccessCell(owner: owner)
+        let pusher = FlowElementPusherCell(owner: owner)
+
+        let connectState = try await cell.attach(
+            emitter: pusher,
+            label: "source",
+            requester: owner
+        )
+        XCTAssertEqual(connectState, .connected)
+        try await cell.absorbFlow(label: "source", requester: owner)
+
+        let leakedEvent = expectation(description: "Detached subscription must not forward events")
+        leakedEvent.isInverted = true
+        let cancellable = try await cell.flow(requester: owner).sink(
+            receiveCompletion: { _ in },
+            receiveValue: { element in
+                if element.title == "post-detach" {
+                    leakedEvent.fulfill()
+                }
+            }
+        )
+
+        await cell.detachAndWait(label: "source", requester: requester)
+        let status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertFalse(status.connected)
+        XCTAssertFalse(status.active)
+        let accessAttempts = await cell.accessGate.attemptCount()
+        XCTAssertEqual(accessAttempts, 1)
+
+        pusher.pushFlowElement(
+            FlowElement(
+                title: "post-detach",
+                content: .string("must not leak"),
+                properties: .init(type: .event, contentType: .string)
+            ),
+            requester: owner
+        )
+        await fulfillment(of: [leakedEvent], timeout: 0.15)
+        cancellable.cancel()
     }
 }

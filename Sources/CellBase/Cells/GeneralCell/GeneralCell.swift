@@ -1848,7 +1848,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             CellBase.diagnosticLog("detach denied label=\(label)", domain: .flow)
             return
         }
-        await dropFlowAndWait(label: label, requester: requester)
+        await dropFlowLocally(label: label)
         if await auditor.loadConnectedCellEmitterForLabel(label) != nil {
             // The connection label is local to this Absorb Cell. The target's
             // resolver and transport lifetime may be shared by other hosts, so
@@ -1871,12 +1871,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             CellBase.diagnosticLog("dropFlow denied label=\(label)", domain: .flow)
             return
         }
-        if (await auditor.loadConnectedCellEmitterForLabel(label)) != nil {
-            await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
-            await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
-        }
+        await dropFlowLocally(label: label)
         let auditorState = await auditor.auditorState()
         CellBase.diagnosticLog("dropFlow label=\(label) auditorState=\(auditorState)", domain: .flow)
+    }
+
+    private func dropFlowLocally(label: String) async {
+        await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
+        await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
     }
     
     public func dropAllFlows(requester: Identity) {
