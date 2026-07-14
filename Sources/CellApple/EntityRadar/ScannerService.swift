@@ -706,8 +706,6 @@ extension ScannerService : BridgeTransportProtocol {
             }
             
             try await connectRadarCell.absorbFlow(label: "lobby", requester: requester	)
-            let startResponse = try await lobbyCell.get(keypath: "start", requester: requester)
-            print("startResponse: \(startResponse)")
         }
     }
     

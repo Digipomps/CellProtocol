@@ -244,8 +244,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         previousService?.stop()
 
         let service: ScannerService
-        if let lobbyCell = try await CellBase.defaultCellResolver?.cellAtEndpoint(endpoint: "cell:///Lobby", requester: requester) as? LobbyCell {
-            let infoDict = lobbyCell.getPublicPurposes()
+        if let infoDict = try await lobbyPublicPurposes(requester: requester) {
             service = ScannerService(owner: requester, serviceDicoveryInfoDict: infoDict)
         } else {
             service = ScannerService(owner: requester)
@@ -261,6 +260,32 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
         pushFlowElement(flowElement, requester: requester)
         pushCapabilitiesEvent(service: service)
+    }
+
+    func lobbyPublicPurposes(requester: Identity) async throws -> [String: String]? {
+        guard let resolver = CellBase.defaultCellResolver else {
+            return nil
+        }
+        guard let lobbyCell = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///Lobby",
+            requester: requester
+        ) as? LobbyCell else {
+            return nil
+        }
+
+        let purposes = try await lobbyCell.get(keypath: "purposes", requester: requester)
+        guard case let .object(object) = purposes else {
+            throw CellBaseError.noSourceCell
+        }
+
+        var result = [String: String]()
+        for (key, value) in object {
+            guard case let .string(string) = value else {
+                throw CellBaseError.noSourceCell
+            }
+            result[key] = string
+        }
+        return result
     }
 
     func stopConnectService(requester: Identity) {

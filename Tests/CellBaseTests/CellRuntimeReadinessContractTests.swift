@@ -252,7 +252,7 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
             await LobbyCell(owner: owner),
             owner: owner,
             expectedKey: "purposes",
-            requiredGrant: Grant(keypath: "start", permission: "rw--")
+            requiredGrant: Grant(keypath: "purposes", permission: "r---")
         )
         try await assertDecodedReadiness(
             await OwnershipTransferCell(owner: owner),
