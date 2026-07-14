@@ -183,6 +183,218 @@ final class RelationalLearningEngineTests: XCTestCase {
         XCTAssertEqual(explainVersion, 2)
     }
 
+    func testTransactionalJournalRestoreAndGeneratedWeightIDsAreDeterministic() async throws {
+        let started = RelationalPurposeLifecycleEvent(
+            eventId: "transaction-start",
+            timestamp: 1_000,
+            status: .started,
+            purposeId: "purpose://transaction",
+            activeInterestRefs: ["interest://determinism"],
+            contextConfidence: 1
+        )
+        let succeeded = RelationalPurposeLifecycleEvent(
+            eventId: "transaction-success",
+            timestamp: 1_001,
+            status: .succeeded,
+            purposeId: "purpose://transaction",
+            activeInterestRefs: ["interest://determinism"],
+            contextConfidence: 1
+        )
+        let envelopes = try [
+            RelationalLearningEventEnvelope.from(started),
+            RelationalLearningEventEnvelope.from(succeeded)
+        ]
+
+        let first = RelationalLearningEngine()
+        let second = RelationalLearningEngine()
+        _ = try await first.applyEnvelopeTransaction(envelopes[0])
+        let firstResult = try await first.applyEnvelopeTransaction(envelopes[1])
+        _ = try await second.applyEnvelopeTransaction(envelopes[0])
+        let secondResult = try await second.applyEnvelopeTransaction(envelopes[1])
+
+        XCTAssertEqual(firstResult.weightUpdates.map(\.eventId), secondResult.weightUpdates.map(\.eventId))
+        XCTAssertTrue(firstResult.weightUpdates.allSatisfy {
+            $0.eventId.hasPrefix("relational-weight-v1-")
+        })
+
+        let journal = await first.journalSnapshot()
+        XCTAssertEqual(journal.revision, 2)
+        XCTAssertEqual(journal.records.map(\.sequence), [1, 2])
+
+        let restored = RelationalLearningEngine()
+        try await restored.restore(from: journal)
+        let restoredEdges = await restored.edges()
+        let originalEdges = await first.edges()
+        let restoredJournal = await restored.journalSnapshot()
+        XCTAssertEqual(
+            try canonicalJSON(restoredEdges),
+            try canonicalJSON(originalEdges)
+        )
+        XCTAssertEqual(
+            try canonicalJSON(restoredJournal),
+            try canonicalJSON(journal)
+        )
+    }
+
+    func testInvalidReplayIsRejectedBeforeResetOrPartialMutation() async throws {
+        let engine = RelationalLearningEngine()
+        let preference = RelationalExplicitPreferenceEvent(
+            eventId: "baseline-preference",
+            timestamp: 2_000,
+            purposeId: "purpose://atomic",
+            relationType: .purposeInterest,
+            targetNode: RelationalNode(type: .interest, id: "interest://integrity"),
+            preferenceWeight: 0.7
+        )
+        _ = try await engine.applyEnvelopeTransaction(.from(preference))
+        let baselineEdges = await engine.edges()
+        let baselineJournal = await engine.journalSnapshot()
+
+        let validContext = try RelationalLearningEventEnvelope.from(
+            RelationalContextTransitionEvent(
+                eventId: "valid-context",
+                timestamp: 2_001,
+                domain: "location",
+                toBlockId: "home",
+                confidence: 1
+            )
+        )
+        var invalidContext = validContext
+        invalidContext.schemaVersion = "unsupported"
+
+        do {
+            _ = try await engine.replayTransaction(
+                events: [validContext, invalidContext],
+                resetFirst: true
+            )
+            XCTFail("Replay must validate every event before reset")
+        } catch RelationalLearningError.unsupportedSchemaVersion {
+            // Expected.
+        }
+
+        let finalEdges = await engine.edges()
+        let finalJournal = await engine.journalSnapshot()
+        let finalContext = await engine.currentActiveContextBlocks()
+        XCTAssertEqual(try canonicalJSON(finalEdges), try canonicalJSON(baselineEdges))
+        XCTAssertEqual(
+            try canonicalJSON(finalJournal),
+            try canonicalJSON(baselineJournal)
+        )
+        XCTAssertTrue(finalContext.isEmpty)
+    }
+
+    func testOversizedJournalIsRejectedExplicitly() throws {
+        let envelope = try RelationalLearningEventEnvelope.from(
+            RelationalContextTransitionEvent(
+                eventId: "capacity",
+                timestamp: 3_000,
+                domain: "location",
+                toBlockId: "home",
+                confidence: 1
+            )
+        )
+        let records = (1 ... RelationalLearningPersistedJournal.maximumRecordCount + 1).map {
+            RelationalLearningJournalRecord(sequence: UInt64($0), envelope: envelope)
+        }
+        let journal = RelationalLearningPersistedJournal(
+            revision: UInt64(records.count),
+            records: records
+        )
+        XCTAssertThrowsError(try journal.validateShapeAndSize()) { error in
+            guard case RelationalLearningError.journalCapacityExceeded = error else {
+                return XCTFail("Expected explicit capacity error, got \(error)")
+            }
+        }
+    }
+
+    func testMismatchedRelationShapesAreRejectedWithoutMutation() async throws {
+        let engine = RelationalLearningEngine()
+        let baseline = RelationalExplicitPreferenceEvent(
+            eventId: "shape-baseline",
+            timestamp: 4_000,
+            purposeId: "purpose://shape",
+            relationType: .purposeInterest,
+            targetNode: RelationalNode(type: .interest, id: "interest://valid"),
+            preferenceWeight: 0.7
+        )
+        _ = try await engine.applyEnvelopeTransaction(.from(baseline))
+        let baselineEdges = await engine.edges()
+        let baselineJournal = await engine.journalSnapshot()
+
+        let invalidPreference = RelationalExplicitPreferenceEvent(
+            eventId: "shape-invalid-preference",
+            timestamp: 4_001,
+            purposeId: "purpose://shape",
+            relationType: .purposeInterest,
+            targetNode: RelationalNode(type: .entityRepresentation, id: "entity://wrong"),
+            preferenceWeight: 0.8
+        )
+        let invalidSourceWeight = RelationalWeightUpdateEvent(
+            eventId: "shape-invalid-source",
+            emittedAt: 4_002,
+            sourceEventId: nil,
+            outcome: .success,
+            edge: RelationalEdge(
+                fromNode: RelationalNode(type: .interest, id: "interest://wrong-source"),
+                relationType: .purposeInterest,
+                toNode: RelationalNode(type: .interest, id: "interest://valid"),
+                weightStored: 0.5,
+                lastReinforcedAt: 4_002,
+                decayProfileId: "noa",
+                decayParamsVersion: 1
+            ),
+            previousWeightStored: 0.4,
+            newWeightStored: 0.5,
+            learningRate: 0.1,
+            eligibility: 1,
+            reason: "invalid source"
+        )
+        let invalidTargetWeight = RelationalWeightUpdateEvent(
+            eventId: "shape-invalid-target",
+            emittedAt: 4_003,
+            sourceEventId: nil,
+            outcome: .success,
+            edge: RelationalEdge(
+                fromNode: RelationalNode(type: .purpose, id: "purpose://shape"),
+                relationType: .purposeEntity,
+                toNode: RelationalNode(type: .interest, id: "interest://wrong-target"),
+                weightStored: 0.5,
+                lastReinforcedAt: 4_003,
+                decayProfileId: "noa",
+                decayParamsVersion: 1
+            ),
+            previousWeightStored: 0.4,
+            newWeightStored: 0.5,
+            learningRate: 0.1,
+            eligibility: 1,
+            reason: "invalid target"
+        )
+        let invalidEnvelopes = try [
+            RelationalLearningEventEnvelope.from(invalidPreference),
+            RelationalLearningEventEnvelope.from(invalidSourceWeight),
+            RelationalLearningEventEnvelope.from(invalidTargetWeight)
+        ]
+
+        for envelope in invalidEnvelopes {
+            do {
+                _ = try await engine.applyEnvelopeTransaction(envelope)
+                XCTFail("Mismatched relation shape must be rejected")
+            } catch RelationalLearningError.invalidEvent {
+                // Expected.
+            }
+            let currentEdges = await engine.edges()
+            let currentJournal = await engine.journalSnapshot()
+            XCTAssertEqual(
+                try canonicalJSON(currentEdges),
+                try canonicalJSON(baselineEdges)
+            )
+            XCTAssertEqual(
+                try canonicalJSON(currentJournal),
+                try canonicalJSON(baselineJournal)
+            )
+        }
+    }
+
     private func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

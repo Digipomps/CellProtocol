@@ -2149,6 +2149,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         }
     }
+
+    /// Creates a synchronous Cell-owned publisher only while this exact Cell is
+    /// installing runtime bindings (or when the requester proves owner
+    /// control). The returned closure never accepts caller authority, so action
+    /// grants remain separate from arbitrary feed-injection grants.
+    @_spi(HAVENRuntime)
+    public func makeCellOwnedFlowEmitterForRuntimeBinding(
+        requester: Identity
+    ) async -> ((FlowElement) -> Void)? {
+        guard await isAllowedToSetupIntercepts(requester: requester) else {
+            return nil
+        }
+        return { [weak self] flowElement in
+            guard let self else { return }
+            var ownedElement = flowElement
+            ownedElement.origin = self.uuid
+            self.feedPublisher.send(ownedElement)
+        }
+    }
+
     public func getEmitterWithUUID(_ uuid: String, requester: Identity) async -> Emit? {
         if let emit = await auditor.connectedEmitter(for: uuid) {
             return emit

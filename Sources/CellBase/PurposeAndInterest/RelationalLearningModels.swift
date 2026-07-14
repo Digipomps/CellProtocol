@@ -105,6 +105,112 @@ public struct RelationalLearningEventEnvelope: Codable, Sendable {
     }
 }
 
+public enum RelationalLearningError: Error, CustomStringConvertible, Sendable {
+    case invalidEvent(String)
+    case invalidJournal(String)
+    case unsupportedSchemaVersion(String)
+    case journalCapacityExceeded
+
+    public var description: String {
+        switch self {
+        case .invalidEvent(let message):
+            return "Invalid relational learning event: \(message)"
+        case .invalidJournal(let message):
+            return "Invalid relational learning journal: \(message)"
+        case .unsupportedSchemaVersion(let version):
+            return "Unsupported relational learning schema version: \(version)"
+        case .journalCapacityExceeded:
+            return "Relational learning journal capacity exceeded"
+        }
+    }
+}
+
+public struct RelationalLearningJournalRecord: Codable, Sendable {
+    public var sequence: UInt64
+    public var envelope: RelationalLearningEventEnvelope
+
+    public init(sequence: UInt64, envelope: RelationalLearningEventEnvelope) {
+        self.sequence = sequence
+        self.envelope = envelope
+    }
+}
+
+public struct RelationalLearningPersistedJournal: Codable, Sendable {
+    public static let currentVersion = 1
+    public static let maximumRecordCount = 2_048
+    public static let maximumEncodedBytes = 2 * 1_024 * 1_024
+
+    public var version: Int
+    public var revision: UInt64
+    public var records: [RelationalLearningJournalRecord]
+
+    public init(
+        version: Int = RelationalLearningPersistedJournal.currentVersion,
+        revision: UInt64 = 0,
+        records: [RelationalLearningJournalRecord] = []
+    ) {
+        self.version = version
+        self.revision = revision
+        self.records = records
+    }
+
+    public static let empty = RelationalLearningPersistedJournal()
+
+    public func validateShapeAndSize() throws {
+        guard version == Self.currentVersion else {
+            throw RelationalLearningError.invalidJournal("unsupported version \(version)")
+        }
+        guard records.count <= Self.maximumRecordCount else {
+            throw RelationalLearningError.journalCapacityExceeded
+        }
+
+        var expectedSequence: UInt64 = 1
+        for record in records {
+            guard record.sequence == expectedSequence else {
+                throw RelationalLearningError.invalidJournal(
+                    "expected sequence \(expectedSequence), observed \(record.sequence)"
+                )
+            }
+            expectedSequence += 1
+        }
+        guard revision == records.last?.sequence ?? 0 else {
+            throw RelationalLearningError.invalidJournal("revision does not match the final sequence")
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(self).count <= Self.maximumEncodedBytes else {
+            throw RelationalLearningError.journalCapacityExceeded
+        }
+    }
+}
+
+public struct RelationalLearningTransactionResult: Sendable {
+    public var applied: Bool
+    public var sequence: UInt64?
+    public var weightUpdates: [RelationalWeightUpdateEvent]
+
+    public init(
+        applied: Bool,
+        sequence: UInt64?,
+        weightUpdates: [RelationalWeightUpdateEvent] = []
+    ) {
+        self.applied = applied
+        self.sequence = sequence
+        self.weightUpdates = weightUpdates
+    }
+}
+
+public struct RelationalLearningReplayResult: Sendable {
+    public var appliedCount: Int
+    public var journal: RelationalLearningPersistedJournal
+
+    public init(appliedCount: Int, journal: RelationalLearningPersistedJournal) {
+        self.appliedCount = appliedCount
+        self.journal = journal
+    }
+}
+
 public enum RelationalPurposeLifecycleStatus: String, Codable, Sendable {
     case started
     case succeeded
@@ -447,8 +553,7 @@ public extension RelationalLearningEventEnvelope {
 }
 
 public extension RelationalContextTransitionEvent {
-    static func fromFlowElement(_ flowElement: FlowElement,
-                                fallbackTimestamp: TimeInterval = Date().timeIntervalSince1970) -> RelationalContextTransitionEvent? {
+    static func fromFlowElement(_ flowElement: FlowElement) -> RelationalContextTransitionEvent? {
         guard case let .object(payload) = flowElement.content else {
             return nil
         }
@@ -457,11 +562,13 @@ public extension RelationalContextTransitionEvent {
         let domain = domainFrom(topic: topic, payload: payload)
         guard let domain else { return nil }
 
-        let timestamp =
+        guard let timestamp =
             doubleValue(payload["occurredAt"]) ??
             doubleValue(payload["date"]) ??
-            doubleValue(payload["timestamp"]) ??
-            fallbackTimestamp
+            doubleValue(payload["timestamp"]),
+            timestamp.isFinite else {
+            return nil
+        }
 
         let confidence =
             doubleValue(payload["confidence"]) ??

@@ -55,6 +55,8 @@ public actor RelationalLearningEngine {
     private var policiesByProfile: [String: [RelationalDecayPolicy]]
     private var appliedWeightUpdateEventIDs: Set<String>
     private var appliedDecayPolicyEventIDs: Set<String>
+    private var appliedSourceEventKeys: Set<String>
+    private var persistedJournal: RelationalLearningPersistedJournal
 
     public init(config: RelationalLearningConfig = .default) {
         self.config = config
@@ -66,6 +68,132 @@ public actor RelationalLearningEngine {
         ]
         self.appliedWeightUpdateEventIDs = []
         self.appliedDecayPolicyEventIDs = []
+        self.appliedSourceEventKeys = []
+        self.persistedJournal = .empty
+    }
+
+    public func journalSnapshot() -> RelationalLearningPersistedJournal {
+        persistedJournal
+    }
+
+    public func restore(from journal: RelationalLearningPersistedJournal) throws {
+        try journal.validateShapeAndSize()
+        for record in journal.records {
+            try Self.validateEnvelope(record.envelope)
+        }
+
+        reset(keepPolicies: false)
+        for record in journal.records {
+            let result = try applyEnvelopeTransaction(record.envelope)
+            guard result.applied, result.sequence == record.sequence else {
+                throw RelationalLearningError.invalidJournal(
+                    "record \(record.sequence) did not restore exactly once"
+                )
+            }
+        }
+        guard persistedJournal.revision == journal.revision else {
+            throw RelationalLearningError.invalidJournal("restored revision mismatch")
+        }
+    }
+
+    public func applyEnvelopeTransaction(
+        _ envelope: RelationalLearningEventEnvelope
+    ) throws -> RelationalLearningTransactionResult {
+        try Self.validateEnvelope(envelope)
+        let eventID = try Self.validatedEventIdentifier(for: envelope)
+        let sourceKey = "\(envelope.eventType.rawValue)|\(eventID)"
+        guard !appliedSourceEventKeys.contains(sourceKey) else {
+            return RelationalLearningTransactionResult(applied: false, sequence: nil)
+        }
+
+        try ensureJournalCapacity(adding: [envelope], resetFirst: false)
+
+        let weightUpdates: [RelationalWeightUpdateEvent]
+        let applied: Bool
+        switch envelope.eventType {
+        case .purposeLifecycle:
+            let event = try RelationalLearningCodec.decode(
+                RelationalPurposeLifecycleEvent.self,
+                from: envelope.payload
+            )
+            weightUpdates = ingestPurposeLifecycleEvent(event)
+            for update in weightUpdates {
+                _ = applyWeightUpdateEvent(update)
+            }
+            applied = true
+        case .weightUpdate:
+            let event = try RelationalLearningCodec.decode(
+                RelationalWeightUpdateEvent.self,
+                from: envelope.payload
+            )
+            weightUpdates = []
+            applied = applyWeightUpdateEvent(event)
+        case .decayPolicyUpdated:
+            let event = try RelationalLearningCodec.decode(
+                RelationalDecayPolicyUpdatedEvent.self,
+                from: envelope.payload
+            )
+            weightUpdates = []
+            applied = applyDecayPolicyUpdatedEvent(event)
+        case .contextTransition:
+            let event = try RelationalLearningCodec.decode(
+                RelationalContextTransitionEvent.self,
+                from: envelope.payload
+            )
+            _ = observeContextTransitionEvent(event)
+            weightUpdates = []
+            applied = true
+        case .explicitPreference:
+            let event = try RelationalLearningCodec.decode(
+                RelationalExplicitPreferenceEvent.self,
+                from: envelope.payload
+            )
+            let update = deriveExplicitPreferenceWeightUpdate(event)
+            weightUpdates = [update]
+            applied = applyWeightUpdateEvent(update)
+        }
+
+        guard applied else {
+            return RelationalLearningTransactionResult(applied: false, sequence: nil)
+        }
+
+        appliedSourceEventKeys.insert(sourceKey)
+        let sequence = persistedJournal.revision + 1
+        persistedJournal.records.append(
+            RelationalLearningJournalRecord(sequence: sequence, envelope: envelope)
+        )
+        persistedJournal.revision = sequence
+        return RelationalLearningTransactionResult(
+            applied: true,
+            sequence: sequence,
+            weightUpdates: weightUpdates
+        )
+    }
+
+    public func replayTransaction(
+        events: [RelationalLearningEventEnvelope],
+        resetFirst: Bool
+    ) throws -> RelationalLearningReplayResult {
+        for envelope in events {
+            try Self.validateEnvelope(envelope)
+        }
+        let sorted = sortedReplayEvents(events)
+        try ensureJournalCapacity(adding: sorted, resetFirst: resetFirst)
+
+        if resetFirst {
+            reset(keepPolicies: false)
+        }
+
+        var appliedCount = 0
+        for envelope in sorted {
+            if try applyEnvelopeTransaction(envelope).applied {
+                appliedCount += 1
+            }
+        }
+        return RelationalLearningReplayResult(
+            appliedCount: appliedCount,
+            journal: persistedJournal
+        )
     }
 
     // MARK: Event ingestion
@@ -186,6 +314,11 @@ public actor RelationalLearningEngine {
                 )
 
                 let updateEvent = RelationalWeightUpdateEvent(
+                    eventId: deterministicWeightUpdateEventID(
+                        sourceEventID: event.eventId,
+                        outcome: outcome,
+                        edge: edge
+                    ),
                     emittedAt: event.timestamp,
                     sourceEventId: event.eventId,
                     outcome: outcome,
@@ -239,6 +372,11 @@ public actor RelationalLearningEngine {
         )
 
         return RelationalWeightUpdateEvent(
+            eventId: deterministicWeightUpdateEventID(
+                sourceEventID: event.eventId,
+                outcome: .explicitPreference,
+                edge: edge
+            ),
             emittedAt: event.timestamp,
             sourceEventId: event.eventId,
             outcome: .explicitPreference,
@@ -271,6 +409,8 @@ public actor RelationalLearningEngine {
         activeContextByDomain = [:]
         appliedWeightUpdateEventIDs = []
         appliedDecayPolicyEventIDs = []
+        appliedSourceEventKeys = []
+        persistedJournal = .empty
 
         if keepPolicies {
             // keep existing policies
@@ -281,63 +421,7 @@ public actor RelationalLearningEngine {
 
     @discardableResult
     public func replay(events: [RelationalLearningEventEnvelope], resetFirst: Bool = true) -> Int {
-        if resetFirst {
-            reset(keepPolicies: false)
-        }
-
-        var appliedCount = 0
-        let sorted = events.sorted {
-            if $0.emittedAt != $1.emittedAt {
-                return $0.emittedAt < $1.emittedAt
-            }
-            if $0.eventType.rawValue != $1.eventType.rawValue {
-                return $0.eventType.rawValue < $1.eventType.rawValue
-            }
-
-            let lhsEventID = eventIdentifier(for: $0)
-            let rhsEventID = eventIdentifier(for: $1)
-            if lhsEventID != rhsEventID {
-                return lhsEventID < rhsEventID
-            }
-
-            return canonicalPayloadString($0.payload) < canonicalPayloadString($1.payload)
-        }
-
-        for envelope in sorted {
-            do {
-                switch envelope.eventType {
-                case .decayPolicyUpdated:
-                    let event = try RelationalLearningCodec.decode(RelationalDecayPolicyUpdatedEvent.self, from: envelope.payload)
-                    if applyDecayPolicyUpdatedEvent(event) {
-                        appliedCount += 1
-                    }
-                case .contextTransition:
-                    let event = try RelationalLearningCodec.decode(RelationalContextTransitionEvent.self, from: envelope.payload)
-                    _ = observeContextTransitionEvent(event)
-                    appliedCount += 1
-                case .purposeLifecycle:
-                    let event = try RelationalLearningCodec.decode(RelationalPurposeLifecycleEvent.self, from: envelope.payload)
-                    let updates = ingestPurposeLifecycleEvent(event)
-                    for update in updates where applyWeightUpdateEvent(update) {
-                        appliedCount += 1
-                    }
-                case .explicitPreference:
-                    let event = try RelationalLearningCodec.decode(RelationalExplicitPreferenceEvent.self, from: envelope.payload)
-                    let update = deriveExplicitPreferenceWeightUpdate(event)
-                    if applyWeightUpdateEvent(update) {
-                        appliedCount += 1
-                    }
-                case .weightUpdate:
-                    let event = try RelationalLearningCodec.decode(RelationalWeightUpdateEvent.self, from: envelope.payload)
-                    if applyWeightUpdateEvent(event) {
-                        appliedCount += 1
-                    }
-                }
-            } catch {
-                continue
-            }
-        }
-        return appliedCount
+        (try? replayTransaction(events: events, resetFirst: resetFirst).appliedCount) ?? 0
     }
 
     // MARK: Scoring
@@ -445,6 +529,27 @@ public actor RelationalLearningEngine {
     }
 
     // MARK: Internals
+
+    private func deterministicWeightUpdateEventID(
+        sourceEventID: String,
+        outcome: RelationalLearningOutcome,
+        edge: RelationalEdge
+    ) -> String {
+        let identity: Object = [
+            "schema": .string("relational-weight-event-id-v1"),
+            "sourceEventId": .string(sourceEventID),
+            "outcome": .string(outcome.rawValue),
+            "fromNodeType": .string(edge.fromNode.type.rawValue),
+            "fromNodeId": .string(edge.fromNode.id),
+            "relationType": .string(edge.relationType.rawValue),
+            "toNodeType": .string(edge.toNode.type.rawValue),
+            "toNodeId": .string(edge.toNode.id)
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = (try? encoder.encode(identity)) ?? Data()
+        return "relational-weight-v1-\(FlowHasher.sha256Hex(data))"
+    }
 
     private func buildEligibilityTraces(from session: RelationalPurposeSession) -> [RelationalEligibilityTrace] {
         var traceMap = [String: RelationalEligibilityTrace]()
@@ -639,6 +744,199 @@ public actor RelationalLearningEngine {
             return lhs.effectiveWeight > rhs.effectiveWeight
         }
         return lhs.edge.lastReinforcedAt > rhs.edge.lastReinforcedAt
+    }
+
+    private func ensureJournalCapacity(
+        adding envelopes: [RelationalLearningEventEnvelope],
+        resetFirst: Bool
+    ) throws {
+        var candidate = resetFirst ? RelationalLearningPersistedJournal.empty : persistedJournal
+        for envelope in envelopes {
+            let sequence = candidate.revision + 1
+            candidate.records.append(
+                RelationalLearningJournalRecord(sequence: sequence, envelope: envelope)
+            )
+            candidate.revision = sequence
+        }
+        try candidate.validateShapeAndSize()
+    }
+
+    private func sortedReplayEvents(
+        _ events: [RelationalLearningEventEnvelope]
+    ) -> [RelationalLearningEventEnvelope] {
+        events.sorted {
+            if $0.emittedAt != $1.emittedAt {
+                return $0.emittedAt < $1.emittedAt
+            }
+            if $0.eventType.rawValue != $1.eventType.rawValue {
+                return $0.eventType.rawValue < $1.eventType.rawValue
+            }
+
+            let lhsEventID = eventIdentifier(for: $0)
+            let rhsEventID = eventIdentifier(for: $1)
+            if lhsEventID != rhsEventID {
+                return lhsEventID < rhsEventID
+            }
+            return canonicalPayloadString($0.payload) < canonicalPayloadString($1.payload)
+        }
+    }
+
+    private static func validateEnvelope(_ envelope: RelationalLearningEventEnvelope) throws {
+        guard envelope.schemaVersion == "1.0" else {
+            throw RelationalLearningError.unsupportedSchemaVersion(envelope.schemaVersion)
+        }
+        guard envelope.emittedAt.isFinite else {
+            throw RelationalLearningError.invalidEvent("envelope timestamp must be finite")
+        }
+        _ = try validatedEventIdentifier(for: envelope)
+
+        switch envelope.eventType {
+        case .purposeLifecycle:
+            let event = try RelationalLearningCodec.decode(
+                RelationalPurposeLifecycleEvent.self,
+                from: envelope.payload
+            )
+            guard event.timestamp.isFinite,
+                  event.timestamp == envelope.emittedAt,
+                  !event.purposeId.isEmpty else {
+                throw RelationalLearningError.invalidEvent("invalid lifecycle timestamp or purposeId")
+            }
+            try validateUnitInterval(event.contextConfidence, field: "contextConfidence")
+            guard (event.activeInterestRefs + event.passiveInterestRefs
+                   + event.activeEntityRefs + event.passiveEntityRefs).allSatisfy({ !$0.isEmpty }) else {
+                throw RelationalLearningError.invalidEvent("lifecycle references must not be empty")
+            }
+            for block in event.activeContextBlocks {
+                guard !block.domain.isEmpty, !block.blockId.isEmpty else {
+                    throw RelationalLearningError.invalidEvent("context block identity must not be empty")
+                }
+                try validateUnitInterval(block.confidence, field: "context block confidence")
+            }
+        case .weightUpdate:
+            let event = try RelationalLearningCodec.decode(
+                RelationalWeightUpdateEvent.self,
+                from: envelope.payload
+            )
+            guard event.emittedAt.isFinite,
+                  event.emittedAt == envelope.emittedAt,
+                  !event.edge.fromNode.id.isEmpty,
+                  !event.edge.toNode.id.isEmpty,
+                  event.edge.lastReinforcedAt.isFinite,
+                  event.learningRate.isFinite,
+                  event.learningRate >= 0 else {
+                throw RelationalLearningError.invalidEvent("invalid weight update")
+            }
+            try validateEdgeShape(
+                relationType: event.edge.relationType,
+                fromNode: event.edge.fromNode,
+                toNode: event.edge.toNode
+            )
+            try validateUnitInterval(event.edge.weightStored, field: "edge.weightStored")
+            try validateUnitInterval(event.previousWeightStored, field: "previousWeightStored")
+            try validateUnitInterval(event.newWeightStored, field: "newWeightStored")
+            try validateUnitInterval(event.eligibility, field: "eligibility")
+        case .decayPolicyUpdated:
+            let event = try RelationalLearningCodec.decode(
+                RelationalDecayPolicyUpdatedEvent.self,
+                from: envelope.payload
+            )
+            guard event.emittedAt.isFinite,
+                  event.emittedAt == envelope.emittedAt,
+                  !event.policy.profileId.isEmpty,
+                  event.policy.version > 0,
+                  event.policy.effectiveFromTimestamp.isFinite else {
+                throw RelationalLearningError.invalidEvent("invalid decay policy")
+            }
+            if event.policy.kind == .noaDoubleSigmoid {
+                guard let parameters = event.policy.noaParameters,
+                      parameters.t1Seconds.isFinite,
+                      parameters.t1Seconds > 0,
+                      parameters.t2Seconds.isFinite,
+                      parameters.t2Seconds > 0,
+                      parameters.k1.isFinite,
+                      parameters.k1 > 0,
+                      parameters.k2.isFinite,
+                      parameters.k2 > 0 else {
+                    throw RelationalLearningError.invalidEvent("invalid Noa decay parameters")
+                }
+                try validateUnitInterval(parameters.rMin, field: "rMin")
+            }
+        case .contextTransition:
+            let event = try RelationalLearningCodec.decode(
+                RelationalContextTransitionEvent.self,
+                from: envelope.payload
+            )
+            guard event.timestamp.isFinite,
+                  event.timestamp == envelope.emittedAt,
+                  !event.domain.isEmpty,
+                  !event.toBlockId.isEmpty else {
+                throw RelationalLearningError.invalidEvent("invalid context transition")
+            }
+            try validateUnitInterval(event.confidence, field: "confidence")
+        case .explicitPreference:
+            let event = try RelationalLearningCodec.decode(
+                RelationalExplicitPreferenceEvent.self,
+                from: envelope.payload
+            )
+            guard event.timestamp.isFinite,
+                  event.timestamp == envelope.emittedAt,
+                  !event.purposeId.isEmpty,
+                  !event.targetNode.id.isEmpty else {
+                throw RelationalLearningError.invalidEvent("invalid explicit preference")
+            }
+            try validateEdgeShape(
+                relationType: event.relationType,
+                fromNode: RelationalNode(type: .purpose, id: event.purposeId),
+                toNode: event.targetNode
+            )
+            try validateUnitInterval(event.preferenceWeight, field: "preferenceWeight")
+        }
+    }
+
+    private static func validateEdgeShape(
+        relationType: RelationalEdgeRelationType,
+        fromNode: RelationalNode,
+        toNode: RelationalNode
+    ) throws {
+        guard fromNode.type == .purpose else {
+            throw RelationalLearningError.invalidEvent(
+                "relational edges must originate at a purpose node"
+            )
+        }
+
+        let expectedTargetType: RelationalNodeType
+        switch relationType {
+        case .purposeInterest:
+            expectedTargetType = .interest
+        case .purposeEntity:
+            expectedTargetType = .entityRepresentation
+        case .purposeContextBlock:
+            expectedTargetType = .contextBlock
+        case .purposePurpose:
+            expectedTargetType = .purpose
+        }
+        guard toNode.type == expectedTargetType else {
+            throw RelationalLearningError.invalidEvent(
+                "relation \(relationType.rawValue) requires target node type \(expectedTargetType.rawValue)"
+            )
+        }
+    }
+
+    private static func validatedEventIdentifier(
+        for envelope: RelationalLearningEventEnvelope
+    ) throws -> String {
+        guard case let .string(eventID)? = envelope.payload["eventId"],
+              !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw RelationalLearningError.invalidEvent("eventId must be a non-empty string")
+        }
+        return eventID
+    }
+
+    private static func validateUnitInterval(_ value: Double?, field: String) throws {
+        guard let value else { return }
+        guard value.isFinite, (0.0 ... 1.0).contains(value) else {
+            throw RelationalLearningError.invalidEvent("\(field) must be finite and within 0...1")
+        }
     }
 
     private func eventIdentifier(for envelope: RelationalLearningEventEnvelope) -> String {
