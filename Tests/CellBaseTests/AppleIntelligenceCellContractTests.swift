@@ -171,9 +171,11 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
         #endif
     }
 
-    func testSensitiveAssistantStateAndDequeueRemainOwnerOnlyAcrossSignedAgreements() async throws {
+    func testSensitiveAssistantStateAndDequeueRemainOwnerOnlyAcrossSignedAgreementsAndDecode() async throws {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, iOS 26.0, *) {
+            let previousVault = CellBase.defaultIdentityVault
+            defer { CellBase.defaultIdentityVault = previousVault }
             let vault = MockIdentityVault()
             CellBase.defaultIdentityVault = vault
             let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
@@ -224,37 +226,76 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
             )
             XCTAssertEqual(purposeAfterUnauthorizedSeed, .null)
 
-            for member in [firstMember, secondMember] {
-                do {
-                    _ = try await cell.get(keypath: "ai.outbox", requester: member)
-                    XCTFail("Signed non-owner read owner outbox")
-                } catch {
-                    // Expected inner owner-only policy after the root Agreement gate.
-                }
-                do {
-                    _ = try await cell.get(keypath: "ai.lastToolArguments", requester: member)
-                    XCTFail("Signed non-owner read owner tool diagnostics")
-                } catch {
-                    // Expected.
-                }
-                do {
-                    _ = try await cell.set(
-                        keypath: "ai.dequeueOutbox",
-                        value: .null,
+            let restored = try JSONDecoder().decode(
+                AppleIntelligenceCell.self,
+                from: JSONEncoder().encode(cell)
+            )
+            for securedCell in [cell, restored] {
+                let delegatedPrompt = try await securedCell.set(
+                    keypath: "ai.promptText",
+                    value: .string("delegated prompt"),
+                    requester: firstMember
+                )
+                XCTAssertEqual(delegatedPrompt, .string("New prompt text: delegated prompt"))
+                let delegatedSend = try await securedCell.set(
+                    keypath: "ai.send",
+                    value: .object(["content": .string("delegated message")]),
+                    requester: firstMember
+                )
+                XCTAssertEqual(delegatedSend, .string("queued"))
+
+                for member in [firstMember, secondMember] {
+                    let publicState = try await securedCell.get(
+                        keypath: "ai.state",
                         requester: member
                     )
-                    XCTFail("Signed non-owner dequeued owner outbox")
-                } catch {
-                    // Expected.
+                    XCTAssertNotNil(publicState)
+                    do {
+                        _ = try await securedCell.get(keypath: "ai.outbox", requester: member)
+                        XCTFail("Signed non-owner read owner outbox")
+                    } catch {
+                        // Expected inner owner-only policy after the root Agreement gate.
+                    }
+                    do {
+                        _ = try await securedCell.get(
+                            keypath: "ai.lastToolArguments",
+                            requester: member
+                        )
+                        XCTFail("Signed non-owner read owner tool diagnostics")
+                    } catch {
+                        // Expected.
+                    }
+                    do {
+                        _ = try await securedCell.set(
+                            keypath: "ai.dequeueOutbox",
+                            value: .null,
+                            requester: member
+                        )
+                        XCTFail("Signed non-owner dequeued owner outbox")
+                    } catch {
+                        // Expected.
+                    }
+                    do {
+                        _ = try await securedCell.set(
+                            keypath: "ai.dequeueOutbox",
+                            value: .string("unsupported"),
+                            requester: member
+                        )
+                        XCTFail("Signed non-owner reached dequeue payload validation")
+                    } catch let error as AppleIntelligenceCell.RuntimeStateError {
+                        XCTAssertEqual(error, .unauthorized)
+                    } catch {
+                        XCTFail("Expected owner-policy denial before payload validation: \(error)")
+                    }
                 }
-            }
 
-            let ownerDequeue = try await cell.set(
-                keypath: "ai.dequeueOutbox",
-                value: .null,
-                requester: owner
-            )
-            XCTAssertNotNil(ownerDequeue)
+                let ownerDequeue = try await securedCell.set(
+                    keypath: "ai.dequeueOutbox",
+                    value: .null,
+                    requester: owner
+                )
+                XCTAssertNotNil(ownerDequeue)
+            }
         } else {
             throw XCTSkip("AppleIntelligenceCell owner policy requires macOS 26/iOS 26 runtime availability")
         }
@@ -612,6 +653,133 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
         #endif
     }
 
+    func testContractShapeGuardsRejectUnsupportedValuesAndFilterMalformedPersistedOutbox() async throws {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, iOS 26.0, *) {
+            let previousVault = CellBase.defaultIdentityVault
+            defer { CellBase.defaultIdentityVault = previousVault }
+            let vault = MockIdentityVault()
+            CellBase.defaultIdentityVault = vault
+            let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+            let cell = await AppleIntelligenceCell(owner: owner)
+
+            let queued = try await cell.set(
+                keypath: "ai.send",
+                value: .object(["content": .string("shape-canary")]),
+                requester: owner
+            )
+            XCTAssertEqual(queued, .string("queued"))
+            let dataQueued = try await cell.set(
+                keypath: "ai.send",
+                value: .object(["content": .data(Data([0xCA, 0xFE]))]),
+                requester: owner
+            )
+            XCTAssertEqual(dataQueued, .string("queued"))
+
+            do {
+                _ = try await cell.set(
+                    keypath: "ai.dequeueOutbox",
+                    value: .string("unsupported"),
+                    requester: owner
+                )
+                XCTFail("Non-null dequeue payload must be rejected")
+            } catch {
+                // Expected: the destructive action accepts only its advertised null input.
+            }
+            guard case let .list(outboxAfterRejectedDequeue) = try await cell.get(
+                keypath: "ai.outbox",
+                requester: owner
+            ) else {
+                return XCTFail("Expected owner outbox after rejected dequeue")
+            }
+            XCTAssertEqual(outboxAfterRejectedDequeue.count, 2)
+
+            for key in ["ai.discover", "ai.rank", "ai.ensurePurpose", "ai.buildCluster"] {
+                let result = try await cell.set(
+                    keypath: key,
+                    value: .string("unsupported"),
+                    requester: owner
+                )
+                XCTAssertEqual(result, .string("paramErr"), "Unexpected trigger acceptance for \(key)")
+            }
+
+            await cell.storeLastToolArguments(.string("unsupported"), requester: owner)
+            let toolArguments = try await cell.get(
+                keypath: "ai.lastToolArguments",
+                requester: owner
+            )
+            guard case let .object(toolArgumentObject) = toolArguments else {
+                return XCTFail("Expected object-shaped tool arguments")
+            }
+            XCTAssertTrue(toolArgumentObject.isEmpty)
+
+            let encoded = try JSONEncoder().encode(cell)
+            var persistedObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            )
+            var runtimeState = try XCTUnwrap(persistedObject["runtimeState"] as? [String: Any])
+            var persistedOutbox = try XCTUnwrap(runtimeState["outbox"] as? [Any])
+            persistedOutbox.append("malformed-string-entry")
+            persistedOutbox.append(["malformed-list-entry"])
+            persistedOutbox.append([String: Any]())
+            persistedOutbox.append([
+                "id": "malformed-object-entry",
+                "topic": "ai.invalid",
+                "title": "",
+                "properties": ["type": "unsupported", "contentType": "string"],
+                "content": "invalid"
+            ])
+            persistedOutbox.append([
+                "id": "malformed-mimetype-entry",
+                "topic": "ai.invalid",
+                "title": "",
+                "properties": [
+                    "type": "content",
+                    "contentType": "string",
+                    "mimetype": 42
+                ],
+                "content": "invalid"
+            ])
+            runtimeState["outbox"] = persistedOutbox
+            persistedObject["runtimeState"] = runtimeState
+            let malformedData = try JSONSerialization.data(withJSONObject: persistedObject)
+            let restored = try JSONDecoder().decode(
+                AppleIntelligenceCell.self,
+                from: malformedData
+            )
+
+            guard case let .list(restoredOutbox) = try await restored.get(
+                keypath: "ai.outbox",
+                requester: owner
+            ) else {
+                return XCTFail("Expected restored owner outbox")
+            }
+            XCTAssertEqual(restoredOutbox.count, 2)
+            for entry in restoredOutbox {
+                guard case .object = entry else {
+                    return XCTFail("Restored outbox must retain only canonical object entries")
+                }
+            }
+            _ = try flowElementWireRoundTrip(restoredOutbox[0])
+            let restoredDataFlow = try flowElementWireRoundTrip(restoredOutbox[1])
+            guard case let .data(restoredData) = restoredDataFlow.content else {
+                return XCTFail("Expected restored base64 FlowElement content")
+            }
+            XCTAssertEqual(restoredData, Data([0xCA, 0xFE]))
+            let restoredDequeue = try await restored.set(
+                keypath: "ai.dequeueOutbox",
+                value: .null,
+                requester: owner
+            )
+            XCTAssertNotNil(restoredDequeue)
+        } else {
+            throw XCTSkip("AppleIntelligenceCell contract-shape guards require macOS 26/iOS 26 runtime availability")
+        }
+        #else
+        throw XCTSkip("FoundationModels is unavailable in this toolchain")
+        #endif
+    }
+
     func testStrictExploreModeInstallsAppleIntelligenceHandlersBeforeImmediateUse() async throws {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, iOS 26.0, *) {
@@ -649,13 +817,15 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
         #endif
     }
 
-    func testStrictExploreModePublishesEveryAppleIntelligenceOperationContract() async throws {
+    func testStrictExploreModePublishesEveryAppleIntelligenceOperationContractBeforeAndAfterDecode() async throws {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, iOS 26.0, *) {
             let previousMode = CellBase.exploreContractEnforcementMode
             CellBase.exploreContractEnforcementMode = .strict
             defer { CellBase.exploreContractEnforcementMode = previousMode }
 
+            let previousVault = CellBase.defaultIdentityVault
+            defer { CellBase.defaultIdentityVault = previousVault }
             let vault = MockIdentityVault()
             CellBase.defaultIdentityVault = vault
             let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
@@ -687,6 +857,23 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
                 "set:ai.send",
                 "set:ai.sendPrompt"
             ])
+            let capabilityReadOperations = Set([
+                "get:ai.status",
+                "get:ai.currentPurposeRef",
+                "get:ai.purposeClusterRefs",
+                "get:ai.candidates",
+                "get:ai.rankWeights",
+                "get:ai.state",
+                "get:ai.promptText",
+                "get:ai.promptInstructions",
+                "get:ai.sendFlowOnIngest",
+                "get:ai.rankEnabled"
+            ])
+            let ownerOnlyOperations = Set([
+                "get:ai.outbox",
+                "get:ai.lastToolArguments",
+                "set:ai.dequeueOutbox"
+            ])
             let contracts = try await cell.operationContracts(requester: owner)
             let actualOperations = Set(contracts.compactMap { contract -> String? in
                 guard let object = ExploreContract.object(from: contract),
@@ -706,7 +893,21 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
                     "unknown",
                     "Unknown return schema for \(method):\(key)"
                 )
-                return "\(method):\(key)"
+                let operation = "\(method):\(key)"
+                let expectedPermissions: [ValueType]
+                if capabilityReadOperations.contains(operation) {
+                    expectedPermissions = [.string("r---")]
+                } else if ownerOnlyOperations.contains(operation) {
+                    expectedPermissions = []
+                } else {
+                    expectedPermissions = [.string("-w--")]
+                }
+                XCTAssertEqual(
+                    ExploreContract.list(from: object[ExploreContract.Field.permissions]),
+                    expectedPermissions,
+                    "Unexpected permissions for \(operation)"
+                )
+                return operation
             })
 
             XCTAssertEqual(contracts.count, expectedOperations.count)
@@ -716,6 +917,119 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
                 operation.split(separator: ":", maxSplits: 1).last.map(String.init)
             })
             XCTAssertTrue(expectedKeys.isSubset(of: installedKeys))
+
+            let disableIngestFlow = try await cell.set(
+                keypath: "ai.sendFlowOnIngest",
+                value: .bool(false),
+                requester: owner
+            )
+            XCTAssertEqual(disableIngestFlow, .string("New sendFlowOnIngest: false"))
+            let restored = try JSONDecoder().decode(
+                AppleIntelligenceCell.self,
+                from: JSONEncoder().encode(cell)
+            )
+            let restoredContracts = try await restored.operationContracts(requester: owner)
+            let restoredOperations = Set(restoredContracts.compactMap { contract -> String? in
+                guard let object = ExploreContract.object(from: contract),
+                      let key = ExploreContract.string(from: object[ExploreContract.Field.key]),
+                      let method = ExploreContract.string(from: object[ExploreContract.Field.method]) else {
+                    return nil
+                }
+                return "\(method):\(key)"
+            })
+
+            XCTAssertEqual(restoredContracts.count, expectedOperations.count)
+            XCTAssertEqual(restoredOperations, expectedOperations)
+            let restoredKeys = Set(try await restored.keys(requester: owner))
+            XCTAssertTrue(expectedKeys.isSubset(of: restoredKeys))
+
+            func operationSnapshot(_ contracts: [ValueType]) -> [String: ValueType] {
+                Dictionary(uniqueKeysWithValues: contracts.compactMap { contract in
+                    guard let object = ExploreContract.object(from: contract),
+                          let key = ExploreContract.string(from: object[ExploreContract.Field.key]),
+                          let method = ExploreContract.string(from: object[ExploreContract.Field.method]) else {
+                        return nil
+                    }
+                    return ("\(method):\(key)", contract)
+                })
+            }
+            let freshSnapshot = operationSnapshot(contracts)
+            let restoredSnapshot = operationSnapshot(restoredContracts)
+            XCTAssertEqual(Set(restoredSnapshot.keys), Set(freshSnapshot.keys))
+            for operation in freshSnapshot.keys {
+                XCTAssertTrue(
+                    ExploreContractValidator.deepEqual(
+                        restoredSnapshot[operation],
+                        freshSnapshot[operation]
+                    ),
+                    "Round-trip changed Apple Intelligence operation contract \(operation)"
+                )
+            }
+
+            let decodedStrictStatus = try await restored.get(
+                keypath: "ai.status",
+                requester: owner
+            )
+            XCTAssertEqual(decodedStrictStatus, .string(AIStatus.idle.rawValue))
+            let decodedStrictPromptUpdate = try await restored.set(
+                keypath: "ai.promptText",
+                value: .string("decoded strict prompt"),
+                requester: owner
+            )
+            XCTAssertEqual(
+                decodedStrictPromptUpdate,
+                .string("New prompt text: decoded strict prompt")
+            )
+            let decodedStrictPrompt = try await restored.get(
+                keypath: "ai.promptText",
+                requester: owner
+            )
+            XCTAssertEqual(decodedStrictPrompt, .string("decoded strict prompt"))
+            let canary = CellConfiguration(name: "Decoded strict contract canary")
+            let decodedStrictIngest = try await restored.set(
+                keypath: "ai.ingestConfigurations",
+                value: .list([.cellConfiguration(canary)]),
+                requester: owner
+            )
+            XCTAssertEqual(decodedStrictIngest, .string("ok"))
+            guard case let .list(restoredCandidates) = try await restored.get(
+                keypath: "ai.candidates",
+                requester: owner
+            ) else {
+                return XCTFail("Expected decoded strict candidate list")
+            }
+            XCTAssertEqual(
+                restoredCandidates.compactMap { value -> String? in
+                    guard case let .cellConfiguration(configuration) = value else { return nil }
+                    return configuration.name
+                },
+                ["Decoded strict contract canary"]
+            )
+            let decodedStrictSend = try await restored.set(
+                keypath: "ai.send",
+                value: .object(["content": .string("decoded strict message")]),
+                requester: owner
+            )
+            XCTAssertEqual(decodedStrictSend, .string("queued"))
+            guard case let .list(restoredOutbox) = try await restored.get(
+                keypath: "ai.outbox",
+                requester: owner
+            ) else {
+                return XCTFail("Expected decoded strict outbox")
+            }
+            XCTAssertEqual(restoredOutbox.count, 1)
+            let decodedStrictDequeue = try await restored.set(
+                keypath: "ai.dequeueOutbox",
+                value: .null,
+                requester: owner
+            )
+            let decodedStrictMessage = try flowElementWireRoundTrip(
+                try XCTUnwrap(decodedStrictDequeue)
+            )
+            guard case let .string(decodedStrictContent) = decodedStrictMessage.content else {
+                return XCTFail("Expected decoded strict string content")
+            }
+            XCTAssertEqual(decodedStrictContent, "decoded strict message")
         } else {
             throw XCTSkip("AppleIntelligenceCell operation contracts require macOS 26/iOS 26 runtime availability")
         }

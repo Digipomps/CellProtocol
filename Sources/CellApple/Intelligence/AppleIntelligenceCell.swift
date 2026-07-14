@@ -200,7 +200,7 @@ public class AppleIntelligenceCell: GeneralCell {
             var retainedSizes: [Int] = []
             var encodedBytes = 2
             for entry in decoded.prefix(AppleIntelligenceCell.maximumOutboxEntries) {
-                guard let data = try? JSONEncoder().encode(entry),
+                guard let data = AppleIntelligenceCell.encodedPersistedOutboxEntryIfValid(entry),
                       data.count <= AppleIntelligenceCell.maximumEncodedOutboxEntryBytes else {
                     continue
                 }
@@ -224,7 +224,7 @@ public class AppleIntelligenceCell: GeneralCell {
         }
     }
 
-    private enum RuntimeStateError: Error {
+    enum RuntimeStateError: Error, Equatable {
         case unsupportedKey(String)
         case invalidValue(String)
         case unauthorized
@@ -324,6 +324,7 @@ public class AppleIntelligenceCell: GeneralCell {
 
     func storeLastToolArguments(_ value: ValueType, requester: Identity) async {
         guard await requesterIsRuntimeOwner(requester),
+              case .object = value,
               isBoundedValue(value, maximumBytes: Self.maximumEncodedRankWeightsBytes) else {
             return
         }
@@ -388,10 +389,13 @@ public class AppleIntelligenceCell: GeneralCell {
         await addInterceptForSet(
             requester: owner,
             key: Self.dequeueOutboxKey
-        ) { [weak self] _, _, requester in
+        ) { [weak self] _, value, requester in
             guard let self else { return .null }
             guard await self.requesterIsRuntimeOwner(requester) else {
                 throw RuntimeStateError.unauthorized
+            }
+            guard value == .null else {
+                throw RuntimeStateError.invalidValue(Self.dequeueOutboxKey)
             }
             return self.dequeueOutboxMessageForOwner() ?? .null
         }
@@ -400,12 +404,14 @@ public class AppleIntelligenceCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "\(AIKeys.root).discover", setValueIntercept: { [weak self] keypath, value, requester in
             CellBase.diagnosticLog("AppleIntelligenceCell set intercept keypath=\(keypath)", domain: .flow)
             guard let self = self else { return .string("failure") }
+            guard Self.isSupportedTriggerPayload(value) else { return .string("paramErr") }
             return .string(await self.discover(requester: requester))
         })
 
         // SET ai.rank -> trigger ranking
         await addInterceptForSet(requester: owner, key: "\(AIKeys.root).rank", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
+            guard Self.isSupportedTriggerPayload(value) else { return .string("paramErr") }
             return .string(
                 await self.rank(perspective: Perspective(), requester: requester)
                     ? "ok"
@@ -416,6 +422,7 @@ public class AppleIntelligenceCell: GeneralCell {
         // SET ai.ensurePurpose
         await addInterceptForSet(requester: owner, key: "\(AIKeys.root).ensurePurpose", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
+            guard Self.isSupportedTriggerPayload(value) else { return .string("paramErr") }
             return .string(
                 await self.ensurePurpose(perspective: Perspective(), requester: requester).rawValue
             )
@@ -424,6 +431,7 @@ public class AppleIntelligenceCell: GeneralCell {
         // SET ai.buildCluster
         await addInterceptForSet(requester: owner, key: "\(AIKeys.root).buildCluster", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
+            guard Self.isSupportedTriggerPayload(value) else { return .string("paramErr") }
             return .string(await self.buildCluster(requester: requester).rawValue)
         })
 
@@ -1043,6 +1051,66 @@ public class AppleIntelligenceCell: GeneralCell {
         encodedSize(of: value, maximumBytes: maximumBytes) != nil
     }
 
+    private static func isSupportedTriggerPayload(_ value: ValueType) -> Bool {
+        switch value {
+        case .null, .bool, .object:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func encodedPersistedOutboxEntryIfValid(_ entry: ValueType) -> Data? {
+        guard case let .object(object) = entry,
+              case let .string(id)? = object["id"],
+              !id.isEmpty,
+              case let .string(topic)? = object["topic"],
+              !topic.isEmpty,
+              case .string? = object["title"],
+              case let .object(properties)? = object["properties"],
+              case let .string(typeValue)? = properties["type"],
+              FlowElementType(rawValue: typeValue) != nil,
+              case let .string(contentTypeValue)? = properties["contentType"],
+              let contentType = FlowElementContentType(rawValue: contentTypeValue),
+              optionalStringFieldIsValid(properties["mimetype"]),
+              optionalStringFieldIsValid(object["origin"]),
+              let content = object["content"],
+              persistedOutboxContent(content, matches: contentType) else {
+            return nil
+        }
+        return try? JSONEncoder().encode(entry)
+    }
+
+    private static func optionalStringFieldIsValid(_ value: ValueType?) -> Bool {
+        switch value {
+        case nil, .some(.null), .some(.string):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func persistedOutboxContent(
+        _ content: ValueType,
+        matches contentType: FlowElementContentType
+    ) -> Bool {
+        switch (contentType, content) {
+        case (.string, .string), (.httpRedirect, .string):
+            return true
+        case let (.base64, .string(encoded)):
+            return Data(base64Encoded: encoded) != nil
+        case (.dslv17, .object),
+             (.experienceTemplate, .object),
+             (.html, .object),
+             (.rdf, .object),
+             (.login, .object),
+             (.object, .object):
+            return true
+        default:
+            return false
+        }
+    }
+
     private func encodedSize(of value: ValueType, maximumBytes: Int) -> Int? {
         guard let encoded = try? JSONEncoder().encode(value),
               encoded.count <= maximumBytes else {
@@ -1125,12 +1193,12 @@ public class AppleIntelligenceCell: GeneralCell {
                 method: .set,
                 input: ExploreContract.oneOfSchema(
                     options: [.null, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "object")],
-                    description: "Payload is ignored; any value triggers the action."
+                    description: "The accepted null, boolean, or object value is ignored."
                 ),
                 returns: ExploreContract.schema(type: "string", description: "Operation status."),
                 permissions: ["-w--"],
                 required: false,
-                description: .string("Triggers the AI assistant operation `\(key)`.")
+                description: .string("Triggers the AI assistant operation `\(key)` with a null, boolean, or object payload; the accepted payload value is otherwise ignored.")
             )
         }
 
