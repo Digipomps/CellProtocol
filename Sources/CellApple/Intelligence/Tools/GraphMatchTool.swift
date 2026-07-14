@@ -41,11 +41,9 @@ final class GraphMatchTool: Tool {
     let description = "Match on Purpose, Interest or Entity"
     
     
-    private unowned let aiCell: AppleIntelligenceCell
     private let requester: Identity
 
-    init(cell: AppleIntelligenceCell, requester: Identity) {
-        self.aiCell = cell
+    init(requester: Identity) {
         self.requester = requester
     }
     

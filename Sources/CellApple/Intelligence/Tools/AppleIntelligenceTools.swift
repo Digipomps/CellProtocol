@@ -16,14 +16,11 @@ import FoundationModels
 
 #if canImport(FoundationModels)
 @available(macOS 26.0, iOS 26.0, *)
-@Observable
-final class GetConfigurationsTool: Tool {
+final class GetConfigurationsTool: Tool, @unchecked Sendable {
     // Tool metadata
     let name: String = "getConfigurations"
-    let description: String = "Return up to `count` CellConfigurations from ai.candidates as a JSON array of names. Records last arguments and uses cell prompt settings."
+    let description: String = "Return up to 20 CellConfigurations from ai.candidates as a JSON array of names. Records the bounded last-arguments snapshot."
 
-    @MainActor var lookupHistory: [Lookup] = []
-    
     @Generable
     enum Category: String, CaseIterable {
         case campground
@@ -46,11 +43,8 @@ final class GetConfigurationsTool: Tool {
         let naturalLanguageQuery: String
     }
     
-    @MainActor func recordLookup(arguments: Arguments) {
-        lookupHistory.append(Lookup(history: arguments))
-    }
-    weak var cell: AppleIntelligenceCell?
-    let requester: Identity
+    private let cell: AppleIntelligenceCell
+    private let requester: Identity
 
     public init(cell: AppleIntelligenceCell, requester: Identity) {
         self.cell = cell
@@ -59,71 +53,25 @@ final class GetConfigurationsTool: Tool {
     
     func call(arguments: Arguments) async throws -> String {
         print("Tool: GetConfigurationsTool, called with arguments: \(arguments)")
-        guard let cell else {
-            return "error: cell unavailable"
-        }
-        await recordLookup(arguments: arguments)
-        if let cell = self.cell {
-            var obj: Object = [:]
-            obj["pointOfInterest"] = .string(arguments.pointOfInterest.rawValue)
-            obj["naturalLanguageQuery"] = .string(arguments.naturalLanguageQuery)
-            _ = try? await cell.set(keypath: "\(AIKeys.root).\(AIKeys.lastToolArguments)", value: .object(obj), requester: requester)
-        }
-        _ = try? await cell.get(keypath: "\(AIKeys.root).\(AIKeys.candidates)", requester: requester)
-//        var configs: [CellConfiguration] = []
-//        if case let .list(list)? = vt {
-//            for item in list {
-//                if case let .cellConfiguration(conf) = item { configs.append(conf) }
-//            }
-//        }
-//
-//        let n = min(arguments.count, configs.count)
-//        let selected = Array(configs.prefix(n))
-//        let names = selected.map { $0.name }
-//        let json = (try? JSONEncoder().encode(names)).flatMap { String(data: $0, encoding: .utf8) } ?? names.description
-//        return .string("json")
-        let promptText: String = await {
-            if let v = try? await cell.get(keypath: "\(AIKeys.root).\(AIKeys.promptText)", requester: requester), case let .string(s) = v, !s.isEmpty { return s }
-            return ""
-        }()
-        let promptInstructions: String = await {
-            if let v = try? await cell.get(keypath: "\(AIKeys.root).\(AIKeys.promptInstructions)", requester: requester), case let .string(s) = v, !s.isEmpty { return s }
-            return "You are a helpful assistant. Keep answers concise."
-        }()
-        let builtPrompt = "Instructions:\n\(promptInstructions)\n\nQuery:\n\(arguments.naturalLanguageQuery)\n\nCategory: \(arguments.pointOfInterest.rawValue)\n\nContext: \(promptText)"
-        return builtPrompt
-    }
-}
+        var argumentsObject: Object = [:]
+        argumentsObject["pointOfInterest"] = .string(arguments.pointOfInterest.rawValue)
+        argumentsObject["naturalLanguageQuery"] = .string(arguments.naturalLanguageQuery)
+        await cell.storeLastToolArguments(.object(argumentsObject), requester: requester)
 
-@available(macOS 26.0, iOS 26.0, *)
-extension GetConfigurationsTool {
-    static var categories: String {
-        Category.allCases.map {
-            $0.rawValue
-        }.joined(separator: ", ")
-    }
-    
-    struct Lookup: Identifiable {
-        let id = UUID()
-        let history: GetConfigurationsTool.Arguments
-    }
-}
-
-@available(macOS 26.0, iOS 26.0, *)
-extension GetConfigurationsTool {
-    
-    func suggestions(category: Category) -> [String] {
-        switch category {
-        case .restaurant : ["Restaurant 1", "Restaurant 2", "Restaurant 3"]
-        case .campground : ["Campground 1", "Campground 2", "Campground 3"]
-        case .hotel : ["Hotel 1", "Hotel 2", "Hotel 3"]
-        case .cafe : ["Cafe 1", "Cafe 2", "Cafe 3"]
-        case .museum : ["Museum 1", "Museum 2", "Museum 3"]
-        case .marina : ["Marina 1", "Marina 2", "Marina 3"]
-        case .nationalMonument : ["The National Rock 1", "The National Rock 2", "The National Rock 3"]
+        guard case let .list(values) = try await cell.get(
+            keypath: "\(AIKeys.root).\(AIKeys.candidates)",
+            requester: requester
+        ) else {
+            return "[]"
         }
+        let names = values.compactMap { value -> String? in
+            guard case let .cellConfiguration(configuration) = value else { return nil }
+            return configuration.name
+        }
+        let selectedNames = Array(names.prefix(20))
+        return (try? JSONEncoder().encode(selectedNames))
+            .flatMap { String(data: $0, encoding: .utf8) }
+            ?? "[]"
     }
 }
 #endif
-
-
