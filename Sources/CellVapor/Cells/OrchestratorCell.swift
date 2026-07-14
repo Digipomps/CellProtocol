@@ -82,6 +82,8 @@ class OrchestratorCell: GeneralCell {
         }
         
         buildOutwardMenuCellConfigurations()
+
+        await registerContracts(requester: owner)
         
         
         
@@ -133,7 +135,7 @@ class OrchestratorCell: GeneralCell {
         })
 
         
-        await setInterceptValueForKey(requester: owner, key: "skeleton", setValueForKeyIntercept:  { [weak self] requester in
+        await addInterceptForGet(requester: owner, key: "skeleton", getValueIntercept:  { [weak self] _, requester in
             guard let self = self else { return .string("failure") }
             var resultString = "denied"
             if await self.validateAccess("r---", at: "skeleton", for: requester) {
@@ -154,7 +156,7 @@ class OrchestratorCell: GeneralCell {
         await addInterceptForSet(requester: owner, key: "addReference", setValueIntercept:  {
             [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "addReference", for: requester) {
+            if await self.validateAccess("-w--", at: "addReference", for: requester) {
                 print("orchestrator set. Keypath: \(keypath) value: \(try value.jsonString())")
                 
                 guard case let  .object(paramObject) = value else {
@@ -267,6 +269,92 @@ class OrchestratorCell: GeneralCell {
             }
             return .string(resultString)
         })
+    }
+
+    private func registerContracts(requester: Identity) async {
+        let menuResult = ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.listSchema(item: ExploreContract.schema(type: "cellConfiguration")),
+                ExploreContract.schema(type: "string")
+            ],
+            description: "Returns CellConfiguration menu entries or a denial/failure string."
+        )
+        let configurationInput = ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "cellConfiguration"),
+                ExploreContract.schema(type: "object")
+            ],
+            description: "CellConfiguration value or compatible object payload."
+        )
+        let mutationResult = ExploreContract.schema(type: "string", description: "Operation status or error string.")
+        let refreshEffect = ExploreContract.flowEffect(trigger: .set, topic: "porthole", contentType: "string")
+
+        await registerExploreContract(
+            requester: requester,
+            key: "skeleton",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.schema(type: "string"),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Returns the active Porthole skeleton JSON.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "outwardMenu",
+            method: .get,
+            input: .null,
+            returns: menuResult,
+            permissions: [],
+            required: false,
+            description: .string("Returns owner-visible configurations available to load.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "historyMenu",
+            method: .get,
+            input: .null,
+            returns: menuResult,
+            permissions: [],
+            required: false,
+            description: .string("Returns owner-visible configuration history.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "addReference",
+            method: .set,
+            input: ExploreContract.objectSchema(
+                properties: ["reference": ExploreContract.schema(type: "cellReference")],
+                requiredKeys: ["reference"]
+            ),
+            returns: mutationResult,
+            permissions: [],
+            required: true,
+            flowEffects: [refreshEffect],
+            description: .string("Adds one CellReference to the active Porthole configuration.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "addConfiguration",
+            method: .set,
+            input: configurationInput,
+            returns: mutationResult,
+            permissions: [],
+            required: true,
+            flowEffects: [refreshEffect],
+            description: .string("Loads and appends a CellConfiguration.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "setConfiguration",
+            method: .set,
+            input: configurationInput,
+            returns: mutationResult,
+            permissions: [],
+            required: true,
+            flowEffects: [refreshEffect],
+            description: .string("Replaces the active Porthole configuration.")
+        )
     }
     
     /*

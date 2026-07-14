@@ -7,18 +7,123 @@ import XCTest
 
 final class CellRuntimeReadinessContractTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
+    private var previousResolver: CellResolverProtocol?
     private var previousDocumentRoot: String?
+    private var previousExploreMode: CellBase.ExploreContractEnforcementMode = .permissive
 
     override func setUp() {
         super.setUp()
         previousVault = CellBase.defaultIdentityVault
+        previousResolver = CellBase.defaultCellResolver
         previousDocumentRoot = CellBase.documentRootPath
+        previousExploreMode = CellBase.exploreContractEnforcementMode
     }
 
     override func tearDown() {
         CellBase.defaultIdentityVault = previousVault
+        CellBase.defaultCellResolver = previousResolver
         CellBase.documentRootPath = previousDocumentRoot
+        CellBase.exploreContractEnforcementMode = previousExploreMode
         super.tearDown()
+    }
+
+    func testAppleEntityAnchorAndOrchestratorDispatchAfterStrictDecode() async throws {
+        CellBase.exploreContractEnforcementMode = .strict
+        let owner = try await configuredOwnerAndDocumentRoot(suffix: "strict-apple-entity-porthole")
+        let vault = try XCTUnwrap(CellBase.defaultIdentityVault)
+        let outsiderCandidate = await vault.identity(for: "strict-outsider", makeNewIfNotFound: true)
+        let outsider = try XCTUnwrap(outsiderCandidate)
+        CellBase.defaultCellResolver = MockCellResolver()
+
+        let entity = await EntityAnchorCell(owner: owner)
+        try await CellContractHarness.assertAdvertisedKey(
+            on: entity,
+            key: "identityLinks.revoke",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "oneOf",
+            expectedReturnType: "oneOf"
+        )
+        try await CellContractHarness.assertPermissions(
+            on: entity,
+            key: "identityLinks.revoke",
+            requester: owner,
+            expected: ["-w--"]
+        )
+        _ = try await entity.set(keypath: "person.headline", value: .string("strict-ready"), requester: owner)
+        let storedHeadline = try await entity.get(keypath: "person.headline", requester: owner)
+        XCTAssertEqual(storedHeadline, .string("strict-ready"))
+
+        let decodedEntity = try JSONDecoder().decode(
+            EntityAnchorCell.self,
+            from: JSONEncoder().encode(entity)
+        )
+        guard case .object = try await decodedEntity.get(keypath: "identityLinks.state", requester: owner) else {
+            return XCTFail("Decoded strict EntityAnchor did not dispatch identityLinks.state")
+        }
+        for action in [
+            "identityLinks.approveEnrollment",
+            "identityLinks.completeEnrollment",
+            "identityLinks.revoke"
+        ] {
+            let result = try await decodedEntity.set(
+                keypath: action,
+                value: .object([:]),
+                requester: owner
+            )
+            guard case let .object(resultObject)? = result else {
+                return XCTFail("Strict EntityAnchor action \(action) did not dispatch")
+            }
+            XCTAssertEqual(resultObject["status"], .string("error"))
+        }
+        try await CellContractHarness.assertSetDenied(
+            on: decodedEntity,
+            key: "identityLinks.revoke",
+            input: .string("not-authorized"),
+            requester: outsider
+        )
+        try await CellContractHarness.assertGetDenied(
+            on: decodedEntity,
+            key: "person",
+            requester: outsider
+        )
+
+        let orchestrator = await OrchestratorCell(owner: owner)
+        try await CellContractHarness.assertAdvertisedKey(
+            on: orchestrator,
+            key: "setConfiguration",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "oneOf",
+            expectedReturnType: "string"
+        )
+        guard case .string = try await orchestrator.get(keypath: "skeleton", requester: owner) else {
+            return XCTFail("Strict Orchestrator skeleton handler was not installed")
+        }
+        let decodedOrchestrator = try JSONDecoder().decode(
+            OrchestratorCell.self,
+            from: JSONEncoder().encode(orchestrator)
+        )
+        let configuration = CellConfiguration(name: "Strict Apple Configuration", cellReferences: [])
+        let configurationResult = try await decodedOrchestrator.set(
+            keypath: "setConfiguration",
+            value: .cellConfiguration(configuration),
+            requester: owner
+        )
+        XCTAssertEqual(configurationResult, .string("ok"))
+        XCTAssertEqual(decodedOrchestrator.getCellConfiguration()?.name, configuration.name)
+        let restartedOrchestrator = try JSONDecoder().decode(
+            OrchestratorCell.self,
+            from: JSONEncoder().encode(decodedOrchestrator)
+        )
+        _ = try await restartedOrchestrator.keys(requester: owner)
+        XCTAssertEqual(restartedOrchestrator.getCellConfiguration()?.name, configuration.name)
+        try await CellContractHarness.assertSetDenied(
+            on: decodedOrchestrator,
+            key: "addReference",
+            input: .object([:]),
+            requester: outsider
+        )
     }
 
     func testCellBaseDecodedCellsAreImmediatelyAndConcurrentlyReady() async throws {

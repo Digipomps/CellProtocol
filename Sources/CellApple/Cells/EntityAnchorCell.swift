@@ -49,6 +49,7 @@ public class EntityAnchorCell: GeneralCell {
     }
     
     private func setupKeys(owner: Identity) async  {
+        await registerContracts(requester: owner)
         
         await addIntercept(requester: owner, intercept: { flowElement, requester in
 //                print("Incoming flowElement to Keypath storage (PDS)") ...hmmm?
@@ -84,6 +85,14 @@ public class EntityAnchorCell: GeneralCell {
             }
         })
 
+        await addInterceptForGet(requester: owner, key: "identityLinks.state", getValueIntercept: {
+            _, requester in
+            if await self.validateAccess("r---", at: "identityLinks", for: requester) {
+                return try self.identityLinksValue(for: "identityLinks.state")
+            }
+            throw KeypathStorageErrors.denied
+        })
+
         await addInterceptForGet(requester: owner, key: "chronicle", getValueIntercept: {
             keypath, requester in
             if await self.validateAccess("r---", at: "chronicle", for: requester) {
@@ -112,7 +121,7 @@ public class EntityAnchorCell: GeneralCell {
         })
     
     await addInterceptForSet(requester: owner, key: "person", setValueIntercept:  { keypath, value, requester in
-        if await self.validateAccess("r---", at: "person", for: requester) {
+        if await self.validateAccess("-w--", at: "person", for: requester) {
 //            print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
             try self.storage.set(keypath: keypath, setValue: value)
             try await self.saveKeypathStorage(entity: self.storage)
@@ -130,7 +139,9 @@ public class EntityAnchorCell: GeneralCell {
     })
     
 	    await addInterceptForSet(requester: owner, key: "proofs", setValueIntercept:  { keypath, value, requester in
-        
+            guard await self.validateAccess("-w--", at: "proofs", for: requester) else {
+                throw KeypathStorageErrors.denied
+            }
             do {
 //                print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
                 try self.storage.set(keypath: keypath, setValue: value)
@@ -167,6 +178,9 @@ public class EntityAnchorCell: GeneralCell {
         
         await addInterceptForSet(requester: owner, key: "relations", setValueIntercept:  {[weak self]  keypath, value, requester in
             guard let self = self else { return nil }
+            guard await self.validateAccess("-w--", at: "relations", for: requester) else {
+                throw KeypathStorageErrors.denied
+            }
                 do {
 //                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
                     // If keypath points to identities
@@ -232,28 +246,6 @@ public class EntityAnchorCell: GeneralCell {
         
             return nil
         })
-    // Thhis is just for testing
-        await addInterceptForSet(requester: owner, key: "identity", setValueIntercept:  { keypath, value, requester in
-            
-                do {
-//                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
-                    try self.storage.set(keypath: keypath, setValue: value)
-                    try await self.saveKeypathStorage(entity: self.storage)
-                    // Send FlowElement notification
-                    
-                    let payloadObject:Object = ["keypath" : .string(keypath), "data" : value]
-                    var flowElement = FlowElement(title: "PDS update", content: .object(payloadObject), properties: FlowElement.Properties(type: .content, contentType: .object))
-                    
-                    flowElement.origin = self.uuid
-                    flowElement.topic = "entity"
-                    self.pushFlowElement(flowElement, requester: requester)
-                } catch {
-                    print("Set \(keypath) failed with error: \(error)")
-                }
-        
-            return nil
-        })
-        
     await addIntercept(requester: owner, intercept: {
         flowElement, identity in
         var correlationId: String?
@@ -363,17 +355,6 @@ public class EntityAnchorCell: GeneralCell {
     })
         
         
-        await addInterceptForGet(requester: owner, key: "proofs", getValueIntercept: {
-            [weak self] keypath, requester in
-            guard let self = self else { return .string("error")}
-            // TODO: fix weak self
-                if let value = try await self.get(keypath: keypath) {
-                    return value
-                }
-                throw KeypathStorageErrors.notFound
-            
-        })
-        
         await addInterceptForGet(requester: owner, key: "relations", getValueIntercept: {
             [weak self] keypath, requester in
             guard let self = self else { return .string("error")}
@@ -385,6 +366,64 @@ public class EntityAnchorCell: GeneralCell {
             
         })
         print("*********** Finished setup keys in Entity Anchor ***********")
+    }
+
+    private func registerContracts(requester: Identity) async {
+        let storedValue = Self.storedValueSchema()
+        let identityLinkResult = ExploreContract.oneOfSchema(
+            options: [ExploreContract.schema(type: "object"), ExploreContract.schema(type: "string")],
+            description: "Returns identity-link state/result metadata or an error string."
+        )
+        let identityLinkEffect = ExploreContract.flowEffect(trigger: .set, topic: "entity.identityLinks", contentType: "object")
+
+        await registerExploreContract(requester: requester, key: "person", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity person data."))
+        await registerExploreContract(requester: requester, key: "person", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity person data."))
+        await registerExploreContract(requester: requester, key: "proofs", method: .set, input: storedValue, returns: .null, permissions: [], required: false, description: .string("Stores owner-only proof data."))
+        await registerExploreContract(requester: requester, key: "proofs", method: .get, input: .null, returns: storedValue, permissions: [], required: false, description: .string("Reads owner-only proof data."))
+        await registerExploreContract(requester: requester, key: "relations", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity relation data."))
+        await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
+        await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
+        await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
+        await registerExploreContract(requester: requester, key: "entityRepresentation", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity representation."))
+        await registerExploreContract(requester: requester, key: "identityLinks", method: .set, input: storedValue, returns: identityLinkResult, permissions: ["-w--"], required: false, flowEffects: [identityLinkEffect], description: .string("Stores identity-link state below the owner entity."))
+        await registerExploreContract(requester: requester, key: "identityLinks", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads identity-link state below the owner entity."))
+        await registerExploreContract(requester: requester, key: "identityLinks.state", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads normalized identity-link runtime state."))
+        await registerExploreContract(requester: requester, key: "identityLinks.approveEnrollment", method: .set, input: ExploreContract.schema(type: "object"), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Approves a cryptographically bound identity enrollment."))
+        await registerExploreContract(requester: requester, key: "identityLinks.completeEnrollment", method: .set, input: ExploreContract.schema(type: "object"), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Completes a previously approved identity enrollment."))
+        await registerExploreContract(requester: requester, key: "identityLinks.revoke", method: .set, input: ExploreContract.oneOfSchema(options: [ExploreContract.schema(type: "string"), ExploreContract.objectSchema(properties: ["linkID": ExploreContract.schema(type: "string")], requiredKeys: ["linkID"])]), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Revokes an exact identity link."))
+        await registerExploreContract(requester: requester, key: "reloadStorage", method: .get, input: .null, returns: ExploreContract.schema(type: "string"), permissions: [], required: false, description: .string("Legacy owner-only compatibility trigger that reloads persisted storage."))
+    }
+
+    private static func storedValueSchema() -> ValueType {
+        ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "object"),
+                ExploreContract.schema(type: "list"),
+                ExploreContract.schema(type: "string"),
+                ExploreContract.schema(type: "bool"),
+                ExploreContract.schema(type: "integer"),
+                ExploreContract.schema(type: "float"),
+                ExploreContract.schema(type: "data"),
+                ExploreContract.schema(type: "flowElement"),
+                ExploreContract.schema(type: "keyValue"),
+                ExploreContract.schema(type: "setValueState"),
+                ExploreContract.schema(type: "setValueResponse"),
+                ExploreContract.schema(type: "cellConfiguration"),
+                ExploreContract.schema(type: "cellReference"),
+                ExploreContract.schema(type: "verifiableCredential"),
+                ExploreContract.schema(type: "identity"),
+                ExploreContract.schema(type: "connectContext"),
+                ExploreContract.schema(type: "connectState"),
+                ExploreContract.schema(type: "contractState"),
+                ExploreContract.schema(type: "signData"),
+                ExploreContract.schema(type: "signature"),
+                ExploreContract.schema(type: "agreementPayload"),
+                ExploreContract.schema(type: "description"),
+                ExploreContract.schema(type: "cell"),
+                .null
+            ],
+            description: "A supported persisted Entity ValueType."
+        )
     }
     
     private func initialLoading() async {
@@ -488,7 +527,7 @@ public class EntityAnchorCell: GeneralCell {
     }
 
     private func identityLinksValue(for keypath: String) throws -> ValueType {
-        if keypath == "identityLinks" || keypath == "identityLinks.state" {
+        if keypath == "identityLinks" || keypath == "identityLinks.state" || keypath == "state" {
             let records = (try? storage.get(keypath: "identityLinks.records")) ?? .object(Object())
             let used = (try? storage.get(keypath: "identityLinks.usedApprovalJTIs")) ?? .object(Object())
             return .object([
