@@ -329,15 +329,23 @@ final class IntegrationTests: XCTestCase {
         var status = try await cell.attachedStatus(for: "source", requester: owner)
         XCTAssertTrue(status.connected)
         XCTAssertTrue(status.active)
+        var statuses = try await cell.attachedStatuses(requester: owner)
+        XCTAssertEqual(statuses.count, 1)
+        XCTAssertEqual(statuses.first?.name, "source")
+        XCTAssertEqual(statuses.first?.active, true)
 
         await cell.dropFlowAndWait(label: "source", requester: owner)
         status = try await cell.attachedStatus(for: "source", requester: owner)
         XCTAssertTrue(status.connected)
         XCTAssertFalse(status.active)
+        statuses = try await cell.attachedStatuses(requester: owner)
+        XCTAssertEqual(statuses.first?.active, false)
 
         await cell.detachAndWait(label: "source", requester: owner)
         status = try await cell.attachedStatus(for: "source", requester: owner)
         XCTAssertFalse(status.connected)
         XCTAssertFalse(status.active)
+        statuses = try await cell.attachedStatuses(requester: owner)
+        XCTAssertTrue(statuses.isEmpty)
     }
 }

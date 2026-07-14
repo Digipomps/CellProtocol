@@ -1937,9 +1937,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     let childStatus = ConnectionStatus(name: "\(currentLabel).\(currentChildStatus.name)", connected: currentChildStatus.connected, active: currentChildStatus.active)
                     attachedStatuses.append(childStatus)
                 }
-                let status = try await attachedStatus(for: currentLabel, requester: requester)
-                attachedStatuses.append(status)
             }
+            // Every connected emitter has a local status. Nested Absorb
+            // emitters additionally contribute child statuses above, but a
+            // leaf Emit must not disappear from host connection UIs.
+            let status = try await attachedStatus(for: currentLabel, requester: requester)
+            attachedStatuses.append(status)
         }
         return attachedStatuses
     }
