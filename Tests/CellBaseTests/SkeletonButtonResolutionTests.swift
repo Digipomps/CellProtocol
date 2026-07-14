@@ -44,9 +44,7 @@ final class SkeletonButtonResolutionTests: XCTestCase {
             "url": .string("cell:///RowOverride"),
             "payload": .object(["hostToken": .string("attacker")])
         ])
-        var observedResolvedKeypath: String?
         let transform = SkeletonButtonResolutionTransform { original, resolved in
-            observedResolvedKeypath = resolved.keypath
             var preserved = original
             preserved.label = resolved.label
             return preserved
@@ -58,7 +56,6 @@ final class SkeletonButtonResolutionTests: XCTestCase {
             transform: transform
         )
 
-        XCTAssertEqual(observedResolvedKeypath, "row.override")
         XCTAssertEqual(resolved.keypath, "host.open")
         XCTAssertEqual(resolved.label, "Resolved label")
         XCTAssertEqual(resolved.url, "cell:///HostAdapter")

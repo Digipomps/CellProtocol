@@ -7,8 +7,11 @@ import CellBase
 /// A renderer-host hook that runs after CellApple has resolved a button against
 /// its current row value. Hosts may use it to preserve host-local routing
 /// metadata without moving that metadata into the portable Skeleton schema.
-public struct SkeletonButtonResolutionTransform: @unchecked Sendable {
-    public typealias Body = (_ template: SkeletonButton, _ resolved: SkeletonButton) -> SkeletonButton
+public struct SkeletonButtonResolutionTransform: Sendable {
+    public typealias Body = @Sendable (
+        _ template: SkeletonButton,
+        _ resolved: SkeletonButton
+    ) -> SkeletonButton
 
     private let body: Body
 
