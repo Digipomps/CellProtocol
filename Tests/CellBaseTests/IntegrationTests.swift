@@ -314,4 +314,30 @@ final class IntegrationTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 1.0)
         cancellable.cancel()
     }
+
+    func testWaitableFlowDisconnectCompletesBeforeStatusRefresh() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.defaultCellResolver = nil
+        let owner = await vault.identity(for: "waitable-disconnect", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        let pusher = FlowElementPusherCell(owner: owner)
+
+        let state = try await cell.attach(emitter: pusher, label: "source", requester: owner)
+        XCTAssertEqual(state, .connected)
+        try await cell.absorbFlow(label: "source", requester: owner)
+        var status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertTrue(status.connected)
+        XCTAssertTrue(status.active)
+
+        await cell.dropFlowAndWait(label: "source", requester: owner)
+        status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertTrue(status.connected)
+        XCTAssertFalse(status.active)
+
+        await cell.detachAndWait(label: "source", requester: owner)
+        status = try await cell.attachedStatus(for: "source", requester: owner)
+        XCTAssertFalse(status.connected)
+        XCTAssertFalse(status.active)
+    }
 }

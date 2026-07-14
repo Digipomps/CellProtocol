@@ -1834,33 +1834,42 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func detach(label: String, requester: Identity) {
-        dropFlow(label: label, requester: requester)
-        Task { [weak auditor] in
-            guard let auditor = auditor else { return }
-        if let resolver = CellBase.defaultCellResolver,
-           let connectedCS = await auditor.loadConnectedCellEmitterForLabel(label)
-           
-        {
-            await resolver.unregisterEmitCell(uuid: connectedCS.uuid) // Just testing
-            connectedCS.close(requester: requester)
+        Task { [weak self] in
+            await self?.detachAndWait(label: label, requester: requester)
+        }
+    }
+
+    /// Completes only after the connection and any subscribed feed have been
+    /// removed from the auditor. Hosts that refresh UI state after disconnect
+    /// must use this waitable form instead of racing the legacy fire-and-forget
+    /// protocol requirement.
+    public func detachAndWait(label: String, requester: Identity) async {
+        await dropFlowAndWait(label: label, requester: requester)
+        if await auditor.loadConnectedCellEmitterForLabel(label) != nil {
+            // The connection label is local to this Absorb Cell. The target's
+            // resolver and transport lifetime may be shared by other hosts, so
+            // detaching here must not unregister or close the target globally.
             await auditor.storeConnectedCellEmitterForLabel(label: label, emitter: nil)
         }
-            let auditorState = await auditor.auditorState()
-            CellBase.diagnosticLog("detach label=\(label) auditorState=\(auditorState)", domain: .flow)
-        }
+        let auditorState = await auditor.auditorState()
+        CellBase.diagnosticLog("detach label=\(label) auditorState=\(auditorState)", domain: .flow)
     }
     
     public func dropFlow(label: String, requester: Identity)  {
-        Task {[weak auditor] in
-            guard let auditor = auditor else { return }
-            if (await auditor.loadConnectedCellEmitterForLabel(label)) != nil { // Don't need uuid any more
-                await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
-                await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
-            }
-            let auditorState = await auditor.auditorState()
-            CellBase.diagnosticLog("dropFlow label=\(label) auditorState=\(auditorState)", domain: .flow)
+        Task { [weak self] in
+            await self?.dropFlowAndWait(label: label, requester: requester)
         }
-        
+    }
+
+    /// Completes only after the subscription and its cancellable are removed.
+    public func dropFlowAndWait(label: String, requester: Identity) async {
+        _ = requester
+        if (await auditor.loadConnectedCellEmitterForLabel(label)) != nil {
+            await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
+            await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
+        }
+        let auditorState = await auditor.auditorState()
+        CellBase.diagnosticLog("dropFlow label=\(label) auditorState=\(auditorState)", domain: .flow)
     }
     
     public func dropAllFlows(requester: Identity) {
