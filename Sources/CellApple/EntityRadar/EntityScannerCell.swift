@@ -79,20 +79,30 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     private func setupPermissions(owner: Identity) async {
-        self.agreementTemplate.ensureGrant("rw--", for: "start")
-        self.agreementTemplate.ensureGrant("rw--", for: "stop")
-        self.agreementTemplate.ensureGrant("rw--", for: "invite")
-        self.agreementTemplate.ensureGrant("rw--", for: "requestContact")
-        self.agreementTemplate.ensureGrant("rw--", for: "acceptContact")
-        self.agreementTemplate.ensureGrant("rw--", for: "exportEncounter")
-        self.agreementTemplate.ensureGrant("rw--", for: "exportEncounterJSON")
-        self.agreementTemplate.ensureGrant("rw--", for: "sharedToken")
+        let actionKeys = [
+            "start",
+            "stop",
+            "invite",
+            "requestContact",
+            "acceptContact",
+            "exportEncounter",
+            "exportEncounterJSON",
+            "sharedToken"
+        ]
+        self.agreementTemplate.grants.removeAll {
+            actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--"
+        }
+        for key in actionKeys {
+            self.agreementTemplate.ensureGrant("-w--", for: key)
+        }
         self.agreementTemplate.ensureGrant("r---", for: "verificationMethods")
         self.agreementTemplate.ensureGrant("r---", for: "capabilities")
         self.agreementTemplate.ensureGrant("r---", for: "encounters")
     }
 
     private func setupKeys(owner: Identity) async {
+        await registerContracts(requester: owner)
+
         await addIntercept(requester: owner, intercept: { [weak self] flowElement, requester in
             CellBase.diagnosticLog("EntityScannerCell feed item title=\(flowElement.title) topic=\(flowElement.topic)", domain: .flow)
 
@@ -134,6 +144,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         await addInterceptForSet(requester: owner, key: "start", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "start", for: requester) {
+                guard case .bool = value else {
+                    throw SetValueError.paramErr
+                }
                 self.requester = requester
                 CellBase.diagnosticLog("EntityScannerCell start keypath=\(keypath)", domain: .flow)
                 try await self.startConnectService(requester: requester)
@@ -144,6 +157,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         await addInterceptForSet(requester: owner, key: "stop", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "stop", for: requester) {
+                guard case .bool = value else {
+                    throw SetValueError.paramErr
+                }
                 self.requester = requester
                 CellBase.diagnosticLog("EntityScannerCell stop keypath=\(keypath)", domain: .flow)
                 self.stopConnectService(requester: requester)
@@ -151,37 +167,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForGet(requester: owner, key: "start", getValueIntercept: { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "start", for: requester) {
-                self.requester = requester
-                CellBase.diagnosticLog("EntityScannerCell start get keypath=\(keypath)", domain: .flow)
-                try await self.startConnectService(requester: requester)
-            }
-            return .string("ok")
-        })
-
-        await addInterceptForGet(requester: owner, key: "stop", getValueIntercept: { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "stop", for: requester) {
-                CellBase.diagnosticLog("EntityScannerCell stop get keypath=\(keypath)", domain: .flow)
-                self.stopConnectService(requester: requester)
-            }
-            return .string("ok")
-        })
-
-        await addInterceptForGet(requester: owner, key: "invite", getValueIntercept: { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "invite", for: requester) {
-                self.requester = requester
-                CellBase.diagnosticLog("EntityScannerCell invite get keypath=\(keypath)", domain: .flow)
-            }
-            return .string("ok")
-        })
-
         await addInterceptForSet(requester: owner, key: "invite", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "invite", for: requester) {
+                guard self.remoteUUID(from: value) != nil else {
+                    throw SetValueError.paramErr
+                }
                 self.requester = requester
                 CellBase.diagnosticLog("EntityScannerCell invite keypath=\(keypath)", domain: .flow)
                 self.invitePeer(peerDeviceDesciptionValue: value)
@@ -232,6 +223,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         await addInterceptForSet(requester: owner, key: "sharedToken", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "sharedToken", for: requester) {
+                switch value {
+                case .string, .object:
+                    break
+                default:
+                    throw SetValueError.paramErr
+                }
                 self.requester = requester
                 CellBase.diagnosticLog("EntityScannerCell sharedToken set keypath=\(keypath)", domain: .flow)
                 try await self.startConnectService(requester: requester)
@@ -239,16 +236,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForGet(requester: owner, key: "sharedToken", getValueIntercept: { [weak self] keypath, requester in
-            guard let self = self else { return .string("failure") }
-            if await self.validateAccess("r---", at: "sharedToken", for: requester) {
-                self.requester = requester
-                CellBase.diagnosticLog("EntityScannerCell sharedToken get keypath=\(keypath)", domain: .flow)
-            }
-            return .string("ok")
-        })
-
-        await registerContracts(requester: owner)
     }
 
     func startConnectService(requester: Identity) async throws {
@@ -1301,7 +1288,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ),
             permissions: ["r---"],
             required: false,
-            flowEffects: [Self.flowEffect(trigger: .get, topic: EntityScannerTopics.capabilities)],
             description: .string("Reports current scanner transport and proximity capabilities.")
         )
 
@@ -1319,32 +1305,14 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ),
             permissions: ["r---"],
             required: false,
-            flowEffects: [Self.flowEffect(trigger: .get, topic: EntityScannerTopics.savedEncounter)],
             description: .string("Lists persisted encounter summaries captured through scanner contact exchange.")
         )
-
-        for key in ["start", "stop", "invite", "sharedToken"] {
-            await registerExploreContract(
-                requester: requester,
-                key: key,
-                method: .get,
-                input: .null,
-                returns: ExploreContract.schema(type: "string", description: "Acknowledgement string."),
-                permissions: ["r---"],
-                required: false,
-                flowEffects: Self.getFlowEffects(for: key),
-                description: .string(Self.getSummary(for: key))
-            )
-        }
 
         await registerExploreContract(
             requester: requester,
             key: "start",
             method: .set,
-            input: ExploreContract.oneOfSchema(
-                options: [.null, ExploreContract.objectSchema(description: "Optional scanner startup options.")],
-                description: "Starts the scanner, optionally with future startup options."
-            ),
+            input: ExploreContract.schema(type: "bool", description: "Explicit action trigger."),
             returns: .null,
             permissions: ["-w--"],
             required: false,
@@ -1359,10 +1327,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             requester: requester,
             key: "stop",
             method: .set,
-            input: ExploreContract.oneOfSchema(
-                options: [.null, ExploreContract.objectSchema(description: "Optional scanner shutdown options.")],
-                description: "Stops the scanner."
-            ),
+            input: ExploreContract.schema(type: "bool", description: "Explicit action trigger."),
             returns: .null,
             permissions: ["-w--"],
             required: false,
@@ -1378,10 +1343,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             returns: .null,
             permissions: ["-w--"],
             required: true,
-            flowEffects: [
-                Self.flowEffect(topic: EntityScannerTopics.pendingContact),
-                Self.flowEffect(topic: EntityScannerTopics.connected)
-            ],
             description: .string("Invites a remote peer by UUID or selected peer payload.")
         )
 
@@ -1396,11 +1357,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ),
             permissions: ["-w--"],
             required: true,
-            flowEffects: [
-                Self.flowEffect(topic: EntityScannerTopics.pendingContact),
-                Self.flowEffect(topic: EntityScannerTopics.outgoingContact),
-                Self.flowEffect(topic: EntityScannerTopics.status)
-            ],
             description: .string("Starts signed contact exchange with a connected or connectable remote peer.")
         )
 
@@ -1427,41 +1383,35 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ),
             permissions: ["-w--"],
             required: true,
-            flowEffects: [
-                Self.flowEffect(topic: EntityScannerTopics.establishedContact),
-                Self.flowEffect(topic: EntityScannerTopics.savedEncounter),
-                Self.flowEffect(topic: EntityScannerTopics.status)
-            ],
             description: .string("Accepts an incoming signed contact request and persists an encounter record.")
         )
 
-        for key in ["exportEncounter", "exportEncounterJSON"] {
-            await registerExploreContract(
-                requester: requester,
-                key: key,
-                method: .set,
-                input: Self.encounterSelectionSchema(
-                    description: key == "exportEncounter"
-                        ? "Encounter identifier or selected encounter payload."
-                        : "Encounter identifier or selected encounter payload for JSON export."
-                ),
-                returns: ExploreContract.oneOfSchema(
-                    options: [Self.encounterExportSchema(), Self.errorSchema(), ExploreContract.schema(type: "string")],
-                    description: "Returns exported encounter payload or an error string/object."
-                ),
-                permissions: ["-w--"],
-                required: true,
-                flowEffects: [
-                    Self.flowEffect(topic: key == "exportEncounter" ? EntityScannerTopics.exportedEncounter : EntityScannerTopics.exportedEncounterJSON),
-                    Self.flowEffect(topic: EntityScannerTopics.status)
-                ],
-                description: .string(
-                    key == "exportEncounter"
-                        ? "Loads and returns a persisted encounter export payload."
-                        : "Loads, serializes, and returns a persisted encounter export payload plus JSON text."
-                )
-            )
-        }
+        await registerExploreContract(
+            requester: requester,
+            key: "exportEncounter",
+            method: .set,
+            input: Self.encounterSelectionSchema(description: "Encounter identifier or selected encounter payload."),
+            returns: ExploreContract.oneOfSchema(
+                options: [Self.encounterExportSchema(), Self.errorSchema(), ExploreContract.schema(type: "string")],
+                description: "Returns exported encounter payload or an error string/object."
+            ),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Loads and returns a persisted encounter export payload.")
+        )
+        await registerExploreContract(
+            requester: requester,
+            key: "exportEncounterJSON",
+            method: .set,
+            input: Self.encounterSelectionSchema(description: "Encounter identifier or selected encounter payload for JSON export."),
+            returns: ExploreContract.oneOfSchema(
+                options: [Self.encounterExportSchema(), Self.errorSchema(), ExploreContract.schema(type: "string")],
+                description: "Returns exported encounter payload or an error string/object."
+            ),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Loads, serializes, and returns a persisted encounter export payload plus JSON text.")
+        )
 
         await registerExploreContract(
             requester: requester,
@@ -1472,7 +1422,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                     ExploreContract.schema(type: "string"),
                     ExploreContract.objectSchema(description: "Future shared token payload.")
                 ],
-                description: "Sets shared token context and restarts scanner discovery."
+                description: "Token-shaped input accepted for compatibility; current implementation restarts discovery but does not apply or persist the token."
             ),
             returns: .null,
             permissions: ["-w--"],
@@ -1481,37 +1431,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 Self.flowEffect(topic: "scanner", contentType: "string"),
                 Self.flowEffect(topic: EntityScannerTopics.capabilities)
             ],
-            description: .string("Applies shared discovery token context and restarts scanner service.")
+            description: .string("Restarts scanner discovery. The current implementation does not apply or persist the supplied token payload.")
         )
-    }
-
-    private static func getSummary(for key: String) -> String {
-        switch key {
-        case "start":
-            return "Starts the scanner via a read-style trigger and returns an acknowledgement string."
-        case "stop":
-            return "Stops the scanner via a read-style trigger and returns an acknowledgement string."
-        case "invite":
-            return "Returns an acknowledgement string for invite-oriented UI actions."
-        case "sharedToken":
-            return "Returns an acknowledgement string for shared token UI actions."
-        default:
-            return "Returns scanner action acknowledgement."
-        }
-    }
-
-    private static func getFlowEffects(for key: String) -> [ValueType] {
-        switch key {
-        case "start":
-            return [
-                flowEffect(trigger: .get, topic: "scanner", contentType: "string"),
-                flowEffect(trigger: .get, topic: EntityScannerTopics.capabilities)
-            ]
-        case "stop":
-            return [flowEffect(trigger: .get, topic: "scanner", contentType: "string")]
-        default:
-            return []
-        }
     }
 
     private static func flowEffect(
@@ -1523,18 +1444,30 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     private static func remoteSelectionSchema(description: String) -> ValueType {
-        ExploreContract.oneOfSchema(
+        let remoteUUID = ExploreContract.schema(type: "string", description: "Remote UUID.")
+        let directSelection = ExploreContract.objectSchema(
+            properties: ["remoteUUID": remoteUUID],
+            requiredKeys: ["remoteUUID"],
+            description: "Object containing a remote UUID."
+        )
+        let payloadSelection = ExploreContract.objectSchema(
+            properties: ["payload": remoteUUID],
+            requiredKeys: ["payload"],
+            description: "Action wrapper containing a remote UUID payload."
+        )
+        let selectedValue = ExploreContract.oneOfSchema(
+            options: [directSelection, payloadSelection],
+            description: "Selected peer object containing a remote UUID."
+        )
+        return ExploreContract.oneOfSchema(
             options: [
-                ExploreContract.schema(type: "string", description: "Remote UUID."),
+                remoteUUID,
                 ExploreContract.objectSchema(
-                    properties: [
-                        "remoteUUID": ExploreContract.schema(type: "string"),
-                        "payload": ExploreContract.schema(type: "string"),
-                        "selected": ExploreContract.schema(type: "object")
-                    ],
-                    description: description
+                    properties: ["selected": selectedValue],
+                    requiredKeys: ["selected"],
+                    description: "Selection wrapper containing a peer object."
                 )
-            ],
+            ] + [directSelection, payloadSelection],
             description: description
         )
     }

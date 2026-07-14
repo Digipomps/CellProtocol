@@ -260,7 +260,7 @@ public struct SkeletonDescriptions {
         
         var configuration2 = CellConfiguration(name: "Radar")
         var entityScannerReference = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-        entityScannerReference.addKeyAndValue( KeyValue(key: "start") )
+        entityScannerReference.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
         configuration2.addReference(entityScannerReference)
         
         
@@ -271,9 +271,9 @@ public struct SkeletonDescriptions {
         elementList.append(.Text(skeletonText))
         
         
-        let skeletonButtonStart = SkeletonButton(keypath: "scanner.start", label: "start")
+        let skeletonButtonStart = SkeletonButton(keypath: "scanner.start", label: "start", payload: .bool(true))
         elementList.append(.Button(skeletonButtonStart))
-        let skeletonButtonStop = SkeletonButton(keypath: "scanner.stop", label: "stop")
+        let skeletonButtonStop = SkeletonButton(keypath: "scanner.stop", label: "stop", payload: .bool(true))
         elementList.append(.Button(skeletonButtonStop))
         
         
@@ -309,7 +309,7 @@ public struct SkeletonDescriptions {
 
         var configuration2Step2 = CellConfiguration(name: "Radar Step 2")
         var entityScannerReferenceStep2 = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-        entityScannerReferenceStep2.addKeyAndValue(KeyValue(key: "start"))
+        entityScannerReferenceStep2.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
         configuration2Step2.addReference(entityScannerReferenceStep2)
 
         var step2Elements = SkeletonElementList()
@@ -317,9 +317,9 @@ public struct SkeletonDescriptions {
         step2Elements.append(.Text(SkeletonText(text: "Radar Step 2")))
         step2Elements.append(.Text(SkeletonText(text: "Event-driven nearby entities")))
 
-        let step2StartButton = SkeletonButton(keypath: "scanner.start", label: "start")
+        let step2StartButton = SkeletonButton(keypath: "scanner.start", label: "start", payload: .bool(true))
         step2Elements.append(.Button(step2StartButton))
-        let step2StopButton = SkeletonButton(keypath: "scanner.stop", label: "stop")
+        let step2StopButton = SkeletonButton(keypath: "scanner.stop", label: "stop", payload: .bool(true))
         step2Elements.append(.Button(step2StopButton))
 
         var statusReference = SkeletonCellReference(keypath: "scanner", topic: "scanner.status")
@@ -372,15 +372,15 @@ public struct SkeletonDescriptions {
 
         var configurationEntityScanner = CellConfiguration(name: "Entity Scanner")
         var entityScannerToolReference = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-        entityScannerToolReference.addKeyAndValue(KeyValue(key: "start"))
+        entityScannerToolReference.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
         configurationEntityScanner.addReference(entityScannerToolReference)
 
         var entityScannerElements = SkeletonElementList()
         entityScannerElements.append(.Spacer(SkeletonSpacer()))
         entityScannerElements.append(.Text(SkeletonText(text: "Entity Scanner")))
         entityScannerElements.append(.Text(SkeletonText(text: "Discover peers, invite them, exchange signed contact proofs and inspect saved encounters")))
-        entityScannerElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start")))
-        entityScannerElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop")))
+        entityScannerElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start", payload: .bool(true))))
+        entityScannerElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop", payload: .bool(true))))
 
         var capabilityReference = SkeletonCellReference(keypath: "scanner", topic: "scanner.capabilities")
         var capabilityElements = SkeletonElementList()
@@ -463,7 +463,7 @@ public struct SkeletonDescriptions {
 
         var configurationEntityScannerHelper = CellConfiguration(name: "Entity Scanner Test Helper")
         var entityScannerHelperReference = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-        entityScannerHelperReference.addKeyAndValue(KeyValue(key: "start"))
+        entityScannerHelperReference.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
         configurationEntityScannerHelper.addReference(entityScannerHelperReference)
         configurationEntityScannerHelper.addReference(CellReference(endpoint: "cell:///Perspective", label: "perspective"))
         configurationEntityScannerHelper.addReference(CellReference(endpoint: "cell:///EntityAnchor", label: "entity"))
@@ -472,8 +472,8 @@ public struct SkeletonDescriptions {
         helperElements.append(.Spacer(SkeletonSpacer()))
         helperElements.append(.Text(SkeletonText(text: "Entity Scanner Test Helper")))
         helperElements.append(.Text(SkeletonText(text: "Manual verification of nearby discovery, signed contact exchange, local perspective snapshot and saved encounter proofs")))
-        helperElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start")))
-        helperElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop")))
+        helperElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start", payload: .bool(true))))
+        helperElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop", payload: .bool(true))))
         helperElements.append(.Divider(SkeletonDivider()))
 
         var localPerspectiveSectionContent = SkeletonElementList()
@@ -603,15 +603,15 @@ public struct SkeletonDescriptions {
 
         var configurationEntityScannerChecklist = CellConfiguration(name: "Entity Scanner Pairing Checklist")
         var checklistScannerReference = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-        checklistScannerReference.addKeyAndValue(KeyValue(key: "start"))
+        checklistScannerReference.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
         configurationEntityScannerChecklist.addReference(checklistScannerReference)
         configurationEntityScannerChecklist.addReference(CellReference(endpoint: "cell:///Perspective", label: "perspective"))
 
         var checklistElements = SkeletonElementList()
         checklistElements.append(.Spacer(SkeletonSpacer()))
         checklistElements.append(.Text(SkeletonText(text: "Entity Scanner Pairing Checklist")))
-        checklistElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start scanner")))
-        checklistElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop scanner")))
+        checklistElements.append(.Button(SkeletonButton(keypath: "scanner.start", label: "start scanner", payload: .bool(true))))
+        checklistElements.append(.Button(SkeletonButton(keypath: "scanner.stop", label: "stop scanner", payload: .bool(true))))
 
         var checklistIntro = SkeletonElementList()
         checklistIntro.append(.Text(SkeletonText(text: "1. Start scanner on both devices")))

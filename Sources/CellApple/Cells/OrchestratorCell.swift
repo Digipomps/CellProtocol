@@ -532,7 +532,7 @@ public class OrchestratorCell: GeneralCell {
             // Example 3: Reference + Buttons (scanner)
             var conf3 = CellConfiguration(name: "Scanner Demo")
             var scannerRef = CellReference(endpoint: "cell:///EntityScanner", label: "scanner")
-            scannerRef.addKeyAndValue(KeyValue(key: "start"))
+            scannerRef.addKeyAndValue(KeyValue(key: "start", value: .bool(true)))
             conf3.addReference(scannerRef)
             var refSkel = SkeletonCellReference(keypath: "scanner", topic: "scanner")
             var flowEls = SkeletonElementList()
