@@ -158,6 +158,273 @@ final class ChatCellTests: XCTestCase {
         XCTAssertEqual(receivedFlow?.id, try? firstMessage["id"]?.stringValue())
     }
 
+    func testSignedMemberExactActionGrantDispatchesAndEmitsCellOwnedFlows() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("-w--", for: "sendMessage")
+        agreement.signatories.append(member)
+        let agreementStatus = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+        let canSend = await cell.validateAccess("-w--", at: "sendMessage", for: member)
+        let canPublishDirectly = await cell.validateAccess("-w--", at: "feed", for: member)
+        XCTAssertTrue(canSend)
+        XCTAssertFalse(canPublishDirectly)
+
+        let publisher = try await cell.flow(requester: owner)
+        let emitted = expectation(description: "Cell-owned chat flows")
+        emitted.expectedFulfillmentCount = 3
+        var topics = [String]()
+        publisher.sink(receiveCompletion: { _ in }, receiveValue: { element in
+            guard element.topic.hasPrefix("chat.") else { return }
+            let topic = element.topic
+            topics.append(topic)
+            emitted.fulfill()
+        }).store(in: &cancellables)
+
+        let response = try await cell.set(
+            keypath: "sendMessage",
+            value: .string("Signed member message"),
+            requester: member
+        )
+        guard case let .object(responseObject)? = response else {
+            return XCTFail("Expected signed member send response")
+        }
+        XCTAssertEqual(responseObject["status"], .string("sent"))
+        await fulfillment(of: [emitted], timeout: 1.0)
+        XCTAssertEqual(topics, ["chat.message", "chat.participant", "chat.status"])
+
+        do {
+            _ = try await cell.set(
+                keypath: "sendMessage",
+                value: .string("Outsider message"),
+                requester: outsider
+            )
+            XCTFail("Outsider must not send")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+    }
+
+    func testExactReadAndWriteGrantsStaySeparatedForDualComposerKey() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let reader = await vault.identity(for: "reader", makeNewIfNotFound: true)!
+        let writer = await vault.identity(for: "writer", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let readAgreement = Agreement(owner: owner)
+        readAgreement.addGrant("r---", for: "compose.body")
+        readAgreement.signatories.append(reader)
+        let readAgreementStatus = await cell.addAgreement(readAgreement, for: reader, authorizedBy: owner)
+        XCTAssertEqual(readAgreementStatus, .signed)
+
+        let writeAgreement = Agreement(owner: owner)
+        writeAgreement.addGrant("-w--", for: "compose.body")
+        writeAgreement.signatories.append(writer)
+        let writeAgreementStatus = await cell.addAgreement(writeAgreement, for: writer, authorizedBy: owner)
+        XCTAssertEqual(writeAgreementStatus, .signed)
+
+        let initialDraft = try await cell.get(keypath: "compose.body", requester: reader)
+        XCTAssertEqual(initialDraft, .string(""))
+        do {
+            _ = try await cell.set(keypath: "compose.body", value: .string("no"), requester: reader)
+            XCTFail("Read-only member must not write")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+
+        let updatedDraft = try await cell.set(
+            keypath: "compose.body",
+            value: .string("writer draft"),
+            requester: writer
+        )
+        XCTAssertEqual(updatedDraft, .string("writer draft"))
+        do {
+            _ = try await cell.get(keypath: "compose.body", requester: writer)
+            XCTFail("Write-only member must not read")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+    }
+
+    func testSignedMemberCanUseSetLifecycleActionsWithoutReadGrant() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("-w--", for: "start")
+        agreement.addGrant("-w--", for: "stop")
+        agreement.signatories.append(member)
+        let agreementStatus = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+
+        let publisher = try await cell.flow(requester: owner)
+        let invalidEmission = expectation(description: "Invalid lifecycle trigger emits no status")
+        invalidEmission.isInverted = true
+        let invalidCancellable = publisher.sink(receiveCompletion: { _ in }, receiveValue: { element in
+            if element.topic == "chat.status" {
+                invalidEmission.fulfill()
+            }
+        })
+        let invalidStart = try await cell.set(
+            keypath: "start",
+            value: .string("unsupported"),
+            requester: member
+        )
+        XCTAssertEqual(invalidStart, .string("error: invalid trigger payload"))
+        XCTAssertFalse(cell.runtimeEmitterIsActive)
+        await fulfillment(of: [invalidEmission], timeout: 0.05)
+        invalidCancellable.cancel()
+
+        let lifecycleEmissions = expectation(description: "Canonical lifecycle actions emit status")
+        lifecycleEmissions.expectedFulfillmentCount = 2
+        publisher.sink(receiveCompletion: { _ in }, receiveValue: { element in
+            if element.topic == "chat.status" {
+                lifecycleEmissions.fulfill()
+            }
+        }).store(in: &cancellables)
+        let startResult = try await cell.set(keypath: "start", value: .bool(true), requester: member)
+        XCTAssertEqual(startResult, .string("ok"))
+        XCTAssertTrue(cell.runtimeEmitterIsActive)
+        let stopResult = try await cell.set(keypath: "stop", value: .null, requester: member)
+        XCTAssertEqual(stopResult, .string("ok"))
+        XCTAssertFalse(cell.runtimeEmitterIsActive)
+        await fulfillment(of: [lifecycleEmissions], timeout: 1.0)
+
+        do {
+            _ = try await cell.get(keypath: "start", requester: member)
+            XCTFail("Write-only lifecycle grant must not authorize the legacy GET alias")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+    }
+
+    func testSignedMemberCanInvokeInvitationInspectionWithExactWriteGrant() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = false
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("-w--", for: "audience.inspectInvitationArtifact")
+        agreement.signatories.append(member)
+        let agreementStatus = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+
+        let response = try await cell.set(
+            keypath: "audience.inspectInvitationArtifact",
+            value: .object([:]),
+            requester: member
+        )
+        guard case let .string(message)? = response else {
+            return XCTFail("Expected validation error for an empty artifact")
+        }
+        XCTAssertTrue(message.hasPrefix("error:"))
+        XCTAssertNotEqual(message, "denied")
+    }
+
+    func testChatPublishesAllMethodSpecificContractsWithoutChangingLegacyWinner() async throws {
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        let operations = try await cell.operationContracts(requester: owner)
+        XCTAssertEqual(operations.count, 56)
+        let keys = try await cell.keys(requester: owner)
+        XCTAssertEqual(keys.count, 50)
+        for key in ["audience.mode", "crypto.persistenceMode", "compose.body", "compose.contentType", "start", "stop"] {
+            _ = try await cell.contract(for: key, method: .get, requester: owner)
+            _ = try await cell.contract(for: key, method: .set, requester: owner)
+            let legacy = try await cell.typeForKey(key: key, requester: owner)
+            XCTAssertEqual(
+                ExploreContract.string(from: ExploreContract.object(from: legacy)?[ExploreContract.Field.method]),
+                "set"
+            )
+        }
+        let persistenceSet = try await cell.contract(
+            for: "crypto.persistenceMode",
+            method: .set,
+            requester: owner
+        )
+        let persistencePermissions = ExploreContract.list(
+            from: ExploreContract.object(from: persistenceSet)?[ExploreContract.Field.permissions]
+        )
+        XCTAssertEqual(persistencePermissions, [.string("-w--")])
+
+        let catalog = try await cell.exploreContractCatalog(requester: owner)
+        XCTAssertEqual(catalog.records.count, 56)
+        XCTAssertEqual(Set(catalog.records.map(\.key)).count, 50)
+        XCTAssertEqual(catalog.records.filter { $0.key == "compose.body" }.map(\.method).sorted(), ["get", "set"])
+        XCTAssertTrue(catalog.records.contains { $0.id == "ChatCell#compose.body" && $0.method == "set" })
+        XCTAssertTrue(catalog.records.contains { $0.id == "ChatCell#compose.body#get" && $0.method == "get" })
+
+        let restored = try await roundTrip(cell)
+        let restoredOperations = try await restored.operationContracts(requester: owner)
+        XCTAssertEqual(restoredOperations.count, 56)
+        func operationSnapshot(_ contracts: [ValueType]) -> [String: ValueType] {
+            Dictionary(uniqueKeysWithValues: contracts.compactMap { contract in
+                guard let object = ExploreContract.object(from: contract),
+                      let key = ExploreContract.string(from: object[ExploreContract.Field.key]),
+                      let method = ExploreContract.string(from: object[ExploreContract.Field.method]) else {
+                    return nil
+                }
+                return ("\(key)#\(method)", contract)
+            })
+        }
+        let originalOperationSnapshot = operationSnapshot(operations)
+        let restoredOperationSnapshot = operationSnapshot(restoredOperations)
+        XCTAssertEqual(Set(restoredOperationSnapshot.keys), Set(originalOperationSnapshot.keys))
+        for key in originalOperationSnapshot.keys {
+            XCTAssertTrue(
+                ExploreContractValidator.deepEqual(
+                    restoredOperationSnapshot[key],
+                    originalOperationSnapshot[key]
+                ),
+                "Round-trip changed operation contract \(key)"
+            )
+        }
+        let restoredCatalog = try await restored.exploreContractCatalog(requester: owner)
+        XCTAssertEqual(restoredCatalog.records.count, 56)
+        let catalogIdentity = catalog.records.map { "\($0.id)|\($0.key)|\($0.method)" }.sorted()
+        let restoredCatalogIdentity = restoredCatalog.records.map { "\($0.id)|\($0.key)|\($0.method)" }.sorted()
+        XCTAssertEqual(restoredCatalogIdentity, catalogIdentity)
+        for key in ["audience.mode", "crypto.persistenceMode", "compose.body", "compose.contentType", "start", "stop"] {
+            let restoredLegacy = try await restored.typeForKey(key: key, requester: owner)
+            XCTAssertEqual(
+                ExploreContract.string(from: ExploreContract.object(from: restoredLegacy)?[ExploreContract.Field.method]),
+                "set"
+            )
+        }
+    }
+
     func testComposerDraftIsScopedPerRequesterAndClearedAfterSend() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true
@@ -565,6 +832,39 @@ final class ChatCellTests: XCTestCase {
         XCTAssertFalse(signature.isEmpty)
     }
 
+    func testPrepareDraftEnvelopeHonorsTopLevelStringOverride() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+        _ = try await cell.set(keypath: "compose.body", value: .string("stored draft"), requester: owner)
+
+        let prepared = try await cell.set(
+            keypath: "crypto.prepareDraftEnvelope",
+            value: .string("direct override"),
+            requester: owner
+        )
+        guard case let .object(preparedObject)? = prepared else {
+            return XCTFail("Expected prepared envelope")
+        }
+        var openPayload = preparedObject
+        openPayload["senderIdentityUUID"] = .string(owner.uuid)
+        openPayload["recipientIdentityUUID"] = .string(owner.uuid)
+        let opened = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(openPayload),
+            requester: owner
+        )
+        guard case let .object(openedObject)? = opened else {
+            return XCTFail("Expected opened envelope")
+        }
+        XCTAssertEqual(openedObject["plaintext"], .string("direct override"))
+    }
+
     func testPreparedEnvelopesAdvanceGenerationOnlyAfterRekeyAcknowledgement() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true
@@ -715,6 +1015,167 @@ final class ChatCellTests: XCTestCase {
             return
         }
         XCTAssertEqual(plaintextString, "Fortrolig agenda")
+    }
+
+    func testOpenEnvelopeCannotDecryptForAnotherRecipient() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let guest = await vault.identity(for: "guest", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+        _ = try await cell.flow(requester: guest)
+
+        let prepared = try await cell.set(
+            keypath: "crypto.prepareDraftEnvelope",
+            value: .string("recipient secret"),
+            requester: owner
+        )
+        guard case let .object(preparedObject)? = prepared else {
+            return XCTFail("Expected prepared envelope")
+        }
+        var targetedPayload = preparedObject
+        targetedPayload["senderIdentityUUID"] = .string(owner.uuid)
+        targetedPayload["recipientIdentityUUID"] = .string(guest.uuid)
+
+        let wrongRequester = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(targetedPayload),
+            requester: owner
+        )
+        guard case let .string(denial)? = wrongRequester else {
+            return XCTFail("Expected cross-recipient denial")
+        }
+        XCTAssertTrue(denial.hasPrefix("denied:"))
+
+        let opened = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(targetedPayload),
+            requester: guest
+        )
+        guard case let .object(openedObject)? = opened else {
+            return XCTFail("Expected intended recipient to open envelope")
+        }
+        XCTAssertEqual(openedObject["plaintext"], .string("recipient secret"))
+        XCTAssertEqual(openedObject["recipientIdentityUUID"], .string(guest.uuid))
+    }
+
+    func testOpenEnvelopeRequiresExactGrantAndLiveRecipientProofWithoutDebugBypass() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let guest = await vault.identity(for: "guest", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "outsider", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+        _ = try await cell.flow(requester: guest)
+
+        let prepared = try await cell.set(
+            keypath: "crypto.prepareDraftEnvelope",
+            value: .string("proof-bound secret"),
+            requester: owner
+        )
+        guard case let .object(preparedObject)? = prepared else {
+            return XCTFail("Expected prepared envelope")
+        }
+        var payload = preparedObject
+        payload["senderIdentityUUID"] = .string(owner.uuid)
+        payload["recipientIdentityUUID"] = .string(guest.uuid)
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("-w--", for: "crypto.openEnvelope")
+        agreement.signatories.append(guest)
+        let agreementStatus = await cell.addAgreement(agreement, for: guest, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+        CellBase.debugValidateAccessForEverything = false
+        let guestCanOpen = await cell.validateAccess(
+            "-w--",
+            at: "crypto.openEnvelope",
+            for: guest
+        )
+        XCTAssertTrue(guestCanOpen)
+        guard guestCanOpen else { return }
+
+        let opened = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(payload),
+            requester: guest
+        )
+        guard case let .object(openedObject)? = opened else {
+            return XCTFail("Expected proof-bearing recipient to open envelope")
+        }
+        XCTAssertEqual(openedObject["plaintext"], .string("proof-bound secret"))
+        let beforeDeniedAttempts = try JSONEncoder().encode(cell)
+
+        let wrongRequester = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(payload),
+            requester: owner
+        )
+        guard case let .string(wrongRequesterMessage)? = wrongRequester else {
+            return XCTFail("Expected cross-recipient denial")
+        }
+        XCTAssertTrue(wrongRequesterMessage.hasPrefix("denied:"))
+
+        var unknownRecipientPayload = payload
+        unknownRecipientPayload["recipientIdentityUUID"] = .string(UUID().uuidString)
+        let unknownRecipient = try await cell.set(
+            keypath: "crypto.openEnvelope",
+            value: .object(unknownRecipientPayload),
+            requester: guest
+        )
+        XCTAssertEqual(unknownRecipient, .string("error: unknown recipient identity"))
+
+        let wrongAgreementKey = guest.publicIdentitySnapshot()
+        wrongAgreementKey.identityVault = vault
+        wrongAgreementKey.publicKeyAgreementSecureKey = outsider.publicKeyAgreementSecureKey
+        do {
+            let wrongAgreementResult = try await cell.set(
+                keypath: "crypto.openEnvelope",
+                value: .object(payload),
+                requester: wrongAgreementKey
+            )
+            guard case let .string(wrongAgreementMessage)? = wrongAgreementResult else {
+                return XCTFail("Expected key-agreement mismatch denial")
+            }
+            XCTAssertTrue(wrongAgreementMessage.hasPrefix("denied:"))
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+
+        let missingProof = guest.publicIdentitySnapshot()
+        do {
+            _ = try await cell.set(
+                keypath: "crypto.openEnvelope",
+                value: .object(payload),
+                requester: missingProof
+            )
+            XCTFail("Public identity snapshot without a vault must not authorize decryption")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+
+        let wrongSigningKey = Identity(guest.uuid, displayName: "forged-guest", identityVault: vault)
+        wrongSigningKey.publicSecureKey = outsider.publicSecureKey
+        wrongSigningKey.publicKeyAgreementSecureKey = guest.publicKeyAgreementSecureKey
+        do {
+            _ = try await cell.set(
+                keypath: "crypto.openEnvelope",
+                value: .object(payload),
+                requester: wrongSigningKey
+            )
+            XCTFail("Same UUID with a different signing key must not authorize decryption")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+
+        XCTAssertEqual(try JSONEncoder().encode(cell), beforeDeniedAttempts)
     }
 
     func testOpeningArchivedEncryptedCompanionUpdatesMessageCryptoMetadata() async throws {
@@ -988,6 +1449,86 @@ final class ChatCellTests: XCTestCase {
         XCTAssertTrue(recipientIDs.contains(owner.uuid))
         XCTAssertTrue(recipientIDs.contains(invitee.uuid))
         XCTAssertFalse(recipientIDs.contains(guest.uuid))
+    }
+
+    func testInvalidBulkAudienceTargetsFailClosedWithoutMutation() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let invitee = await vault.identity(for: "invitee", makeNewIfNotFound: true)!
+        let contextMember = await vault.identity(for: "context-member", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+        _ = try await cell.set(
+            keypath: "audience.inviteIdentities",
+            value: .list([.identity(invitee)]),
+            requester: owner
+        )
+        _ = try await cell.flow(requester: contextMember)
+        let before = try JSONEncoder().encode(cell)
+
+        for key in ["audience.acceptInvites", "audience.declineInvites", "audience.revokeInvites", "audience.removeContextMembers"] {
+            let response = try await cell.set(keypath: key, value: .string("unsupported"), requester: owner)
+            guard case let .string(message)? = response else {
+                return XCTFail("Expected invalid-target error for \(key)")
+            }
+            XCTAssertTrue(message.hasPrefix("error: invalid"))
+        }
+        let generate = try await cell.set(
+            keypath: "audience.generateInvitationArtifacts",
+            value: .bool(false),
+            requester: owner
+        )
+        XCTAssertEqual(generate, .string("error: invalid invitation target payload"))
+
+        let unknownUUID = UUID().uuidString
+        for key in ["audience.acceptInvites", "audience.declineInvites", "audience.revokeInvites"] {
+            let response = try await cell.set(
+                keypath: key,
+                value: .list([.identity(invitee), .string(unknownUUID)]),
+                requester: owner
+            )
+            guard case let .string(message)? = response else {
+                return XCTFail("Expected unknown-target error for \(key)")
+            }
+            XCTAssertTrue(message.hasPrefix("error:"))
+            XCTAssertEqual(try JSONEncoder().encode(cell), before)
+        }
+        let mixedGenerate = try await cell.set(
+            keypath: "audience.generateInvitationArtifacts",
+            value: .list([.identity(invitee), .string(unknownUUID)]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            mixedGenerate,
+            .string("error: invitation targets must all reference eligible invitation records")
+        )
+        XCTAssertEqual(try JSONEncoder().encode(cell), before)
+
+        let mixedRemoval = try await cell.set(
+            keypath: "audience.removeContextMembers",
+            value: .list([.identity(contextMember), .string(unknownUUID)]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            mixedRemoval,
+            .string("error: context-member targets must all reference removable non-owner members")
+        )
+        XCTAssertEqual(try JSONEncoder().encode(cell), before)
+
+        let ownerRemoval = try await cell.set(
+            keypath: "audience.removeContextMembers",
+            value: .list([.identity(owner)]),
+            requester: owner
+        )
+        XCTAssertEqual(
+            ownerRemoval,
+            .string("error: context-member targets must all reference removable non-owner members")
+        )
+        XCTAssertEqual(try JSONEncoder().encode(cell), before)
     }
 
     func testRemoveContextMembersForcesFreshRekeyAndExcludesRemovedRecipients() async throws {

@@ -203,6 +203,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     var ttl = 7776000 // 90 days
     var schemaDict = Object()
     var schemaDescriptionDict = Object()
+    private var operationSchemaDict = [String: [ExploreContractMethod: ValueType]]()
     private var cellScopeInternal: CellUsageScope
     public var cellScope: CellUsageScope {
         get {
@@ -231,6 +232,27 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
                 
         return schema
+    }
+
+    public func contract(
+        for key: String,
+        method: ExploreContractMethod,
+        requester: Identity
+    ) async throws -> ValueType {
+        try await ensureRuntimeReady()
+        guard let schema = operationSchemaDict[key]?[method] else {
+            throw GeneralCellErrors.noSchemaForKey
+        }
+        return schema
+    }
+
+    public func operationContracts(requester: Identity) async throws -> [ValueType] {
+        try await ensureRuntimeReady()
+        return operationSchemaDict.keys.sorted().flatMap { key in
+            operationSchemaDict[key, default: [:]].keys
+                .sorted { $0.rawValue < $1.rawValue }
+                .compactMap { operationSchemaDict[key]?[$0] }
+        }
     }
 
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
@@ -1533,20 +1555,33 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         }
         
-        let authorizationDecision = await self.authorizationDecision(
-            requestedAccess: "r---",
-            at: contextKey,
-            for: requester
-        )
+        let exactIntercept = await self.intercepts.loadInterceptGet(keypath: keypath)
+        let rootValueIntercept = exactIntercept == nil
+            ? await self.intercepts.loadInterceptValueForKey(key: contextKey)
+            : nil
+        let rootGetIntercept = exactIntercept == nil && rootValueIntercept == nil
+            ? await self.intercepts.loadInterceptGet(keypath: contextKey)
+            : nil
+        let authorizationDecision = exactIntercept != nil
+            ? await self.authorizationDecisionForDispatch(
+                requestedAccess: "r---",
+                exactKeypath: resolvedKeyPath,
+                fallbackKeypath: contextKey,
+                for: requester
+            )
+            : await self.authorizationDecision(
+                requestedAccess: "r---",
+                at: contextKey,
+                for: requester
+            )
         if authorizationDecision.allowed {
-            
-            if let intercept = await self.intercepts.loadInterceptGet(keypath: keypath) {
+            if let intercept = exactIntercept {
                 CellBase.diagnosticLog("get intercept key=\(contextKey) keypath=\(keypath)", domain: .flow)
                 return try await intercept(keypath, requester)
-            } else if let intercept = await self.intercepts.loadInterceptValueForKey(key: contextKey) {
+            } else if let intercept = rootValueIntercept {
                 CellBase.diagnosticLog("get value intercept key=\(contextKey)", domain: .flow)
                 return await intercept(requester)
-            } else if let intercept = await self.intercepts.loadInterceptGet(keypath: contextKey) {
+            } else if let intercept = rootGetIntercept {
                 CellBase.diagnosticLog("get nested intercept root=\(contextKey) keypath=\(keypath)", domain: .flow)
                 let rootValue = try await intercept(contextKey, requester)
                 return try resolveNestedValue(rootValue, childKeypath: childKeypath)
@@ -1644,17 +1679,31 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     
                   
                 } else {
-                    let authorizationDecision = await self.authorizationDecision(
-                        requestedAccess: "-w--",
-                        at: contextKey,
-                        for: requester
-                    )
+                    let exactIntercept = await self.intercepts.loadInterceptSet(keypath: keypath)
+                    let rootSetIntercept = exactIntercept == nil
+                        ? await self.intercepts.loadInterceptSet(keypath: contextKey)
+                        : nil
+                    let rootValueIntercept = exactIntercept == nil && rootSetIntercept == nil
+                        ? await self.intercepts.loadInterceptSetValueForKey(key: contextKey)
+                        : nil
+                    let authorizationDecision = exactIntercept != nil
+                        ? await self.authorizationDecisionForDispatch(
+                            requestedAccess: "-w--",
+                            exactKeypath: resolvedKeyPath,
+                            fallbackKeypath: contextKey,
+                            for: requester
+                        )
+                        : await self.authorizationDecision(
+                            requestedAccess: "-w--",
+                            at: contextKey,
+                            for: requester
+                        )
                     if authorizationDecision.allowed { // We need to look at this...
-                            if let intercept = await self.intercepts.loadInterceptSet(keypath: keypath) {
+                            if let intercept = exactIntercept {
                                 response = try await intercept(keypath, value, requester)
-                            } else if let intercept = await self.intercepts.loadInterceptSet(keypath: contextKey) {
+                            } else if let intercept = rootSetIntercept {
                                 response = try await intercept(keypath, value, requester)
-                            } else if let intercept = await self.intercepts.loadInterceptSetValueForKey(key: contextKey) {
+                            } else if let intercept = rootValueIntercept {
                                 await intercept(value, requester) // Should this throw so we can send failure?
                             } else {
                                 throw KeyValueErrors.notFound
@@ -1753,13 +1802,64 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         at keypath: String,
         for identity: Identity
     ) async -> CellAuthorizationDecision {
-        let request = CellAuthorizationRequest(
-            cellUUID: uuid,
-            identityDomain: identityDomain,
-            keypath: keypath,
+        let decision = await authorizationDecisionWithoutRecording(
             requestedAccess: requestedAccess,
-            requester: identity
+            at: keypath,
+            for: identity
         )
+        await recordSecurityEvent(for: decision)
+        return decision
+    }
+
+    private func authorizationDecisionForDispatch(
+        requestedAccess: String,
+        exactKeypath: String,
+        fallbackKeypath: String,
+        for identity: Identity
+    ) async -> CellAuthorizationDecision {
+        let evidence = await authorizationEvidence(for: identity)
+        let exactDecision = await authorizationDecisionWithoutRecording(
+            requestedAccess: requestedAccess,
+            at: exactKeypath,
+            for: identity,
+            evidence: evidence
+        )
+        if exactDecision.allowed || exactKeypath == fallbackKeypath {
+            await recordSecurityEvent(for: exactDecision)
+            return exactDecision
+        }
+
+        let fallbackDecision = await authorizationDecisionWithoutRecording(
+            requestedAccess: requestedAccess,
+            at: fallbackKeypath,
+            for: identity,
+            evidence: evidence
+        )
+        await recordSecurityEvent(for: fallbackDecision)
+        return fallbackDecision
+    }
+
+    private func authorizationDecisionWithoutRecording(
+        requestedAccess: String,
+        at keypath: String,
+        for identity: Identity
+    ) async -> CellAuthorizationDecision {
+        let evidence = await authorizationEvidence(for: identity)
+        return await authorizationDecisionWithoutRecording(
+            requestedAccess: requestedAccess,
+            at: keypath,
+            for: identity,
+            evidence: evidence
+        )
+    }
+
+    private struct AuthorizationEvidence {
+        var ownerReferenceMatches: Bool
+        var ownerProofValid: Bool
+        var contracts: [Agreement]
+    }
+
+    private func authorizationEvidence(for identity: Identity) async -> AuthorizationEvidence {
         let ownerReferenceMatches = identitiesReferenceSame(owner, identity)
         let ownerProofValid = ownerReferenceMatches
             ? await checkIdentityOrigin(identity, against: owner)
@@ -1767,21 +1867,38 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         if ownerReferenceMatches && !ownerProofValid {
             print("General. Got owner identity but it failed to prove ownership!")
         }
-        let contracts = ownerReferenceMatches ? [] : await contractsForIdentity(identity)
-        let cellSpecificAllowed = ownerReferenceMatches
+        return AuthorizationEvidence(
+            ownerReferenceMatches: ownerReferenceMatches,
+            ownerProofValid: ownerProofValid,
+            contracts: ownerReferenceMatches ? [] : await contractsForIdentity(identity)
+        )
+    }
+
+    private func authorizationDecisionWithoutRecording(
+        requestedAccess: String,
+        at keypath: String,
+        for identity: Identity,
+        evidence: AuthorizationEvidence
+    ) async -> CellAuthorizationDecision {
+        let request = CellAuthorizationRequest(
+            cellUUID: uuid,
+            identityDomain: identityDomain,
+            keypath: keypath,
+            requestedAccess: requestedAccess,
+            requester: identity
+        )
+        let cellSpecificAllowed = evidence.ownerReferenceMatches
             ? false
             : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
 
-        let decision = CellAuthorizationPolicy.decide(
+        return CellAuthorizationPolicy.decide(
             request: request,
-            ownerReferenceMatches: ownerReferenceMatches,
+            ownerReferenceMatches: evidence.ownerReferenceMatches,
             ownerUUIDMatches: owner.uuid == identity.uuid,
-            ownerProofValid: ownerProofValid,
-            contracts: contracts,
+            ownerProofValid: evidence.ownerProofValid,
+            contracts: evidence.contracts,
             cellSpecificAllowed: cellSpecificAllowed
         )
-        await recordSecurityEvent(for: decision)
-        return decision
     }
 
     private func recordSecurityEvent(for decision: CellAuthorizationDecision) async {
@@ -2016,8 +2133,30 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         for key: String,
         method: ExploreContractMethod
     ) -> ExploreContractRegistrationDecision {
-        if schemaDict[key] != nil {
+        if operationSchemaDict[key]?[method] != nil {
             return .useExisting
+        }
+
+        let hasMethodlessLegacySchema: Bool
+        if let legacyObject = ExploreContract.object(from: schemaDict[key]),
+           let rawMethod = ExploreContract.string(from: legacyObject[ExploreContract.Field.method]) {
+            hasMethodlessLegacySchema = ExploreContractMethod(rawValue: rawMethod) == nil
+        } else {
+            hasMethodlessLegacySchema = schemaDict[key] != nil
+        }
+        if hasMethodlessLegacySchema {
+            switch CellBase.exploreContractEnforcementMode {
+            case .permissive:
+                return .useExisting
+            case .warn:
+                CellBase.diagnosticLog(
+                    "Legacy method-less Explore schema for `\(key)` retained while installing the \(method.rawValue) handler. Migrate it to an explicit method contract before enabling strict mode.",
+                    domain: .contracts
+                )
+                return .useExisting
+            case .strict:
+                break
+            }
         }
 
         switch CellBase.exploreContractEnforcementMode {
@@ -2234,11 +2373,19 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     private func register(key: String, schema: ValueType, description: ValueType) {
-        self.schemaDict[key] = ExploreContract.normalizeSchema(
+        let normalizedSchema = ExploreContract.normalizeSchema(
             key: key,
             schema: schema,
             description: description
         )
+        self.schemaDict[key] = normalizedSchema
         self.schemaDescriptionDict[key] = description
+        if let object = ExploreContract.object(from: normalizedSchema),
+           let rawMethod = ExploreContract.string(from: object[ExploreContract.Field.method]),
+           let method = ExploreContractMethod(rawValue: rawMethod) {
+            operationSchemaDict[key, default: [:]][method] = normalizedSchema
+        }
     }
 }
+
+extension GeneralCell: ExploreOperationContractProviding {}

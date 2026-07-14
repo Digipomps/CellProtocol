@@ -402,6 +402,7 @@ public final class ChatCell: GeneralCell {
     private var topic = "chat"
     private var running = false
     private var emitterTask: Task<Void, Never>?
+    private var cellOwnedFlowEmitter: ((FlowElement) -> Void)?
 
     enum CodingKeys: String, CodingKey {
         case chatMessageHistory
@@ -476,7 +477,7 @@ public final class ChatCell: GeneralCell {
 
     public override func installCellRuntimeBindingsForAccess() async throws {
         await setupPermissions(owner: owner)
-        await setupKeys(owner: owner)
+        try await setupKeys(owner: owner)
     }
 
     deinit {
@@ -534,7 +535,7 @@ public final class ChatCell: GeneralCell {
         agreementTemplate.addGrant("r---", for: "audience.invitations")
         agreementTemplate.addGrant("r---", for: "audience.invitationLedger")
         agreementTemplate.addGrant("r---", for: "audience.invitationArtifacts")
-        agreementTemplate.addGrant("r---", for: "audience.inspectInvitationArtifact")
+        agreementTemplate.addGrant("-w--", for: "audience.inspectInvitationArtifact")
         agreementTemplate.addGrant("rw--", for: "audience.inviteIdentities")
         agreementTemplate.addGrant("rw--", for: "audience.generateInvitationArtifacts")
         agreementTemplate.addGrant("rw--", for: "audience.generateInvitationAcceptance")
@@ -545,6 +546,8 @@ public final class ChatCell: GeneralCell {
         agreementTemplate.addGrant("rw--", for: "audience.removeContextMembers")
         agreementTemplate.addGrant("rw--", for: "audience.clearInvites")
         agreementTemplate.addGrant("rw--", for: "compose")
+        agreementTemplate.addGrant("rw--", for: "compose.body")
+        agreementTemplate.addGrant("rw--", for: "compose.contentType")
         agreementTemplate.addGrant("rw--", for: "compose.state")
         agreementTemplate.addGrant("rw--", for: "compose.previewRows")
         agreementTemplate.addGrant("r---", for: "crypto")
@@ -572,7 +575,13 @@ public final class ChatCell: GeneralCell {
         agreementTemplate.addGrant("rw--", for: "stop")
     }
 
-    private func setupKeys(owner: Identity) async {
+    private func setupKeys(owner: Identity) async throws {
+        guard let cellOwnedFlowEmitter = await makeCellOwnedFlowEmitterForRuntimeBinding(
+            requester: owner
+        ) else {
+            throw FlowError.denied
+        }
+        self.cellOwnedFlowEmitter = cellOwnedFlowEmitter
         // Strict Explore mode rejects handler registration unless the complete
         // contract is already present. Keep contract publication and dispatch
         // installation in the same readiness transaction, in that order.
@@ -689,7 +698,7 @@ public final class ChatCell: GeneralCell {
 
         await registerSet(key: "audience.inspectInvitationArtifact", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
-            guard await self.canRead(requester, keypath: "audience.inspectInvitationArtifact") else { return .string("denied") }
+            guard await self.canWrite(requester, keypath: "audience.inspectInvitationArtifact") else { return .string("denied") }
             return self.inspectInvitationArtifact(payload: payload)
         }
 
@@ -720,31 +729,31 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "audience.acceptInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.acceptInvites") else { return .string("denied") }
-            return .object(self.updateInvitationStatuses(from: payload, to: .accepted))
+            return self.updateInvitationStatuses(from: payload, to: .accepted)
         }
 
         await registerSet(key: "audience.declineInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.declineInvites") else { return .string("denied") }
-            return .object(self.updateInvitationStatuses(from: payload, to: .declined))
+            return self.updateInvitationStatuses(from: payload, to: .declined)
         }
 
         await registerSet(key: "audience.revokeInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.revokeInvites") else { return .string("denied") }
-            return .object(self.updateInvitationStatuses(from: payload, to: .revoked))
+            return self.updateInvitationStatuses(from: payload, to: .revoked)
         }
 
         await registerSet(key: "audience.removeContextMembers", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.removeContextMembers") else { return .string("denied") }
-            return .object(self.removeContextMembers(from: payload))
+            return self.removeContextMembers(from: payload)
         }
 
         await registerSet(key: "audience.clearInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.clearInvites") else { return .string("denied") }
-            _ = payload
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             self.persistInvitationArtifactLedgerBeforeClearingInvites()
             self.invitedIdentitiesByUUID.removeAll()
             self.invitationRecordsByIdentityUUID.removeAll()
@@ -890,7 +899,7 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "crypto.clearDraftEnvelope", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "crypto.clearDraftEnvelope") else { return .string("denied") }
-            _ = payload
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             self.clearPreparedEnvelopeDraft(for: requester)
             return .null
         }
@@ -898,7 +907,7 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "crypto.clearEncryptedMessages", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "crypto.clearEncryptedMessages") else { return .string("denied") }
-            _ = payload
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             self.encryptedMessageRecordsByMessageID.removeAll()
             return .null
         }
@@ -912,6 +921,20 @@ public final class ChatCell: GeneralCell {
         await registerGet(key: "stop", owner: owner) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "stop") else { return .string("denied") }
+            return await self.stopEmitter(requester: requester)
+        }
+
+        await registerSet(key: "start", owner: owner) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "start") else { return .string("denied") }
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
+            return await self.startEmitter(requester: requester)
+        }
+
+        await registerSet(key: "stop", owner: owner) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "stop") else { return .string("denied") }
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             return await self.stopEmitter(requester: requester)
         }
 
@@ -950,14 +973,14 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "sendComposedMessage", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "sendComposedMessage") else { return .string("denied") }
-            _ = payload
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             return await self.sendComposedMessage(requester: requester)
         }
 
         await registerSet(key: "clearComposer", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "clearComposer") else { return .string("denied") }
-            _ = payload
+            guard self.isSupportedTriggerPayload(payload) else { return .string("error: invalid trigger payload") }
             self.clearDraft(for: requester, keepContentType: true)
             return .object(self.draft(for: requester).objectValue())
         }
@@ -973,11 +996,20 @@ public final class ChatCell: GeneralCell {
     }
 
     private func canWrite(_ requester: Identity, keypath: String) async -> Bool {
-        let directAccess = await validateAccess("rw--", at: keypath, for: requester)
+        let directAccess = await validateAccess("-w--", at: keypath, for: requester)
         if directAccess {
             return true
         }
-        return await validateAccess("rw--", at: "chat", for: requester)
+        return await validateAccess("-w--", at: "chat", for: requester)
+    }
+
+    private func isSupportedTriggerPayload(_ payload: ValueType) -> Bool {
+        switch payload {
+        case .null, .bool, .object:
+            return true
+        default:
+            return false
+        }
     }
 
     private func messagesPayload() -> ValueType {
@@ -1600,7 +1632,14 @@ public final class ChatCell: GeneralCell {
         }
         initializeMembershipTrackingIfNeeded(reason: "prepareDraftEnvelope")
 
-        let requestedBody = stringValue(objectValue(payload)?["content"]) ??
+        let directBody: String?
+        if case let .string(value) = payload {
+            directBody = value
+        } else {
+            directBody = nil
+        }
+        let requestedBody = directBody ??
+            stringValue(objectValue(payload)?["content"]) ??
             stringValue(objectValue(payload)?["body"]) ??
             stringValue(objectValue(payload)?["text"])
         let contentTypeOverride = normalizedContentType(
@@ -1669,11 +1708,27 @@ public final class ChatCell: GeneralCell {
 
         let payloadObject = objectValue(payload) ?? [:]
         let messageID = stringValue(payloadObject["messageID"])
-        let recipient = resolveIdentity(
-            directValue: payloadObject["recipientIdentity"],
-            explicitUUID: stringValue(payloadObject["recipientIdentityUUID"]),
-            fallback: requester
-        )
+        let recipient: Identity
+        if let directRecipient = payloadObject["recipientIdentity"] {
+            guard let resolvedRecipient = identityValue(directRecipient) else {
+                return .string("error: invalid recipient identity")
+            }
+            recipient = resolvedRecipient
+        } else if let explicitRecipientUUID = stringValue(payloadObject["recipientIdentityUUID"]) {
+            guard let resolvedRecipient = resolveIdentity(explicitUUID: explicitRecipientUUID) else {
+                return .string("error: unknown recipient identity")
+            }
+            recipient = resolvedRecipient
+        } else {
+            recipient = requester
+        }
+        guard identitiesReferenceSame(recipient, requester),
+              let recipientKeyAgreement = recipient.publicKeyAgreementSecureKey?.compressedKey,
+              let requesterKeyAgreement = requester.publicKeyAgreementSecureKey?.compressedKey,
+              recipientKeyAgreement == requesterKeyAgreement,
+              await checkIdentityOrigin(requester, against: recipient) else {
+            return .string("denied: recipient must match the proved requester identity")
+        }
         let sender = identityValue(payloadObject["senderIdentity"]) ??
             stringValue(payloadObject["senderIdentityUUID"]).flatMap { resolveIdentity(explicitUUID: $0) }
 
@@ -1718,8 +1773,23 @@ public final class ChatCell: GeneralCell {
 
     private func generateInvitationArtifacts(from payload: ValueType, requester: Identity) async -> ValueType? {
         _ = requester
-        let targetUUIDs = invitationTargetUUIDs(from: payload)
-        let idsToGenerate = targetUUIDs.isEmpty ? Set(invitationRecordsByIdentityUUID.keys) : targetUUIDs
+        let eligibleInvitationIDs = Set(
+            invitationRecordsByIdentityUUID.compactMap { identityUUID, record in
+                record.status == .revoked ? nil : identityUUID
+            }
+        )
+        let idsToGenerate: Set<String>
+        switch invitationTargetSelection(from: payload, allowBooleanTrigger: true) {
+        case .all:
+            idsToGenerate = eligibleInvitationIDs
+        case .selected(let targetUUIDs):
+            guard targetUUIDs.isSubset(of: eligibleInvitationIDs) else {
+                return .string("error: invitation targets must all reference eligible invitation records")
+            }
+            idsToGenerate = targetUUIDs
+        case .invalid:
+            return .string("error: invalid invitation target payload")
+        }
         let createdAt = Self.timestampString()
         let expiresAt = Self.timestampString(Date().addingTimeInterval(60 * 60 * 24 * 7))
         var artifacts = [ValueType]()
@@ -1948,9 +2018,20 @@ public final class ChatCell: GeneralCell {
         return audiencePayload()
     }
 
-    private func updateInvitationStatuses(from payload: ValueType, to status: ChatInvitationStatus) -> Object {
-        let targetUUIDs = invitationTargetUUIDs(from: payload)
-        let idsToUpdate = targetUUIDs.isEmpty ? Set(invitationRecordsByIdentityUUID.keys) : targetUUIDs
+    private func updateInvitationStatuses(from payload: ValueType, to status: ChatInvitationStatus) -> ValueType {
+        let knownInvitationIDs = Set(invitationRecordsByIdentityUUID.keys)
+        let idsToUpdate: Set<String>
+        switch invitationTargetSelection(from: payload) {
+        case .all:
+            idsToUpdate = knownInvitationIDs
+        case .selected(let targetUUIDs):
+            guard targetUUIDs.isSubset(of: knownInvitationIDs) else {
+                return .string("error: invitation targets must all reference known invitation records")
+            }
+            idsToUpdate = targetUUIDs
+        case .invalid:
+            return .string("error: invalid invitation target payload")
+        }
         let timestamp = Self.timestampString()
 
         for id in idsToUpdate {
@@ -1966,14 +2047,23 @@ public final class ChatCell: GeneralCell {
         syncAcceptedInvitedIdentitiesFromInvitationRecords()
         noteAudienceMembershipMutation(reason: "invitationStatusChanged:\(status.rawValue)")
         invalidateAllPreparedEnvelopeDrafts()
-        return audiencePayload()
+        return .object(audiencePayload())
     }
 
-    private func removeContextMembers(from payload: ValueType) -> Object {
-        let targetUUIDs = invitationTargetUUIDs(from: payload)
-        let idsToRemove = targetUUIDs.isEmpty
-            ? Set(participantRecords.keys.filter { $0 != owner.uuid })
-            : targetUUIDs.subtracting([owner.uuid])
+    private func removeContextMembers(from payload: ValueType) -> ValueType {
+        let removableContextMemberIDs = Set(participantRecords.keys.filter { $0 != owner.uuid })
+        let idsToRemove: Set<String>
+        switch invitationTargetSelection(from: payload) {
+        case .all:
+            idsToRemove = removableContextMemberIDs
+        case .selected(let targetUUIDs):
+            guard targetUUIDs.isSubset(of: removableContextMemberIDs) else {
+                return .string("error: context-member targets must all reference removable non-owner members")
+            }
+            idsToRemove = targetUUIDs
+        case .invalid:
+            return .string("error: invalid context-member target payload")
+        }
 
         var removedAny = false
         for id in idsToRemove {
@@ -1989,13 +2079,43 @@ public final class ChatCell: GeneralCell {
             invalidateAllPreparedEnvelopeDrafts()
         }
 
-        return audiencePayload()
+        return .object(audiencePayload())
     }
 
-    private func invitationTargetUUIDs(from payload: ValueType) -> Set<String> {
-        let directIDs = Set((stringListValue(payload) ?? []).compactMap { resolveIdentity(explicitUUID: $0)?.uuid ?? $0 })
-        let identityIDs = Set(identities(from: payload).map(\.uuid))
-        return directIDs.union(identityIDs)
+    private enum InvitationTargetSelection {
+        case all
+        case selected(Set<String>)
+        case invalid
+    }
+
+    private func invitationTargetSelection(
+        from payload: ValueType,
+        allowBooleanTrigger: Bool = false
+    ) -> InvitationTargetSelection {
+        if case .null = payload {
+            return .all
+        }
+        if allowBooleanTrigger, payload == .bool(true) {
+            return .all
+        }
+        guard case let .list(values) = payload else {
+            return .invalid
+        }
+        if values.isEmpty {
+            return .all
+        }
+
+        var targetUUIDs = Set<String>()
+        for value in values {
+            if let identity = identityValue(value) {
+                targetUUIDs.insert(identity.uuid)
+            } else if let uuid = stringValue(value), uuid.isEmpty == false {
+                targetUUIDs.insert(resolveIdentity(explicitUUID: uuid)?.uuid ?? uuid)
+            } else {
+                return .invalid
+            }
+        }
+        return targetUUIDs.isEmpty ? .invalid : .selected(targetUUIDs)
     }
 
     private func syncAcceptedInvitedIdentitiesFromInvitationRecords() {
@@ -2602,7 +2722,7 @@ public final class ChatCell: GeneralCell {
         )
         flowElement.topic = "chat.message"
         flowElement.origin = uuid
-        pushFlowElement(flowElement, requester: requester)
+        cellOwnedFlowEmitter?(flowElement)
     }
 
     private func publishParticipantEvent(_ participant: ChatParticipantRecord, requester: Identity) {
@@ -2614,7 +2734,7 @@ public final class ChatCell: GeneralCell {
         )
         flowElement.topic = "chat.participant"
         flowElement.origin = uuid
-        pushFlowElement(flowElement, requester: requester)
+        cellOwnedFlowEmitter?(flowElement)
     }
 
     private func publishStatusEvent(requester: Identity) {
@@ -2626,7 +2746,7 @@ public final class ChatCell: GeneralCell {
         )
         flowElement.topic = "chat.status"
         flowElement.origin = uuid
-        pushFlowElement(flowElement, requester: requester)
+        cellOwnedFlowEmitter?(flowElement)
     }
 
     private func startEmitter(requester: Identity) async -> ValueType {
@@ -2684,10 +2804,7 @@ public final class ChatCell: GeneralCell {
             key: "status",
             method: .get,
             input: .null,
-            returns: ExploreContract.oneOfSchema(
-                options: [Self.statusDetailSchema(), ExploreContract.schema(type: "string")],
-                description: "Returns a structured chat status object or a denial/failure string."
-            ),
+            returns: ExploreContract.schema(type: "string", description: "Chat status summary, denial, or failure."),
             permissions: ["r---"],
             required: false,
             description: .string("Returns the current chat summary including message and participant counts.")
@@ -2867,6 +2984,7 @@ public final class ChatCell: GeneralCell {
             input: ExploreContract.oneOfSchema(
                 options: [
                     .null,
+                    ExploreContract.schema(type: "bool", description: "Compatibility trigger that uses the current draft."),
                     ExploreContract.schema(type: "string", description: "Optional plaintext override."),
                     ExploreContract.objectSchema(
                         properties: [
@@ -2935,25 +3053,14 @@ public final class ChatCell: GeneralCell {
             requester: requester,
             key: "crypto.openEnvelope",
             method: .set,
-            input: ExploreContract.objectSchema(
-                properties: [
-                    "messageID": ExploreContract.schema(type: "string"),
-                    "senderIdentityUUID": ExploreContract.schema(type: "string"),
-                    "recipientIdentityUUID": ExploreContract.schema(type: "string"),
-                    "header": Self.encryptedEnvelopeHeaderSchema(),
-                    "combinedCiphertextBase64": ExploreContract.schema(type: "string"),
-                    "senderSignatureBase64": ExploreContract.schema(type: "string")
-                ],
-                requiredKeys: ["header", "combinedCiphertextBase64"],
-                description: "Encrypted envelope payload to open for the current or specified recipient."
-            ),
+            input: Self.openEnvelopeInputSchema(),
             returns: ExploreContract.oneOfSchema(
                 options: [Self.openedEnvelopeSchema(), ExploreContract.schema(type: "string")],
                 description: "Returns opened plaintext metadata or a denial/failure string."
             ),
             permissions: ["-w--"],
             required: false,
-            description: .string("Opens and verifies a prepared encrypted envelope for the requester or another explicitly selected recipient identity.")
+            description: .string("Opens and verifies a prepared encrypted envelope only for the cryptographically proved requester identity.")
         )
 
         await registerExploreContract(
@@ -2964,7 +3071,7 @@ public final class ChatCell: GeneralCell {
                 options: [.null, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "object")],
                 description: "Payload is ignored; any value clears the requester-scoped draft envelope cache."
             ),
-            returns: .null,
+            returns: ExploreContract.oneOfSchema(options: [.null, ExploreContract.schema(type: "string")]),
             permissions: ["-w--"],
             required: false,
             description: .string("Clears the requester-scoped encrypted draft-envelope cache.")
@@ -2978,7 +3085,7 @@ public final class ChatCell: GeneralCell {
                 options: [.null, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "object")],
                 description: "Payload is ignored; any value clears the encrypted companion-message archive."
             ),
-            returns: .null,
+            returns: ExploreContract.oneOfSchema(options: [.null, ExploreContract.schema(type: "string")]),
             permissions: ["-w--"],
             required: false,
             description: .string("Clears the locally persisted encrypted companion-envelope archive.")
@@ -3090,7 +3197,7 @@ public final class ChatCell: GeneralCell {
                 options: [Self.invitationArtifactInspectionSchema(), ExploreContract.schema(type: "string")],
                 description: "Returns the current lifecycle/inspection state for a provided invitation artifact or a denial/failure string."
             ),
-            permissions: ["r---"],
+            permissions: ["-w--"],
             required: false,
             description: .string("Inspects whether a provided invitation artifact is still current, expired, consumed, revoked, declined, superseded, or unknown to this chat cell.")
         )
@@ -3125,10 +3232,11 @@ public final class ChatCell: GeneralCell {
             input: ExploreContract.oneOfSchema(
                 options: [
                     .null,
+                    ExploreContract.schema(type: "bool", description: "True is a compatibility trigger for all eligible invitation records."),
                     ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                     ExploreContract.listSchema(item: ExploreContract.schema(type: "object"))
                 ],
-                description: "Optional list of identity UUIDs or identity objects. Empty input generates artifacts for all non-revoked invitation records."
+                description: "Optional target list. Null, an empty list, or true generates artifacts for all eligible invitation records; unsupported shapes fail closed."
             ),
             returns: ExploreContract.oneOfSchema(
                 options: [ExploreContract.listSchema(item: Self.invitationArtifactSchema()), ExploreContract.schema(type: "string")],
@@ -3203,7 +3311,7 @@ public final class ChatCell: GeneralCell {
                         ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                         ExploreContract.listSchema(item: ExploreContract.schema(type: "object"))
                     ],
-                    description: "Optional list of identity UUIDs or identity objects. Empty input applies to all invitation records."
+                    description: "Optional target list. Null or an empty list applies to all invitation records; unsupported shapes fail closed."
                 ),
                 returns: ExploreContract.oneOfSchema(
                     options: [Self.audienceStateSchema(), ExploreContract.schema(type: "string")],
@@ -3225,7 +3333,7 @@ public final class ChatCell: GeneralCell {
                     ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
                     ExploreContract.listSchema(item: ExploreContract.schema(type: "object"))
                 ],
-                description: "Optional list of identity UUIDs or identity objects. Empty input removes every non-owner context member."
+                description: "Optional target list. Null or an empty list removes every non-owner context member; unsupported shapes fail closed."
             ),
             returns: ExploreContract.oneOfSchema(
                 options: [Self.audienceStateSchema(), ExploreContract.schema(type: "string")],
@@ -3242,7 +3350,7 @@ public final class ChatCell: GeneralCell {
             method: .set,
             input: ExploreContract.oneOfSchema(
                 options: [.null, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "object")],
-                description: "Payload is ignored; any value clears explicit invitees."
+                description: "Accepts null, bool, or object trigger payloads; unsupported shapes fail closed."
             ),
             returns: ExploreContract.oneOfSchema(
                 options: [Self.audienceStateSchema(), ExploreContract.schema(type: "string")],
@@ -3327,7 +3435,10 @@ public final class ChatCell: GeneralCell {
             key: "compose.availableFormats",
             method: .get,
             input: .null,
-            returns: ExploreContract.listSchema(item: Self.formatSchema(), description: "Available composer formats."),
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: Self.formatSchema()), ExploreContract.schema(type: "string")],
+                description: "Available composer formats or a denial/failure string."
+            ),
             permissions: ["r---"],
             required: false,
             description: .string("Lists the available composer formats and their labels.")
@@ -3368,9 +3479,27 @@ public final class ChatCell: GeneralCell {
                 method: .get,
                 input: .null,
                 returns: ExploreContract.schema(type: "string", description: "Operation status such as `ok` or `already running`."),
-                permissions: ["-w--"],
+                permissions: ["rw--"],
                 required: false,
                 flowEffects: [ExploreContract.flowEffect(trigger: .get, topic: "chat.status", contentType: "object")],
+                description: .string(
+                    key == "start"
+                        ? "Legacy compatibility alias that starts background chat event generation; prefer SET."
+                        : "Legacy compatibility alias that stops background chat event generation; prefer SET."
+                )
+            )
+            await registerExploreContract(
+                requester: requester,
+                key: key,
+                method: .set,
+                input: ExploreContract.oneOfSchema(
+                    options: [.null, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "object")],
+                    description: "Null, bool, or object trigger payload."
+                ),
+                returns: ExploreContract.schema(type: "string", description: "Operation status such as `ok` or `already running`."),
+                permissions: ["-w--"],
+                required: false,
+                flowEffects: [ExploreContract.flowEffect(trigger: .set, topic: "chat.status", contentType: "object")],
                 description: .string(key == "start" ? "Starts background chat event generation." : "Stops background chat event generation.")
             )
         }
@@ -3998,6 +4127,54 @@ public final class ChatCell: GeneralCell {
             ],
             requiredKeys: ["version", "suiteID", "contentAlgorithm", "keyWrappingAlgorithm", "createdAt", "recipientKeys"],
             description: "Encrypted content envelope header."
+        )
+    }
+
+    private static func encryptedEnvelopeSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "header": encryptedEnvelopeHeaderSchema(),
+                "combinedCiphertextBase64": ExploreContract.schema(type: "string"),
+                "senderSignatureBase64": ExploreContract.schema(type: "string")
+            ],
+            requiredKeys: ["header", "combinedCiphertextBase64"],
+            description: "Encrypted content envelope."
+        )
+    }
+
+    private static func openEnvelopeInputSchema() -> ValueType {
+        let identityReference = ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.schema(type: "identity"),
+                ExploreContract.schema(type: "object")
+            ],
+            description: "Native or JSON identity reference."
+        )
+        let metadata: Object = [
+            "messageID": ExploreContract.schema(type: "string"),
+            "senderIdentity": identityReference,
+            "senderIdentityUUID": ExploreContract.schema(type: "string"),
+            "recipientIdentity": identityReference,
+            "recipientIdentityUUID": ExploreContract.schema(type: "string")
+        ]
+        var directProperties = metadata
+        directProperties["header"] = encryptedEnvelopeHeaderSchema()
+        directProperties["combinedCiphertextBase64"] = ExploreContract.schema(type: "string")
+        directProperties["senderSignatureBase64"] = ExploreContract.schema(type: "string")
+        var wrappedProperties = metadata
+        wrappedProperties["envelope"] = encryptedEnvelopeSchema()
+        return ExploreContract.oneOfSchema(
+            options: [
+                ExploreContract.objectSchema(
+                    properties: directProperties,
+                    requiredKeys: ["header", "combinedCiphertextBase64"]
+                ),
+                ExploreContract.objectSchema(
+                    properties: wrappedProperties,
+                    requiredKeys: ["envelope"]
+                )
+            ],
+            description: "Direct or wrapped encrypted envelope. Any recipient reference must match the proved requester."
         )
     }
 

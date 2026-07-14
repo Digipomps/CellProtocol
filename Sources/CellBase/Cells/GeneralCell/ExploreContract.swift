@@ -3,9 +3,22 @@
 
 import Foundation
 
-public enum ExploreContractMethod: String, Codable {
+public enum ExploreContractMethod: String, Codable, Hashable, Sendable {
     case get
     case set
+}
+
+/// Additive capability for runtimes that can expose more than one operation
+/// contract for the same key. `Explore.typeForKey(key:)` remains the legacy,
+/// single-slot view for wire compatibility.
+public protocol ExploreOperationContractProviding {
+    func contract(
+        for key: String,
+        method: ExploreContractMethod,
+        requester: Identity
+    ) async throws -> ValueType
+
+    func operationContracts(requester: Identity) async throws -> [ValueType]
 }
 
 public enum ExploreContract {

@@ -1058,6 +1058,272 @@ final class GeneralCellInterfaceTests: XCTestCase {
         )
     }
 
+    func testStrictModeRequiresContractForExactHandlerMethod() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.exploreContractEnforcementMode = .strict
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.registerExploreContract(
+            requester: owner,
+            key: "dual",
+            method: .set,
+            input: ExploreContract.schema(type: "string"),
+            returns: ExploreContract.schema(type: "string")
+        )
+        await cell.addInterceptForGet(requester: owner, key: "dual") { _, _ in
+            .string("must-not-install")
+        }
+
+        do {
+            _ = try await cell.get(keypath: "dual", requester: owner)
+            XCTFail("A SET contract must not authorize GET handler installation")
+        } catch GeneralCell.KeyValueErrors.notFound {
+        }
+
+        await cell.registerExploreContract(
+            requester: owner,
+            key: "dual",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.schema(type: "string")
+        )
+        await cell.addInterceptForGet(requester: owner, key: "dual") { _, _ in
+            .string("get-ok")
+        }
+
+        let getValue = try await cell.get(keypath: "dual", requester: owner)
+        XCTAssertEqual(getValue, .string("get-ok"))
+        let getContract = try await cell.contract(for: "dual", method: .get, requester: owner)
+        let setContract = try await cell.contract(for: "dual", method: .set, requester: owner)
+        XCTAssertEqual(
+            ExploreContract.string(from: ExploreContract.object(from: getContract)?[ExploreContract.Field.method]),
+            "get"
+        )
+        XCTAssertEqual(
+            ExploreContract.string(from: ExploreContract.object(from: setContract)?[ExploreContract.Field.method]),
+            "set"
+        )
+
+        // Legacy Explore remains last-registration-wins for compatibility.
+        let legacy = try await cell.typeForKey(key: "dual", requester: owner)
+        XCTAssertEqual(
+            ExploreContract.string(from: ExploreContract.object(from: legacy)?[ExploreContract.Field.method]),
+            "get"
+        )
+
+        let catalog = try await cell.exploreContractCatalog(requester: owner)
+        let getRecord = try XCTUnwrap(catalog.records.first { $0.key == "dual" && $0.method == "get" })
+        let setRecord = try XCTUnwrap(catalog.records.first { $0.key == "dual" && $0.method == "set" })
+        XCTAssertEqual(getRecord.id, "GeneralCell#dual")
+        XCTAssertEqual(setRecord.id, "GeneralCell#dual#set")
+        XCTAssertTrue(getRecord.markdown.contains("## `dual` [GET]"))
+        XCTAssertTrue(getRecord.markdown.contains("Method: `get`"))
+        XCTAssertTrue(setRecord.markdown.contains("## `dual` [SET]"))
+        XCTAssertTrue(catalog.markdown.contains("## `dual` [GET]"))
+        XCTAssertTrue(catalog.markdown.contains("## `dual` [SET]"))
+    }
+
+    func testOperationCatalogRetainsLegacySchemaWithoutMethodMetadata() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.registerExploreSchema(
+            requester: owner,
+            key: "legacy",
+            schema: .string("string"),
+            description: .string("Legacy schema")
+        )
+
+        let catalog = try await cell.exploreContractCatalog(requester: owner)
+        XCTAssertEqual(catalog.records.count, 1)
+        XCTAssertEqual(catalog.records.first?.id, "GeneralCell#legacy")
+        XCTAssertEqual(catalog.records.first?.key, "legacy")
+        XCTAssertEqual(catalog.records.first?.contract, .string("string"))
+    }
+
+    func testStrictModeGetContractCannotAuthorizeSetHandler() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.exploreContractEnforcementMode = .strict
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.registerExploreContract(
+            requester: owner,
+            key: "read-only-contract",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.schema(type: "string")
+        )
+        await cell.addInterceptForSet(requester: owner, key: "read-only-contract") { _, _, _ in
+            .string("must-not-install")
+        }
+
+        do {
+            _ = try await cell.set(
+                keypath: "read-only-contract",
+                value: .string("no"),
+                requester: owner
+            )
+            XCTFail("A GET contract must not authorize SET handler installation")
+        } catch GeneralCell.KeyValueErrors.notFound {
+        }
+        let legacy = try await cell.typeForKey(key: "read-only-contract", requester: owner)
+        XCTAssertEqual(
+            ExploreContract.string(from: ExploreContract.object(from: legacy)?[ExploreContract.Field.method]),
+            "get"
+        )
+    }
+
+    func testPermissiveAndWarnHandlersRetainExplicitMethodlessLegacySchema() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+
+        for mode in [CellBase.ExploreContractEnforcementMode.permissive, .warn] {
+            CellBase.exploreContractEnforcementMode = mode
+            let cell = await GeneralCell(owner: owner)
+            let legacySchema: ValueType = .object([
+                "returns": .string("string"),
+                "customLegacyMarker": .string("retained")
+            ])
+            await cell.registerExploreSchema(
+                requester: owner,
+                key: "legacy.handler",
+                schema: legacySchema,
+                description: .string("Legacy handler schema")
+            )
+            let advertisedBefore = try await cell.typeForKey(key: "legacy.handler", requester: owner)
+
+            await cell.addInterceptForGet(requester: owner, key: "legacy.handler") { _, _ in
+                .string("ok")
+            }
+
+            let advertisedAfter = try await cell.typeForKey(key: "legacy.handler", requester: owner)
+            let description = try await cell.schemaDescriptionForKey(key: "legacy.handler", requester: owner)
+            XCTAssertTrue(ExploreContractValidator.deepEqual(advertisedAfter, advertisedBefore))
+            XCTAssertEqual(description, .string("Legacy handler schema"))
+            let result = try await cell.get(keypath: "legacy.handler", requester: owner)
+            XCTAssertEqual(result, .string("ok"))
+        }
+    }
+
+    func testStrictModeRejectsMethodlessLegacySchemaForHandlerInstallation() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        CellBase.exploreContractEnforcementMode = .strict
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.registerExploreSchema(
+            requester: owner,
+            key: "legacy.strict",
+            schema: .string("string"),
+            description: .string("Legacy strict schema")
+        )
+        await cell.addInterceptForGet(requester: owner, key: "legacy.strict") { _, _ in
+            .string("must-not-install")
+        }
+
+        do {
+            _ = try await cell.get(keypath: "legacy.strict", requester: owner)
+            XCTFail("Strict mode must require an exact method contract")
+        } catch GeneralCell.KeyValueErrors.notFound {
+        }
+        let advertised = try await cell.typeForKey(key: "legacy.strict", requester: owner)
+        XCTAssertEqual(advertised, .string("string"))
+    }
+
+    func testCatalogRetainsLegacyBaseAlongsideMethodSpecificContract() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.registerExploreContract(
+            requester: owner,
+            key: "mixed",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.schema(type: "string")
+        )
+        await cell.registerExploreSchema(
+            requester: owner,
+            key: "mixed",
+            schema: .object(["customLegacyMarker": .string("retained")]),
+            description: .string("Legacy base")
+        )
+
+        let catalog = try await cell.exploreContractCatalog(requester: owner)
+        let mixedRecords = catalog.records.filter { $0.key == "mixed" }
+        XCTAssertEqual(mixedRecords.count, 2)
+        XCTAssertEqual(
+            Set(mixedRecords.map { "\($0.id)|\($0.method)" }),
+            Set(["GeneralCell#mixed|unspecified", "GeneralCell#mixed#get|get"])
+        )
+    }
+
+    func testExactChildGrantCannotReachLegacyRootGetterOrSetter() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        var rootWasMutated = false
+
+        await cell.setInterceptValueForKey(requester: owner, key: "profile") { _ in
+            .object(["name": .string("Private"), "secret": .string("must-not-leak")])
+        }
+        await cell.setInterceptSetValueForKey(requester: owner, key: "profile") { _, _ in
+            rootWasMutated = true
+        }
+        cell.agreementTemplate.addGrant("r---", for: "profile.name")
+        cell.agreementTemplate.addGrant("-w--", for: "profile.name")
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "profile.name")
+        agreement.addGrant("-w--", for: "profile.name")
+        agreement.signatories.append(member)
+        let agreementStatus = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+
+        do {
+            _ = try await cell.get(keypath: "profile.name", requester: member)
+            XCTFail("A child grant must not authorize a legacy root getter")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+        do {
+            _ = try await cell.set(keypath: "profile.name", value: .string("Changed"), requester: member)
+            XCTFail("A child grant must not authorize a legacy root setter")
+        } catch {
+            XCTAssertTrue(error is CellAuthorizationError)
+        }
+        XCTAssertFalse(rootWasMutated)
+    }
+
+    func testRootGrantStillAuthorizesExactHandlerCompatibilityFallback() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "member", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+
+        await cell.addInterceptForGet(requester: owner, key: "profile.name") { _, _ in .string("Visible") }
+        cell.agreementTemplate.addGrant("r---", for: "profile")
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "profile")
+        agreement.signatories.append(member)
+        let agreementStatus = await cell.addAgreement(agreement, for: member, authorizedBy: owner)
+        XCTAssertEqual(agreementStatus, .signed)
+
+        let value = try await cell.get(keypath: "profile.name", requester: member)
+        XCTAssertEqual(value, .string("Visible"))
+    }
+
     func testAttachSignContractWithUnmetConditionEmitsConnectChallenge() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
