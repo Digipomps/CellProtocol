@@ -442,7 +442,7 @@ public class AppleIntelligenceCell: GeneralCell {
                 state.promptText = newValue
                 state.revision += 1
             }
-            return .string("New promtpt text: \(newValue)")
+            return .string("New prompt text: \(newValue)")
         })
 
         // GET/SET ai.promptInstructions
@@ -1150,7 +1150,7 @@ public class AppleIntelligenceCell: GeneralCell {
             key: "\(AIKeys.root).\(AIKeys.promptText)",
             method: .set,
             input: ExploreContract.schema(type: "string", description: "New prompt text."),
-            returns: ExploreContract.schema(type: "string", description: "Echoes the stored prompt text."),
+            returns: ExploreContract.schema(type: "string", description: "Returns a confirmation containing the stored prompt text."),
             permissions: ["-w--"],
             required: true,
             description: .string("Updates the default prompt text.")
@@ -1172,7 +1172,7 @@ public class AppleIntelligenceCell: GeneralCell {
             key: "\(AIKeys.root).\(AIKeys.promptInstructions)",
             method: .set,
             input: ExploreContract.schema(type: "string", description: "New instruction block."),
-            returns: ExploreContract.schema(type: "string", description: "Echoes the stored instruction block."),
+            returns: ExploreContract.schema(type: "string", description: "Returns a confirmation containing the stored instruction block."),
             permissions: ["-w--"],
             required: true,
             description: .string("Updates the instruction block used for prompt generation.")

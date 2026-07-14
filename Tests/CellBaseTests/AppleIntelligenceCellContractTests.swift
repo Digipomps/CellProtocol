@@ -437,7 +437,7 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
                 requester: owner
             )
             let updatedPrompt = try await decoded.get(keypath: "ai.promptText", requester: owner)
-            XCTAssertEqual(updateResult, .string("New promtpt text: Updated after restore"))
+            XCTAssertEqual(updateResult, .string("New prompt text: Updated after restore"))
             XCTAssertEqual(updatedPrompt, .string("Updated after restore"))
         } else {
             throw XCTSkip("AppleIntelligenceCell persistence requires macOS 26/iOS 26 runtime availability")
@@ -639,10 +639,85 @@ final class AppleIntelligenceCellContractTests: XCTestCase {
                 requester: owner
             )
             XCTAssertEqual(status, .string(AIStatus.idle.rawValue))
-            XCTAssertEqual(promptUpdate, .string("New promtpt text: Strict runtime prompt"))
+            XCTAssertEqual(promptUpdate, .string("New prompt text: Strict runtime prompt"))
             XCTAssertEqual(promptRead, .string("Strict runtime prompt"))
         } else {
             throw XCTSkip("AppleIntelligenceCell strict contracts require macOS 26/iOS 26 runtime availability")
+        }
+        #else
+        throw XCTSkip("FoundationModels is unavailable in this toolchain")
+        #endif
+    }
+
+    func testStrictExploreModePublishesEveryAppleIntelligenceOperationContract() async throws {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, iOS 26.0, *) {
+            let previousMode = CellBase.exploreContractEnforcementMode
+            CellBase.exploreContractEnforcementMode = .strict
+            defer { CellBase.exploreContractEnforcementMode = previousMode }
+
+            let vault = MockIdentityVault()
+            CellBase.defaultIdentityVault = vault
+            let owner = await vault.identity(for: "private", makeNewIfNotFound: true)!
+            let cell = await AppleIntelligenceCell(owner: owner)
+
+            let expectedOperations = Set([
+                "get:ai.status",
+                "get:ai.currentPurposeRef",
+                "get:ai.purposeClusterRefs",
+                "get:ai.candidates",
+                "get:ai.rankWeights",
+                "get:ai.outbox",
+                "get:ai.lastToolArguments",
+                "get:ai.state",
+                "set:ai.dequeueOutbox",
+                "set:ai.discover",
+                "set:ai.rank",
+                "set:ai.ensurePurpose",
+                "set:ai.buildCluster",
+                "get:ai.promptText",
+                "set:ai.promptText",
+                "get:ai.promptInstructions",
+                "set:ai.promptInstructions",
+                "get:ai.sendFlowOnIngest",
+                "set:ai.sendFlowOnIngest",
+                "get:ai.rankEnabled",
+                "set:ai.rankEnabled",
+                "set:ai.ingestConfigurations",
+                "set:ai.send",
+                "set:ai.sendPrompt"
+            ])
+            let contracts = try await cell.operationContracts(requester: owner)
+            let actualOperations = Set(contracts.compactMap { contract -> String? in
+                guard let object = ExploreContract.object(from: contract),
+                      let key = ExploreContract.string(from: object[ExploreContract.Field.key]),
+                      let method = ExploreContract.string(from: object[ExploreContract.Field.method]) else {
+                    return nil
+                }
+                XCTAssertNotNil(object[ExploreContract.Field.input], "Missing input schema for \(method):\(key)")
+                XCTAssertNotNil(object[ExploreContract.Field.returns], "Missing return schema for \(method):\(key)")
+                XCTAssertNotEqual(
+                    ExploreContract.schemaType(from: object[ExploreContract.Field.input]),
+                    "unknown",
+                    "Unknown input schema for \(method):\(key)"
+                )
+                XCTAssertNotEqual(
+                    ExploreContract.schemaType(from: object[ExploreContract.Field.returns]),
+                    "unknown",
+                    "Unknown return schema for \(method):\(key)"
+                )
+                return "\(method):\(key)"
+            })
+
+            XCTAssertEqual(contracts.count, expectedOperations.count)
+            XCTAssertEqual(actualOperations, expectedOperations)
+            let installedKeys = Set(try await cell.keys(requester: owner))
+            let expectedKeys = Set(expectedOperations.compactMap { operation in
+                operation.split(separator: ":", maxSplits: 1).last.map(String.init)
+            })
+            XCTAssertTrue(expectedKeys.isSubset(of: installedKeys))
+        } else {
+            throw XCTSkip("AppleIntelligenceCell operation contracts require macOS 26/iOS 26 runtime availability")
         }
         #else
         throw XCTSkip("FoundationModels is unavailable in this toolchain")
