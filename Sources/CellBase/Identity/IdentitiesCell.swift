@@ -59,6 +59,8 @@ public class IdentitiesCell: GeneralCell {
     }
     
     private func setupKeys(owner: Identity) async  {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "identities", getValueIntercept:  { [weak self] keypath, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "identities", for: requester) {
@@ -69,8 +71,6 @@ public class IdentitiesCell: GeneralCell {
             }
             return .string("denied")
         })
-
-        await registerContracts(requester: owner)
     }
     
     

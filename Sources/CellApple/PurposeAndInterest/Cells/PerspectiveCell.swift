@@ -83,6 +83,8 @@ public class PerspectiveCell: GeneralCell {
     }
     
     private func setupKeys(owner: Identity) async  {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "advertisedPurpose", getValueIntercept:  { [weak self] keypath, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "advertisedPurpose", for: requester) {
@@ -166,8 +168,6 @@ public class PerspectiveCell: GeneralCell {
             }
             return .string("denied")
         })
-
-        await registerContracts(requester: owner)
     }
     
     private func loadPerspective() async throws {

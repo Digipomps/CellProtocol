@@ -247,6 +247,8 @@ public final class ContractProbeCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "probe.status") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "probe", for: requester) else { return .string("denied") }
@@ -294,8 +296,6 @@ public final class ContractProbeCell: GeneralCell {
             guard await self.validateAccess("-w--", at: "probe", for: requester) else { return .string("denied") }
             return await self.runProbe(value: value, requester: requester)
         }
-
-        await registerContracts(requester: owner)
     }
 
     private func registerContracts(requester: Identity) async {

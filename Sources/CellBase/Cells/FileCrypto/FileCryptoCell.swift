@@ -32,6 +32,8 @@ public final class FileCryptoCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "fileCrypto.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "fileCrypto", for: requester) else { return .string("denied") }
@@ -49,8 +51,6 @@ public final class FileCryptoCell: GeneralCell {
             guard await self.validateAccess("-w--", at: "fileCrypto", for: requester) else { return .string("denied") }
             return self.handleOpen(value: value)
         }
-
-        await registerContracts(requester: owner)
     }
 
     private func statePayload() -> ValueType {

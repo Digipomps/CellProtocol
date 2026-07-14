@@ -113,6 +113,8 @@ public final class EntityAtlasInspectorCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "atlas.status") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "atlas", for: requester) else { return .string("denied") }
@@ -184,8 +186,6 @@ public final class EntityAtlasInspectorCell: GeneralCell {
             guard await self.validateAccess("-w--", at: "atlas", for: requester) else { return .string("denied") }
             return await self.coveragePayload(value: value, requester: requester)
         }
-
-        await registerContracts(requester: owner)
     }
 
     private func registerContracts(requester: Identity) async {

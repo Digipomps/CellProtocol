@@ -197,6 +197,32 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         )
     }
 
+    func testRawInterceptCellsPublishCompleteContractsBeforeHandlersInStrictMode() async throws {
+        CellBase.exploreContractEnforcementMode = .strict
+        let owner = try await configuredOwnerAndDocumentRoot(suffix: "strict-contract-order")
+        CellBase.defaultCellResolver = MockCellResolver()
+
+        let cases: [(GeneralCell, String)] = [
+            (await PerspectiveCell(owner: owner), "perspective.state"),
+            (await CommonsResolverCell(owner: owner), "commons.status"),
+            (await CommonsTaxonomyCell(owner: owner), "taxonomy.status"),
+            (await EntityAtlasInspectorCell(owner: owner), "atlas.status"),
+            (await FileCryptoCell(owner: owner), "fileCrypto.state"),
+            (await ContractProbeCell(owner: owner), "probe.status"),
+            (await GraphIndexCell(owner: owner), "graph.state"),
+            (await VaultCell(owner: owner), "vault.state"),
+            (await IdentitiesCell(owner: owner), "identities")
+        ]
+
+        for (cell, expectedKey) in cases {
+            let keys = try await cell.keys(requester: owner)
+            XCTAssertTrue(
+                keys.contains(expectedKey),
+                "Strict runtime omitted \(expectedKey) from \(type(of: cell))"
+            )
+        }
+    }
+
     func testAppleAndVaporDecodedCellsAreImmediatelyAndConcurrentlyReady() async throws {
         let owner = try await configuredOwnerAndDocumentRoot(suffix: "apple-vapor")
 

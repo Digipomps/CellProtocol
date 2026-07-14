@@ -56,6 +56,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func setupKeys(owner: Identity) async {
+        await registerContracts(requester: owner)
+
         await addInterceptForGet(requester: owner, key: "vault.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "vault", for: requester) else { return .string("denied") }
@@ -103,8 +105,6 @@ public final class VaultCell: GeneralCell {
             guard await self.validateAccess("-w--", at: "vault", for: requester) else { return .string("denied") }
             return self.handleBacklinks(value: value)
         }
-
-        await registerContracts(requester: owner)
     }
 
     private func registerContracts(requester: Identity) async {
