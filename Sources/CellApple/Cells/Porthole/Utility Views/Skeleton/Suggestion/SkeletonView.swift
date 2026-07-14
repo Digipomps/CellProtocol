@@ -786,6 +786,7 @@ public struct SkeletonView: View {
 
     let userInfoValue: ValueType?
     @EnvironmentObject var viewModel: PortholeViewModel
+    @Environment(\.skeletonButtonResolutionTransform) private var buttonResolutionTransform
     public init(element: SkeletonElement, userInfoValue: ValueType? = nil) {
         self.element = element
         self.userInfoValue = userInfoValue
@@ -882,7 +883,11 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(o.modifiers)
             )
         case .Button(let btn):
-            let resolvedButton = resolveButton(btn, with: userInfoValue)
+            let resolvedButton = SkeletonButtonResolutionSupport.resolve(
+                template: btn,
+                userInfoValue: userInfoValue,
+                transform: buttonResolutionTransform
+            )
             return AnyView(
                 CellActionButtonView(skeletonButton: resolvedButton)
                     .applySkeletonModifiers(resolvedButton.modifiers)
@@ -1084,30 +1089,6 @@ public struct SkeletonView: View {
 //        await self.viewModel.cache.set(nil, forAllKeys: ())
     }
 
-    private func resolveButton(_ skeletonButton: SkeletonButton, with userInfoValue: ValueType?) -> SkeletonButton {
-        var button = skeletonButton
-        guard case let .object(object)? = userInfoValue else {
-            return button
-        }
-
-        if let urlValue = object["url"], case let .string(urlString) = urlValue {
-            button.url = urlString
-        }
-        let keypathField = skeletonButton.keypathKeypath ?? "keypath"
-        let labelField = skeletonButton.labelKeypath ?? "label"
-        let payloadField = skeletonButton.payloadKeypath ?? "payload"
-        if let keypathValue = object[keypathField], case let .string(keypathString) = keypathValue {
-            button.keypath = keypathString
-        }
-        if let payloadValue = object[payloadField] {
-            button.payload = payloadValue
-        }
-        if let labelValue = object[labelField], case let .string(labelString) = labelValue {
-            button.label = labelString
-        }
-        return button
-    }
-    
     private func makeURL(for keypath: String?, or urlString: String?) -> URL? {
         var url: URL?
         
