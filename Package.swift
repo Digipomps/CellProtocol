@@ -127,7 +127,9 @@ let package = Package(
                 .target(name: "PurposeInterestBenchmarkSupport"),
                 "CellApple",
                 .target(name: "CellVapor", condition: .when(platforms: [.macOS])),
-            ]),
+            ],
+            exclude: ["Fixtures"]
+        ),
         .testTarget(
             name: "HavenCommonsTests",
             dependencies: [

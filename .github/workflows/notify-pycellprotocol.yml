@@ -21,6 +21,8 @@ on:
       - "Tests/CellBaseTests/*Resolver*"
       - "Tests/CellBaseTests/*Vault*"
       - "Tests/CellBaseTests/*CellConfiguration*"
+      - "Tests/CellBaseTests/CrossRuntimeWireFixtureTests.swift"
+      - "Tests/CellBaseTests/Fixtures/**"
       - "Tests/CellBaseTests/SkeletonTests.swift"
   pull_request_target:
     branches:
@@ -47,6 +49,8 @@ on:
       - "Tests/CellBaseTests/*Resolver*"
       - "Tests/CellBaseTests/*Vault*"
       - "Tests/CellBaseTests/*CellConfiguration*"
+      - "Tests/CellBaseTests/CrossRuntimeWireFixtureTests.swift"
+      - "Tests/CellBaseTests/Fixtures/**"
       - "Tests/CellBaseTests/SkeletonTests.swift"
   workflow_dispatch:
 

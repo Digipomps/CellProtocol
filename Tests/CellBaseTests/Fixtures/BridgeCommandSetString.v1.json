@@ -1,0 +1,8 @@
+{
+  "cmd": "set",
+  "cid": 7,
+  "&keyValue": {
+    "key": "profile.name",
+    "string": "CellProtocol"
+  }
+}
