@@ -11,6 +11,7 @@ import OpenCombine
 
 enum GeneralCellErrors: Error {
     case noPublisherForLabel
+    case flowBufferOverflow
     case noSchemaForKey
 }
 
@@ -73,12 +74,131 @@ private final class CellRuntimeBindingInstallationToken: @unchecked Sendable {
     }
 }
 
+final class FlowBufferOverflowState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var overflowed = false
+    private var invalidated = false
+    private var activeForwardReservations = 0
+    private var drainWaiters = [CheckedContinuation<Void, Never>]()
+
+    @discardableResult
+    func markOverflow() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard overflowed == false else {
+            return false
+        }
+        overflowed = true
+        invalidated = true
+        return true
+    }
+
+    func performIfNotOverflowed(_ operation: () -> Void) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard overflowed == false, invalidated == false else {
+            return false
+        }
+        operation()
+        return true
+    }
+
+    func reserveForwardIfNotOverflowed() -> FlowForwardReservation? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard overflowed == false, invalidated == false else {
+            return nil
+        }
+        activeForwardReservations += 1
+        return FlowForwardReservation(state: self)
+    }
+
+    func invalidate() {
+        lock.lock()
+        invalidated = true
+        lock.unlock()
+    }
+
+    func waitForForwardReservationsToDrain() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            guard activeForwardReservations > 0 else {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            drainWaiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    fileprivate func isForwardReservationValid() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return invalidated == false && overflowed == false
+    }
+
+    fileprivate func releaseForwardReservation() {
+        lock.lock()
+        guard activeForwardReservations > 0 else {
+            lock.unlock()
+            return
+        }
+        activeForwardReservations -= 1
+        let waiters: [CheckedContinuation<Void, Never>]
+        if activeForwardReservations == 0 {
+            waiters = drainWaiters
+            drainWaiters.removeAll()
+        } else {
+            waiters = []
+        }
+        lock.unlock()
+        waiters.forEach { $0.resume() }
+    }
+
+    func didOverflow() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return overflowed
+    }
+}
+
+final class FlowForwardReservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var state: FlowBufferOverflowState?
+
+    fileprivate init(state: FlowBufferOverflowState) {
+        self.state = state
+    }
+
+    func shouldDeliver() -> Bool {
+        lock.lock()
+        let state = self.state
+        lock.unlock()
+        return state?.isForwardReservationValid() == true
+    }
+
+    func finish() {
+        lock.lock()
+        let state = self.state
+        self.state = nil
+        lock.unlock()
+        state?.releaseForwardReservation()
+    }
+
+    deinit {
+        finish()
+    }
+}
+
 
 open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizationDeciding, CellRuntimeReady {
+    static let flowEventBufferLimit = 256
     private static let missingIdentityVaultLogLock = NSLock()
     nonisolated(unsafe) private static var missingIdentityVaultLoggedUUIDs: Set<String> = []
     @TaskLocal private static var isEvaluatingAuthorizationConditions = false
     @TaskLocal private static var runtimeBindingInstallationToken: CellRuntimeBindingInstallationToken?
+    @TaskLocal private static var attachedStatusTraversalVisitedCells: Set<ObjectIdentifier> = []
 
     var ttl = 7776000 // 90 days
     var schemaDict = Object()
@@ -367,6 +487,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 // Cell Absorb functions
     
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
+        try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
         if let runtimeReadyEmitter = emitter as? CellRuntimeReady {
             try await runtimeReadyEmitter.ensureRuntimeReady()
@@ -376,6 +497,20 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         CellBase.diagnosticLog("attach label=\(label) connectState=\(connectState)", domain: .flow)
         let adjustedConnectState =  try await self.consumeConnectResponseForIdentity(connectState: connectState, label: label, identity: requester, emitCell: emitter)
         return adjustedConnectState
+    }
+
+    private func requireFlowLifecycleWriteAccess(
+        label: String,
+        requester: Identity
+    ) async throws {
+        let decision = await authorizationDecision(
+            requestedAccess: "-w--",
+            at: label,
+            for: requester
+        )
+        guard decision.allowed else {
+            throw CellAuthorizationError.denied(decision)
+        }
     }
 
     public func retryAdmissionSession(id: String, requester: Identity) async throws -> ConnectState {
@@ -547,15 +682,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     private func addEmitter(_ emitter: Emit, for label: String, requester: Identity) async {
-        let existingEmitter = await auditor.loadConnectedCellEmitterForLabel(label)
-        let emitterChanged = existingEmitter?.uuid != emitter.uuid
-
-        await auditor.storeConnectedCellEmitterForLabel(label: label, emitter: emitter)
-
-        if emitterChanged {
-            await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
-            await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
-        }
+        await auditor.connectEmitter(emitter, for: label)
     }
     
     private func processContractChallenge(context: ConnectContext, agreementTemplate: Agreement) async -> ContractChallengeEvaluation {
@@ -826,43 +953,160 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     // change to absorb flow
     public func absorbFlow(label: String, requester: Identity) async throws {  
+        try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
-//        Task { [weak self] in
-//            guard let self = self else { return }
-            if let emitCell = await self.auditor.loadConnectedCellEmitterForLabel(label) {
+        switch await auditor.beginFlowSubscription(for: label) {
+        case .ready(let subscriptionID, let emitCell, let subscriptionFlight):
+            do {
                 if let runtimeReadyEmitter = emitCell as? CellRuntimeReady {
                     try await runtimeReadyEmitter.ensureRuntimeReady()
                 }
-                if await self.auditor.loadSubscribedFeedsForLabel(label) == nil {
-                    let subscribeFeedPublisher = try await emitCell.flow(requester: requester)
-                    await self.auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: subscribeFeedPublisher)
-                    let feedCancellable = subscribeFeedPublisher
-                        .sink(receiveCompletion: { completion in
-                            CellBase.diagnosticLog("feed completion label=\(label) completion=\(completion)", domain: .flow)
-                            
-                        }, receiveValue: { [weak self] flowElement in
-                            guard let self = self else { return }
-//                                print("General got feed item: \(flowElement.title) label: \(flowElement.label)")
-                            Task {
-                                if let intercept = await self.intercepts.loadFeedIntercept() {
-                                    if let transformedFlowElement = await intercept(flowElement, requester) {
-                                        self.feedPublisher.send(transformedFlowElement)
-                                    }
-                                } else {
-                                    self.feedPublisher.send(flowElement)
-                                }
-                            }
-                        })
-                    await self.auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: feedCancellable)
-                    
-                } else {
-                    CellBase.diagnosticLog("feed already active for label=\(label)", domain: .flow)
+                guard await auditor.isFlowSubscriptionCurrent(
+                    label: label,
+                    id: subscriptionID,
+                    emitterUUID: emitCell.uuid
+                ) else {
+                    throw CancellationError()
                 }
-            } else {
-                print("No emitter for \(label)") // FIXME: server reports this error
-                self.feedPublisher.send(completion: .failure(GeneralCellErrors.noPublisherForLabel))
+                let subscribeFeedPublisher = try await emitCell.flow(requester: requester)
+                guard await auditor.isFlowSubscriptionCurrent(
+                    label: label,
+                    id: subscriptionID,
+                    emitterUUID: emitCell.uuid
+                ) else {
+                    throw CancellationError()
+                }
+                let (eventStream, eventContinuation) = AsyncStream.makeStream(
+                    of: FlowSubscriptionEvent.self,
+                    bufferingPolicy: .bufferingOldest(GeneralCell.flowEventBufferLimit)
+                )
+                let overflowState = FlowBufferOverflowState()
+                let subscriptionAuditor = auditor
+                let subscriptionIntercepts = intercepts
+                let subscriptionFeedPublisher = feedPublisher
+                let emitterUUID = emitCell.uuid
+                let eventProcessor = Task { [weak subscriptionAuditor] in
+                    do {
+                        try await subscriptionFlight.wait()
+                    } catch {
+                        return
+                    }
+                    for await event in eventStream {
+                        guard Task.isCancelled == false,
+                              overflowState.didOverflow() == false else {
+                            return
+                        }
+                        switch event {
+                        case .value(let flowElement):
+                            let transformedFlowElement: FlowElement?
+                            if let intercept = await subscriptionIntercepts.loadFeedIntercept() {
+                                transformedFlowElement = await intercept(flowElement, requester)
+                            } else {
+                                transformedFlowElement = flowElement
+                            }
+                            guard overflowState.didOverflow() == false else {
+                                return
+                            }
+                            guard let transformedFlowElement else { continue }
+                            guard let forwardReservation = await GeneralCell.reserveFlowElementForward(
+                                auditor: subscriptionAuditor,
+                                label: label,
+                                id: subscriptionID,
+                                emitterUUID: emitterUUID,
+                                overflowState: overflowState
+                            ) else {
+                                return
+                            }
+                            if forwardReservation.shouldDeliver() {
+                                subscriptionFeedPublisher.send(transformedFlowElement)
+                            }
+                            forwardReservation.finish()
+                        case .completion:
+                            guard let subscriptionAuditor else { return }
+                            await subscriptionAuditor.completeFlowSubscription(
+                                for: label,
+                                id: subscriptionID,
+                                emitterUUID: emitterUUID
+                            )
+                            return
+                        }
+                    }
+                }
+                let handleBufferOverflow: @Sendable () -> Void = { [weak subscriptionAuditor] in
+                    guard overflowState.markOverflow() else { return }
+                    eventContinuation.finish()
+                    CellBase.diagnosticLog(
+                        "flow event buffer overflow label=\(label) limit=\(GeneralCell.flowEventBufferLimit)",
+                        domain: .flow
+                    )
+                    Task { [weak subscriptionAuditor] in
+                        await subscriptionAuditor?.invalidateFlowSubscriptionAfterOverflow(
+                            label: label,
+                            id: subscriptionID,
+                            emitterUUID: emitterUUID
+                        )
+                    }
+                }
+                let feedCancellable = subscribeFeedPublisher
+                    .sink(receiveCompletion: { completion in
+                        CellBase.diagnosticLog("feed completion label=\(label) completion=\(completion)", domain: .flow)
+                        if case .dropped = eventContinuation.yield(.completion) {
+                            handleBufferOverflow()
+                        } else {
+                            eventContinuation.finish()
+                        }
+                    }, receiveValue: { flowElement in
+                        if case .dropped = eventContinuation.yield(.value(flowElement)) {
+                            handleBufferOverflow()
+                        }
+                    })
+                let installed = await auditor.installFlowSubscription(
+                    for: label,
+                    id: subscriptionID,
+                    emitterUUID: emitCell.uuid,
+                    subscribedFeed: subscribeFeedPublisher,
+                    feedCancellable: feedCancellable,
+                    eventProcessor: eventProcessor,
+                    eventContinuation: eventContinuation,
+                    overflowState: overflowState
+                )
+                guard installed else {
+                    try await subscriptionFlight.wait()
+                    throw CancellationError()
+                }
+            } catch {
+                await auditor.cancelFlowSubscription(
+                    for: label,
+                    pendingID: subscriptionID,
+                    pendingError: error
+                )
+                try await subscriptionFlight.wait()
+                throw error
             }
-//        }
+        case .pending(let subscriptionFlight):
+            try await subscriptionFlight.wait()
+        case .active:
+            CellBase.diagnosticLog("feed already active for label=\(label)", domain: .flow)
+        case .noEmitter:
+            CellBase.diagnosticLog("No emitter for label=\(label)", domain: .flow)
+            throw GeneralCellErrors.noPublisherForLabel
+        }
+    }
+
+    private static func reserveFlowElementForward(
+        auditor: GeneralAuditor?,
+        label: String,
+        id: String,
+        emitterUUID: String,
+        overflowState: FlowBufferOverflowState
+    ) async -> FlowForwardReservation? {
+        guard let auditor else { return nil }
+        return await auditor.reserveFlowElementForwardIfCurrent(
+            label: label,
+            id: id,
+            emitterUUID: emitterUUID,
+            overflowState: overflowState
+        )
     }
    
     private func handleFeedEvent(eventDescriptionValue: FlowElementValueType, requester: Identity) async -> FlowElement? {
@@ -1848,13 +2092,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             CellBase.diagnosticLog("detach denied label=\(label)", domain: .flow)
             return
         }
-        await dropFlowLocally(label: label)
-        if await auditor.loadConnectedCellEmitterForLabel(label) != nil {
-            // The connection label is local to this Absorb Cell. The target's
-            // resolver and transport lifetime may be shared by other hosts, so
-            // detaching here must not unregister or close the target globally.
-            await auditor.storeConnectedCellEmitterForLabel(label: label, emitter: nil)
-        }
+        // The connection label is local to this Absorb Cell. The target's
+        // resolver and transport lifetime may be shared by other hosts, so
+        // detaching here must not unregister or close the target globally.
+        await auditor.disconnectEmitter(for: label)
         let auditorState = await auditor.auditorState()
         CellBase.diagnosticLog("detach label=\(label) auditorState=\(auditorState)", domain: .flow)
     }
@@ -1877,8 +2118,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
 
     private func dropFlowLocally(label: String) async {
-        await auditor.storeSubscribedFeedForLabel(label: label, subscribedFeed: nil)
-        await auditor.storeFeedCancellablesForLabel(label: label, feedCancellable: nil)
+        await auditor.cancelFlowSubscription(for: label)
     }
     
     public func dropAllFlows(requester: Identity) {
@@ -1937,6 +2177,19 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func attachedStatuses(requester: Identity) async throws -> [ConnectionStatus] {
+        let cellIdentifier = ObjectIdentifier(self)
+        let visitedCells = GeneralCell.attachedStatusTraversalVisitedCells
+        guard visitedCells.contains(cellIdentifier) == false else {
+            return []
+        }
+        var nextVisitedCells = visitedCells
+        nextVisitedCells.insert(cellIdentifier)
+        return try await GeneralCell.$attachedStatusTraversalVisitedCells.withValue(nextVisitedCells) {
+            try await collectAttachedStatuses(requester: requester)
+        }
+    }
+
+    private func collectAttachedStatuses(requester: Identity) async throws -> [ConnectionStatus] {
         let attachedLabels = await self.connectedLabels(requester: requester)
         var attachedStatuses = [ConnectionStatus]()
         for currentLabel in attachedLabels {
@@ -1953,7 +2206,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             let status = try await attachedStatus(for: currentLabel, requester: requester)
             attachedStatuses.append(status)
         }
-        return attachedStatuses
+        return attachedStatuses.sorted { lhs, rhs in
+            if lhs.name != rhs.name { return lhs.name < rhs.name }
+            if lhs.connected != rhs.connected { return lhs.connected == false }
+            return lhs.active == false && rhs.active
+        }
     }
     
     private func register(key: String, schema: ValueType, description: ValueType) {

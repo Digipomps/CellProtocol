@@ -387,6 +387,15 @@ final class GeneralCellInterfaceTests: XCTestCase {
         published.agreementTemplate.conditions = []
         published.agreementTemplate.grants = []
         published.agreementTemplate.addGrant("r---", for: "published.state")
+        source.agreementTemplate.addGrant("-w--", for: "second")
+        let sourceWriteRequest = Agreement(owner: first)
+        sourceWriteRequest.addGrant("-w--", for: "second")
+        let sourceWriteState = await source.addAgreement(
+            sourceWriteRequest,
+            for: second,
+            authorizedBy: first
+        )
+        XCTAssertEqual(sourceWriteState, .signed)
 
         let firstState = try await source.attach(emitter: published, label: "first", requester: first)
         let secondState = try await source.attach(emitter: published, label: "second", requester: second)
