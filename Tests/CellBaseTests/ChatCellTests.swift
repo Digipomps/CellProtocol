@@ -1111,7 +1111,7 @@ final class ChatCellTests: XCTestCase {
             return XCTFail("Expected proof-bearing recipient to open envelope")
         }
         XCTAssertEqual(openedObject["plaintext"], .string("proof-bound secret"))
-        let beforeDeniedAttempts = try JSONEncoder().encode(cell)
+        let beforeDeniedAttempts = try deterministicSnapshot(cell)
 
         let wrongRequester = try await cell.set(
             keypath: "crypto.openEnvelope",
@@ -1175,7 +1175,7 @@ final class ChatCellTests: XCTestCase {
             XCTAssertTrue(error is CellAuthorizationError)
         }
 
-        XCTAssertEqual(try JSONEncoder().encode(cell), beforeDeniedAttempts)
+        XCTAssertEqual(try deterministicSnapshot(cell), beforeDeniedAttempts)
     }
 
     func testOpeningArchivedEncryptedCompanionUpdatesMessageCryptoMetadata() async throws {
@@ -1468,7 +1468,7 @@ final class ChatCellTests: XCTestCase {
             requester: owner
         )
         _ = try await cell.flow(requester: contextMember)
-        let before = try JSONEncoder().encode(cell)
+        let before = try deterministicSnapshot(cell)
 
         for key in ["audience.acceptInvites", "audience.declineInvites", "audience.revokeInvites", "audience.removeContextMembers"] {
             let response = try await cell.set(keypath: key, value: .string("unsupported"), requester: owner)
@@ -1495,7 +1495,7 @@ final class ChatCellTests: XCTestCase {
                 return XCTFail("Expected unknown-target error for \(key)")
             }
             XCTAssertTrue(message.hasPrefix("error:"))
-            XCTAssertEqual(try JSONEncoder().encode(cell), before)
+            XCTAssertEqual(try deterministicSnapshot(cell), before)
         }
         let mixedGenerate = try await cell.set(
             keypath: "audience.generateInvitationArtifacts",
@@ -1506,7 +1506,7 @@ final class ChatCellTests: XCTestCase {
             mixedGenerate,
             .string("error: invitation targets must all reference eligible invitation records")
         )
-        XCTAssertEqual(try JSONEncoder().encode(cell), before)
+        XCTAssertEqual(try deterministicSnapshot(cell), before)
 
         let mixedRemoval = try await cell.set(
             keypath: "audience.removeContextMembers",
@@ -1517,7 +1517,7 @@ final class ChatCellTests: XCTestCase {
             mixedRemoval,
             .string("error: context-member targets must all reference removable non-owner members")
         )
-        XCTAssertEqual(try JSONEncoder().encode(cell), before)
+        XCTAssertEqual(try deterministicSnapshot(cell), before)
 
         let ownerRemoval = try await cell.set(
             keypath: "audience.removeContextMembers",
@@ -1528,7 +1528,7 @@ final class ChatCellTests: XCTestCase {
             ownerRemoval,
             .string("error: context-member targets must all reference removable non-owner members")
         )
-        XCTAssertEqual(try JSONEncoder().encode(cell), before)
+        XCTAssertEqual(try deterministicSnapshot(cell), before)
     }
 
     func testRemoveContextMembersForcesFreshRekeyAndExcludesRemovedRecipients() async throws {
@@ -2696,6 +2696,12 @@ final class ChatCellTests: XCTestCase {
         )
         result.proof?.signature = signature
         return result
+    }
+
+    private func deterministicSnapshot(_ cell: ChatCell) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(cell)
     }
 
     private func roundTrip(_ cell: ChatCell) async throws -> ChatCell {
