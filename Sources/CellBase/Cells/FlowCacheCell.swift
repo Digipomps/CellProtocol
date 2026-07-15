@@ -267,19 +267,17 @@ public final class FlowCacheCell: GeneralCell {
         await super.init(owner: owner)
         persistancy = .ephemeral
         name = "FlowCache"
-        await setupPermissions()
-        await setupExploreContract(owner: owner)
-        await setupIntercepts(owner: owner)
+        try? await ensureRuntimeReady()
     }
 
     public required init(from decoder: Decoder) throws {
         try super.init(from: decoder)
         persistancy = .ephemeral
-        Task {
-            await self.setupPermissions()
-            await self.setupExploreContract(owner: self.owner)
-            await self.setupIntercepts(owner: self.owner)
-        }
+    }
+
+    public override func installCellRuntimeBindingsForAccess() async throws {
+        setupPermissions()
+        await setupIntercepts(owner: owner)
     }
 
     deinit {
@@ -287,6 +285,7 @@ public final class FlowCacheCell: GeneralCell {
     }
 
     public override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
+        try await ensureRuntimeReady()
         guard await validateAccess("r---", at: "flowCache", for: requester) else {
             throw StreamState.denied
         }
@@ -298,6 +297,7 @@ public final class FlowCacheCell: GeneralCell {
         requester: Identity,
         targetEndpoint: String? = nil
     ) async throws {
+        try await ensureRuntimeReady()
         guard await validateAccess("-w--", at: "flowCache", for: requester) else {
             throw StreamState.denied
         }
@@ -347,6 +347,7 @@ public final class FlowCacheCell: GeneralCell {
     }
 
     public func startCaching(endpoint: String, requester: Identity) async throws {
+        try await ensureRuntimeReady()
         guard let resolver = CellBase.defaultCellResolver else {
             throw FlowError.noResolver
         }
@@ -396,56 +397,130 @@ public final class FlowCacheCell: GeneralCell {
         cacheStateLock.withLock { replayHub.snapshot() }
     }
 
-    private func setupPermissions() async {
-        agreementTemplate.addGrant("rw--", for: "flowCache")
+    private func setupPermissions() {
+        agreementTemplate.ensureGrant("rw--", for: "flowCache")
     }
 
     private func setupExploreContract(owner: Identity) async {
-        let statusSchema: ValueType = .object([
-            "status": .string("idle|running|stopped|failed"),
-            "target": .string("cell endpoint or empty"),
-            "capacity": .string("integer 1...10000"),
-            "cachedCount": .string("integer"),
-            "totalReceived": .string("integer"),
-            "droppedCount": .string("integer"),
-            "replayScope": .string("process-local")
-        ])
-        await registerExploreSchema(
+        let stringSchema = ExploreContract.schema(type: "string")
+        let integerSchema = ExploreContract.schema(type: "integer")
+        let statusSchema = ExploreContract.objectSchema(
+            properties: [
+                "status": stringSchema,
+                "target": stringSchema,
+                "capacity": integerSchema,
+                "cachedCount": integerSchema,
+                "totalReceived": integerSchema,
+                "droppedCount": integerSchema,
+                "startedAt": stringSchema,
+                "lastError": stringSchema,
+                "replayScope": stringSchema,
+                "reconnectReplayGuaranteed": ExploreContract.schema(type: "bool")
+            ],
+            requiredKeys: [
+                "status",
+                "target",
+                "capacity",
+                "cachedCount",
+                "totalReceived",
+                "droppedCount",
+                "startedAt",
+                "lastError",
+                "replayScope",
+                "reconnectReplayGuaranteed"
+            ]
+        )
+        let errorSchema = ExploreContract.objectSchema(
+            properties: [
+                "status": stringSchema,
+                "message": stringSchema
+            ],
+            requiredKeys: ["status", "message"]
+        )
+        let statusOrErrorSchema = ExploreContract.oneOfSchema(options: [statusSchema, errorSchema])
+
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.status",
-            schema: statusSchema,
+            method: .get,
+            input: .null,
+            returns: statusSchema,
+            permissions: ["r---"],
             description: .string("Bounded process-local cache status; does not promise reconnect replay.")
         )
-        await registerExploreSchema(
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.target.current",
-            schema: .string("cell endpoint or empty")
+            method: .get,
+            input: .null,
+            returns: stringSchema,
+            permissions: ["r---"],
+            description: .string("Returns the configured upstream endpoint, or an empty string when unset.")
         )
-        await registerExploreSchema(
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.items",
-            schema: .list([.flowElement(FlowElement())])
+            method: .get,
+            input: .null,
+            returns: ExploreContract.listSchema(item: ExploreContract.schema(type: "flowElement")),
+            permissions: ["r---"],
+            description: .string("Returns only the bounded items observed during this process lifetime.")
         )
-        await registerExploreSchema(
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.target",
-            schema: .string("cell endpoint")
+            method: .set,
+            input: stringSchema,
+            returns: ExploreContract.oneOfSchema(options: [stringSchema, errorSchema]),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Configures the upstream Cell endpoint without starting the cache.")
         )
-        await registerExploreSchema(
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.capacity",
-            schema: .integer(FlowCacheCell.defaultCapacity)
+            method: .set,
+            input: integerSchema,
+            returns: ExploreContract.oneOfSchema(options: [integerSchema, errorSchema]),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Sets the bounded in-process replay capacity, clamped to 1 through 10000.")
         )
-        await registerExploreSchema(
+        await registerExploreContract(
             requester: owner,
             key: "flowCache.start",
-            schema: .string("optional cell endpoint")
+            method: .set,
+            input: ExploreContract.oneOfSchema(options: [stringSchema, .null]),
+            returns: statusOrErrorSchema,
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Starts caching from the supplied endpoint or the previously configured target.")
         )
-        await registerExploreSchema(requester: owner, key: "flowCache.stop", schema: .null)
-        await registerExploreSchema(requester: owner, key: "flowCache.clear", schema: .null)
+        await registerExploreContract(
+            requester: owner,
+            key: "flowCache.stop",
+            method: .set,
+            input: .null,
+            returns: statusSchema,
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Stops the upstream subscription while retaining the current bounded replay.")
+        )
+        await registerExploreContract(
+            requester: owner,
+            key: "flowCache.clear",
+            method: .set,
+            input: .null,
+            returns: statusSchema,
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Stops the upstream subscription and clears all process-local replay state.")
+        )
     }
 
     private func setupIntercepts(owner: Identity) async {
+        await setupExploreContract(owner: owner)
+
         await addInterceptForGet(requester: owner, key: "flowCache.status") { [weak self] _, requester in
             guard let self else { return .null }
             guard await self.validateAccess("r---", at: "flowCache", for: requester) else {
