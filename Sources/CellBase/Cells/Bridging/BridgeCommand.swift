@@ -11,6 +11,11 @@ public enum Command: String {
     case admit
     case agreement
     case feed
+    case stopFeed
+    case openChannel
+    case channelOpened
+    case channelRejected
+    case closeChannel
     case state
     case emitter // getEmitterWithUUID - this may not be necessary...
     
@@ -58,12 +63,26 @@ public struct BridgeCommand: Codable {
     public var payload: ValueType?
     public var cid: Int
     public var error: BridgeError?
+    /// Optional v2 transport metadata. Its absence is the legacy, single-channel protocol.
+    public var protocolVersion: Int?
+    public var channelID: String?
+    public var targetEndpoint: String?
+    /// Flow continuity metadata. A sequence is only a watermark; it does not imply replay.
+    public var streamID: String?
+    public var sequence: UInt64?
+    public var resumeFromSequence: UInt64?
     
     enum CodingKeys: String, CodingKey
     {
         case cmd // = "&cmd"
         case cid // = "&cid"
         case identity //= "&identity"
+        case protocolVersion = "&protocolVersion"
+        case channelID = "&channelID"
+        case targetEndpoint = "&targetEndpoint"
+        case streamID = "&streamID"
+        case sequence = "&sequence"
+        case resumeFromSequence = "&resumeFromSequence"
         case description = "&description"
         case connectState = "&connectState"
         case agreementState = "&agreementState"
@@ -104,11 +123,28 @@ public struct BridgeCommand: Codable {
         case list  = "&list"
     }
     //CloudBridgeCommand(cmd: "response", payload: payload, cid: command.cid)
-    public init(cmd: String, identity: Identity? = nil, payload: ValueType?, cid: Int) {
+    public init(
+        cmd: String,
+        identity: Identity? = nil,
+        payload: ValueType?,
+        cid: Int,
+        protocolVersion: Int? = nil,
+        channelID: String? = nil,
+        targetEndpoint: String? = nil,
+        streamID: String? = nil,
+        sequence: UInt64? = nil,
+        resumeFromSequence: UInt64? = nil
+    ) {
         self.cmd = cmd
         self.payload = payload
         self.cid = cid
         self.identity = identity
+        self.protocolVersion = protocolVersion
+        self.channelID = channelID
+        self.targetEndpoint = targetEndpoint
+        self.streamID = streamID
+        self.sequence = sequence
+        self.resumeFromSequence = resumeFromSequence
     }
     
     public init(from decoder: Decoder) throws {
@@ -116,6 +152,12 @@ public struct BridgeCommand: Codable {
         cmd = try values.decode(String.self, forKey: .cmd)
         cid = try values.decode(Int.self, forKey: .cid)
         identity = try? values.decodeIfPresent(Identity.self, forKey: .identity)
+        protocolVersion = try? values.decodeIfPresent(Int.self, forKey: .protocolVersion)
+        channelID = try? values.decodeIfPresent(String.self, forKey: .channelID)
+        targetEndpoint = try? values.decodeIfPresent(String.self, forKey: .targetEndpoint)
+        streamID = try? values.decodeIfPresent(String.self, forKey: .streamID)
+        sequence = try? values.decodeIfPresent(UInt64.self, forKey: .sequence)
+        resumeFromSequence = try? values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
         payload = Self.decodePayload(from: values)
     }
     
@@ -126,6 +168,12 @@ public struct BridgeCommand: Codable {
         if identity != nil {
             try container.encode(identity, forKey: .identity)
         }
+        try container.encodeIfPresent(protocolVersion, forKey: .protocolVersion)
+        try container.encodeIfPresent(channelID, forKey: .channelID)
+        try container.encodeIfPresent(targetEndpoint, forKey: .targetEndpoint)
+        try container.encodeIfPresent(streamID, forKey: .streamID)
+        try container.encodeIfPresent(sequence, forKey: .sequence)
+        try container.encodeIfPresent(resumeFromSequence, forKey: .resumeFromSequence)
         if let payload = payload {
             switch payload {
             case let .description(value):

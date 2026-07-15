@@ -10,7 +10,7 @@
 
 import Foundation
 
-public protocol BridgeDelegateProtocol {
+public protocol BridgeDelegateProtocol: AnyObject {
     func consumeCommand(command: BridgeCommand) async throws
     func consumeResponse(command: BridgeCommand) async throws
     func sendCommand(command: Command, identity: Identity, payload: ValueType?) async
@@ -37,6 +37,11 @@ public protocol BridgeTransportProtocol {
     func setDelegate(_ delegate: BridgeDelegateProtocol)
     func setup(_ endpointURL: URL, identity: Identity) async throws // Set up transportation
     func sendData(_ data: Data) async throws
+    func close() async
     func identityVault(for: Identity?) async -> IdentityVaultProtocol
     static func new() -> BridgeTransportProtocol
+}
+
+public extension BridgeTransportProtocol {
+    func close() async {}
 }

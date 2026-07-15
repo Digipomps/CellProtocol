@@ -2,6 +2,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
 @testable import CellBase
 
 final class BridgeTests: XCTestCase {
@@ -1067,6 +1072,90 @@ final class BridgeTests: XCTestCase {
         } else {
             XCTFail("Expected string payload")
         }
+    }
+
+    func testBridgeBaseSharesOneRemoteFeedAcrossLocalSubscribers() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity(displayName: "owner")
+        let bridge = try await BridgeBase(
+            BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        )
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+
+        let firstPublisher = try await bridge.flow(requester: owner)
+        let secondPublisher = try await bridge.flow(requester: owner)
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let feedCommand = try XCTUnwrap(sentCommands.first)
+        XCTAssertEqual(feedCommand.command, .feed)
+        XCTAssertEqual(sentCommands.filter { $0.command == .feed }.count, 1)
+
+        let firstReceived = expectation(description: "first subscriber receives remote flow")
+        let secondReceived = expectation(description: "second subscriber receives remote flow")
+        let secondSurvivesFirstCancellation = expectation(description: "second subscriber stays active")
+        var secondValues = [String]()
+
+        var firstCancellable: AnyCancellable? = firstPublisher.sink(
+            receiveCompletion: { _ in },
+            receiveValue: { flowElement in
+                if flowElement.id == "shared-1" {
+                    firstReceived.fulfill()
+                }
+            }
+        )
+        var secondCancellable: AnyCancellable? = secondPublisher.sink(
+            receiveCompletion: { _ in },
+            receiveValue: { flowElement in
+                secondValues.append(flowElement.id)
+                if flowElement.id == "shared-1" {
+                    secondReceived.fulfill()
+                } else if flowElement.id == "shared-2" {
+                    secondSurvivesFirstCancellation.fulfill()
+                }
+            }
+        )
+
+        try await bridge.consumeResponse(command: BridgeCommand(
+            cmd: Command.response.rawValue,
+            identity: owner,
+            payload: .flowElement(FlowElement(
+                id: "shared-1",
+                title: "first",
+                content: .string("one"),
+                properties: .init(type: .content, contentType: .string)
+            )),
+            cid: feedCommand.cid
+        ))
+        await fulfillment(of: [firstReceived, secondReceived], timeout: 1)
+
+        firstCancellable?.cancel()
+        firstCancellable = nil
+        XCTAssertEqual(
+            try transport.sentData.map { try JSONDecoder().decode(BridgeCommand.self, from: $0) }
+                .filter { $0.command == .stopFeed }
+                .count,
+            0
+        )
+
+        try await bridge.consumeResponse(command: BridgeCommand(
+            cmd: Command.response.rawValue,
+            identity: owner,
+            payload: .flowElement(FlowElement(
+                id: "shared-2",
+                title: "second",
+                content: .string("two"),
+                properties: .init(type: .content, contentType: .string)
+            )),
+            cid: feedCommand.cid
+        ))
+        await fulfillment(of: [secondSurvivesFirstCancellation], timeout: 1)
+        XCTAssertEqual(secondValues, ["shared-1", "shared-2"])
+
+        secondCancellable?.cancel()
+        secondCancellable = nil
+        let afterCancellation = try await waitUntilTransportHasSent(2, transport: transport)
+        let stopCommand = try XCTUnwrap(afterCancellation.first(where: { $0.command == .stopFeed }))
+        XCTAssertEqual(stopCommand.payload, .integer(feedCommand.cid))
     }
 
     func testCellResolverBuildsPublisherFirstBridgeheadURLWhenRouteRequestsIt() async throws {

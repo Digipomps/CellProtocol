@@ -297,6 +297,14 @@ public enum AppInitializer {
         )
         try await registerResolve(
             on: resolver,
+            name: "FlowCache",
+            cellScope: .identityUnique,
+            persistency: .ephemeral,
+            identityDomain: "private",
+            type: FlowCacheCell.self
+        )
+        try await registerResolve(
+            on: resolver,
             name: "StateSnapshot",
             cellScope: .identityUnique,
             persistency: .persistant,

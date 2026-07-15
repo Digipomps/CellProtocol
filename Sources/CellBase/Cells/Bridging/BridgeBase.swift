@@ -53,6 +53,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     private var connectCancellable: AnyCancellable?
     private var feedCancellable: AnyCancellable?
+    private var outboundFeedStartTask: Task<Void, Error>?
+    private var outboundFeedCommandID: Int?
+    private var outboundFeedRequester: Identity?
+    private var inboundFeedCommandID: Int?
+    private var inboundFeedRequester: Identity?
+    private var localFeedSubscriberCount = 0
     private var connectPublisher: PassthroughSubject<ConnectState, Error>?
     private var feedPublisher2 = PassthroughSubject<FlowElement, Error>()
     
@@ -390,6 +396,22 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         ready = true
     }
     public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
+        let previousFeedStartTask = withCallbackStateLock { () -> Task<Void, Error>? in
+            let task = outboundFeedStartTask
+            outboundFeedStartTask = nil
+            outboundFeedCommandID = nil
+            outboundFeedRequester = nil
+            inboundFeedCommandID = nil
+            inboundFeedRequester = nil
+            localFeedSubscriberCount = 0
+            feedActive = false
+            return task
+        }
+        previousFeedStartTask?.cancel()
+        flowElementCallbackCancellable?.cancel()
+        flowElementCallbackCancellable = nil
+        feedCancellable?.cancel()
+        feedCancellable = nil
         self.transport = transport
         transport.setDelegate(self)
         ready = false
@@ -418,43 +440,150 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     
     public func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, any Error> {
-        if !feedActive {
-            if validateFeedPermission(identity: requester) {
-                let commandID = await auditor.getNewCommandId()
-                flowElementCallbackCancellable = flowElementCallbackDataPublisher
-                    .handleEvents(receiveCancel: { [weak self] in
-                        bridgeLog("Cancelled feed")
-                        Task { [weak self] in
-                            await self?.auditor.removeBridgeCommand(for: commandID)
-                        }
-                    })
-                    .sink(receiveCompletion: { [weak self] completion in
-                        bridgeLog("Bridge got flowElement publisher completion: \(completion)")
-                        self?.flowElementCallbackCancellable = nil
-                        Task { [weak self] in
-                            await self?.auditor.removeBridgeCommand(for: commandID)
-                        }
-                    }, receiveValue: { flowElement in
-                        bridgeLog("BridgeBase got flowElement: \(flowElement)")
-                        self.feedPublisher2.send(flowElement)
-                    })
-                do {
-                    try await sendCommandChecked(
-                        command: .feed,
-                        identity: requester,
-                        payload: nil,
-                        commandId: commandID
-                    )
-                } catch {
-                    flowElementCallbackCancellable = nil
-                    await auditor.removeBridgeCommand(for: commandID)
-                    throw error
+        guard validateFeedPermission(identity: requester) else {
+            throw StreamState.denied
+        }
+        try await ensureOutboundFeed(requester: requester)
+        return feedPublisher2
+            .handleEvents(
+                receiveSubscription: { [weak self] _ in
+                    self?.retainLocalFeedSubscriber()
+                },
+                receiveCompletion: { [weak self] _ in
+                    self?.releaseLocalFeedSubscriber()
+                },
+                receiveCancel: { [weak self] in
+                    self?.releaseLocalFeedSubscriber()
                 }
-            } else {
-                throw StreamState.denied
+            )
+            .eraseToAnyPublisher()
+    }
+
+    private func ensureOutboundFeed(requester: Identity) async throws {
+        let task = withCallbackStateLock { () -> Task<Void, Error> in
+            if let outboundFeedStartTask {
+                return outboundFeedStartTask
+            }
+            let newTask = Task { [weak self] in
+                guard let self else {
+                    throw BridgeError.transportUnavailable
+                }
+                try await self.startOutboundFeed(requester: requester)
+            }
+            outboundFeedStartTask = newTask
+            return newTask
+        }
+
+        do {
+            try await task.value
+        } catch {
+            withCallbackStateLock {
+                outboundFeedStartTask = nil
+                outboundFeedCommandID = nil
+                outboundFeedRequester = nil
+                feedActive = false
+            }
+            throw error
+        }
+    }
+
+    private func startOutboundFeed(requester: Identity) async throws {
+        let commandID = await auditor.getNewCommandId()
+        flowElementCallbackCancellable = flowElementCallbackDataPublisher
+            .handleEvents(receiveCancel: {
+                bridgeLog("Cancelled remote feed forwarding")
+            })
+            .sink(receiveCompletion: { [weak self] completion in
+                bridgeLog("Bridge remote feed completed: \(completion)")
+                self?.markOutboundFeedInactive(commandID: commandID)
+            }, receiveValue: { [weak self] flowElement in
+                bridgeLog("Bridge received flow element")
+                self?.feedPublisher2.send(flowElement)
+            })
+
+        do {
+            try await sendCommandChecked(
+                command: .feed,
+                identity: requester,
+                payload: nil,
+                commandId: commandID
+            )
+            withCallbackStateLock {
+                outboundFeedCommandID = commandID
+                outboundFeedRequester = requester
+                feedActive = true
+            }
+        } catch {
+            flowElementCallbackCancellable?.cancel()
+            flowElementCallbackCancellable = nil
+            await auditor.removeBridgeCommand(for: commandID)
+            throw error
+        }
+    }
+
+    private func markOutboundFeedInactive(commandID: Int) {
+        withCallbackStateLock {
+            guard outboundFeedCommandID == commandID else { return }
+            outboundFeedStartTask = nil
+            outboundFeedCommandID = nil
+            outboundFeedRequester = nil
+            feedActive = false
+        }
+        Task { [weak self] in
+            await self?.auditor.removeBridgeCommand(for: commandID)
+        }
+    }
+
+    private func retainLocalFeedSubscriber() {
+        withCallbackStateLock {
+            localFeedSubscriberCount += 1
+        }
+    }
+
+    private func releaseLocalFeedSubscriber() {
+        let feedToStop = withCallbackStateLock { () -> (Int, Identity)? in
+            guard localFeedSubscriberCount > 0 else { return nil }
+            localFeedSubscriberCount -= 1
+            guard localFeedSubscriberCount == 0,
+                  let commandID = outboundFeedCommandID,
+                  let requester = outboundFeedRequester else {
+                return nil
+            }
+            outboundFeedStartTask = nil
+            outboundFeedCommandID = nil
+            outboundFeedRequester = nil
+            feedActive = false
+            return (commandID, requester)
+        }
+        guard let feedToStop else { return }
+
+        flowElementCallbackCancellable?.cancel()
+        flowElementCallbackCancellable = nil
+        Task { [weak self] in
+            await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1)
+        }
+    }
+
+    private func sendStopFeed(commandID: Int, requester: Identity) async {
+        defer {
+            Task { [weak self] in
+                await self?.auditor.removeBridgeCommand(for: commandID)
             }
         }
-        return feedPublisher2.eraseToAnyPublisher()
+        let command = BridgeCommand(
+            cmd: Command.stopFeed.rawValue,
+            identity: requester,
+            payload: .integer(commandID),
+            cid: commandID
+        )
+        guard let data = try? JSONEncoder().encode(command), let transport else {
+            return
+        }
+        do {
+            try await transport.sendData(data)
+        } catch {
+            bridgeLog("Stopping remote feed failed with transport error: \(error)")
+        }
     }
     // Should this be moved to base?
     enum ConnectError: Error {
@@ -1315,6 +1444,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 {
                     client.dropAllFlows(requester: identity)
                 }
+
+            case .stopFeed:
+                try await processStopFeedCommand(command: command)
                 
             case .removeConnecion:
                 if
@@ -1409,13 +1541,40 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 setupFlow(
                     commandCid: command.cid,
                     from: try await emitter.flow(requester: identity)
-                ) // thats wrong - every command ceates new subsciption
+                )
+                inboundFeedCommandID = command.cid
+                inboundFeedRequester = identity
             }
 //            await emitter.startFeed(requester: identity)
             
             
             feedActive = true
         }
+    }
+
+    private func processStopFeedCommand(command: BridgeCommand) async throws {
+        guard let identity = command.identity,
+              case let .integer(feedCommandID) = command.payload,
+              feedCommandID == inboundFeedCommandID,
+              let inboundFeedRequester,
+              bridgeIdentitiesReferenceSame(inboundFeedRequester, identity) else {
+            bridgeLog("Rejected stopFeed command that did not match the active feed")
+            return
+        }
+        feedCancellable?.cancel()
+        feedCancellable = nil
+        inboundFeedCommandID = nil
+        self.inboundFeedRequester = nil
+        feedActive = false
+    }
+
+    private func bridgeIdentitiesReferenceSame(_ trusted: Identity, _ presented: Identity) -> Bool {
+        guard trusted.uuid == presented.uuid,
+              let trustedFingerprint = trusted.signingPublicKeyFingerprint,
+              let presentedFingerprint = presented.signingPublicKeyFingerprint else {
+            return false
+        }
+        return trustedFingerprint == presentedFingerprint
     }
     
     private func setupFlow(commandCid: Int, from publisher: AnyPublisher<FlowElement, Error>?) {
@@ -1426,6 +1585,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         
             .sink(receiveCompletion: { [weak self] completion in
                 self?.feedCancellable = nil
+                self?.inboundFeedCommandID = nil
+                self?.inboundFeedRequester = nil
+                self?.feedActive = false
             }, receiveValue: { [weak self] flowElement in
                 guard let self = self else {return}
                 Task { [weak self] in

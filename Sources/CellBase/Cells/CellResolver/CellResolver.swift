@@ -67,18 +67,28 @@ public struct RemoteCellHostRoute: Sendable {
         case publisherUUIDThenEndpoint
     }
 
+    public enum ConnectionSharing: Sendable {
+        /// Existing wire format: one physical connection per remote bridge.
+        case dedicated
+        /// Protocol v2: identity-bound physical session with logical channels.
+        case multiplexedV2
+    }
+
     public var websocketEndpoint: String
     public var schemePreference: SchemePreference
     public var pathLayout: PathLayout
+    public var connectionSharing: ConnectionSharing
 
     public init(
         websocketEndpoint: String = "bridgehead",
         schemePreference: SchemePreference = .automatic,
-        pathLayout: PathLayout = .endpointThenPublisherUUID
+        pathLayout: PathLayout = .endpointThenPublisherUUID,
+        connectionSharing: ConnectionSharing = .dedicated
     ) {
         self.websocketEndpoint = websocketEndpoint
         self.schemePreference = schemePreference
         self.pathLayout = pathLayout
+        self.connectionSharing = connectionSharing
     }
 }
 
@@ -92,6 +102,7 @@ public class CellResolver: CellResolverProtocol {
     private var remoteCellHostRoutes = [String : RemoteCellHostRoute]()
     private var remoteBridgeCache = [String : Emit]()
     private var pendingRemoteBridgeTasks = [String : Task<Emit, Error>]()
+    private let remoteBridgeConnectionPool = BridgeConnectionPool()
     var auditor = ResolverAuditor()
     
     var connectCellCancellables = [String : AnyCancellable]() // used by push item
@@ -1792,14 +1803,48 @@ public class CellResolver: CellResolverProtocol {
             throw CellResolverError.missingRemoteCellHostRegistration(host: host)
         }
         let transportScheme = try remoteWebSocketScheme(for: route, endpoint: logicalEndpoint)
-        let transport = try transportForScheme(transportScheme)
-        let bridgeConfig = BridgeBase.Config(contractTemplate: await Agreement(), transport: transport, connection: .outbound)
-        let cellBridge = try await BridgeBase(bridgeConfig)
+        let cellBridgeUUID = UUID().uuidString
+        let transport: BridgeTransportProtocol
+        let finalizedConnectionURL: URL
 
-        let finalizedConnectionURL = try remoteWebSocketConnectionURL(
-            from: endpointUrl,
-            publisherUUID: cellBridge.uuid
+        switch route.connectionSharing {
+        case .dedicated:
+            transport = try transportForScheme(transportScheme)
+            finalizedConnectionURL = try remoteWebSocketConnectionURL(
+                from: endpointUrl,
+                publisherUUID: cellBridgeUUID
+            )
+        case .multiplexedV2:
+            guard let transportType = withStateLock({ transports[transportScheme] }) else {
+                throw TransportError.TransportNotFound
+            }
+            guard let signingKeyFingerprint = identity.signingPublicKeyFingerprint,
+                  let homeVaultReference = identity.homeVaultReference else {
+                throw IdentityVaultError.noKey
+            }
+            finalizedConnectionURL = try remoteMultiplexSessionURL(
+                from: endpointUrl,
+                route: route
+            )
+            let key = BridgeConnectionPoolKey(
+                sessionEndpoint: finalizedConnectionURL,
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: signingKeyFingerprint,
+                homeVaultReference: homeVaultReference
+            )
+            transport = try remoteBridgeConnectionPool.channelTransport(
+                for: key,
+                targetEndpoint: trimmedSlashes(endpointUrl.path),
+                physicalTransportFactory: { transportType.new() }
+            )
+        }
+        let bridgeConfig = BridgeBase.Config(
+            contractTemplate: await Agreement(),
+            uuid: cellBridgeUUID,
+            transport: transport,
+            connection: .outbound
         )
+        let cellBridge = try await BridgeBase(bridgeConfig)
         try await cellBridge.setTransport(transport, connection: .outbound)
         try await transport.setup(finalizedConnectionURL, identity: identity)
         do {
@@ -1812,6 +1857,41 @@ public class CellResolver: CellResolverProtocol {
         }
         try await self.registerNamedEmitCell(name: logicalEndpoint, emitCell: cellBridge, identity: identity)
         return cellBridge
+    }
+
+    private func remoteMultiplexSessionURL(
+        from cellEndpointURL: URL,
+        route: RemoteCellHostRoute
+    ) throws -> URL {
+        guard let host = cellEndpointURL.host else {
+            throw CellResolverError.invalidRemoteCellReference(
+                endpoint: cellEndpointURL.absoluteString
+            )
+        }
+        let resolvedScheme = try remoteWebSocketScheme(
+            for: route,
+            endpoint: cellEndpointURL.absoluteString
+        )
+        let routePath = trimmedSlashes(route.websocketEndpoint)
+        let sessionPath = routePath.isEmpty ? "/session" : "/\(routePath)/session"
+
+        var components = URLComponents()
+        components.scheme = resolvedScheme
+        components.host = host
+        components.port = cellEndpointURL.port
+        components.path = sessionPath
+        if let queryItemsProvider = CellBase.remoteWebSocketQueryItemsProvider {
+            let queryItems = queryItemsProvider(cellEndpointURL).filter {
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            components.queryItems = queryItems.isEmpty ? nil : queryItems
+        }
+        guard let url = components.url else {
+            throw CellResolverError.failedToCreateUrlEndpoint(
+                from: cellEndpointURL.absoluteString
+            )
+        }
+        return url
     }
 
     private func remoteBridgeCacheKey(endpoint: String, identity: Identity) -> String {
@@ -1943,6 +2023,7 @@ public class CellResolver: CellResolverProtocol {
         for task in pendingTasks {
             _ = try? await task.value
         }
+        remoteBridgeConnectionPool.reset()
         await auditor.resetRuntimeStateForTesting()
         await lifecycleTracker.resetRuntimeStateForTesting()
     }
