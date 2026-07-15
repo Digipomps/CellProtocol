@@ -87,6 +87,28 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertFalse(forgedControlVerified)
     }
 
+    func testOwnerProofAndRuntimeRestoreRequireSigningControl() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner-proof", makeNewIfNotFound: true)!
+        let foreign = await vault.identity(for: "foreign-proof", makeNewIfNotFound: true)!
+        let publicOwner = owner.publicIdentitySnapshot()
+        let restored = await GeneralCell(owner: publicOwner)
+
+        let publicSnapshotOwnsCell = await restored.requesterProvesOwnership(publicOwner)
+        let foreignOwnsCell = await restored.requesterProvesOwnership(foreign)
+        let foreignRestoredOwner = await restored.restoreStoredOwnerIdentity(using: foreign)
+
+        let ownerRestoredOwner = await restored.restoreStoredOwnerIdentity(using: owner)
+        let ownerOwnsCell = await restored.requesterProvesOwnership(owner)
+
+        XCTAssertFalse(publicSnapshotOwnsCell)
+        XCTAssertFalse(foreignOwnsCell)
+        XCTAssertFalse(foreignRestoredOwner)
+        XCTAssertTrue(ownerRestoredOwner)
+        XCTAssertTrue(ownerOwnsCell)
+    }
+
     func testSetInterceptRegistersSchemaAndReturnsValue() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault

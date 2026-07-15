@@ -358,6 +358,23 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         owner.homeVaultReference = runtimeOwner.homeVaultReference
         return true
     }
+
+    /// Returns true only when the requester references the stored owner and
+    /// proves control of the corresponding signing key through its home vault.
+    public func requesterProvesOwnership(_ requester: Identity) async -> Bool {
+        guard identitiesReferenceSame(owner, requester) else {
+            return false
+        }
+        return await checkIdentityOrigin(requester, against: owner)
+    }
+
+    /// Compatibility facade for hosts that predate the explicit runtime-binding API.
+    /// This retains the same proof requirements as `bindStoredOwnerToRuntimeIdentity`.
+    @available(*, deprecated, renamed: "bindStoredOwnerToRuntimeIdentity(_:)")
+    @discardableResult
+    public func restoreStoredOwnerIdentity(using candidate: Identity) async -> Bool {
+        await bindStoredOwnerToRuntimeIdentity(candidate)
+    }
     
     public init() async { // This should only be used while we are developing
         
