@@ -2180,4 +2180,12 @@ public class CellResolver: CellResolverProtocol {
         }
         await auditor.replaceIdentityNamedCells(namedCells, for: requester.uuid)
     }
+
+    @discardableResult
+    public func restoreIdentityNamedCellsFillingGaps(
+        _ restored: [String: [String: String]],
+        requester: Identity
+    ) async -> [String: [String: String]] {
+        await auditor.restoreIdentityNamedCellsFillingGaps(restored)
+    }
 }

@@ -34,6 +34,14 @@ public protocol CellResolverProtocol {
     func setResolverEmitter(_ emitter: FlowElementPusherCell, requester: Identity) async  throws
     func setIdentityNamedCells(_ identityNamedCells: [String : [String : String]], requester: Identity) async
     func replaceIdentityNamedCells(_ namedCells: [String: String], requester: Identity) async throws
+    /// Restores persisted identity-scoped references without replacing any
+    /// endpoint that is already live. Production resolvers should implement
+    /// this as one atomic registry mutation.
+    @discardableResult
+    func restoreIdentityNamedCellsFillingGaps(
+        _ restored: [String: [String: String]],
+        requester: Identity
+    ) async -> [String: [String: String]]
     
     func get(from url: URL, requester: Identity) async throws -> ValueType?
     func set(value: ValueType, into url: URL, requester: Identity) async throws -> ValueType?
@@ -44,5 +52,24 @@ public extension CellResolverProtocol {
         var merged = await identityNamedCells(requester: requester)
         merged[requester.uuid] = namedCells
         await setIdentityNamedCells(merged, requester: requester)
+    }
+
+    @discardableResult
+    func restoreIdentityNamedCellsFillingGaps(
+        _ restored: [String: [String: String]],
+        requester: Identity
+    ) async -> [String: [String: String]] {
+        var merged = restored
+        for (identityUUID, liveReferences) in await identityNamedCells(requester: requester) {
+            var references = merged[identityUUID] ?? [:]
+            for (endpoint, cellUUID) in liveReferences {
+                references[endpoint] = cellUUID
+            }
+            if references.isEmpty == false {
+                merged[identityUUID] = references
+            }
+        }
+        await setIdentityNamedCells(merged, requester: requester)
+        return merged
     }
 }

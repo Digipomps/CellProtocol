@@ -275,6 +275,23 @@ actor ResolverAuditor {
         personalCellReferenceDict[identityUUID] = namedCells
     }
 
+    func restoreIdentityNamedCellsFillingGaps(
+        _ restored: [String: [String: String]]
+    ) -> [String: [String: String]] {
+        var merged = restored
+        for (identityUUID, liveReferences) in personalCellReferenceDict {
+            var references = merged[identityUUID] ?? [:]
+            for (endpoint, cellUUID) in liveReferences {
+                references[endpoint] = cellUUID
+            }
+            if references.isEmpty == false {
+                merged[identityUUID] = references
+            }
+        }
+        personalCellReferenceDict = merged
+        return merged
+    }
+
     func resolveSnapshots() -> [CellResolverResolveSnapshot] {
         namedCellResolves.values.map { resolve in
             CellResolverResolveSnapshot(

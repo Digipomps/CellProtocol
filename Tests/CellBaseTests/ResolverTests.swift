@@ -479,6 +479,41 @@ final class ResolverTests: XCTestCase {
         XCTAssertNil(mappingsAfterDenial[ownerA.uuid]?["Forged"])
     }
 
+    func testAtomicIdentityRestoreFillsGapsWithoutLosingConcurrentLiveRegistration() async throws {
+        let auditor = ResolverAuditor()
+        let owner = Identity(
+            "atomic-restore-owner",
+            displayName: "Atomic Restore Owner",
+            identityVault: nil
+        )
+        let existing = TestEmitCell(owner: owner, uuid: "existing-live-cell")
+        let concurrent = TestEmitCell(owner: owner, uuid: "concurrent-live-cell")
+        try await auditor.registerPersonalReference(
+            existing,
+            endpoint: "Existing",
+            identity: owner
+        )
+
+        async let restored = auditor.restoreIdentityNamedCellsFillingGaps([
+            owner.uuid: [
+                "Existing": "stale-persisted-cell",
+                "RestoredOnly": "restored-cell"
+            ]
+        ])
+        async let registered: Void = auditor.registerPersonalReference(
+            concurrent,
+            endpoint: "Concurrent",
+            identity: owner
+        )
+        _ = await restored
+        try await registered
+
+        let mappings = await auditor.identityNamedCells()
+        XCTAssertEqual(mappings[owner.uuid]?["Existing"], existing.uuid)
+        XCTAssertEqual(mappings[owner.uuid]?["Concurrent"], concurrent.uuid)
+        XCTAssertEqual(mappings[owner.uuid]?["RestoredOnly"], "restored-cell")
+    }
+
     func testUnsupportedSchemeThrows() async {
         let resolver = CellResolver.sharedInstance
         let identity = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true)
