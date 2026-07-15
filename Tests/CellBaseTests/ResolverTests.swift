@@ -682,6 +682,263 @@ final class ResolverTests: XCTestCase {
         await resolver.unregisterEmitCell(uuid: loaded.uuid)
     }
 
+    func testResolverHonorsExplicitReadRequirementForSideEffectFreeSetQuery() async throws {
+        let resolver = CellResolver.sharedInstance
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-owner",
+            makeNewIfNotFound: true
+        )
+        let resolvedReader = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-reader",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let reader = try XCTUnwrap(resolvedReader)
+        let cell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        let name = "ReadOnlySetQuery-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: name,
+            emitCell: cell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: cell.uuid) } }
+
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "query")
+        let agreementState = await cell.addAgreement(
+            agreement,
+            for: reader,
+            authorizedBy: owner
+        )
+        XCTAssertEqual(agreementState, .signed)
+
+        let queryURL = try XCTUnwrap(URL(string: "cell:///\(name)/query"))
+        let result = try await resolver.set(
+            value: .object(["selector": .string("known")]),
+            into: queryURL,
+            requester: reader
+        )
+        XCTAssertEqual(result, .string("query:known"))
+
+        let directResult = try await cell.set(
+            keypath: "query",
+            value: .object(["selector": .string("direct")]),
+            requester: reader
+        )
+        XCTAssertEqual(directResult, .string("query:direct"))
+
+        let resolvedOutsider = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-outsider",
+            makeNewIfNotFound: true
+        )
+        let outsider = try XCTUnwrap(resolvedOutsider)
+        for invoke in [
+            { try await resolver.set(
+                value: .object(["selector": .string("resolver-outsider")]),
+                into: queryURL,
+                requester: outsider
+            ) },
+            { try await cell.set(
+                keypath: "query",
+                value: .object(["selector": .string("direct-outsider")]),
+                requester: outsider
+            ) },
+        ] {
+            do {
+                _ = try await invoke()
+                XCTFail("A requester without a read Contract must not execute the SET query")
+            } catch let CellAuthorizationError.denied(decision) {
+                XCTAssertEqual(decision.path, .deniedNoGrant)
+                XCTAssertEqual(decision.request.requestedAccess, "r---")
+            }
+        }
+
+        let mutationURL = try XCTUnwrap(URL(string: "cell:///\(name)/mutate"))
+        do {
+            _ = try await resolver.set(value: .bool(true), into: mutationURL, requester: reader)
+            XCTFail("A read Contract must not authorize a mutating SET operation")
+        } catch let CellAuthorizationError.denied(decision) {
+            XCTAssertEqual(decision.path, .deniedNoGrant)
+            XCTAssertEqual(decision.request.requestedAccess, "-w--")
+        }
+        let wasMutated = await cell.state.wasMutated()
+        XCTAssertFalse(wasMutated)
+    }
+
+    func testDirectAndResolverGetHonorStrengthenedOperationRequirement() async throws {
+        let resolver = CellResolver.sharedInstance
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-get-owner",
+            makeNewIfNotFound: true
+        )
+        let resolvedPrivilegedReader = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-get-privileged-reader",
+            makeNewIfNotFound: true
+        )
+        let resolvedBasicReader = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-get-basic-reader",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let privilegedReader = try XCTUnwrap(resolvedPrivilegedReader)
+        let basicReader = try XCTUnwrap(resolvedBasicReader)
+        let cell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        let name = "StrengthenedGet-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: name,
+            emitCell: cell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: cell.uuid) } }
+
+        let privilegedAgreement = Agreement(owner: owner)
+        privilegedAgreement.addGrant("r--s", for: "sensitive")
+        let privilegedAgreementState = await cell.addAgreement(
+            privilegedAgreement,
+            for: privilegedReader,
+            authorizedBy: owner
+        )
+        XCTAssertEqual(privilegedAgreementState, .signed)
+
+        let basicAgreement = Agreement(owner: owner)
+        basicAgreement.addGrant("r---", for: "sensitive")
+        let basicAgreementState = await cell.addAgreement(
+            basicAgreement,
+            for: basicReader,
+            authorizedBy: owner
+        )
+        XCTAssertEqual(basicAgreementState, .signed)
+
+        let sensitiveURL = try XCTUnwrap(URL(string: "cell:///\(name)/sensitive"))
+        let resolverResult = try await resolver.get(from: sensitiveURL, requester: privilegedReader)
+        XCTAssertEqual(resolverResult, .string("sensitive"))
+        let directResult = try await cell.get(keypath: "sensitive", requester: privilegedReader)
+        XCTAssertEqual(directResult, .string("sensitive"))
+
+        for invoke in [
+            { try await resolver.get(from: sensitiveURL, requester: basicReader) },
+            { try await cell.get(keypath: "sensitive", requester: basicReader) },
+        ] {
+            do {
+                _ = try await invoke()
+                XCTFail("A basic read Contract must not satisfy a strengthened GET requirement")
+            } catch let CellAuthorizationError.denied(decision) {
+                XCTAssertEqual(decision.path, .deniedNoGrant)
+                XCTAssertEqual(decision.request.requestedAccess, "r--s")
+            }
+        }
+    }
+
+    func testResolverFailsClosedForInvalidOrUndeclaredOperationRequirement() async throws {
+        let resolver = CellResolver.sharedInstance
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "resolver-operation-mismatch-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+
+        let mismatchCell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        mismatchCell.declaredQueryPermissions = ["-w--"]
+        mismatchCell.queryRequirement = "r---"
+        let mismatchName = "MismatchedSetQuery-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: mismatchName,
+            emitCell: mismatchCell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: mismatchCell.uuid) } }
+
+        do {
+            _ = try await resolver.set(
+                value: .object(["selector": .string("known")]),
+                into: try XCTUnwrap(URL(string: "cell:///\(mismatchName)/query")),
+                requester: owner
+            )
+            XCTFail("Resolver must reject a requirement missing from the Explore contract")
+        } catch let error as MeddleOperationAuthorizationRequirementError {
+            XCTAssertEqual(
+                error,
+                .permissionNotDeclared(permission: "r---", method: "set", keypath: "query")
+            )
+        }
+
+        let multiPermissionCell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        multiPermissionCell.declaredQueryPermissions = ["r---", "-w--"]
+        let multiPermissionName = "MultiPermissionSetQuery-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: multiPermissionName,
+            emitCell: multiPermissionCell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: multiPermissionCell.uuid) } }
+
+        do {
+            _ = try await resolver.set(
+                value: .object(["selector": .string("known")]),
+                into: try XCTUnwrap(URL(string: "cell:///\(multiPermissionName)/query")),
+                requester: owner
+            )
+            XCTFail("Resolver must reject ambiguous multi-permission operation Contracts")
+        } catch let error as MeddleOperationAuthorizationRequirementError {
+            XCTAssertEqual(
+                error,
+                .permissionNotDeclared(permission: "r---", method: "set", keypath: "query")
+            )
+        }
+
+        let missingSetContractCell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        missingSetContractCell.registerQuerySetContract = false
+        missingSetContractCell.registerQueryGetContract = true
+        let missingSetContractName = "MissingSetContractQuery-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: missingSetContractName,
+            emitCell: missingSetContractCell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: missingSetContractCell.uuid) } }
+
+        do {
+            _ = try await resolver.set(
+                value: .object(["selector": .string("known")]),
+                into: try XCTUnwrap(URL(string: "cell:///\(missingSetContractName)/query")),
+                requester: owner
+            )
+            XCTFail("A GET Contract must not satisfy a missing SET Contract")
+        } catch let error as MeddleOperationAuthorizationRequirementError {
+            XCTAssertEqual(
+                error,
+                .missingExploreContract(method: "set", keypath: "query")
+            )
+        }
+
+        let invalidCell = await ResolverOperationAuthorizationProbeCell(owner: owner)
+        invalidCell.queryRequirement = "read"
+        let invalidName = "InvalidSetQuery-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(
+            name: invalidName,
+            emitCell: invalidCell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: invalidCell.uuid) } }
+
+        do {
+            _ = try await resolver.set(
+                value: .object(["selector": .string("known")]),
+                into: try XCTUnwrap(URL(string: "cell:///\(invalidName)/query")),
+                requester: owner
+            )
+            XCTFail("Resolver must reject a non-canonical operation requirement")
+        } catch let error as MeddleOperationAuthorizationRequirementError {
+            XCTAssertEqual(error, .invalidPermission("read"))
+        }
+    }
+
     func testScopedSecretProviderSeedsPersistedCellMasterKeyBeforeLegacyVaultAPI() async throws {
 #if canImport(CellVapor)
         let resolver = CellResolver.sharedInstance
@@ -908,6 +1165,110 @@ private final class ResolverReadinessProbeCell: GeneralCell {
             await readinessGate.blockInstallationUntilReleased()
         }
         await readinessState.markInstalled()
+    }
+}
+
+private actor ResolverOperationAuthorizationProbeState {
+    private var mutated = false
+
+    func markMutated() {
+        mutated = true
+    }
+
+    func wasMutated() -> Bool {
+        mutated
+    }
+}
+
+private final class ResolverOperationAuthorizationProbeCell:
+    GeneralCell,
+    MeddleOperationAuthorizationRequirementProviding
+{
+    let state = ResolverOperationAuthorizationProbeState()
+    var queryRequirement: String? = "r---"
+    var sensitiveGetRequirement: String? = "r--s"
+    var declaredQueryPermissions = ["r---"]
+    var registerQuerySetContract = true
+    var registerQueryGetContract = false
+
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    override func installCellRuntimeBindingsForAccess() async throws {
+        let owner = storedOwnerIdentity
+        for permission in declaredQueryPermissions {
+            agreementTemplate.addGrant(permission, for: "query")
+        }
+        agreementTemplate.addGrant("-w--", for: "mutate")
+        agreementTemplate.addGrant("r--s", for: "sensitive")
+        if registerQuerySetContract {
+            await registerSet(
+                key: "query",
+                owner: owner,
+                input: ExploreContract.objectSchema(
+                    properties: ["selector": ExploreContract.schema(type: "string")],
+                    requiredKeys: ["selector"]
+                ),
+                returns: ExploreContract.schema(type: "string"),
+                permissions: declaredQueryPermissions,
+                description: .string("Side-effect-free parameterized read probe.")
+            ) { _, payload in
+                guard case let .object(object) = payload,
+                      case let .string(selector)? = object["selector"] else {
+                    return .string("error: selector required")
+                }
+                return .string("query:\(selector)")
+            }
+        }
+        if registerQueryGetContract {
+            await registerGet(
+                key: "query",
+                owner: owner,
+                returns: ExploreContract.schema(type: "string"),
+                permissions: declaredQueryPermissions,
+                description: .string("GET-only contract probe.")
+            ) { _ in .string("get-only") }
+        }
+        await registerGet(
+            key: "sensitive",
+            owner: owner,
+            returns: ExploreContract.schema(type: "string"),
+            permissions: ["r--s"],
+            description: .string("Strengthened GET authorization probe.")
+        ) { _ in .string("sensitive") }
+        await registerSet(
+            key: "mutate",
+            owner: owner,
+            input: ExploreContract.schema(type: "bool"),
+            returns: ExploreContract.schema(type: "bool"),
+            permissions: ["-w--"],
+            description: .string("Mutation probe.")
+        ) { [weak self, state] requester, _ in
+            guard let self,
+                  await self.validateAccess("-w--", at: "mutate", for: requester) else {
+                return .string("denied")
+            }
+            await state.markMutated()
+            return .bool(true)
+        }
+    }
+
+    func meddleAuthorizationRequirement(
+        for method: ExploreContractMethod,
+        keypath: String
+    ) async throws -> String? {
+        if method == .set && keypath == "query" {
+            return queryRequirement
+        }
+        if method == .get && keypath == "sensitive" {
+            return sensitiveGetRequirement
+        }
+        return nil
     }
 }
 

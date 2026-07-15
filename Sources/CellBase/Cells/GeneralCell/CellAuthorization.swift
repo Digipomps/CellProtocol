@@ -75,6 +75,78 @@ public enum CellAuthorizationError: Error {
     case denied(CellAuthorizationDecision)
 }
 
+/// Lets a Cell explicitly narrow or strengthen method-level Meddle
+/// authorization for one operation. Returning `nil` preserves the default
+/// (`r---` for GET and `-w--` for SET).
+///
+/// The requirement is operation metadata, not caller authority. It must match
+/// the operation's exact, singleton Explore permission declaration. Resolver
+/// preflight and GeneralCell dispatch still evaluate owner proof,
+/// Contract/Grant, or cell-specific policy before executing the operation.
+public protocol MeddleOperationAuthorizationRequirementProviding: ExploreOperationContractProviding {
+    func meddleAuthorizationRequirement(
+        for method: ExploreContractMethod,
+        keypath: String
+    ) async throws -> String?
+}
+
+public enum MeddleOperationAuthorizationRequirementError: Error, Equatable {
+    case invalidPermission(String)
+    case missingExploreContract(method: String, keypath: String)
+    case permissionNotDeclared(permission: String, method: String, keypath: String)
+}
+
+enum MeddleOperationAuthorizationRequirementResolver {
+    static func resolve(
+        target: Any,
+        keypath: String,
+        method: ExploreContractMethod,
+        requester: Identity
+    ) async throws -> String? {
+        guard let provider = target as? MeddleOperationAuthorizationRequirementProviding,
+              let provided = try await provider.meddleAuthorizationRequirement(
+                for: method,
+                keypath: keypath
+              ) else {
+            return nil
+        }
+
+        let canonical = Permission(provided).permissionString
+        guard provided.count == 4,
+              canonical == provided,
+              provided != "----" else {
+            throw MeddleOperationAuthorizationRequirementError.invalidPermission(provided)
+        }
+
+        let contract: ValueType
+        do {
+            contract = try await provider.contract(
+                for: keypath,
+                method: method,
+                requester: requester
+            )
+        } catch GeneralCellErrors.noSchemaForKey {
+            throw MeddleOperationAuthorizationRequirementError.missingExploreContract(
+                method: method.rawValue,
+                keypath: keypath
+            )
+        }
+        let contractObject = ExploreContract.object(from: contract)
+        let declaredPermissions = ExploreContract.list(
+            from: contractObject?[ExploreContract.Field.permissions]
+        )?.compactMap { ExploreContract.string(from: $0) } ?? []
+        guard declaredPermissions == [provided] else {
+            throw MeddleOperationAuthorizationRequirementError.permissionNotDeclared(
+                permission: provided,
+                method: method.rawValue,
+                keypath: keypath
+            )
+        }
+
+        return provided
+    }
+}
+
 public protocol CellAuthorizationDeciding {
     func authorizationDecision(
         requestedAccess: String,

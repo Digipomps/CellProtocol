@@ -940,7 +940,8 @@ public class CellResolver: CellResolverProtocol {
         try await authorizeMeddleIfAvailable(
             target: target,
             keypath: keypath,
-            requestedAccess: "r---",
+            method: .get,
+            defaultAccess: "r---",
             requester: requester
         )
         let resultValue = try await target.get(keypath: keypath, requester: requester)
@@ -971,7 +972,8 @@ public class CellResolver: CellResolverProtocol {
         try await authorizeMeddleIfAvailable(
             target: target,
             keypath: keypath,
-            requestedAccess: "-w--",
+            method: .set,
+            defaultAccess: "-w--",
             requester: requester
         )
         let resultValue = try await target.set(keypath: keypath, value: value, requester: requester)
@@ -991,7 +993,8 @@ public class CellResolver: CellResolverProtocol {
     private func authorizeMeddleIfAvailable(
         target: Meddle,
         keypath: String,
-        requestedAccess: String,
+        method: ExploreContractMethod,
+        defaultAccess: String,
         requester: Identity
     ) async throws {
         if let runtimeReadyTarget = target as? CellRuntimeReady {
@@ -1000,6 +1003,12 @@ public class CellResolver: CellResolverProtocol {
         guard let authorizer = target as? CellAuthorizationDeciding else {
             return
         }
+        let requestedAccess = try await MeddleOperationAuthorizationRequirementResolver.resolve(
+            target: target,
+            keypath: keypath,
+            method: method,
+            requester: requester
+        ) ?? defaultAccess
         let decision = await authorizer.authorizationDecision(
             requestedAccess: requestedAccess,
             at: keypath,
@@ -1013,7 +1022,7 @@ public class CellResolver: CellResolverProtocol {
             throw CellAuthorizationError.denied(decision)
         }
     }
-    
+
     private func splitCellURL(cellURL: URL) -> (URL, String?) {
         var responseURL = cellURL
         var keypath: String?

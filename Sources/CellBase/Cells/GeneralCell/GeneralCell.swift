@@ -1524,6 +1524,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         try await ensureRuntimeReady()
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
+        let operationAuthorizationDecision = try await explicitMeddleAuthorizationDecision(
+            keypath: resolvedKeyPath,
+            method: .get,
+            requester: requester
+        )
+        if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
+            throw CellAuthorizationError.denied(operationAuthorizationDecision)
+        }
         
         let keypathArray = resolvedKeyPath.split(separator: ".")
         let contextKey = String(keypathArray[0])
@@ -1562,18 +1570,23 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         let rootGetIntercept = exactIntercept == nil && rootValueIntercept == nil
             ? await self.intercepts.loadInterceptGet(keypath: contextKey)
             : nil
-        let authorizationDecision = exactIntercept != nil
-            ? await self.authorizationDecisionForDispatch(
+        let authorizationDecision: CellAuthorizationDecision
+        if let operationAuthorizationDecision {
+            authorizationDecision = operationAuthorizationDecision
+        } else if exactIntercept != nil {
+            authorizationDecision = await self.authorizationDecisionForDispatch(
                 requestedAccess: "r---",
                 exactKeypath: resolvedKeyPath,
                 fallbackKeypath: contextKey,
                 for: requester
             )
-            : await self.authorizationDecision(
+        } else {
+            authorizationDecision = await self.authorizationDecision(
                 requestedAccess: "r---",
                 at: contextKey,
                 for: requester
             )
+        }
         if authorizationDecision.allowed {
             if let intercept = exactIntercept {
                 CellBase.diagnosticLog("get intercept key=\(contextKey) keypath=\(keypath)", domain: .flow)
@@ -1651,6 +1664,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "set", param: keypath)
             
             let resolvedKeyPath = keypath // will look for substitutions later?
+            let operationAuthorizationDecision = try await explicitMeddleAuthorizationDecision(
+                keypath: resolvedKeyPath,
+                method: .set,
+                requester: requester
+            )
+            if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
+                throw CellAuthorizationError.denied(operationAuthorizationDecision)
+            }
             
             let keypathArray = resolvedKeyPath.split(separator: ".")
             let contextKey = String(keypathArray[0]) // TODO:Errors here must be handeled
@@ -1686,18 +1707,23 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     let rootValueIntercept = exactIntercept == nil && rootSetIntercept == nil
                         ? await self.intercepts.loadInterceptSetValueForKey(key: contextKey)
                         : nil
-                    let authorizationDecision = exactIntercept != nil
-                        ? await self.authorizationDecisionForDispatch(
+                    let authorizationDecision: CellAuthorizationDecision
+                    if let operationAuthorizationDecision {
+                        authorizationDecision = operationAuthorizationDecision
+                    } else if exactIntercept != nil {
+                        authorizationDecision = await self.authorizationDecisionForDispatch(
                             requestedAccess: "-w--",
                             exactKeypath: resolvedKeyPath,
                             fallbackKeypath: contextKey,
                             for: requester
                         )
-                        : await self.authorizationDecision(
+                    } else {
+                        authorizationDecision = await self.authorizationDecision(
                             requestedAccess: "-w--",
                             at: contextKey,
                             for: requester
                         )
+                    }
                     if authorizationDecision.allowed { // We need to look at this...
                             if let intercept = exactIntercept {
                                 response = try await intercept(keypath, value, requester)
@@ -1719,6 +1745,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         
         return response
+    }
+
+    private func explicitMeddleAuthorizationDecision(
+        keypath: String,
+        method: ExploreContractMethod,
+        requester: Identity
+    ) async throws -> CellAuthorizationDecision? {
+        guard let requirement = try await MeddleOperationAuthorizationRequirementResolver.resolve(
+            target: self,
+            keypath: keypath,
+            method: method,
+            requester: requester
+        ) else {
+            return nil
+        }
+        return await authorizationDecision(
+            requestedAccess: requirement,
+            at: keypath,
+            for: requester
+        )
     }
 
     public final func ensureRuntimeReady() async throws {
