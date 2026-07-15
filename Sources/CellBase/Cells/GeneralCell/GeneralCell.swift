@@ -2106,11 +2106,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     private func isAllowedToSetupIntercepts(requester: Identity) async -> Bool { // TODO: change permission chack to something more meaningful
-        guard identitiesReferenceSame(owner, requester) else {
-            return false
-        }
+        // Runtime binding installation is authorized by an active, instance-bound
+        // token rather than by caller identity. This allows a freshly created Cell
+        // with a public/unsigned owner descriptor to install its own handlers while
+        // keeping every registration attempt outside that scope proof-gated.
         if Self.runtimeBindingInstallationToken?.authorizes(self) == true {
             return true
+        }
+        guard identitiesReferenceSame(owner, requester) else {
+            return false
         }
         return await checkIdentityOrigin(requester, against: owner)
     }

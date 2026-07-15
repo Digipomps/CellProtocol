@@ -355,6 +355,27 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         XCTAssertFalse(keys.contains(RuntimeBindingPrivilegeProbeCell.crossCellKey))
     }
 
+    func testRuntimeBindingPrivilegeInstallsUnsignedFreshOwnerHandlersOnlyInsideTokenScope() async throws {
+        let owner = Identity(
+            "unsigned-runtime-owner-\(UUID().uuidString)",
+            displayName: "Unsigned Runtime Owner",
+            identityVault: nil
+        )
+        let probe = await UnsignedRuntimeBindingProbeCell(owner: owner)
+
+        let installedKeys = try await probe.keys(requester: owner)
+        XCTAssertTrue(installedKeys.contains(UnsignedRuntimeBindingProbeCell.installedKey))
+
+        await probe.addInterceptForGet(
+            requester: owner,
+            key: UnsignedRuntimeBindingProbeCell.outsideScopeKey
+        ) { _, _ in
+            .string("must-not-register")
+        }
+        let keysAfterOutsideAttempt = try await probe.keys(requester: owner)
+        XCTAssertFalse(keysAfterOutsideAttempt.contains(UnsignedRuntimeBindingProbeCell.outsideScopeKey))
+    }
+
     func testRuntimeBindingPrivilegeExpiresBeforeEscapedChildTaskRuns() async throws {
         let owner = try await configuredOwnerAndDocumentRoot(suffix: "expired-token")
         let gate = RuntimeBindingPrivilegeGate()
@@ -651,4 +672,23 @@ private final class RuntimeBindingPrivilegeProbeCell: GeneralCell {
 
 private enum RuntimeBindingPrivilegeProbeError: Error {
     case installationFailed
+}
+
+private final class UnsignedRuntimeBindingProbeCell: GeneralCell {
+    static let installedKey = "probe.unsigned-installed"
+    static let outsideScopeKey = "probe.unsigned-outside-scope"
+
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    override func installCellRuntimeBindingsForAccess() async throws {
+        await addInterceptForGet(requester: storedOwnerIdentity, key: Self.installedKey) { _, _ in
+            .string("ready")
+        }
+    }
 }
