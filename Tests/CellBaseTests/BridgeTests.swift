@@ -10,9 +10,65 @@ import OpenCombine
 @testable import CellBase
 
 final class BridgeTests: XCTestCase {
+    private actor BlockingRouteSetupGate {
+        private var setupURLs = [URL]()
+        private var setupIdentities = [Identity]()
+        private var continuations = [CheckedContinuation<Void, Never>]()
+
+        func recordAndWait(_ url: URL, identity: Identity) async {
+            setupURLs.append(url)
+            setupIdentities.append(identity)
+            await withCheckedContinuation { continuation in
+                continuations.append(continuation)
+            }
+        }
+
+        func recordedSetupURLs() -> [URL] {
+            setupURLs
+        }
+
+        func recordedSetupIdentities() -> [Identity] {
+            setupIdentities
+        }
+
+        func releaseNext() {
+            guard continuations.isEmpty == false else { return }
+            continuations.removeFirst().resume()
+        }
+
+        func reset() {
+            let pending = continuations
+            continuations.removeAll(keepingCapacity: false)
+            setupURLs.removeAll(keepingCapacity: false)
+            setupIdentities.removeAll(keepingCapacity: false)
+            pending.forEach { $0.resume() }
+        }
+    }
+
+    private final class BlockingRouteBridgeTransport: BridgeTransportProtocol {
+        static let setupGate = BlockingRouteSetupGate()
+
+        static func new() -> BridgeTransportProtocol {
+            BlockingRouteBridgeTransport()
+        }
+
+        func setDelegate(_ delegate: BridgeDelegateProtocol) {}
+
+        func setup(_ endpointURL: URL, identity: Identity) async throws {
+            await Self.setupGate.recordAndWait(endpointURL, identity: identity)
+        }
+
+        func sendData(_ data: Data) async throws {}
+
+        func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
+            CellBase.defaultIdentityVault ?? MockIdentityVault()
+        }
+    }
+
     private final class RecordingBridgeTransport: BridgeTransportProtocol {
         static let stateLock = NSLock()
         static var lastSetupURL: URL?
+        static var setupURLs = [URL]()
 
         static func new() -> BridgeTransportProtocol {
             RecordingBridgeTransport()
@@ -21,6 +77,7 @@ final class BridgeTests: XCTestCase {
         static func reset() {
             stateLock.withLock {
                 lastSetupURL = nil
+                setupURLs.removeAll(keepingCapacity: false)
             }
         }
 
@@ -30,11 +87,18 @@ final class BridgeTests: XCTestCase {
             }
         }
 
+        static func recordedSetupURLs() -> [URL] {
+            stateLock.withLock {
+                setupURLs
+            }
+        }
+
         func setDelegate(_ delegate: BridgeDelegateProtocol) {}
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
             Self.stateLock.withLock {
                 Self.lastSetupURL = endpointURL
+                Self.setupURLs.append(endpointURL)
             }
         }
 
@@ -1160,7 +1224,9 @@ final class BridgeTests: XCTestCase {
 
     func testCellResolverBuildsPublisherFirstBridgeheadURLWhenRouteRequestsIt() async throws {
         let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
         CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
         RecordingBridgeTransport.reset()
 
         try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
@@ -1173,7 +1239,8 @@ final class BridgeTests: XCTestCase {
             )
         )
 
-        let requester = TestFixtures.makeIdentity(displayName: "requester")
+        let requesterValue = await vault.identity(for: "requester", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterValue)
         _ = try await resolver.cellAtEndpoint(
             endpoint: "cell://bridge-layout.example/ConferenceAIGatewayPreview",
             requester: requester
@@ -1189,6 +1256,480 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(pathComponents[0], "bridgehead")
         XCTAssertEqual(pathComponents[2], "ConferenceAIGatewayPreview")
         XCTAssertEqual(pathComponents[1].count, 36)
+    }
+
+    func testCellResolverRouteReplacementInvalidatesCachedRemoteBridge() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-replacement-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-replacement-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-a", schemePreference: .wss)
+        )
+        let first = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-b", schemePreference: .wss)
+        )
+        let second = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        let setupURLs = RecordingBridgeTransport.recordedSetupURLs()
+
+        XCTAssertNotEqual(first.uuid, second.uuid)
+        XCTAssertEqual(setupURLs.count, 2)
+        let globallyRegisteredBridgeUUID = await resolver.cellUUID(for: endpoint)
+        XCTAssertNil(globallyRegisteredBridgeUUID)
+        if setupURLs.count == 2 {
+            XCTAssertEqual(setupURLs[0].path.split(separator: "/").first.map(String.init), "bridge-a")
+            XCTAssertEqual(setupURLs[1].path.split(separator: "/").first.map(String.init), "bridge-b")
+        }
+    }
+
+    func testCellResolverUnregisterRevokesCachedRemoteBridge() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-unregister-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-unregister-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .wss)
+        )
+        _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        resolver.unregisterRemoteCellHost(host)
+
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+            XCTFail("Unregistered host must not resolve through a cached bridge")
+        } catch CellResolverError.missingRemoteCellHostRegistration(let deniedHost) {
+            XCTAssertEqual(deniedHost, host)
+        } catch {
+            XCTFail("Expected missingRemoteCellHostRegistration, got \(error)")
+        }
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 1)
+    }
+
+    func testCellResolverIdenticalRouteRegistrationKeepsCachedRemoteBridge() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-stable-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-stable-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+        let route = RemoteCellHostRoute(
+            websocketEndpoint: "bridgehead",
+            schemePreference: .wss,
+            pathLayout: .publisherUUIDThenEndpoint
+        )
+
+        resolver.registerRemoteCellHost(host, route: route)
+        let first = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        resolver.registerRemoteCellHost(host, route: route)
+        let second = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+
+        XCTAssertEqual(first.uuid, second.uuid)
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 1)
+    }
+
+    func testCellResolverRemoteBridgeSeparatesProofBearingPrincipalsWithSameUUID() async throws {
+        let resolver = CellResolver.sharedInstance
+        let firstVault = EphemeralIdentityVault()
+        let secondVault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-principal-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .wss)
+        )
+        let resolvedFirst = await firstVault.identity(
+            for: "route-principal-first",
+            makeNewIfNotFound: true
+        )
+        let first = try XCTUnwrap(resolvedFirst)
+        let resolvedSecond = await secondVault.identity(
+            for: "route-principal-second",
+            makeNewIfNotFound: true
+        )
+        let second = try XCTUnwrap(resolvedSecond)
+        let secondKey = try XCTUnwrap(second.publicSecureKey)
+        let wrongKey = Identity(first.uuid, displayName: "wrong-key", identityVault: secondVault)
+        wrongKey.publicSecureKey = secondKey
+        wrongKey.homeVaultReference = second.homeVaultReference
+
+        let firstBridge = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: first)
+        let secondPrincipalBridge = try await resolver.cellAtEndpoint(
+            endpoint: endpoint,
+            requester: wrongKey
+        )
+
+        XCTAssertNotEqual(firstBridge.uuid, secondPrincipalBridge.uuid)
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 2)
+    }
+
+    func testCellResolverRemoteBridgeRejectsCopiedDescriptorMissingOrWrongVaultProof() async throws {
+        let resolver = CellResolver.sharedInstance
+        let homeVault = EphemeralIdentityVault()
+        let wrongVault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = homeVault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-proof-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .wss)
+        )
+        let ownerValue = await homeVault.identity(for: "route-proof-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerValue)
+        _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: owner)
+
+        let copiedWithoutVault = Identity(owner.uuid, displayName: "copied", identityVault: nil)
+        copiedWithoutVault.publicSecureKey = owner.publicSecureKey
+        copiedWithoutVault.homeVaultReference = owner.homeVaultReference
+
+        let copiedWithWrongVault = Identity(owner.uuid, displayName: "wrong-vault", identityVault: wrongVault)
+        copiedWithWrongVault.publicSecureKey = owner.publicSecureKey
+        copiedWithWrongVault.homeVaultReference = owner.homeVaultReference
+
+        let missingHomeReference = Identity(owner.uuid, displayName: "missing-home", identityVault: homeVault)
+        missingHomeReference.publicSecureKey = owner.publicSecureKey
+
+        let missingSigningKey = Identity(owner.uuid, displayName: "missing-key", identityVault: homeVault)
+        missingSigningKey.homeVaultReference = owner.homeVaultReference
+
+        for deniedRequester in [
+            copiedWithoutVault,
+            copiedWithWrongVault,
+            missingHomeReference,
+            missingSigningKey
+        ] {
+            do {
+                _ = try await resolver.cellAtEndpoint(
+                    endpoint: endpoint,
+                    requester: deniedRequester
+                )
+                XCTFail("Remote bridge resolution must require current private-key and home-vault control")
+            } catch CellSetupError.ownerAuthorityUnavailable {
+                // Expected.
+            } catch {
+                XCTFail("Expected ownerAuthorityUnavailable, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 1)
+    }
+
+    func testCellResolverDirectWebSocketBridgeSeparatesPrincipalsAndRejectsCopiedDescriptor() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        let secondVault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let endpoint = "wss://direct-proof-\(UUID().uuidString.lowercased()).example/RuntimeSurface"
+        let ownerValue = await vault.identity(for: "direct-proof-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerValue)
+
+        let firstBridge = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: owner)
+        let secondOwnerValue = await secondVault.identity(
+            for: "direct-proof-second-owner",
+            makeNewIfNotFound: true
+        )
+        let secondOwner = try XCTUnwrap(secondOwnerValue)
+        XCTAssertEqual(secondOwner.uuid, owner.uuid)
+        let secondBridge = try await resolver.cellAtEndpoint(
+            endpoint: endpoint,
+            requester: secondOwner
+        )
+        XCTAssertNotEqual(firstBridge.uuid, secondBridge.uuid)
+
+        let copied = Identity(owner.uuid, displayName: "copied", identityVault: nil)
+        copied.publicSecureKey = owner.publicSecureKey
+        copied.homeVaultReference = owner.homeVaultReference
+
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: copied)
+            XCTFail("Direct WebSocket bridge cache must not accept a copied public descriptor")
+        } catch CellSetupError.ownerAuthorityUnavailable {
+            // Expected.
+        } catch {
+            XCTFail("Expected ownerAuthorityUnavailable, got \(error)")
+        }
+
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 2)
+        let globallyRegisteredBridgeUUID = await resolver.cellUUID(for: endpoint)
+        XCTAssertNil(globallyRegisteredBridgeUUID)
+    }
+
+    func testCellResolverRouteReplacementWhileSetupIsPendingCannotPublishStaleBridge() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-pending-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-pending-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-a", schemePreference: .wss)
+        )
+        let resolution = Task {
+            try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        }
+        try await waitForBlockingRouteSetupCount(1)
+
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-b", schemePreference: .wss)
+        )
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+        try await waitForBlockingRouteSetupCount(2)
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+
+        let resolved = try await resolution.value
+        let cached = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        let setupURLs = await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs()
+
+        XCTAssertEqual(resolved.uuid, cached.uuid)
+        XCTAssertEqual(setupURLs.count, 2)
+        if setupURLs.count == 2 {
+            XCTAssertEqual(setupURLs[0].path.split(separator: "/").first.map(String.init), "bridge-a")
+            XCTAssertEqual(setupURLs[1].path.split(separator: "/").first.map(String.init), "bridge-b")
+        }
+    }
+
+    func testCellResolverRemoteBridgeUsesOwnedPrincipalSnapshotAcrossCallerMutation() async throws {
+        let resolver = CellResolver.sharedInstance
+        let firstVault = EphemeralIdentityVault()
+        let secondVault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = firstVault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-principal-snapshot-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .wss)
+        )
+        let firstValue = await firstVault.identity(for: "snapshot-first", makeNewIfNotFound: true)
+        let secondValue = await secondVault.identity(for: "snapshot-second", makeNewIfNotFound: true)
+        let callerOwnedIdentity = try XCTUnwrap(firstValue)
+        let replacementIdentity = try XCTUnwrap(secondValue)
+        XCTAssertEqual(callerOwnedIdentity.uuid, replacementIdentity.uuid)
+        let firstFingerprint = try XCTUnwrap(callerOwnedIdentity.signingPublicKeyFingerprint)
+        let firstHomeVaultReference = try XCTUnwrap(callerOwnedIdentity.homeVaultReference)
+        let secondFingerprint = try XCTUnwrap(replacementIdentity.signingPublicKeyFingerprint)
+        let secondHomeVaultReference = try XCTUnwrap(replacementIdentity.homeVaultReference)
+
+        let firstResolution = Task {
+            try await resolver.cellAtEndpoint(
+                endpoint: endpoint,
+                requester: callerOwnedIdentity
+            )
+        }
+        try await waitForBlockingRouteSetupCount(1)
+        let firstSetupIdentities = await BlockingRouteBridgeTransport.setupGate.recordedSetupIdentities()
+        let firstSetupIdentity = try XCTUnwrap(firstSetupIdentities.first)
+
+        callerOwnedIdentity.publicSecureKey = replacementIdentity.publicSecureKey
+        callerOwnedIdentity.publicKeyAgreementSecureKey = replacementIdentity.publicKeyAgreementSecureKey
+        callerOwnedIdentity.homeVaultReference = replacementIdentity.homeVaultReference
+        callerOwnedIdentity.identityVault = secondVault
+
+        XCTAssertFalse(firstSetupIdentity === callerOwnedIdentity)
+        XCTAssertEqual(firstSetupIdentity.signingPublicKeyFingerprint, firstFingerprint)
+        XCTAssertEqual(firstSetupIdentity.homeVaultReference, firstHomeVaultReference)
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+        let firstBridge = try await firstResolution.value
+
+        let secondResolution = Task {
+            try await resolver.cellAtEndpoint(
+                endpoint: endpoint,
+                requester: callerOwnedIdentity
+            )
+        }
+        try await waitForBlockingRouteSetupCount(2)
+        let setupIdentities = await BlockingRouteBridgeTransport.setupGate.recordedSetupIdentities()
+        XCTAssertEqual(setupIdentities.count, 2)
+        if setupIdentities.count == 2 {
+            XCTAssertFalse(setupIdentities[1] === callerOwnedIdentity)
+            XCTAssertEqual(setupIdentities[1].signingPublicKeyFingerprint, secondFingerprint)
+            XCTAssertEqual(setupIdentities[1].homeVaultReference, secondHomeVaultReference)
+        }
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+        let secondBridge = try await secondResolution.value
+
+        XCTAssertNotEqual(firstBridge.uuid, secondBridge.uuid)
+    }
+
+    func testCellResolverUnregisterWhileSetupIsPendingCannotReturnOrPublishBridge() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-pending-unregister-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-pending-unregister-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .wss)
+        )
+
+        let resolution = Task {
+            try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        }
+        try await waitForBlockingRouteSetupCount(1)
+        resolver.unregisterRemoteCellHost(host)
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+
+        do {
+            _ = try await resolution.value
+            XCTFail("Unregister must revoke an in-flight remote bridge resolution")
+        } catch CellResolverError.missingRemoteCellHostRegistration(let deniedHost) {
+            XCTAssertEqual(deniedHost, host)
+        } catch {
+            XCTFail("Expected missingRemoteCellHostRegistration, got \(error)")
+        }
+        let setupCount = await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs().count
+        XCTAssertEqual(setupCount, 1)
+        let globallyRegisteredBridgeUUID = await resolver.cellUUID(for: endpoint)
+        XCTAssertNil(globallyRegisteredBridgeUUID)
+    }
+
+    func testCellResolverRouteChurnDoesNotSwallowCallerCancellation() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-cancel-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let identityValue = await vault.identity(for: "route-cancel-owner", makeNewIfNotFound: true)
+        let identity = try XCTUnwrap(identityValue)
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-a", schemePreference: .wss)
+        )
+
+        let resolution = Task {
+            try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        }
+        try await waitForBlockingRouteSetupCount(1)
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge-b", schemePreference: .wss)
+        )
+        resolution.cancel()
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+
+        do {
+            _ = try await resolution.value
+            XCTFail("Route churn must not convert caller cancellation into a successful retry")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+        let setupCount = await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs().count
+        XCTAssertEqual(setupCount, 1)
+    }
+
+    func testCancelledWaiterPublishesSuccessfullyOpenedRemoteBridgeForReuse() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-cancelled-waiter-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let identityValue = await vault.identity(for: "route-cancelled-waiter-owner", makeNewIfNotFound: true)
+        let identity = try XCTUnwrap(identityValue)
+        resolver.registerRemoteCellHost(
+            host,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridge", schemePreference: .wss)
+        )
+
+        let cancelledResolution = Task {
+            try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        }
+        try await waitForBlockingRouteSetupCount(1)
+        cancelledResolution.cancel()
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+
+        do {
+            _ = try await cancelledResolution.value
+            XCTFail("A cancelled waiter must still observe cancellation")
+        } catch is CancellationError {
+            // Expected. The shared bridge result is still published for reuse.
+        } catch {
+            XCTFail("Expected CancellationError, got \(error)")
+        }
+
+        let reusedBridge = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: identity)
+        let setupCount = await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs().count
+        XCTAssertEqual(setupCount, 1)
+        let globallyRegisteredBridgeUUID = await resolver.cellUUID(for: endpoint)
+        XCTAssertNil(globallyRegisteredBridgeUUID)
+        XCTAssertFalse(reusedBridge.uuid.isEmpty)
+    }
+
+    private func waitForBlockingRouteSetupCount(_ expectedCount: Int) async throws {
+        for _ in 0..<1_000 {
+            if await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs().count >= expectedCount {
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Timed out waiting for \(expectedCount) blocked route setup calls")
+        throw CellResolverError.bridgeSetupError
     }
 
     private func waitUntilTransportHasSent(_ expectedCount: Int, transport: MockBridgeTransport) async throws -> [BridgeCommand] {

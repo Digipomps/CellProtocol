@@ -128,17 +128,20 @@ public struct BridgeConnectionPoolKey: Hashable, Sendable {
     public let identityUUID: String
     public let signingKeyFingerprint: String
     public let homeVaultReference: String
+    public let routeGeneration: UInt64
 
     public init(
         sessionEndpoint: URL,
         identityUUID: String,
         signingKeyFingerprint: String,
-        homeVaultReference: String
+        homeVaultReference: String,
+        routeGeneration: UInt64 = 0
     ) {
         self.sessionEndpoint = sessionEndpoint.absoluteString
         self.identityUUID = identityUUID.lowercased()
         self.signingKeyFingerprint = signingKeyFingerprint
         self.homeVaultReference = homeVaultReference
+        self.routeGeneration = routeGeneration
     }
 
     fileprivate var isSecurityBound: Bool {
@@ -213,6 +216,19 @@ public final class BridgeConnectionPool: @unchecked Sendable {
             let retiredSessions = sessions.values.map(\.session)
             sessions.removeAll(keepingCapacity: false)
             return retiredSessions
+        }
+        retiredSessions.forEach { $0.retireFromPool() }
+    }
+
+    func reset(host: String, routeGeneration: UInt64) {
+        let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedHost.isEmpty == false else { return }
+        let retiredSessions = stateLock.withLock { () -> [BridgeMultiplexSession] in
+            let matchingKeys = sessions.keys.filter { key in
+                URL(string: key.sessionEndpoint)?.host?.lowercased() == normalizedHost
+                    && key.routeGeneration == routeGeneration
+            }
+            return matchingKeys.compactMap { sessions.removeValue(forKey: $0)?.session }
         }
         retiredSessions.forEach { $0.retireFromPool() }
     }

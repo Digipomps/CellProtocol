@@ -801,6 +801,82 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(physicalFactoryInvocations, 2)
     }
 
+    func testPoolResetForHostRetiresOnlyMatchingRemoteSessions() async throws {
+        let vault = EphemeralIdentityVault()
+        let identityValue = await vault.identity(for: "host-reset-owner", makeNewIfNotFound: true)
+        let identity = try XCTUnwrap(identityValue)
+        let fingerprint = try XCTUnwrap(identity.signingPublicKeyFingerprint)
+        let homeVaultReference = try XCTUnwrap(identity.homeVaultReference)
+        let pool = BridgeConnectionPool()
+        var physicalFactoryInvocations = 0
+        let firstPhysical = MultiplexPhysicalTransport(vault: vault)
+        let secondPhysical = MultiplexPhysicalTransport(vault: vault)
+        let replacementPhysical = MultiplexPhysicalTransport(vault: vault)
+
+        func key(host: String, routeGeneration: UInt64 = 7) throws -> BridgeConnectionPoolKey {
+            BridgeConnectionPoolKey(
+                sessionEndpoint: try XCTUnwrap(URL(string: "wss://\(host)/bridgehead/session")),
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: fingerprint,
+                homeVaultReference: homeVaultReference,
+                routeGeneration: routeGeneration
+            )
+        }
+
+        let firstKey = try key(host: "first.example")
+        let secondKey = try key(host: "second.example")
+        let firstChannel = try pool.channelTransport(
+            for: firstKey,
+            targetEndpoint: "FirstCell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return firstPhysical
+            }
+        )
+        let secondChannel = try pool.channelTransport(
+            for: secondKey,
+            targetEndpoint: "SecondCell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return secondPhysical
+            }
+        )
+
+        pool.reset(host: " FIRST.EXAMPLE ", routeGeneration: 7)
+        XCTAssertEqual(pool.sessionCount(), 1)
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 0)
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+        await firstChannel.close()
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 1)
+
+        let secondChannelAgain = try pool.channelTransport(
+            for: secondKey,
+            targetEndpoint: "SecondCellAgain",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return MultiplexPhysicalTransport(vault: vault)
+            }
+        )
+        let firstChannelAgain = try pool.channelTransport(
+            for: firstKey,
+            targetEndpoint: "FirstCellAgain",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return replacementPhysical
+            }
+        )
+
+        XCTAssertEqual(pool.sessionCount(), 2)
+        XCTAssertEqual(physicalFactoryInvocations, 3)
+        await secondChannel.close()
+        await secondChannelAgain.close()
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+
+        pool.reset()
+        await firstChannelAgain.close()
+        XCTAssertEqual(replacementPhysical.snapshot().closeInvocations, 1)
+    }
+
     func testResolverMultiplexRouteUsesOneSessionURLForTwoRemoteCells() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()
@@ -834,5 +910,47 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(snapshot.instances, 1)
         XCTAssertEqual(snapshot.setupURLs.count, 1)
         XCTAssertEqual(snapshot.setupURLs.first?.path, "/bridgehead/session")
+    }
+
+    func testResolverMultiplexRouteReplacementKeepsNewGenerationSessionUsable() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        ResolverMultiplexTransport.reset()
+        try await resolver.registerTransport(ResolverMultiplexTransport.self, for: "wss")
+        let host = "multiplex-swap-\(UUID().uuidString.lowercased()).example"
+        let firstRoute = RemoteCellHostRoute(
+            websocketEndpoint: "bridge-a",
+            schemePreference: .wss,
+            connectionSharing: .multiplexedV2
+        )
+        let secondRoute = RemoteCellHostRoute(
+            websocketEndpoint: "bridge-b",
+            schemePreference: .wss,
+            connectionSharing: .multiplexedV2
+        )
+        resolver.registerRemoteCellHost(host, route: firstRoute)
+        let identityValue = await vault.identity(for: "resolver-multiplex-swap-owner", makeNewIfNotFound: true)
+        let identity = try XCTUnwrap(identityValue)
+
+        let first = try await resolver.cellAtEndpoint(
+            endpoint: "cell://\(host)/RuntimeSurface",
+            requester: identity
+        )
+        resolver.registerRemoteCellHost(host, route: secondRoute)
+        let replacement = try await resolver.cellAtEndpoint(
+            endpoint: "cell://\(host)/RuntimeSurface",
+            requester: identity
+        )
+        _ = try await resolver.cellAtEndpoint(
+            endpoint: "cell://\(host)/SecondSurface",
+            requester: identity
+        )
+
+        let snapshot = ResolverMultiplexTransport.snapshot()
+        XCTAssertNotEqual(first.uuid, replacement.uuid)
+        XCTAssertEqual(snapshot.instances, 2)
+        XCTAssertEqual(snapshot.setupURLs.map(\.path), ["/bridge-a/session", "/bridge-b/session"])
     }
 }
