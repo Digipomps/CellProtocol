@@ -45,15 +45,18 @@ public struct EntityBatchPersistEnvelope: Codable, Equatable {
     public var schema: String
     public var mutations: [EntityBatchPersistMutation]
     public var metadata: Object
+    public var commitRequest: EntityAuthorityCommitRequest?
 
     public init(
         schema: String,
         mutations: [EntityBatchPersistMutation],
-        metadata: Object = [:]
+        metadata: Object = [:],
+        commitRequest: EntityAuthorityCommitRequest? = nil
     ) {
         self.schema = schema
         self.mutations = mutations
         self.metadata = metadata
+        self.commitRequest = commitRequest
     }
 
     public init(object: Object) throws {
@@ -86,13 +89,23 @@ public struct EntityBatchPersistEnvelope: Codable, Equatable {
         } else {
             self.metadata = [:]
         }
+
+        if let commitRequestValue = object["commitRequest"] {
+            self.commitRequest = try EntityAuthorityCommitRequest(value: commitRequestValue)
+        } else {
+            self.commitRequest = nil
+        }
     }
 
     public func objectValue() -> Object {
-        [
+        var object: Object = [
             "schema": .string(schema),
             "mutations": .list(mutations.map { .object($0.objectValue()) }),
             "metadata": .object(metadata)
         ]
+        if let commitRequest {
+            object["commitRequest"] = (try? commitRequest.valueType()) ?? .null
+        }
+        return object
     }
 }

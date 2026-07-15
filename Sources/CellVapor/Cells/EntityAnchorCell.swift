@@ -12,7 +12,11 @@ import Foundation
 
 public class EntityAnchorCell: GeneralCell {
     static let storageFilename = "keypathstorage.json"
+    static let authorityJournalFilename = "entity-authority-journal.json"
     private var storage: Entity
+    private var authorityJournal = EntityAuthorityJournalDocument()
+    private var persistenceFailureReason: String?
+    private let authorityCommitGate = EntityAuthorityCommitGate()
    
     // Should  support set/get keypath and persistance of json
     
@@ -43,6 +47,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
+        self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         
@@ -125,6 +130,14 @@ public class EntityAnchorCell: GeneralCell {
             } else {
                 throw KeypathStorageErrors.denied
             }
+        })
+
+        await addInterceptForGet(requester: owner, key: "entityAuthority", getValueIntercept: {
+            _, requester in
+            if await self.validateAccess("r---", at: "entityAuthority", for: requester) {
+                return try await self.authorityCommitStateValue()
+            }
+            throw KeypathStorageErrors.denied
         })
     
     await addInterceptForSet(requester: owner, key: "person", setValueIntercept:  { keypath, value, requester in
@@ -255,13 +268,17 @@ public class EntityAnchorCell: GeneralCell {
                     throw SetValueError.wrongParamType
                 }
                 let envelope = try EntityBatchPersistEnvelope(object: envelopeObject)
-                let persistedPaths = try await self.persistBatchEnvelope(envelope)
+                let result = try await self.persistBatchEnvelope(envelope, requester: identity)
 
                 var payloadObject: Object = [
-                    "status": .string("persisted"),
+                    "status": .string(result.receipt == nil ? "persisted" : "authority_committed"),
                     "schema": .string(envelope.schema),
-                    "persistedPaths": .list(persistedPaths.map { .string($0) })
+                    "persistedPaths": .list(result.persistedPaths.map { .string($0) }),
+                    "idempotentReplay": .bool(result.idempotentReplay)
                 ]
+                if let receipt = result.receipt {
+                    payloadObject["commitReceipt"] = try receipt.valueType()
+                }
                 if let correlationId {
                     payloadObject["correlationId"] = .string(correlationId)
                 }
@@ -310,10 +327,7 @@ public class EntityAnchorCell: GeneralCell {
         } catch {
             print("Feed item handling failed with error: \(error)")
             if correlationId != nil || operation != nil {
-                var payloadObject: Object = [
-                    "status": .string("failed"),
-                    "error": .string(String(describing: error))
-                ]
+                var payloadObject = self.authorityCommitFailurePayload(error)
                 if let correlationId {
                     payloadObject["correlationId"] = .string(correlationId)
                 }
@@ -357,6 +371,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "relations", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity relation data."))
         await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
+        await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
         await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
         await registerExploreContract(requester: requester, key: "entityRepresentation", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity representation."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .set, input: storedValue, returns: identityLinkResult, permissions: ["-w--"], required: false, flowEffects: [identityLinkEffect], description: .string("Stores identity-link state below the owner entity."))
@@ -402,17 +417,40 @@ public class EntityAnchorCell: GeneralCell {
     
     private func initialLoading() async {
         do {
-            self.storage = try await self.loadKeypathStorage()
-//        } catch {
-            
+            let loadedStorage = try await self.loadKeypathStorage()
+            let loadedJournal = try await self.loadAuthorityJournalIfPresent()
+            try loadedJournal.validateStructure()
+            guard try loadedJournal.verifyReceipts(authority: storedOwnerIdentity) else {
+                throw EntityAuthorityCommitError.journalCorrupt("authority_receipt_signature")
+            }
+            let recoveredStorage = try loadedJournal.replay(on: loadedStorage)
+            self.authorityJournal = loadedJournal
+            self.storage = recoveredStorage
+            self.persistenceFailureReason = nil
+            if try Self.canonicalEntityData(recoveredStorage) != Self.canonicalEntityData(loadedStorage) {
+                try await self.writeKeypathStorage(entity: recoveredStorage)
+            }
         } catch {
-            
-            print("Loading entity anchor storage data failed with error: \(error)")
-	            let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "agremments" : .object(Object()),  "chronicle" : .object(Object())]
-            do {
-                try await self.saveKeypathStorage(entity: stubsEntity)
-            } catch {
-                print("Could not create and save an entity either. Failed with error: \(error)")
+            if Self.isMissingFile(error) {
+                let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "agremments" : .object(Object()),  "chronicle" : .object(Object())]
+                do {
+                    let existingJournal = try await self.loadAuthorityJournalIfPresent()
+                    try existingJournal.validateStructure()
+                    guard try existingJournal.verifyReceipts(authority: storedOwnerIdentity) else {
+                        throw EntityAuthorityCommitError.journalCorrupt("authority_receipt_signature")
+                    }
+                    let recoveredStorage = try existingJournal.replay(on: stubsEntity)
+                    try await self.writeKeypathStorage(entity: recoveredStorage)
+                    self.authorityJournal = existingJournal
+                    self.storage = recoveredStorage
+                    self.persistenceFailureReason = nil
+                } catch {
+                    self.persistenceFailureReason = String(describing: error)
+                    CellBase.diagnosticLog("Could not initialize EntityAnchor storage", domain: .identity)
+                }
+            } else {
+                self.persistenceFailureReason = String(describing: error)
+                CellBase.diagnosticLog("EntityAnchor storage validation failed; existing files were not overwritten", domain: .identity)
             }
         }
     }
@@ -451,15 +489,51 @@ public class EntityAnchorCell: GeneralCell {
         let loadedEntity = try JSONDecoder().decode(Entity.self, from: entityJsonData)
         return loadedEntity
     }
-    
-    func saveKeypathStorage(entity: Entity) async throws {
-        let encoder = JSONEncoder()
-        let entityData = try encoder.encode(entity)
-        
-        try await self.writeFileDataInCellDirectory(fileData: entityData, filename: EntityAnchorCell.storageFilename)
-        
+
+    private func loadAuthorityJournalIfPresent() async throws -> EntityAuthorityJournalDocument {
+        do {
+            let data = try await self.getFileDataInCellDirectory(filename: EntityAnchorCell.authorityJournalFilename)
+            return try JSONDecoder().decode(EntityAuthorityJournalDocument.self, from: data)
+        } catch {
+            if Self.isMissingFile(error) {
+                return EntityAuthorityJournalDocument()
+            }
+            throw error
+        }
     }
-    
+
+    func saveKeypathStorage(entity: Entity) async throws {
+        await authorityCommitGate.acquire()
+        do {
+            try ensurePersistenceAvailable()
+            let recovered = try authorityJournal.replay(on: entity)
+            guard try Self.canonicalEntityData(recovered) == Self.canonicalEntityData(entity) else {
+                self.storage = recovered
+                throw EntityAuthorityCommitError.journalCorrupt("legacy_write_conflicts_with_committed_keypath")
+            }
+            try await writeKeypathStorage(entity: entity)
+            self.storage = entity
+            await authorityCommitGate.release()
+        } catch {
+            await authorityCommitGate.release()
+            throw error
+        }
+    }
+
+    private func writeKeypathStorage(entity: Entity) async throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let entityData = try encoder.encode(entity)
+        try await self.writeFileDataInCellDirectory(fileData: entityData, filename: EntityAnchorCell.storageFilename)
+    }
+
+    private func writeAuthorityJournal(_ journal: EntityAuthorityJournalDocument) async throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(journal)
+        try await self.writeFileDataInCellDirectory(fileData: data, filename: EntityAnchorCell.authorityJournalFilename)
+    }
+
     func set(keypath: String, value: ValueType) async throws {
         // Validate
         // Check if it is a change
@@ -475,19 +549,82 @@ public class EntityAnchorCell: GeneralCell {
         let flowElement = FlowElement(title: "Set data", content: .object(setDataObject), properties: FlowElement.Properties(type: .event, contentType: .object))
     }
 
-    private func persistBatchEnvelope(_ envelope: EntityBatchPersistEnvelope) async throws -> [String] {
-        var updatedStorage = self.storage
-        for mutation in envelope.mutations {
-            try updatedStorage.set(keypath: mutation.keypath, setValue: mutation.value)
+    private func persistBatchEnvelope(
+        _ envelope: EntityBatchPersistEnvelope,
+        requester: Identity
+    ) async throws -> EntityAnchorBatchPersistResult {
+        await authorityCommitGate.acquire()
+        do {
+            try ensurePersistenceAvailable()
+            let verificationAuthority = storedOwnerIdentity
+            guard try authorityJournal.verifyReceipts(authority: verificationAuthority) else {
+                throw EntityAuthorityCommitError.journalCorrupt("authority_receipt_signature")
+            }
+            guard await requesterProvesOwnership(requester) else {
+                throw EntityAuthorityCommitError.requesterMismatch
+            }
+            // The stored descriptor is intentionally public-only. After an explicit
+            // ownership proof, the active requester supplies the vault-backed signer.
+            let authority = requester
+            let recoveredStorage = try authorityJournal.replay(on: self.storage)
+            let result: EntityAnchorBatchPersistResult
+            if envelope.commitRequest == nil {
+                var updatedStorage = recoveredStorage
+                for mutation in envelope.mutations {
+                    try updatedStorage.set(keypath: mutation.keypath, setValue: mutation.value)
+                }
+                try await writeKeypathStorage(entity: updatedStorage)
+                self.storage = updatedStorage
+                result = EntityAnchorBatchPersistResult(
+                    persistedPaths: envelope.mutations.map(\.keypath),
+                    receipt: nil,
+                    idempotentReplay: false
+                )
+            } else {
+                let outcome = try await authorityJournal.appending(
+                    envelope: envelope,
+                    to: recoveredStorage,
+                    requester: requester,
+                    authority: authority,
+                    authorityCellUUID: uuid,
+                    committedAtEpochMilliseconds: Int(Date().timeIntervalSince1970 * 1_000)
+                )
+                try await writeAuthorityJournal(outcome.journal)
+                self.authorityJournal = outcome.journal
+                self.storage = outcome.snapshot
+                try await writeKeypathStorage(entity: outcome.snapshot)
+                result = EntityAnchorBatchPersistResult(
+                    persistedPaths: envelope.mutations.map(\.keypath),
+                    receipt: outcome.receipt,
+                    idempotentReplay: outcome.idempotentReplay
+                )
+            }
+            await authorityCommitGate.release()
+            return result
+        } catch {
+            await authorityCommitGate.release()
+            throw error
         }
-        self.storage = updatedStorage
-        try await saveKeypathStorage(entity: self.storage)
-        return envelope.mutations.map(\.keypath)
     }
     
     
     func reloadStorage(requester: Identity) async throws {
-        self.storage = try await self.loadKeypathStorage()
+        await authorityCommitGate.acquire()
+        do {
+            try ensurePersistenceAvailable()
+            let loadedStorage = try await self.loadKeypathStorage()
+            let loadedJournal = try await self.loadAuthorityJournalIfPresent()
+            try loadedJournal.validateStructure()
+            guard try loadedJournal.verifyReceipts(authority: storedOwnerIdentity) else {
+                throw EntityAuthorityCommitError.journalCorrupt("authority_receipt_signature")
+            }
+            self.authorityJournal = loadedJournal
+            self.storage = try loadedJournal.replay(on: loadedStorage)
+            await authorityCommitGate.release()
+        } catch {
+            await authorityCommitGate.release()
+            throw error
+        }
         let setDataObject: Object = ["reload" : .string("reload_persistant_data"), "timestamp" : .float(Date.now.timeIntervalSince1970)]
         var flowElement = FlowElement(title: "Reload", content: .object(setDataObject), properties: FlowElement.Properties(type: .event, contentType: .object))
         flowElement.origin = self.uuid
@@ -664,5 +801,80 @@ public class EntityAnchorCell: GeneralCell {
         flowElement.origin = self.uuid
         flowElement.topic = "entity.identityLinks"
         self.pushFlowElement(flowElement, requester: requester)
+    }
+
+    private func authorityCommitStateValue() async throws -> ValueType {
+        await authorityCommitGate.acquire()
+        do {
+            try ensurePersistenceAvailable()
+            let value = try authorityJournal.state().valueType()
+            await authorityCommitGate.release()
+            return value
+        } catch {
+            await authorityCommitGate.release()
+            throw error
+        }
+    }
+
+    private func ensurePersistenceAvailable() throws {
+        if let persistenceFailureReason {
+            throw EntityAuthorityCommitError.journalCorrupt(persistenceFailureReason)
+        }
+    }
+
+    private func authorityCommitFailurePayload(_ error: Error) -> Object {
+        guard let commitError = error as? EntityAuthorityCommitError else {
+            return [
+                "status": .string("failed"),
+                "error": .string(String(describing: error))
+            ]
+        }
+        return [
+            "status": .string(commitError.isConflict ? "conflict" : "failed"),
+            "errorCode": .string(commitError.code),
+            "error": .string(commitError.localizedDescription),
+            "commitState": (try? authorityJournal.state().valueType()) ?? .null
+        ]
+    }
+
+    private static func isMissingFile(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSCocoaErrorDomain
+            && nsError.code == CocoaError.fileReadNoSuchFile.rawValue
+    }
+
+    private static func canonicalEntityData(_ entity: Entity) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(entity)
+    }
+}
+
+private struct EntityAnchorBatchPersistResult {
+    var persistedPaths: [String]
+    var receipt: EntityAuthorityCommitReceipt?
+    var idempotentReplay: Bool
+}
+
+private actor EntityAuthorityCommitGate {
+    private var locked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if locked == false {
+            locked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            locked = false
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }
