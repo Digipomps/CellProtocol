@@ -119,6 +119,48 @@ final class ExploreContractValidatorTests: XCTestCase {
         XCTAssertFalse(ExploreContractValidator.matches(value: invalid, schema: schema))
     }
 
+    func testCanonicalNamedValueTypesPreserveWireCaseAndValidateLegacyLowercaseSchemas() {
+        let canonicalTypes = [
+            "flowElement",
+            "keyValue",
+            "setValueState",
+            "setValueResponse",
+            "cellConfiguration",
+            "cellReference",
+            "verifiableCredential",
+            "connectContext",
+            "connectState",
+            "contractState",
+            "signData",
+            "agreementPayload"
+        ]
+
+        for canonicalType in canonicalTypes {
+            XCTAssertEqual(
+                ExploreContract.canonicalTypeName(canonicalType),
+                canonicalType
+            )
+            XCTAssertEqual(
+                ExploreContract.canonicalTypeName(canonicalType.lowercased()),
+                canonicalType
+            )
+            XCTAssertEqual(
+                ExploreContract.schemaType(from: ExploreContract.schema(type: canonicalType)),
+                canonicalType
+            )
+        }
+
+        let configuration = ValueType.cellConfiguration(
+            CellConfiguration(name: "Explore canonical type regression")
+        )
+        XCTAssertTrue(
+            ExploreContractValidator.validate(
+                value: configuration,
+                against: ExploreContract.schema(type: "cellconfiguration")
+            ).ok
+        )
+    }
+
     func testDeepEqualPreservesContractProbeComparisonSemantics() {
         XCTAssertTrue(
             ExploreContractValidator.deepEqual(

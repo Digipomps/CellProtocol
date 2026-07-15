@@ -259,6 +259,30 @@ public enum ExploreContract {
             return "data"
         case "null", "none":
             return "null"
+        case "flowelement":
+            return "flowElement"
+        case "keyvalue":
+            return "keyValue"
+        case "setvaluestate":
+            return "setValueState"
+        case "setvalueresponse":
+            return "setValueResponse"
+        case "cellconfiguration":
+            return "cellConfiguration"
+        case "cellreference":
+            return "cellReference"
+        case "verifiablecredential":
+            return "verifiableCredential"
+        case "connectcontext":
+            return "connectContext"
+        case "connectstate":
+            return "connectState"
+        case "contractstate":
+            return "contractState"
+        case "signdata":
+            return "signData"
+        case "agreementpayload":
+            return "agreementPayload"
         case "":
             return "unknown"
         default:
