@@ -161,6 +161,126 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(first.uuid, third.uuid)
     }
 
+    func testIdentityUniqueDirectUUIDResolutionAcceptsVerifiedContractOnly() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = try XCTUnwrap(CellBase.defaultIdentityVault)
+        let resolvedOwner = await vault.identity(
+            for: "direct-contract-owner-\(UUID().uuidString)",
+            makeNewIfNotFound: true
+        )
+        let resolvedMember = await vault.identity(
+            for: "direct-contract-member-\(UUID().uuidString)",
+            makeNewIfNotFound: true
+        )
+        let resolvedOutsider = await vault.identity(
+            for: "direct-contract-outsider-\(UUID().uuidString)",
+            makeNewIfNotFound: true
+        )
+        let resolvedUnrelatedKey = await vault.identity(
+            for: "direct-contract-unrelated-key-\(UUID().uuidString)",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let member = try XCTUnwrap(resolvedMember)
+        let outsider = try XCTUnwrap(resolvedOutsider)
+        let unrelatedKey = try XCTUnwrap(resolvedUnrelatedKey)
+
+        let cell = await GeneralCell(owner: owner)
+        cell.cellScope = .identityUnique
+        await cell.addInterceptForGet(requester: owner, key: "shared") { _, _ in
+            .string("visible through contract")
+        }
+        await cell.addInterceptForGet(requester: owner, key: "secret") { _, _ in
+            .string("owner only")
+        }
+        cell.agreementTemplate.addGrant("r---", for: "shared")
+        let agreement = Agreement(owner: owner)
+        agreement.addGrant("r---", for: "shared")
+        let agreementState = await cell.addAgreement(
+            agreement,
+            for: member,
+            authorizedBy: owner
+        )
+        XCTAssertEqual(agreementState, .signed)
+
+        let name = "DirectContractCell-\(UUID().uuidString)"
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            identityDomain: "direct-contract-resolution",
+            type: GeneralCell.self
+        )
+        try await resolver.registerNamedEmitCell(
+            name: name,
+            emitCell: cell,
+            scope: .identityUnique,
+            identity: owner
+        )
+        defer { Task { await resolver.unregisterEmitCell(uuid: cell.uuid) } }
+
+        let directEndpoint = "cell:///\(cell.uuid)"
+        let resolved = try await resolver.cellAtEndpoint(
+            endpoint: directEndpoint,
+            requester: member
+        )
+        XCTAssertEqual(resolved.uuid, cell.uuid)
+        let sharedValue = try await (resolved as? GeneralCell)?.get(
+            keypath: "shared",
+            requester: member
+        )
+        XCTAssertEqual(sharedValue, .string("visible through contract"))
+
+        do {
+            _ = try await (resolved as? GeneralCell)?.get(keypath: "secret", requester: member)
+            XCTFail("Resolving a concrete UUID must not grant an unlisted keypath")
+        } catch let CellAuthorizationError.denied(decision) {
+            XCTAssertEqual(decision.path, .deniedNoGrant)
+        }
+
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: directEndpoint, requester: outsider)
+            XCTFail("An unrelated Identity must not resolve an identity-unique Cell UUID")
+        } catch CellSetupError.ownerAuthorityUnavailable {
+            // Expected.
+        }
+
+        let forgedMember = Identity(member.uuid, displayName: "Forged member", identityVault: vault)
+        forgedMember.publicSecureKey = unrelatedKey.publicSecureKey
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: directEndpoint, requester: forgedMember)
+            XCTFail("A matching UUID with a different signing key must not satisfy the Contract")
+        } catch CellSetupError.ownerAuthorityUnavailable {
+            // Expected.
+        }
+
+        let memberNamedCell = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: member
+        )
+        XCTAssertNotEqual(
+            memberNamedCell.uuid,
+            cell.uuid,
+            "Named identity-unique resolution must remain scoped to the active requester"
+        )
+
+        let persistedSnapshot = try JSONEncoder().encode(cell)
+        await resolver.unregisterEmitCell(uuid: cell.uuid)
+        let decodedCell = try JSONDecoder().decode(GeneralCell.self, from: persistedSnapshot)
+        CellBase.typedCellUtility = FixedDecodedCellUtility(cell: decodedCell)
+        let restored = try await resolver.loadTypedEmitCell(
+            with: cell.uuid,
+            requester: member
+        )
+        let restoredCell = try XCTUnwrap(restored as? GeneralCell)
+        let restoredDecision = await restoredCell.authorizationDecision(
+            requestedAccess: "r---",
+            at: "shared",
+            for: member
+        )
+        XCTAssertTrue(restoredDecision.allowed)
+        XCTAssertEqual(restoredDecision.path, .signedContract)
+    }
+
     func testIdentitySetFollowsReplacedEntityAnchorMapping() async throws {
         let resolver = CellResolver.sharedInstance
         await resolver.resetRuntimeStateForTesting()
