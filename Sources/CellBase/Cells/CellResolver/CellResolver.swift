@@ -1618,7 +1618,7 @@ public class CellResolver: CellResolverProtocol {
         if isUUID(reference) {
             if let cell = await loadCellFromMemory(uuid:reference) {
                 if cell.cellScope == .identityUnique {
-                    guard case .valid = try await validateIdentityUniqueOwner(
+                    guard try await validatesIdentityUniqueDirectReferenceAccess(
                         cell,
                         requester: identity
                     ) else {
@@ -2438,12 +2438,23 @@ public class CellResolver: CellResolverProtocol {
             throw CellSetupError.persistedCellUnavailable
         }
         if emitCell.cellScope == .identityUnique {
-            guard let requester,
-                  case .valid = try await validateIdentityUniqueOwner(
+            guard let requester else {
+                throw CellSetupError.ownerAuthorityUnavailable
+            }
+            if isUUID(reference) {
+                guard try await validatesIdentityUniqueDirectReferenceAccess(
                     emitCell,
                     requester: requester
-                  ) else {
-                throw CellSetupError.ownerAuthorityUnavailable
+                ) else {
+                    throw CellSetupError.ownerAuthorityUnavailable
+                }
+            } else {
+                guard case .valid = try await validateIdentityUniqueOwner(
+                    emitCell,
+                    requester: requester
+                ) else {
+                    throw CellSetupError.ownerAuthorityUnavailable
+                }
             }
         }
         _ = try await prepareCellForRuntime(emitCell)
@@ -2483,6 +2494,28 @@ public class CellResolver: CellResolverProtocol {
         return await requesterProvesSigningControl(requester)
             ? .valid
             : .authorityUnproven
+    }
+
+    /// A concrete UUID may be resolved by either its proven owner or a subject
+    /// holding an active signed Contract in that Cell. Named identity-unique
+    /// references remain owner-bound because resolving a name also selects an
+    /// Identity-specific instance. Returning the concrete Cell does not grant
+    /// keypath access; GeneralCell still evaluates the Contract for every GET
+    /// and SET operation.
+    private func validatesIdentityUniqueDirectReferenceAccess(
+        _ emitCell: Emit,
+        requester: Identity
+    ) async throws -> Bool {
+        if case .valid = try await validateIdentityUniqueOwner(
+            emitCell,
+            requester: requester
+        ) {
+            return true
+        }
+        guard let generalCell = emitCell as? GeneralCell else {
+            return false
+        }
+        return await generalCell.hasVerifiedAuthorizationContract(for: requester)
     }
 
     private func requesterProvesSigningControl(_ requester: Identity) async -> Bool {

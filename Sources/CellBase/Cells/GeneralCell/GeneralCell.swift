@@ -2049,6 +2049,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         return relevantContracts
     }
+
+    /// Resolver admission for a known concrete Cell UUID. This only proves
+    /// that the requester is a current Contract subject; operation-level
+    /// authorization still evaluates the requested keypath and permission.
+    func hasVerifiedAuthorizationContract(for identity: Identity) async -> Bool {
+        await contractsForIdentity(identity).isEmpty == false
+    }
     
     func determineIdentityState(identity: Identity) async -> IdentityState {
         var identityState = IdentityState.other
