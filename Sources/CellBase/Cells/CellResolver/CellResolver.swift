@@ -2184,8 +2184,16 @@ public class CellResolver: CellResolverProtocol {
     @discardableResult
     public func restoreIdentityNamedCellsFillingGaps(
         _ restored: [String: [String: String]],
-        requester: Identity
-    ) async -> [String: [String: String]] {
-        await auditor.restoreIdentityNamedCellsFillingGaps(restored)
+        requester: Identity,
+        authorization: CellResolverRecoveryAuthorization
+    ) async throws -> [String: [String: String]] {
+        guard await requesterProvesSigningControl(requester) else {
+            CellBase.diagnosticLog(
+                "Refusing identity mapping recovery without requester key proof identity=\(requester.uuid)",
+                domain: .resolver
+            )
+            throw CellSetupError.ownerAuthorityUnavailable
+        }
+        return await auditor.restoreIdentityNamedCellsFillingGaps(restored)
     }
 }

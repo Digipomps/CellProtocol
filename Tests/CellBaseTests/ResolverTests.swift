@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
-@_spi(Testing) @testable import CellBase
+@_spi(Testing) @_spi(CellRuntimeRecovery) @testable import CellBase
 import Foundation
 
 #if canImport(CellVapor)
@@ -512,6 +512,33 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(mappings[owner.uuid]?["Existing"], existing.uuid)
         XCTAssertEqual(mappings[owner.uuid]?["Concurrent"], concurrent.uuid)
         XCTAssertEqual(mappings[owner.uuid]?["RestoredOnly"], "restored-cell")
+    }
+
+    func testResolverRecoveryRequiresRequesterSigningControl() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let resolvedOwner = await vault.identity(for: "mapping-recovery-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(resolvedOwner)
+        let restored = [
+            "persisted-owner": ["Recovered": "persisted-cell"]
+        ]
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await resolver.restoreIdentityNamedCellsFillingGaps(
+                restored,
+                requester: owner.publicIdentitySnapshot(),
+                authorization: CellResolverRecoveryAuthorization()
+            )
+        }
+
+        let merged = try await resolver.restoreIdentityNamedCellsFillingGaps(
+            restored,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        XCTAssertEqual(merged["persisted-owner"]?["Recovered"], "persisted-cell")
     }
 
     func testUnsupportedSchemeThrows() async {
