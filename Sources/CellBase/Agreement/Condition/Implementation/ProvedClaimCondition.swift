@@ -82,57 +82,7 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
         {
             do {
                 let value = try await getValueAtConditionKeypath(keypathExpression: keypathExpression, connectContext: context)
-                switch value {
-                case .object( let vCClaimObject):
-                    let claim = try convertToClaim( vCClaimObject) // Catch error and report
-                    guard claimSubjectMatchesRequester(claim, requester: identity) else {
-                        CellBase.diagnosticLog(
-                            "ProvedClaimCondition rejected credential with wrong or missing subject binding",
-                            domain: .agreement
-                        )
-                        return .unresolved
-                    }
-                    if try await claim.verify() { //
-                        CellBase.diagnosticLog("ProvedClaimCondition claim verified", domain: .agreement)
-
-                        let contextId = trustContextId(keypathExpression: keypathExpression)
-                        let trustedByPolicy = await evaluateIssuerTrust(
-                            claim: claim,
-                            contextId: contextId,
-                            requester: identity
-                        )
-
-                        // A target owner is not an implicit credential authority.
-                        // Issuer trust, validity, and revocation policy must be
-                        // evaluated by the TrustedIssuer runtime.
-                        if !trustedByPolicy {
-                            return .unresolved
-                        }
-
-                        guard credentialSatisfiesDeclaredRequirement(
-                            claim,
-                            expression: keypathExpression,
-                            trustedByPolicy: trustedByPolicy
-                        ) else {
-                            CellBase.diagnosticLog(
-                                "ProvedClaimCondition rejected credential not bound to declared type/claim/keypath",
-                                domain: .agreement
-                            )
-                            return .unresolved
-                        }
-                        
-                        // check statement
-                        //
-                        // ensure that there's sufficient grants to reach
-                        // if user need to be involved send flowItem via ... Identity?
-                        
-                        state = .met
-                    } else {
-                        print("Value at keypath not valid VC")
-                        // VC did exist but was not valid
-                    }
-                    
-                default:
+                guard let claim = try? credentialClaim(from: value) else {
                     // Primitive Entity values are assertions made by the Entity
                     // owner, not cryptographic proof. Only a verified credential
                     // envelope may satisfy ProvedClaimCondition.
@@ -141,9 +91,50 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                         domain: .agreement
                     )
                     return .unresolved
-                    
                 }
-                
+                guard claimSubjectMatchesRequester(claim, requester: identity) else {
+                    CellBase.diagnosticLog(
+                        "ProvedClaimCondition rejected credential with wrong or missing subject binding",
+                        domain: .agreement
+                    )
+                    return .unresolved
+                }
+                guard try await claim.verify() else {
+                    CellBase.diagnosticLog(
+                        "ProvedClaimCondition rejected invalid credential proof",
+                        domain: .agreement
+                    )
+                    return .unresolved
+                }
+                CellBase.diagnosticLog("ProvedClaimCondition claim verified", domain: .agreement)
+
+                let contextId = trustContextId(keypathExpression: keypathExpression)
+                let trustedByPolicy = await evaluateIssuerTrust(
+                    claim: claim,
+                    contextId: contextId,
+                    requester: identity
+                )
+
+                // A target owner is not an implicit credential authority.
+                // Issuer trust, validity, and revocation policy must be
+                // evaluated by the TrustedIssuer runtime.
+                guard trustedByPolicy else {
+                    return .unresolved
+                }
+
+                guard credentialSatisfiesDeclaredRequirement(
+                    claim,
+                    expression: keypathExpression,
+                    trustedByPolicy: trustedByPolicy
+                ) else {
+                    CellBase.diagnosticLog(
+                        "ProvedClaimCondition rejected credential not bound to declared type/claim/keypath",
+                        domain: .agreement
+                    )
+                    return .unresolved
+                }
+
+                state = .met
             } catch KeyPathError.notFound(let erroredKeypath){
                 print("No value found at \(erroredKeypath)")
             } catch KeypathStorageErrors.denied {
@@ -417,8 +408,7 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
                     // is it is a claimvalue then verify it and addit to target
                     let value = try await identity.get(keypath: shortenedKeypath, requester: identity)
                    
-                    if case let .object(vCClaimObject) = value {
-                        let claim = try convertToClaim( vCClaimObject)
+                    if let claim = try? credentialClaim(from: value) {
                         guard claimSubjectMatchesRequester(claim, requester: identity),
                               try await claim.verify() else {
                             CellBase.diagnosticLog(
@@ -486,11 +476,23 @@ public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChall
     }
     
     func convertToClaim(_ claimObject: Object) throws -> VCClaim {
-        
         let claimObjectJson = try JSONEncoder().encode(claimObject)
         let claim = try JSONDecoder().decode(VCClaim.self, from: claimObjectJson)
-        
         return claim
+    }
+
+    private func credentialClaim(from value: ValueType) throws -> VCClaim {
+        switch value {
+        case .verifiableCredential(let claim):
+            return claim
+        case .object(let claimObject):
+            // Legacy Entity stores encoded VCClaim as a plain Object. Keep
+            // accepting that representation while treating the canonical
+            // ValueType.verifiableCredential envelope identically.
+            return try convertToClaim(claimObject)
+        default:
+            throw ValueTypeError.unexpectedValueType
+        }
     }
 
     func trustContextId(keypathExpression: AnyKeypathExpression) -> String {

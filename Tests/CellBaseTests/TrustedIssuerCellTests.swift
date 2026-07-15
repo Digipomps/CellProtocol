@@ -1064,11 +1064,12 @@ final class TrustedIssuerCellTests: XCTestCase {
             ]
         )
         try await claim.generateProof(issuerIdentity: issuerIdentity)
-        let claimData = try JSONEncoder().encode(claim)
-        let claimObject = try JSONDecoder().decode(Object.self, from: claimData)
-
         let entityAnchor = TestEmitCell(owner: requester, uuid: "entity-anchor")
-        _ = try await entityAnchor.set(keypath: "claims.ageProof", value: .object(claimObject), requester: requester)
+        _ = try await entityAnchor.set(
+            keypath: "claims.ageProof",
+            value: .verifiableCredential(claim),
+            requester: requester
+        )
         try await resolver.registerNamedEmitCell(name: "EntityAnchor", emitCell: entityAnchor, scope: .identityUnique, identity: requester)
 
         let trustedIssuerCell = await TrustedIssuerCell(owner: registryOwner)
@@ -1139,6 +1140,53 @@ final class TrustedIssuerCellTests: XCTestCase {
             for: requester
         )
         XCTAssertTrue(requesterCanRead)
+
+        let claimObject = try JSONDecoder().decode(
+            Object.self,
+            from: JSONEncoder().encode(claim)
+        )
+        _ = try await entityAnchor.set(
+            keypath: "claims.ageProof",
+            value: .object(claimObject),
+            requester: requester
+        )
+        let legacyTarget = await GeneralCell(owner: targetOwner)
+        legacyTarget.agreementTemplate.conditions = [condition]
+        legacyTarget.agreementTemplate.grants = [
+            Grant(keypath: "member.state.legacy", permission: "r---")
+        ]
+        legacyTarget.agreementAdmissionPolicy = .automaticWhenConditionsMet
+        let legacyAgreementRequest = Agreement(owner: targetOwner)
+        legacyAgreementRequest.conditions = [condition]
+        legacyAgreementRequest.grants = [
+            Grant(keypath: "member.state.legacy", permission: "r---")
+        ]
+        let legacyState = await legacyTarget.addAgreement(
+            legacyAgreementRequest,
+            for: requester
+        )
+        XCTAssertEqual(
+            legacyState,
+            .signed,
+            "Legacy Object-encoded credentials must retain admission compatibility."
+        )
+        let stateAfterLegacyAdmission = try await trustedIssuerCell.get(
+            keypath: "trustedIssuers.state",
+            requester: registryOwner
+        )
+        guard case .object(let legacyAdmissionObject) = stateAfterLegacyAdmission else {
+            return XCTFail("Expected trusted issuer state after legacy credential admission")
+        }
+        guard case .integer(let legacyEvaluationCount)? = legacyAdmissionObject["evaluationHistoryCount"] else {
+            return XCTFail("Expected trusted issuer evaluation history after legacy admission")
+        }
+        XCTAssertGreaterThan(legacyEvaluationCount, 1)
+        let requesterCanReadLegacy = await legacyTarget.validateAccess(
+            "r---",
+            at: "member.state.legacy",
+            for: requester
+        )
+        XCTAssertTrue(requesterCanReadLegacy)
 
         let outsiderIdentity = await issuerVault.identity(
             for: "proof-bearing-outsider",
