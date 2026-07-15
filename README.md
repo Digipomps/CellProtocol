@@ -186,6 +186,10 @@ If `CellBaseTests` shows as “missing”, verify these two entries match your l
 - `../Binding/Binding.xcworkspace/contents.xcworkspacedata` includes `group:../CellProtocol`
 - `../Binding/Binding.xcodeproj/xcshareddata/xctestplans/Binding.xctestplan` uses `container:../CellProtocol`
 
+For local or agent-driven SwiftPM commands, use the bounded build runner so
+scratch, dependency, and module caches are serialized and retained within a
+managed size/age policy. See `Docs/SwiftPM_Bounded_Build_Runner_NO.md`.
+
 ## ✅ Running Purpose/Interest/Entity Matching Tests
 
 Weighted relationship matching tests for `Purpose`, `Interest`, and
@@ -201,9 +205,9 @@ They verify relationship matching for:
 - `partOf`
 - `states`
 
-Run only this suite with:
+Run only this suite locally with:
 
-- `swift test --filter PurposeAndInterestMatchingTests`
+- `Scripts/haven-swiftpm.sh -- test --filter PurposeAndInterestMatchingTests`
 
 ## 🧪 Contract Testing
 
