@@ -287,15 +287,18 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
         
         return .string("Something went wrong while get from identity (\(self.uuid)") // Should not reach here
     }
-    var entityAnchorEmit: Emit?
-    
     public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         guard let resolver = CellBase.defaultCellResolver else {
             throw CellBaseError.noResolver
         }
-        if entityAnchorEmit == nil {
-            entityAnchorEmit = try await resolver.cellAtEndpoint(endpoint: self.entityAnchorReference, requester: requester)
-        }
+        // Identity-scoped resolver mappings can be restored or replaced while
+        // this Identity instance remains alive. Resolve every mutation against
+        // the current mapping, just as get(keypath:requester:) does, so a stale
+        // cached EntityAnchor cannot receive writes after recovery.
+        let entityAnchorEmit = try await resolver.cellAtEndpoint(
+            endpoint: self.entityAnchorReference,
+            requester: requester
+        )
         if let entityAnchorMeddle = entityAnchorEmit as? Meddle {
             let shortenedKeypath = deletePrefix("identity.", from: keypath)
             return try await entityAnchorMeddle.set(keypath: shortenedKeypath, value: value, requester: self)

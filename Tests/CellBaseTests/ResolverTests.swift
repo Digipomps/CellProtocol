@@ -161,6 +161,65 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(first.uuid, third.uuid)
     }
 
+    func testIdentitySetFollowsReplacedEntityAnchorMapping() async throws {
+        let resolver = CellResolver.sharedInstance
+        await resolver.resetRuntimeStateForTesting()
+
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "identity-anchor-rebinding",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let firstAnchor = await IdentityEntityAnchorProbeCell(owner: owner)
+        let secondAnchor = await IdentityEntityAnchorProbeCell(owner: owner)
+        await firstAnchor.installProbeBindings(owner: owner)
+        await secondAnchor.installProbeBindings(owner: owner)
+
+        try await resolver.registerNamedEmitCell(
+            name: "EntityAnchor",
+            emitCell: firstAnchor,
+            scope: .identityUnique,
+            identity: owner
+        )
+        try await resolver.registerNamedEmitCell(
+            name: "ReplacementEntityAnchor-\(UUID().uuidString)",
+            emitCell: secondAnchor,
+            scope: .identityUnique,
+            identity: owner
+        )
+
+        _ = try await owner.set(
+            keypath: "identity.proofs.runtime",
+            value: .string("first"),
+            requester: owner
+        )
+        let firstRecordedValue = await firstAnchor.recordedValue(for: "proofs.runtime")
+        XCTAssertEqual(firstRecordedValue, .string("first"))
+
+        var mappings = await resolver.identityNamedCells(requester: owner)
+        mappings[owner.uuid, default: [:]]["EntityAnchor"] = secondAnchor.uuid
+        await resolver.setIdentityNamedCells(mappings, requester: owner)
+
+        _ = try await owner.set(
+            keypath: "identity.proofs.runtime",
+            value: .string("second"),
+            requester: owner
+        )
+
+        let staleAnchorValue = await firstAnchor.recordedValue(for: "proofs.runtime")
+        let currentAnchorValue = await secondAnchor.recordedValue(for: "proofs.runtime")
+        XCTAssertEqual(
+            staleAnchorValue,
+            .string("first"),
+            "Replacing the resolver mapping must stop subsequent Identity mutations from reaching the stale EntityAnchor."
+        )
+        XCTAssertEqual(
+            currentAnchorValue,
+            .string("second"),
+            "Identity.set must resolve the current identity-scoped EntityAnchor for every mutation."
+        )
+    }
+
     func testPersistedIdentityUniqueCellRejectsCrossSigningIdentityMappingBeforeReadiness() async throws {
         let resolver = CellResolver.sharedInstance
         await resolver.resetRuntimeStateForTesting()
@@ -657,6 +716,48 @@ final class ResolverTests: XCTestCase {
 #else
         throw XCTSkip("CellVapor-backed file storage is unavailable in this test environment")
 #endif
+    }
+}
+
+private actor IdentityEntityAnchorProbeState {
+    private var values: [String: ValueType] = [:]
+
+    func set(_ value: ValueType, for keypath: String) {
+        values[keypath] = value
+    }
+
+    func value(for keypath: String) -> ValueType? {
+        values[keypath]
+    }
+}
+
+private final class IdentityEntityAnchorProbeCell: GeneralCell {
+    private let probeState = IdentityEntityAnchorProbeState()
+
+    required init(owner: Identity) async {
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        try super.init(from: decoder)
+    }
+
+    func installProbeBindings(owner: Identity) async {
+        await registerExploreContract(
+            requester: owner,
+            key: "proofs",
+            method: .set,
+            input: ExploreContract.schema(type: "string"),
+            returns: .null
+        )
+        await addInterceptForSet(requester: owner, key: "proofs") { [probeState] keypath, value, _ in
+            await probeState.set(value, for: keypath)
+            return nil
+        }
+    }
+
+    func recordedValue(for keypath: String) async -> ValueType? {
+        await probeState.value(for: keypath)
     }
 }
 
