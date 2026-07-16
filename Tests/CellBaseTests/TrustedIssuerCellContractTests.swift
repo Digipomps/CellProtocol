@@ -37,6 +37,20 @@ final class TrustedIssuerCellContractTests: XCTestCase {
             requester: owner,
             expected: ["-w--"]
         )
+        try await CellContractHarness.assertAdvertisedKey(
+            on: cell,
+            key: "trustedIssuers.evaluateSigned",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "object",
+            expectedReturnType: "oneOf"
+        )
+        try await CellContractHarness.assertPermissions(
+            on: cell,
+            key: "trustedIssuers.evaluateSigned",
+            requester: owner,
+            expected: ["-w--"]
+        )
         try await CellContractHarness.assertSetDenied(
             on: cell,
             key: "trustedIssuers.evaluate",

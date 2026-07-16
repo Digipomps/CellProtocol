@@ -10,9 +10,37 @@
 @_spi(HAVENRuntime) import CellBase
 import Foundation
 
+private actor SignedAgreementCommitGate {
+    private var isHeld = false
+    private var waiters = [CheckedContinuation<Void, Never>]()
+
+    func withExclusiveAccess<T>(_ operation: () async -> T) async -> T {
+        await acquire()
+        defer { release() }
+        return await operation()
+    }
+
+    private func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        guard !waiters.isEmpty else {
+            isHeld = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
 public class EntityAnchorCell: GeneralCell {
     static let storageFilename = "keypathstorage.json"
     private var storage: Entity
+    private let signedAgreementCommitGate = SignedAgreementCommitGate()
    
     // Should  support set/get keypath and persistance of json
     
@@ -40,6 +68,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "proofs")
         self.agreementTemplate.ensureGrant("rw--", for: "agreements")
         self.agreementTemplate.ensureGrant("rw--", for: "signedAgreementEntity")
+        self.agreementTemplate.ensureGrant("-w--", for: "signedAgreementEntity.commit")
         self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
@@ -106,6 +135,18 @@ public class EntityAnchorCell: GeneralCell {
                 return try self.storage.get(keypath: keypath)
             } else {
                 throw KeypathStorageErrors.denied
+            }
+        })
+
+        await addInterceptForSet(requester: owner, key: "signedAgreementEntity.commit", setValueIntercept: { [weak self] _, value, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("-w--", at: "signedAgreementEntity.commit", for: requester),
+                  self.storedOwnerIdentity.referencesSameSigningIdentity(as: requester),
+                  await self.verifyRequesterIdentityControl(requester) else {
+                throw KeypathStorageErrors.denied
+            }
+            return await self.signedAgreementCommitGate.withExclusiveAccess {
+                await self.commitSignedAgreement(value: value, requester: requester)
             }
         })
 
@@ -358,6 +399,16 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
+        await registerExploreContract(
+            requester: requester,
+            key: "signedAgreementEntity.commit",
+            method: .set,
+            input: Self.signedAgreementCommitSchema(),
+            returns: Self.signedAgreementCommitResultSchema(),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Verifies and immutably persists an owner-signed Contract, then returns an owner-signed read-after-write receipt.")
+        )
         await registerExploreContract(requester: requester, key: "entityRepresentation", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity representation."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .set, input: storedValue, returns: identityLinkResult, permissions: ["-w--"], required: false, flowEffects: [identityLinkEffect], description: .string("Stores identity-link state below the owner entity."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads identity-link state below the owner entity."))
@@ -398,6 +449,129 @@ public class EntityAnchorCell: GeneralCell {
             ],
             description: "A supported persisted Entity ValueType."
         )
+    }
+
+    private static func signedAgreementCommitSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "contract": ExploreContract.schema(type: "object"),
+                "metadata": ExploreContract.schema(type: "object"),
+                "credentialReceipts": ExploreContract.listSchema(item: ExploreContract.schema(type: "object"))
+            ],
+            requiredKeys: ["contract"],
+            description: "Owner-signed Contract plus public-safe metadata and verifier-signed VC evaluation receipts."
+        )
+    }
+
+    private static func signedAgreementCommitResultSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "status": ExploreContract.schema(type: "string"),
+                "record": ExploreContract.schema(type: "object"),
+                "receipt": ExploreContract.schema(type: "object"),
+                "error": ExploreContract.schema(type: "string")
+            ],
+            requiredKeys: ["status"],
+            description: "Persisted/conflict/error result. Persisted results include the verified record and signed commit receipt."
+        )
+    }
+
+    private func commitSignedAgreement(value: ValueType, requester: Identity) async -> ValueType {
+        do {
+            let request = try SignedAgreementEntityCommitRequest.from(value: value)
+            let expectedDomain = SignedAgreementEntitySupport.ownerEntityDomain(for: storedOwnerIdentity)
+            guard await request.contract.verifyAuthorizationBinding(
+                expectedIssuer: storedOwnerIdentity,
+                expectedSubject: storedOwnerIdentity,
+                expectedDomain: expectedDomain
+            ) else {
+                throw SignedAgreementEntityCommitError.invalidContract
+            }
+            if request.credentialReceipts.isEmpty {
+                guard SignedAgreementEntitySupport.credentialReceiptsAreBound(
+                    request: request,
+                    expectedVerifier: storedOwnerIdentity
+                ) else {
+                    throw SignedAgreementEntityCommitError.invalidCredentialReceipt
+                }
+            } else {
+                guard let resolver = CellBase.defaultCellResolver,
+                      let verifierCell = try? await resolver.cellAtEndpoint(
+                        endpoint: TrustedIssuerEvaluationReceipt.verifierEndpoint,
+                        requester: requester
+                      ),
+                      let verifierOwner = try? await verifierCell.getOwner(requester: requester),
+                      SignedAgreementEntitySupport.credentialReceiptsAreBound(
+                        request: request,
+                        expectedVerifier: verifierOwner
+                      ) else {
+                    throw SignedAgreementEntityCommitError.invalidCredentialReceipt
+                }
+            }
+
+            let contractHash = try SignedAgreementEntitySupport.contractHash(request.contract)
+            let contentHash = try SignedAgreementEntitySupport.immutableContentHash(
+                request: request,
+                contractHash: contractHash
+            )
+            let recordKeypath = "signedAgreementEntity.records.\(request.contract.uuid)"
+            let record: Object
+            if let existing = try? storage.get(keypath: recordKeypath),
+               case let .object(existingRecord) = existing {
+                guard case let .string(existingContentHash)? = existingRecord["immutableContentHash"],
+                      existingContentHash == contentHash else {
+                    throw SignedAgreementEntityCommitError.immutableRecordConflict
+                }
+                record = existingRecord
+            } else {
+                let newRecord = try SignedAgreementEntitySupport.recordObject(
+                    request: request,
+                    contractHash: contractHash
+                )
+                try storage.set(keypath: recordKeypath, setValue: .object(newRecord))
+                record = newRecord
+            }
+
+            let expectedRecordHash = try SignedAgreementEntitySupport.recordHash(record)
+            let receipt = try await SignedAgreementEntityCommitReceipt.issue(
+                recordID: request.contract.uuid,
+                entityKeypath: recordKeypath,
+                entityOwner: requester,
+                contractHash: contractHash,
+                recordHash: expectedRecordHash
+            )
+            let receiptKeypath = "signedAgreementEntity.receipts.\(receipt.receiptID)"
+            try storage.set(keypath: receiptKeypath, setValue: .object(receipt.asObject()))
+            try await saveKeypathStorage(entity: storage)
+            let persistedStorage = try await loadKeypathStorage()
+            guard case let .object(persistedRecord) = try persistedStorage.get(keypath: recordKeypath),
+                  try SignedAgreementEntitySupport.recordHash(persistedRecord) == expectedRecordHash,
+                  case let .object(persistedReceiptObject) = try persistedStorage.get(keypath: receiptKeypath) else {
+                throw SignedAgreementEntityCommitError.readAfterWriteMismatch
+            }
+            let persistedReceipt = try SignedAgreementEntityCommitReceipt.from(object: persistedReceiptObject)
+            guard persistedReceipt.verifySignature(),
+                  persistedReceipt.recordHash == expectedRecordHash else {
+                throw SignedAgreementEntityCommitError.readAfterWriteMismatch
+            }
+            storage = persistedStorage
+
+            return .object([
+                "status": .string("persisted"),
+                "record": .object(record),
+                "receipt": .object(persistedReceiptObject)
+            ])
+        } catch SignedAgreementEntityCommitError.immutableRecordConflict {
+            return .object([
+                "status": .string("conflict"),
+                "error": .string("immutable_record_conflict")
+            ])
+        } catch {
+            return .object([
+                "status": .string("error"),
+                "error": .string(String(describing: error))
+            ])
+        }
     }
     
     private func initialLoading() async {

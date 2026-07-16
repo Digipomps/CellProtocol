@@ -9,6 +9,16 @@ public enum ContractError: Error {
 }
 
 public struct Contract: Codable {
+    public enum TemporalStatus: String, Codable {
+        case active
+        case notYetValid = "not_yet_valid"
+        case expired
+        case structurallyInvalid = "structurally_invalid"
+    }
+    /// The current Contract wire format proves one issuer signature and binds
+    /// that signature to one subject and one domain. It is not a bilateral or
+    /// multi-party signature format.
+    public static let issuerOnlySubjectBoundSemantics = "issuer_only_subject_bound_v1"
     public static let maximumDuration: TimeInterval = 60 * 60 * 24 * 365
     public static let allowedClockSkew: TimeInterval = 300
     public var uuid: String
@@ -19,6 +29,12 @@ public struct Contract: Codable {
     public var issuedAt: TimeInterval
     public var expiresAt: TimeInterval
     public var signature: Data?
+
+    /// Human- and machine-readable semantics for the existing wire format.
+    /// This is derived rather than encoded, preserving wire compatibility.
+    public var signingSemantics: String {
+        Self.issuerOnlySubjectBoundSemantics
+    }
 
     var authorizationDeduplicationKey: String {
         let grants = agreement.grants
@@ -89,17 +105,54 @@ public struct Contract: Codable {
         return contract
     }
 
-    public func verifySignature(now: Date = Date()) async -> Bool {
-        guard let signature else { return false }
+    /// Creates an immutable owner-signed snapshot from an editable Agreement.
+    ///
+    /// The returned Contract is issuer-signed and subject-bound with the owner
+    /// acting as both issuer and subject. This deliberately does not imply that
+    /// any named counterparty has signed the agreement.
+    public static func ownerSignedSnapshot(
+        agreement: Agreement,
+        signer: Identity,
+        domain: String,
+        issuedAt: Date = Date()
+    ) async throws -> Contract {
+        let signedSnapshot = try snapshot(agreement)
+        signedSnapshot.owner = signer
+        signedSnapshot.signatories = [signer]
+        signedSnapshot.state = .signed
+        return try await signed(
+            agreement: signedSnapshot,
+            issuer: signer,
+            subject: signer,
+            domain: domain,
+            issuedAt: issuedAt
+        )
+    }
+
+    public func temporalStatus(now: Date = Date()) -> TemporalStatus {
         let nowInterval = now.timeIntervalSince1970
         guard issuedAt.isFinite,
               expiresAt.isFinite,
-              issuedAt <= nowInterval + Self.allowedClockSkew,
-              expiresAt >= nowInterval,
               expiresAt >= issuedAt,
               expiresAt - issuedAt <= Self.maximumDuration,
               agreement.duration > 0,
               abs((expiresAt - issuedAt) - TimeInterval(agreement.duration)) < 0.001 else {
+            return .structurallyInvalid
+        }
+        if issuedAt > nowInterval + Self.allowedClockSkew {
+            return .notYetValid
+        }
+        if expiresAt < nowInterval {
+            return .expired
+        }
+        return .active
+    }
+
+    /// Verifies the immutable bytes and issuer key without treating expiry as
+    /// erasure. This is the correct primitive for signed-history inspection.
+    public func verifyCryptographicSignature() async -> Bool {
+        guard let signature else { return false }
+        guard temporalStatus(now: Date(timeIntervalSince1970: issuedAt)) != .structurallyInvalid else {
             return false
         }
         guard let messageData = try? signingData() else {
@@ -110,6 +163,31 @@ public struct Contract: Codable {
             messageData: messageData,
             identity: issuer
         )
+    }
+
+    /// Active-authorization verification. Expired or not-yet-valid Contracts
+    /// remain inspectable through `verifyCryptographicSignature()` but cannot
+    /// authorize access or a new entity commit.
+    public func verifySignature(now: Date = Date()) async -> Bool {
+        guard temporalStatus(now: now) == .active else { return false }
+        return await verifyCryptographicSignature()
+    }
+
+    public func verifyHistoricalBinding(
+        expectedIssuer: Identity,
+        expectedSubject: Identity,
+        expectedDomain: String
+    ) async -> Bool {
+        guard domain == expectedDomain,
+              Self.identitiesReferenceSame(issuer, expectedIssuer),
+              Self.identitiesReferenceSame(subject, expectedSubject),
+              Self.identitiesReferenceSame(agreement.owner, expectedIssuer),
+              agreement.state == .signed,
+              agreement.signatories.contains(where: { Self.identitiesReferenceSame($0, expectedIssuer) }),
+              agreement.signatories.contains(where: { Self.identitiesReferenceSame($0, expectedSubject) }) else {
+            return false
+        }
+        return await verifyCryptographicSignature()
     }
 
     public func verifyAuthorizationBinding(

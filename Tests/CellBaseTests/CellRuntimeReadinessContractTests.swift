@@ -38,6 +38,14 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         let entity = await EntityAnchorCell(owner: owner)
         try await CellContractHarness.assertAdvertisedKey(
             on: entity,
+            key: "signedAgreementEntity.commit",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "object",
+            expectedReturnType: "object"
+        )
+        try await CellContractHarness.assertAdvertisedKey(
+            on: entity,
             key: "identityLinks.revoke",
             requester: owner,
             expectedMethod: .set,

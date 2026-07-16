@@ -6,6 +6,113 @@ import XCTest
 @testable import CellVapor
 
 final class VaporCellRuntimeReadinessContractTests: XCTestCase {
+    func testVaporEntityAnchorPersistsVerifiedContractAndRejectsImmutableConflict() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let previousDocumentRoot = CellBase.documentRootPath
+        defer {
+            CellBase.defaultIdentityVault = previousVault
+            CellBase.documentRootPath = previousDocumentRoot
+        }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cellprotocol-signed-agreement-vapor-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        CellBase.documentRootPath = root.path
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let ownerCandidate = await vault.identity(for: "private", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
+        let entity = await EntityAnchorCell(owner: owner)
+
+        let agreement = Agreement(owner: owner)
+        agreement.name = "Owner agreement archive"
+        agreement.conditions = []
+        agreement.grants = [Grant(keypath: "document.body", permission: "r---")]
+        let contract = try await Contract.ownerSignedSnapshot(
+            agreement: agreement,
+            signer: owner,
+            domain: SignedAgreementEntitySupport.ownerEntityDomain(for: owner)
+        )
+        let contractObject = try SignedAgreementEntitySupport.contractObject(contract)
+        let commit = try await entity.set(
+            keypath: "signedAgreementEntity.commit",
+            value: .object([
+                "contract": .object(contractObject),
+                "metadata": .object(["templateID": .string("owner-archive")])
+            ]),
+            requester: owner
+        )
+
+        guard case let .object(commitObject)? = commit,
+              case .string("persisted")? = commitObject["status"],
+              case let .object(receiptObject)? = commitObject["receipt"] else {
+            return XCTFail("Expected persisted signed Agreement result, got \(String(describing: commit))")
+        }
+        let receipt = try SignedAgreementEntityCommitReceipt.from(object: receiptObject)
+        XCTAssertTrue(receipt.verifySignature())
+        XCTAssertEqual(receipt.recordID, contract.uuid)
+
+        let stored = try await entity.get(
+            keypath: "signedAgreementEntity.records.\(contract.uuid)",
+            requester: owner
+        )
+        guard case let .object(storedRecord) = stored else {
+            return XCTFail("Expected stored signed Agreement record")
+        }
+        XCTAssertEqual(storedRecord["signatureValidationState"], .string("verified"))
+        XCTAssertEqual(storedRecord["counterpartySignatureState"], .string("not_present"))
+
+        let repeatedPayload: ValueType = .object([
+            "contract": .object(contractObject),
+            "metadata": .object(["templateID": .string("owner-archive")])
+        ])
+        let repeatedResults = try await withThrowingTaskGroup(of: ValueType?.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    try await entity.set(
+                        keypath: "signedAgreementEntity.commit",
+                        value: repeatedPayload,
+                        requester: owner
+                    )
+                }
+            }
+            var results = [ValueType?]()
+            for try await result in group {
+                results.append(result)
+            }
+            return results
+        }
+        XCTAssertEqual(repeatedResults.count, 8)
+        for result in repeatedResults {
+            guard case let .object(resultObject)? = result else {
+                return XCTFail("Expected serialized commit result")
+            }
+            XCTAssertEqual(resultObject["status"], .string("persisted"))
+        }
+        let storedReceipts = try await entity.get(
+            keypath: "signedAgreementEntity.receipts",
+            requester: owner
+        )
+        guard case let .object(receiptsObject) = storedReceipts else {
+            return XCTFail("Expected signed Agreement commit receipts")
+        }
+        XCTAssertEqual(receiptsObject.count, 9)
+
+        let conflict = try await entity.set(
+            keypath: "signedAgreementEntity.commit",
+            value: .object([
+                "contract": .object(contractObject),
+                "metadata": .object(["templateID": .string("mutated-after-commit")])
+            ]),
+            requester: owner
+        )
+        guard case let .object(conflictObject)? = conflict else {
+            return XCTFail("Expected immutable conflict result")
+        }
+        XCTAssertEqual(conflictObject["status"], .string("conflict"))
+        XCTAssertEqual(conflictObject["error"], .string("immutable_record_conflict"))
+    }
+
     func testVaporDecodedCellsAreImmediatelyAndConcurrentlyReady() async throws {
         let previousVault = CellBase.defaultIdentityVault
         let previousResolver = CellBase.defaultCellResolver
@@ -63,6 +170,14 @@ final class VaporCellRuntimeReadinessContractTests: XCTestCase {
         CellBase.defaultCellResolver = MockCellResolver()
 
         let entity = await EntityAnchorCell(owner: owner)
+        try await CellContractHarness.assertAdvertisedKey(
+            on: entity,
+            key: "signedAgreementEntity.commit",
+            requester: owner,
+            expectedMethod: .set,
+            expectedInputType: "object",
+            expectedReturnType: "object"
+        )
         try await CellContractHarness.assertAdvertisedKey(
             on: entity,
             key: "identityLinks.completeEnrollment",

@@ -261,6 +261,7 @@ public class TrustedIssuerCell: GeneralCell {
         let requiredKeys = Set([
             "trustedIssuers.state",
             "trustedIssuers.evaluate",
+            "trustedIssuers.evaluateSigned",
             "trustedIssuers.policy.upsert"
         ])
         guard requiredKeys.isSubset(of: Set(schemaDict.keys)) else {
@@ -302,7 +303,9 @@ public class TrustedIssuerCell: GeneralCell {
         for identity: Identity
     ) async -> Bool {
         guard requestedAccess == "-w--",
-              keypath == "trustedIssuers" || keypath == "trustedIssuers.evaluate" else {
+              keypath == "trustedIssuers"
+                || keypath == "trustedIssuers.evaluate"
+                || keypath == "trustedIssuers.evaluateSigned" else {
             return false
         }
         return await verifyRequesterIdentityControl(identity)
@@ -409,6 +412,50 @@ public class TrustedIssuerCell: GeneralCell {
                 return .string("denied")
             }
             return try await self.handleEvaluate(payload: value, requester: requester)
+        }
+
+        await addInterceptForSet(requester: owner, key: "trustedIssuers.evaluateSigned") { [weak self] _, value, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("-w--", at: "trustedIssuers.evaluateSigned", for: requester) else {
+                return .string("denied")
+            }
+            guard case let .object(requestObject) = value,
+                  let contextID = self.stringValue(requestObject["contextId"]),
+                  case let .object(candidateCredential)? = requestObject["candidateVc"],
+                  case let .object(agreementCondition)? = requestObject["agreementCondition"],
+                  self.stringValue(agreementCondition["kind"]) == "prove",
+                  self.stringValue(agreementCondition["title"]) == contextID else {
+                return .string("error: evaluateSigned requires candidateVc and the exact prove agreementCondition bound to contextId")
+            }
+            let state = self.stateSnapshot()
+            guard let policy = state.policiesByContext[contextID], policy.status == "active" else {
+                return .string("error: no active policy for contextId")
+            }
+            if let schema = policy.claimSchema {
+                let suppliedCredentialType = self.stringValue(agreementCondition["requiredCredentialType"]) ?? ""
+                let suppliedClaimPath = self.stringValue(agreementCondition["subjectClaimPath"]) ?? ""
+                guard suppliedCredentialType == (schema.credentialType ?? ""),
+                      suppliedClaimPath == schema.subjectPath else {
+                    return .string("error: agreementCondition does not match the active policy claim schema")
+                }
+            }
+            let evaluation = try await self.handleEvaluate(payload: value, requester: requester)
+            guard case let .object(evaluationObject) = evaluation else {
+                return evaluation
+            }
+            let verifier = try await self.runtimeBindingOwner()
+            let evidenceBinding = try TrustedIssuerEvaluationReceipt.evidenceBinding(
+                candidateCredential: candidateCredential,
+                policySnapshot: policy.asObject(),
+                agreementCondition: agreementCondition,
+                evaluation: evaluationObject
+            )
+            let receipt = try await TrustedIssuerEvaluationReceipt.issue(
+                evaluation: evaluationObject,
+                verifier: verifier,
+                evidenceBinding: evidenceBinding
+            )
+            return .object(receipt.asObject())
         }
 
     }
@@ -1749,6 +1796,20 @@ public class TrustedIssuerCell: GeneralCell {
             required: true,
             description: .string("Evaluates a candidate credential against issuer trust policy and attestations.")
         )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "trustedIssuers.evaluateSigned",
+            method: .set,
+            input: Self.signedEvaluateSchema(),
+            returns: ExploreContract.oneOfSchema(
+                options: [Self.signedEvaluationReceiptSchema(), ExploreContract.schema(type: "string")],
+                description: "Returns a verifier-signed evaluation receipt or an error string."
+            ),
+            permissions: ["-w--"],
+            required: true,
+            description: .string("Evaluates a candidate credential and signs the exact evaluation with the TrustedIssuer verifier identity.")
+        )
     }
 
     private static func claimSchema() -> ValueType {
@@ -1843,6 +1904,23 @@ public class TrustedIssuerCell: GeneralCell {
             ],
             requiredKeys: ["evaluationId", "issuerId", "contextId", "score", "decision", "threshold", "reasons", "createdAt"],
             description: "Trust evaluation record for a credential candidate."
+        )
+    }
+
+    private static func signedEvaluationReceiptSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "receiptFormat": ExploreContract.schema(type: "string"),
+                "evaluation": evaluationSchema(),
+                "verifier": ExploreContract.schema(type: "identity"),
+                "verifierCellEndpoint": ExploreContract.schema(type: "string"),
+                "evidenceBinding": ExploreContract.schema(type: "object"),
+                "issuedAt": ExploreContract.schema(type: "string"),
+                "validUntil": ExploreContract.schema(type: "string"),
+                "signature": ExploreContract.schema(type: "data")
+            ],
+            requiredKeys: ["receiptFormat", "evaluation", "verifier", "verifierCellEndpoint", "evidenceBinding", "issuedAt", "validUntil", "signature"],
+            description: "Portable verifier-signed TrustedIssuer evaluation receipt."
         )
     }
 
@@ -1975,10 +2053,35 @@ public class TrustedIssuerCell: GeneralCell {
                 "candidateVc": ExploreContract.schema(
                     type: "object",
                     description: "Candidate VC; maximum encoded JSON size is 1,048,576 bytes."
+                ),
+                "agreementCondition": ExploreContract.schema(
+                    type: "object",
+                    description: "Exact prove-condition snapshot bound into signed evaluation receipts."
                 )
             ],
             requiredKeys: ["issuerId", "contextId", "candidateVc"],
             description: "Evaluates a candidate credential against trust policy; candidateVc is limited to 1 MiB of encoded JSON."
+        )
+    }
+
+    private static func signedEvaluateSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "evaluationId": ExploreContract.schema(type: "string"),
+                "issuerId": ExploreContract.schema(type: "string"),
+                "contextId": ExploreContract.schema(type: "string"),
+                "requesterId": ExploreContract.schema(type: "string"),
+                "candidateVc": ExploreContract.schema(
+                    type: "object",
+                    description: "Candidate VC; maximum encoded JSON size is 1,048,576 bytes."
+                ),
+                "agreementCondition": ExploreContract.schema(
+                    type: "object",
+                    description: "Exact prove-condition snapshot bound into the signed receipt."
+                )
+            ],
+            requiredKeys: ["issuerId", "contextId", "candidateVc", "agreementCondition"],
+            description: "Evaluates a VC and binds the signed result to the exact credential, policy snapshot, requester, issuer, and agreement condition."
         )
     }
 

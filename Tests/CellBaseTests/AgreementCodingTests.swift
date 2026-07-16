@@ -259,6 +259,65 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertTrue(verified)
     }
 
+    func testOwnerSignedSnapshotNormalizesTemplateWithoutMutatingSource() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "owner-snapshot", makeNewIfNotFound: true)!
+        let template = Agreement(owner: owner)
+        template.name = "Owner archive agreement"
+        template.conditions = []
+        template.grants = [Grant(keypath: "document.body", permission: "r---")]
+
+        let contract = try await Contract.ownerSignedSnapshot(
+            agreement: template,
+            signer: owner,
+            domain: "private"
+        )
+
+        XCTAssertEqual(template.state, .template, "Signing must not mutate the editable source")
+        XCTAssertEqual(contract.agreement.state, .signed)
+        XCTAssertEqual(contract.agreement.signatories.map(\.uuid), [owner.uuid])
+        XCTAssertEqual(contract.signingSemantics, Contract.issuerOnlySubjectBoundSemantics)
+        let bindingIsValid = await contract.verifyAuthorizationBinding(
+            expectedIssuer: owner,
+            expectedSubject: owner,
+            expectedDomain: "private"
+        )
+        XCTAssertTrue(bindingIsValid)
+
+        let roundTripped = try JSONDecoder().decode(
+            Contract.self,
+            from: JSONEncoder().encode(contract)
+        )
+        XCTAssertEqual(roundTripped.signingSemantics, Contract.issuerOnlySubjectBoundSemantics)
+        let roundTrippedSignatureIsValid = await roundTripped.verifySignature()
+        XCTAssertTrue(roundTrippedSignatureIsValid)
+    }
+
+    func testOwnerSignedSnapshotRejectsTamperedStoredAgreement() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "owner-tamper", makeNewIfNotFound: true)!
+        let template = Agreement(owner: owner)
+        template.conditions = []
+        template.grants = [Grant(keypath: "document.body", permission: "r---")]
+        let contract = try await Contract.ownerSignedSnapshot(
+            agreement: template,
+            signer: owner,
+            domain: "private"
+        )
+
+        contract.agreement.name = "Tampered after signing"
+        let tamperedSignatureIsValid = await contract.verifySignature()
+        XCTAssertFalse(tamperedSignatureIsValid)
+    }
+
     func testContractRejectsFutureExpiredOverlongAndWrongDomainBindings() async throws {
         let previousVault = CellBase.defaultIdentityVault
         let vault = MockIdentityVault()
@@ -293,6 +352,15 @@ final class AgreementCodingTests: XCTestCase {
         )
         let expiredValid = await expired.verifySignature()
         XCTAssertFalse(expiredValid)
+        XCTAssertEqual(expired.temporalStatus(), .expired)
+        let expiredSignatureIsAuthentic = await expired.verifyCryptographicSignature()
+        XCTAssertTrue(expiredSignatureIsAuthentic)
+        let expiredHistoricalBindingIsValid = await expired.verifyHistoricalBinding(
+            expectedIssuer: owner,
+            expectedSubject: subject,
+            expectedDomain: "private"
+        )
+        XCTAssertTrue(expiredHistoricalBindingIsValid)
 
         agreement.duration = Int(Contract.maximumDuration) + 1
         let overlong = try await Contract.signed(
