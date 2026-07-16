@@ -110,18 +110,22 @@ private actor RecordingBridgeDelegate: BridgeDelegateProtocol {
 
 final class LightweightBridgeTransportTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
+    private var previousSecurityEventSink: CellSecurityEventSink?
     private var previousSendDataAsText = false
 
     override func setUp() {
         super.setUp()
         previousVault = CellBase.defaultIdentityVault
+        previousSecurityEventSink = CellBase.securityEventSink
         previousSendDataAsText = CellBase.sendDataAsText
         CellBase.defaultIdentityVault = MockIdentityVault()
+        CellBase.securityEventSink = nil
         CellBase.sendDataAsText = false
     }
 
     override func tearDown() {
         CellBase.defaultIdentityVault = previousVault
+        CellBase.securityEventSink = previousSecurityEventSink
         CellBase.sendDataAsText = previousSendDataAsText
         super.tearDown()
     }
@@ -182,6 +186,33 @@ final class LightweightBridgeTransportTests: XCTestCase {
         XCTAssertEqual(consumedResponses.first?.command, .response)
         XCTAssertNotNil(consumedCommands.first?.identity?.identityVault)
         XCTAssertNotNil(consumedResponses.first?.identity?.identityVault)
+    }
+
+    func testOversizedInboundPayloadIsRejectedBeforeDecode() async throws {
+        let socket = MockLightweightWebSocketClient()
+        let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
+        let delegate = RecordingBridgeDelegate()
+        let sink = InMemoryCellSecurityEventSink()
+        CellBase.securityEventSink = sink
+        transport.setDelegate(delegate)
+
+        let identity = TestFixtures.makeIdentity(displayName: "owner")
+        try await transport.setup(URL(string: "wss://bridge.example/cell")!, identity: identity)
+        let oversized = Data(
+            repeating: 0x20,
+            count: BridgeInboundPayloadValidator.defaultMaximumBytes + 1
+        )
+        await transport.client(socket, didReceive: oversized)
+
+        let consumedCommands = await delegate.consumedCommands
+        let consumedResponses = await delegate.consumedResponses
+        let pushedErrors = await delegate.pushedErrors
+        XCTAssertTrue(consumedCommands.isEmpty)
+        XCTAssertTrue(consumedResponses.isEmpty)
+        XCTAssertEqual(pushedErrors, ["Rejected invalid bridge payload"])
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.bridgePayloadTooLarge)
+        XCTAssertEqual(events.last?.resource.identifier, "lightweight-websocket")
     }
 
     func testIdentityVaultFallsBackToDefaultIdentityVault() async throws {

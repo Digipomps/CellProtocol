@@ -91,6 +91,9 @@ Vault-regel:
 - En VC-utsteder skal bevise kontroll over issuer-identiteten i dens eksakte
   home vault foer signering. Den ferdige credentialen skal verifiseres mot
   samme issuer-identitet foer den returneres.
+- Inngaaende bridge-JSON skal avvises paa byte- og nestinggrenser foer decode.
+  Avslaget skal gi redigert `transportRejected`-event; transporten skal ikke
+  tolke payloaden som authority eller fortsette dispatch etter avslag.
 
 ## Contracts Og Conditions
 

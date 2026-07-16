@@ -127,6 +127,21 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     }
     
     private func extractCommandFromData(_ data: Data) async {
+        do {
+            try BridgeInboundPayloadValidator().validate(data)
+        } catch let error as BridgeInboundPayloadError {
+            await CellBase.recordSecurityEvent(.bridgePayloadRejected(
+                transportIdentifier: "apple-websocket",
+                error: error
+            ))
+            await currentDelegate()?.pushError(
+                errorMessage: "Rejected invalid bridge payload",
+                error: nil
+            )
+            return
+        } catch {
+            return
+        }
         let decoder = JSONDecoder()
         if let bridgeCommand = try? decoder.decode(BridgeCommand.self, from: data),
            let delegate = currentDelegate() {

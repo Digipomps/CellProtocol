@@ -148,6 +148,9 @@ public enum CellSecurityReasonCode {
     public static let signingRateLimited = "signing_rate_limited"
     public static let bridgeQuarantined = "bridge_quarantined"
     public static let reauthenticationRequired = "reauthentication_required"
+    public static let bridgePayloadTooLarge = "bridge_payload_too_large"
+    public static let bridgePayloadTooDeep = "bridge_payload_too_deep"
+    public static let bridgePayloadMalformed = "bridge_payload_malformed"
 }
 
 public extension CellSecurityReplayDecision {
@@ -264,6 +267,32 @@ public extension CellSecurityEvent {
             reasonCode: reasonCode,
             userMessage: message,
             requiredAction: "allowlist_endpoint_or_use_local_configuration",
+            canAutoResolve: false
+        )
+    }
+
+    static func bridgePayloadRejected(
+        transportIdentifier: String,
+        error: BridgeInboundPayloadError
+    ) -> CellSecurityEvent {
+        let severity: CellSecuritySeverity
+        switch error {
+        case .tooLarge, .tooDeep:
+            severity = .high
+        case .malformedStructure:
+            severity = .medium
+        }
+        return CellSecurityEvent(
+            kind: .transportRejected,
+            severity: severity,
+            resource: CellSecurityResource(
+                kind: "bridgeTransport",
+                identifier: transportIdentifier,
+                action: "decode"
+            ),
+            reasonCode: error.reasonCode,
+            userMessage: "Bridge payload rejected before decoding.",
+            requiredAction: "send_bounded_valid_bridge_command",
             canAutoResolve: false
         )
     }

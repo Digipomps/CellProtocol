@@ -82,17 +82,21 @@ private enum AppleBridgeTransportTestError: Error {
 
 final class AppleBridgeTransportTests: XCTestCase {
     private var previousResolver: CellResolverProtocol?
+    private var previousSecurityEventSink: CellSecurityEventSink?
     private var previousSendDataAsText = false
 
     override func setUp() {
         super.setUp()
         previousResolver = CellBase.defaultCellResolver
+        previousSecurityEventSink = CellBase.securityEventSink
         previousSendDataAsText = CellBase.sendDataAsText
+        CellBase.securityEventSink = nil
         CellBase.sendDataAsText = false
     }
 
     override func tearDown() {
         CellBase.defaultCellResolver = previousResolver
+        CellBase.securityEventSink = previousSecurityEventSink
         CellBase.sendDataAsText = previousSendDataAsText
         super.tearDown()
     }
@@ -216,5 +220,30 @@ final class AppleBridgeTransportTests: XCTestCase {
         XCTAssertEqual(consumedCommands.map(\.cmd), [Command.get.rawValue, "futureCommand"])
         XCTAssertEqual(consumedCommands.last?.command, Command.none)
         XCTAssertEqual(consumedResponses.map(\.cmd), [Command.response.rawValue])
+    }
+
+    func testOversizedInboundPayloadIsRejectedBeforeDecode() async {
+        let socket = MockAppleWebSocketConnection()
+        let transport = AppleBridgeTransport(webSocketConnection: socket)
+        let delegate = RecordingAppleBridgeDelegate()
+        let sink = InMemoryCellSecurityEventSink()
+        CellBase.securityEventSink = sink
+        transport.setDelegate(delegate)
+
+        let oversized = Data(
+            repeating: 0x20,
+            count: BridgeInboundPayloadValidator.defaultMaximumBytes + 1
+        )
+        await transport.onMessage(connection: socket, data: oversized)
+
+        let consumedCommands = await delegate.consumedCommands
+        let consumedResponses = await delegate.consumedResponses
+        let pushedErrors = await delegate.pushedErrors
+        XCTAssertTrue(consumedCommands.isEmpty)
+        XCTAssertTrue(consumedResponses.isEmpty)
+        XCTAssertEqual(pushedErrors, ["Rejected invalid bridge payload"])
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.bridgePayloadTooLarge)
+        XCTAssertEqual(events.last?.resource.identifier, "apple-websocket")
     }
 }

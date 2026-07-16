@@ -8,18 +8,22 @@ import XCTest
 final class VaporBridgeTransportTests: XCTestCase {
     private var previousResolver: CellResolverProtocol?
     private var previousDocumentRootPath: String?
+    private var previousSecurityEventSink: CellSecurityEventSink?
     private var previousSendDataAsText = false
 
     override func setUp() {
         super.setUp()
         previousResolver = CellBase.defaultCellResolver
         previousDocumentRootPath = CellBase.documentRootPath
+        previousSecurityEventSink = CellBase.securityEventSink
         previousSendDataAsText = CellBase.sendDataAsText
+        CellBase.securityEventSink = nil
     }
 
     override func tearDown() {
         CellBase.defaultCellResolver = previousResolver
         CellBase.documentRootPath = previousDocumentRootPath
+        CellBase.securityEventSink = previousSecurityEventSink
         CellBase.sendDataAsText = previousSendDataAsText
         super.tearDown()
     }
@@ -147,6 +151,36 @@ final class VaporBridgeTransportTests: XCTestCase {
             makeNewIfNotFound: false
         )
         XCTAssertNotNil(reloadedFirstIdentity, "Switching back to the first root should reload its persisted vault.")
+    }
+
+    func testOversizedInboundPayloadIsRejectedBeforeDecode() async {
+        let transport = VaporBridgeTransport()
+        let sink = InMemoryCellSecurityEventSink()
+        CellBase.securityEventSink = sink
+        transport.setDelegate(RecordingBridgeDelegate(uuid: "vapor-payload-validator"))
+        let oversized = Data(
+            repeating: 0x20,
+            count: BridgeInboundPayloadValidator.defaultMaximumBytes + 1
+        )
+
+        do {
+            try await transport.extractCommand(oversized)
+            XCTFail("Expected oversized payload rejection")
+        } catch let error as BridgeInboundPayloadError {
+            XCTAssertEqual(
+                error,
+                .tooLarge(
+                    actualBytes: oversized.count,
+                    maximumBytes: BridgeInboundPayloadValidator.defaultMaximumBytes
+                )
+            )
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let events = await sink.snapshot()
+        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.bridgePayloadTooLarge)
+        XCTAssertEqual(events.last?.resource.identifier, "vapor-websocket")
     }
 }
 

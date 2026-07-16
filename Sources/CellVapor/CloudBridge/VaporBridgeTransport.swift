@@ -181,7 +181,20 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         await CellBase.defaultCellResolver?.unregisterEmitCell(uuid: delegate.uuid)
     }
     
-    private func extractCommand(_ incomingData: Data) async throws {
+    func extractCommand(_ incomingData: Data) async throws {
+        do {
+            try BridgeInboundPayloadValidator().validate(incomingData)
+        } catch let error as BridgeInboundPayloadError {
+            await CellBase.recordSecurityEvent(.bridgePayloadRejected(
+                transportIdentifier: "vapor-websocket",
+                error: error
+            ))
+            await currentDelegate()?.pushError(
+                errorMessage: "Rejected invalid bridge payload",
+                error: nil
+            )
+            throw error
+        }
         let command = try? JSONDecoder().decode(BridgeCommand.self, from: incomingData)
         let delegate = currentDelegate()
         guard let command = command,

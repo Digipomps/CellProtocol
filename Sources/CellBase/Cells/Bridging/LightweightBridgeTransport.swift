@@ -942,6 +942,18 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     private func handleIncomingData(_ data: Data) async {
+        do {
+            try BridgeInboundPayloadValidator().validate(data)
+        } catch let error as BridgeInboundPayloadError {
+            await CellBase.recordSecurityEvent(.bridgePayloadRejected(
+                transportIdentifier: "lightweight-websocket",
+                error: error
+            ))
+            await delegate?.pushError(errorMessage: "Rejected invalid bridge payload", error: nil)
+            return
+        } catch {
+            return
+        }
         guard let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),
               let delegate else {
             await self.delegate?.pushError(errorMessage: "Failed to decode bridge command", error: nil)
