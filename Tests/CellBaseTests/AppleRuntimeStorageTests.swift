@@ -84,4 +84,25 @@ final class AppleRuntimeStorageTests: XCTestCase {
         XCTAssertEqual(loaded?.uuid, cell.uuid)
         XCTAssertEqual(loaded?.storedOwnerIdentity.uuid, owner.uuid)
     }
+
+    func testAppleFileSystemStorageRejectsPathTraversal() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppleStorageTraversal-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        CellBase.documentRootPath = root.path
+
+        var configuration = CellConfiguration(name: "Traversal probe")
+        configuration.uuid = "traversal-probe"
+        let escapeName = "escaped-cell-\(UUID().uuidString)"
+        let escapedURL = root
+            .appendingPathComponent(escapeName)
+            .appendingPathComponent("typedCell.json")
+
+        XCTAssertThrowsError(try FileSystemCellStorage().storeCell(
+            cellName: "CellConfiguration",
+            cell: configuration,
+            uuid: "../\(escapeName)"
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: escapedURL.path))
+    }
 }

@@ -32,7 +32,10 @@ extension GeneralCell {
     }
     
     public func getCellDirectory() throws -> URL {
-        let directoryURL = CellVapor.getCellsDocumentsDirectory().appending(path: self.name)
+        let directoryURL = try CellStoragePathPolicy.component(
+            self.name,
+            under: CellVapor.getCellsDocumentsDirectory()
+        )
         let directory = directoryURL.path.cString(using: .utf8)
         
         if !directoryExists(directory) {
@@ -45,22 +48,25 @@ extension GeneralCell {
     }
     
     public func getFileDataInCellDirectory(filename: String) async throws -> Data {
-        let directoryURL = CellVapor.getCellsDocumentsDirectory().appending(path: self.name)
-        let fileURL = directoryURL.appending(path: filename)
+        let directoryURL = try getCellDirectory()
+        let fileURL = try CellStoragePathPolicy.filename(filename, under: directoryURL)
         let fileData = try Data(contentsOf: fileURL)
         return fileData
     }
 
     public func fileExistsInCellDirectory(filename: String) -> Bool {
-        let fileURL = CellVapor.getCellsDocumentsDirectory()
-            .appending(path: self.name)
-            .appending(path: filename)
+        guard let directoryURL = try? CellStoragePathPolicy.component(
+            self.name,
+            under: CellVapor.getCellsDocumentsDirectory()
+        ), let fileURL = try? CellStoragePathPolicy.filename(filename, under: directoryURL) else {
+            return false
+        }
         return FileManager.default.fileExists(atPath: fileURL.path)
     }
     
     public func writeFileDataInCellDirectory(fileData: Data, filename: String) async throws {
         let directoryURL = try getCellDirectory()
-        let fileURL = directoryURL.appending(path: filename)
-        try fileData.write(to: fileURL)
+        let fileURL = try CellStoragePathPolicy.filename(filename, under: directoryURL)
+        try fileData.write(to: fileURL, options: [.atomic])
     }
 }

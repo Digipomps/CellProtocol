@@ -18,8 +18,11 @@ public struct FileSystemCellStorage: CellStorage {
     public init() {}
     
     public func loadEmitCell(with uuid: String, decoder: CellJSONCoder) throws -> Emit {
-        let cellURL = CellApple.getCellsDocumentsDirectory().appendingPathComponent(uuid)
-        let typedCellURL = cellURL.appendingPathComponent(dataFilename)
+        let cellURL = try CellStoragePathPolicy.component(
+            uuid,
+            under: CellApple.getCellsDocumentsDirectory()
+        )
+        let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: cellURL)
         let stored = try Data(contentsOf: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(stored: stored, uuid: uuid)
         
@@ -32,8 +35,11 @@ public struct FileSystemCellStorage: CellStorage {
     
     // Loads cell relative to documentRootPath
     public func loadEmitCell(at path: String, decoder: CellJSONCoder) throws -> Emit {
-        let cellURL = CellApple.getDocumentsDirectory().appendingPathComponent(path)
-        let typedCellURL = cellURL.appendingPathComponent(dataFilename)
+        let cellURL = try CellStoragePathPolicy.relativePath(
+            path,
+            under: CellApple.getDocumentsDirectory()
+        )
+        let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: cellURL)
         let stored = try Data(contentsOf: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(
             stored: stored,
@@ -48,15 +54,15 @@ public struct FileSystemCellStorage: CellStorage {
     }
     
     public func loadEmitCell(with cellURL: URL, decoder: CellJSONCoder) throws -> Emit {
-//        guard let documentRootPath = CellBase.documentRootPath else {
-//            throw StorageError.noDocumentRoot
-//        }
-        // Check that url is building on documentRoot Path?
-        let typedCellURL = cellURL.appendingPathComponent(dataFilename)
+        let confinedCellURL = try CellStoragePathPolicy.existingURL(
+            cellURL,
+            under: CellApple.getDocumentsDirectory()
+        )
+        let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: confinedCellURL)
         let stored = try Data(contentsOf: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(
             stored: stored,
-            uuid: cellURL.lastPathComponent
+            uuid: confinedCellURL.lastPathComponent
         )
         let cell = try decoder.decodeEmitCell(from: cellJson)
         guard let cell = cell else {
@@ -86,7 +92,7 @@ public struct FileSystemCellStorage: CellStorage {
             uuid: uuid,
             options: options
         )
-        let directoryURL = cellDirectoryURL(uuid: uuid)
+        let directoryURL = try cellDirectoryURL(uuid: uuid)
         let directory = directoryURL.path.cString(using: .utf8)
         if !directoryExists(directory) {
             if mkdir_p(directory) != 0 {
@@ -94,13 +100,16 @@ public struct FileSystemCellStorage: CellStorage {
                 throw StorageError.unableToCreateDirectory
             }
         }
-        try persistedData.write(to: directoryURL.appendingPathComponent(dataFilename))
+        let fileURL = try CellStoragePathPolicy.filename(dataFilename, under: directoryURL)
+        try persistedData.write(to: fileURL, options: [.atomic])
   
     }
     
-    private func cellDirectoryURL(uuid: String) -> URL {
-        let cellDirectoryURL = CellApple.getCellsDocumentsDirectory().appendingPathComponent(uuid)
-        return cellDirectoryURL
+    private func cellDirectoryURL(uuid: String) throws -> URL {
+        try CellStoragePathPolicy.component(
+            uuid,
+            under: CellApple.getCellsDocumentsDirectory()
+        )
     }
     func getDocumentsDirectory() -> URL {
         CellApple.getDocumentsDirectory()

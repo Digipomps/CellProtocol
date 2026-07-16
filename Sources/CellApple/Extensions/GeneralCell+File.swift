@@ -41,7 +41,10 @@ extension GeneralCell {
     func getCellDirectory() throws -> URL {
         
         
-        let directoryURL = CellApple.getCellsDocumentsDirectory().appending(path: self.name)
+        let directoryURL = try CellStoragePathPolicy.component(
+            self.name,
+            under: CellApple.getCellsDocumentsDirectory()
+        )
         let directory = directoryURL.path
         
         let fileManager = FileManager.default
@@ -56,16 +59,19 @@ extension GeneralCell {
     }
     
     func getFileDataInCellDirectory(filename: String) async throws -> Data {
-        let directoryURL = CellApple.getCellsDocumentsDirectory().appending(path: self.name)
-        let fileURL = directoryURL.appending(path: filename)
+        let directoryURL = try getCellDirectory()
+        let fileURL = try CellStoragePathPolicy.filename(filename, under: directoryURL)
         let fileData = try Data(contentsOf: fileURL)
         return fileData
     }
 
     func fileExistsInCellDirectory(filename: String) -> Bool {
-        let fileURL = CellApple.getCellsDocumentsDirectory()
-            .appending(path: self.name)
-            .appending(path: filename)
+        guard let directoryURL = try? CellStoragePathPolicy.component(
+            self.name,
+            under: CellApple.getCellsDocumentsDirectory()
+        ), let fileURL = try? CellStoragePathPolicy.filename(filename, under: directoryURL) else {
+            return false
+        }
         return FileManager.default.fileExists(atPath: fileURL.path)
     }
     
@@ -75,7 +81,7 @@ extension GeneralCell {
         }
 //        print("GeneralCell.writeFileDataInCellDirectory data:\n\(String(describing: String(data:fileData, encoding: .utf8 )))")
         let directoryURL = try getCellDirectory()
-        let fileURL = directoryURL.appending(path: filename)
-        try fileData.write(to: fileURL)
+        let fileURL = try CellStoragePathPolicy.filename(filename, under: directoryURL)
+        try fileData.write(to: fileURL, options: [.atomic])
     }
 }

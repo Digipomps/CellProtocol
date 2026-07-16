@@ -169,6 +169,19 @@ SecurityWorkbench skal brukes som menneskelig operasjonsflate:
 SecurityWorkbench skal aldri vaere policy-authority. Resolver/GeneralCell,
 vault og signerte contracts/proofs er fortsatt kilden til authority.
 
+## Persistent Lagring Og Filstier
+
+Persisted-cell paths skal bygges med `CellStoragePathPolicy` under runtime-eid
+storage root. Celle-ID, cellenavn, relativ sti og filnavn er ubetrodd input og
+skal ikke sendes direkte til `URL.appendingPathComponent`.
+
+- Avvis absolutte stier, tomme segmenter, `.`/`..`, separatorer og NUL.
+- Verifiser at standardisert og symlink-resolvet sti fortsatt ligger under
+  riktig storage root.
+- Bruk atomisk filskriving for typed-cell payloads.
+- Test både vanlig traversal og symlink-flukt, og verifiser at ingen fil blir
+  opprettet utenfor storage root.
+
 ## Minimumstester
 
 For hver sikkerhetsendring:

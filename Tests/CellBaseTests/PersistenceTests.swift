@@ -118,6 +118,56 @@ final class PersistenceTests: XCTestCase {
         }
     }
 
+    func testCellStoragePathPolicyRejectsTraversalAndSymlinkEscape() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cell-storage-path-policy-\(UUID().uuidString)", isDirectory: true)
+        let storageRoot = tempRoot.appendingPathComponent("storage", isDirectory: true)
+        let outsideRoot = tempRoot.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        XCTAssertThrowsError(try CellStoragePathPolicy.component("..", under: storageRoot))
+        XCTAssertThrowsError(try CellStoragePathPolicy.component("nested/name", under: storageRoot))
+        XCTAssertThrowsError(try CellStoragePathPolicy.relativePath("../outside", under: storageRoot))
+        XCTAssertThrowsError(try CellStoragePathPolicy.relativePath("/absolute", under: storageRoot))
+        XCTAssertThrowsError(try CellStoragePathPolicy.existingURL(outsideRoot, under: storageRoot))
+
+        let symlink = storageRoot.appendingPathComponent("linked-outside", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: outsideRoot)
+        XCTAssertThrowsError(try CellStoragePathPolicy.existingURL(symlink, under: storageRoot))
+    }
+
+    func testFileSystemStorageRejectsPathTraversal() async throws {
+        try await withSeparateTempHomeAndDocumentRoot { _, documentRoot in
+            let storage = FileSystemCellStorage()
+            var configuration = CellConfiguration(name: "Traversal probe")
+            configuration.uuid = "traversal-probe"
+            let escapeName = "escaped-cell-\(UUID().uuidString)"
+            let escapedURL = documentRoot
+                .deletingLastPathComponent()
+                .appendingPathComponent(escapeName)
+                .appendingPathComponent("typedCell.json")
+
+            XCTAssertThrowsError(try storage.storeCell(
+                cellName: "CellConfiguration",
+                cell: configuration,
+                uuid: "../\(escapeName)"
+            ))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: escapedURL.path))
+
+            let decoder = CellJSONCoder()
+            XCTAssertThrowsError(try storage.loadEmitCell(
+                at: "../\(escapeName)",
+                decoder: decoder
+            ))
+            XCTAssertThrowsError(try storage.loadEmitCell(
+                with: documentRoot.deletingLastPathComponent(),
+                decoder: decoder
+            ))
+        }
+    }
+
     func testLoadMissingCellReturnsNil() async throws {
         try await withTempHome { _ in
             let storage = FileSystemCellStorage()
