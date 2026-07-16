@@ -46,6 +46,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     private var mainSecret: Data?
     private var testHostKeychainFallbackData = [String: Data]()
     private let tag = "me.entity.key"
+    private let vaultReference = "cellapple.identityvault:\(IdentityVault.keychainGenericPasswordService)"
     
     private var initializer: (() -> ())?
     
@@ -110,6 +111,10 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         initializationTask = task
         await task.value
         return self
+    }
+
+    public func identityVaultReference() async -> String? {
+        vaultReference
     }
 
     private func finishInitialization() {
@@ -252,6 +257,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     
     public func addIdentity(identity: inout Identity, for identityContext: String) async {
         identity.identityVault = self
+        identity.homeVaultReference = vaultReference
         if let targetUUid = identitiesDictionary[identityContext] {
             if targetUUid == identity.uuid, var vaultIdentity = identitiesUUIDDictionary[targetUUid] {
                 vaultIdentity = await healedVaultIdentityIfNeeded(vaultIdentity, saveAfterHealing: false)
@@ -347,12 +353,14 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 // Testing / Playing
                 let identity = healedVaultIdentity.identity
                 identity.identityVault = self
+                identity.homeVaultReference = vaultReference
                 return identity
             }
         }
         if makeNewIfNotFound {
            var identity = Identity()
            identity.identityVault = self
+           identity.homeVaultReference = vaultReference
             await addIdentity(identity: &identity, for: identityContext)
            return identity
        }
@@ -366,6 +374,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         let healedVaultIdentity = await healedVaultIdentityIfNeeded(currentVaultIdentity)
         let identity = healedVaultIdentity.identity
         identity.identityVault = self
+        identity.homeVaultReference = vaultReference
         return identity
     }
     
@@ -377,6 +386,8 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     }
     
     public func saveIdentity(_ identity: Identity) async {
+        identity.identityVault = self
+        identity.homeVaultReference = vaultReference
         if var vaultIdentity = vaultIdentityWithUUID(identity.uuid) {
             vaultIdentity.update(with: identity)
             identitiesUUIDDictionary[identity.uuid] = vaultIdentity

@@ -199,6 +199,30 @@ final class AppleIdentityVaultKeyStorageTests: XCTestCase {
         XCTAssertTrue(verified)
     }
 
+    func testIdentityLookupBindsHomeVaultAndProvesControl() async throws {
+        let identityContext = "apple-vault-control-\(UUID().uuidString)"
+        let vault = IdentityVault.shared
+
+        guard let identity = await vault.identity(for: identityContext, makeNewIfNotFound: true) else {
+            return XCTFail("Expected a vault-owned identity")
+        }
+        defer { deletePrivateKeyIfPresent(for: identity.uuid) }
+        if identity.signingPublicKeyFingerprint == nil {
+            throw XCTSkip("Keychain-backed key generation is unavailable in this test environment")
+        }
+
+        let vaultReference = await vault.identityVaultReference()
+        let provedControl = await IdentitySigningChallenge.proveControl(
+            of: identity,
+            domain: "apple-vault",
+            resource: "remote-endpoint",
+            action: "resolve",
+            audience: "AppleIdentityVaultKeyStorageTests"
+        )
+        XCTAssertEqual(identity.homeVaultReference, vaultReference)
+        XCTAssertTrue(provedControl)
+    }
+
     func testSignMessageForIdentityRequiresPresentedPublicKeyToMatchStoredIdentity() async throws {
         let ownerContext = "apple-vault-owner-\(UUID().uuidString)"
         let forgedContext = "apple-vault-forged-\(UUID().uuidString)"
