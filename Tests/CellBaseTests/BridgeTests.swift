@@ -10,6 +10,35 @@ import OpenCombine
 @testable import CellBase
 
 final class BridgeTests: XCTestCase {
+    private actor RemoteRouteInstallationGate {
+        private var installed: (host: String, generation: UInt64)?
+        private var arrivalWaiters = [CheckedContinuation<Void, Never>]()
+        private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+        func arriveAndWait(host: String, generation: UInt64) async {
+            installed = (host, generation)
+            let waiters = arrivalWaiters
+            arrivalWaiters.removeAll(keepingCapacity: false)
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+
+        func waitForInstallation() async -> (host: String, generation: UInt64) {
+            if let installed { return installed }
+            await withCheckedContinuation { continuation in
+                arrivalWaiters.append(continuation)
+            }
+            return installed!
+        }
+
+        func release() {
+            releaseContinuation?.resume()
+            releaseContinuation = nil
+        }
+    }
+
     private actor BlockingRouteSetupGate {
         private var setupURLs = [URL]()
         private var setupIdentities = [Identity]()
@@ -1535,6 +1564,97 @@ final class BridgeTests: XCTestCase {
             XCTAssertEqual(setupURLs[0].path.split(separator: "/").first.map(String.init), "bridge-a")
             XCTAssertEqual(setupURLs[1].path.split(separator: "/").first.map(String.init), "bridge-b")
         }
+    }
+
+    func testCellResolverPinnedRouteFailsInsteadOfRetryingThroughReplacement() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        await BlockingRouteBridgeTransport.setupGate.reset()
+        try await resolver.registerTransport(BlockingRouteBridgeTransport.self, for: "wss")
+        let host = "route-pinned-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let resolvedIdentity = await vault.identity(
+            for: "route-pinned-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(resolvedIdentity)
+        let routeA = RemoteCellHostRoute(websocketEndpoint: "BridgeA", schemePreference: .wss)
+        let routeB = RemoteCellHostRoute(websocketEndpoint: "bridgeb", schemePreference: .wss)
+
+        let pinnedResolution = Task {
+            try await resolver.cellAtEndpoint(
+                endpoint: endpoint,
+                requester: identity,
+                remoteRoute: routeA
+            )
+        }
+        try await waitForBlockingRouteSetupCount(1)
+        resolver.registerRemoteCellHost(host, route: routeB)
+        resolver.registerRemoteCellHost(host, route: routeA)
+        await BlockingRouteBridgeTransport.setupGate.releaseNext()
+
+        do {
+            _ = try await pinnedResolution.value
+            XCTFail("Pinned resolution must fail after route replacement, even when the same route is restored")
+        } catch {
+            // The exact internal route error is intentionally not part of the
+            // public API; the invariant is failure without a replacement retry.
+        }
+        let setupURLs = await BlockingRouteBridgeTransport.setupGate.recordedSetupURLs()
+        XCTAssertEqual(setupURLs.count, 1)
+        XCTAssertEqual(
+            setupURLs.first?.path.split(separator: "/").first.map(String.init),
+            "BridgeA"
+        )
+    }
+
+    func testCellResolverPinnedRouteCapturesItsOwnGenerationAtomically() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "route-installation-\(UUID().uuidString.lowercased()).example"
+        let endpoint = "cell://\(host)/RuntimeSurface"
+        let identityValue = await vault.identity(
+            for: "route-installation-owner",
+            makeNewIfNotFound: true
+        )
+        let identity = try XCTUnwrap(identityValue)
+        let routeA = RemoteCellHostRoute(websocketEndpoint: "BridgeA", schemePreference: .wss)
+        let routeB = RemoteCellHostRoute(websocketEndpoint: "bridgeb", schemePreference: .wss)
+        let installationGate = RemoteRouteInstallationGate()
+        resolver.setRemoteRouteInstalledHookForTesting { installedHost, generation in
+            await installationGate.arriveAndWait(host: installedHost, generation: generation)
+        }
+        defer {
+            resolver.setRemoteRouteInstalledHookForTesting(nil)
+        }
+
+        let pinnedResolution = Task {
+            try await resolver.cellAtEndpoint(
+                endpoint: endpoint,
+                requester: identity,
+                remoteRoute: routeA
+            )
+        }
+        let installed = await installationGate.waitForInstallation()
+        XCTAssertEqual(installed.host, host)
+        resolver.registerRemoteCellHost(host, route: routeB)
+        resolver.registerRemoteCellHost(host, route: routeA)
+        resolver.setRemoteRouteInstalledHookForTesting(nil)
+        await installationGate.release()
+
+        do {
+            _ = try await pinnedResolution.value
+            XCTFail("Pinned resolution must retain its own generation across register-to-resolve ABA churn")
+        } catch {
+            // Expected: the route text matches again, but its generation does not.
+        }
+        XCTAssertTrue(RecordingBridgeTransport.recordedSetupURLs().isEmpty)
     }
 
     func testCellResolverRemoteBridgeUsesOwnedPrincipalSnapshotAcrossCallerMutation() async throws {
