@@ -75,12 +75,23 @@ public enum JOSEJWSVerifier {
         algorithm: String,
         using jwk: JOSEJWK
     ) throws -> Bool {
+        guard jwk.algorithm == nil || jwk.algorithm == algorithm,
+              jwk.publicKeyUse == nil || jwk.publicKeyUse == "sig",
+              jwk.keyOperations == nil || jwk.keyOperations?.contains("verify") == true else {
+            throw JOSEJWSVerificationError.invalidKeyMaterial
+        }
         switch algorithm {
         case "EdDSA":
-            guard let x = jwk.x else {
+            guard jwk.keyType == "OKP",
+                  jwk.curve == "Ed25519",
+                  jwk.y == nil,
+                  let x = jwk.x else {
                 throw JOSEJWSVerificationError.missingKeyMaterial
             }
             let publicKey = try JOSEBase64URL.decode(x)
+            guard publicKey.count == 32 else {
+                throw JOSEJWSVerificationError.invalidKeyMaterial
+            }
             return try verify(
                 signingInput: signingInput,
                 signature: signature,
@@ -89,11 +100,32 @@ public enum JOSEJWSVerifier {
                 curveType: .Curve25519
             )
         case "ES256", "ES384", "ES512":
-            guard let x = jwk.x, let y = jwk.y else {
+            let expectedCurve: String
+            let coordinateLength: Int
+            switch algorithm {
+            case "ES256":
+                expectedCurve = "P-256"
+                coordinateLength = 32
+            case "ES384":
+                expectedCurve = "P-384"
+                coordinateLength = 48
+            case "ES512":
+                expectedCurve = "P-521"
+                coordinateLength = 66
+            default:
+                throw JOSEJWSVerificationError.unsupportedAlgorithm(algorithm)
+            }
+            guard jwk.keyType == "EC",
+                  jwk.curve == expectedCurve,
+                  let x = jwk.x,
+                  let y = jwk.y else {
                 throw JOSEJWSVerificationError.missingKeyMaterial
             }
             let xData = try JOSEBase64URL.decode(x)
             let yData = try JOSEBase64URL.decode(y)
+            guard xData.count == coordinateLength, yData.count == coordinateLength else {
+                throw JOSEJWSVerificationError.invalidKeyMaterial
+            }
             let x963Representation = Data([0x04]) + xData + yData
 
             let curveType: CurveType
@@ -127,33 +159,60 @@ public enum JOSEJWSVerifier {
     ) throws -> Bool {
         switch algorithm {
         case "EdDSA":
-            guard curveType == .Curve25519 else {
+            guard curveType == .Curve25519,
+                  publicKey.count == 32,
+                  signature.count == 64 else {
                 throw JOSEJWSVerificationError.invalidKeyMaterial
             }
             let signingKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
             return signingKey.isValidSignature(signature, for: signingInput)
         case "ES256":
+            guard curveType == .P256,
+                  publicKey.count == 32 || publicKey.count == 33 || publicKey.count == 65,
+                  signature.count == 64 else {
+                throw JOSEJWSVerificationError.invalidKeyMaterial
+            }
             let signingKey: P256.Signing.PublicKey
-            if let compactKey = try? P256.Signing.PublicKey(compactRepresentation: publicKey) {
+            if publicKey.count == 32,
+               let compactKey = try? P256.Signing.PublicKey(compactRepresentation: publicKey) {
                 signingKey = compactKey
+            } else if publicKey.count == 33,
+               let compressedKey = try? P256.Signing.PublicKey(compressedRepresentation: publicKey) {
+                signingKey = compressedKey
             } else {
                 signingKey = try P256.Signing.PublicKey(x963Representation: publicKey)
             }
             let parsedSignature = try P256.Signing.ECDSASignature(rawRepresentation: signature)
             return signingKey.isValidSignature(parsedSignature, for: signingInput)
         case "ES384":
+            guard publicKey.count == 48 || publicKey.count == 49 || publicKey.count == 97,
+                  signature.count == 96 else {
+                throw JOSEJWSVerificationError.invalidKeyMaterial
+            }
             let signingKey: P384.Signing.PublicKey
-            if let compactKey = try? P384.Signing.PublicKey(compactRepresentation: publicKey) {
+            if publicKey.count == 48,
+               let compactKey = try? P384.Signing.PublicKey(compactRepresentation: publicKey) {
                 signingKey = compactKey
+            } else if publicKey.count == 49,
+               let compressedKey = try? P384.Signing.PublicKey(compressedRepresentation: publicKey) {
+                signingKey = compressedKey
             } else {
                 signingKey = try P384.Signing.PublicKey(x963Representation: publicKey)
             }
             let parsedSignature = try P384.Signing.ECDSASignature(rawRepresentation: signature)
             return signingKey.isValidSignature(parsedSignature, for: signingInput)
         case "ES512":
+            guard publicKey.count == 66 || publicKey.count == 67 || publicKey.count == 133,
+                  signature.count == 132 else {
+                throw JOSEJWSVerificationError.invalidKeyMaterial
+            }
             let signingKey: P521.Signing.PublicKey
-            if let compactKey = try? P521.Signing.PublicKey(compactRepresentation: publicKey) {
+            if publicKey.count == 66,
+               let compactKey = try? P521.Signing.PublicKey(compactRepresentation: publicKey) {
                 signingKey = compactKey
+            } else if publicKey.count == 67,
+               let compressedKey = try? P521.Signing.PublicKey(compressedRepresentation: publicKey) {
+                signingKey = compressedKey
             } else {
                 signingKey = try P521.Signing.PublicKey(x963Representation: publicKey)
             }

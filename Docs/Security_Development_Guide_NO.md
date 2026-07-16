@@ -85,6 +85,9 @@ Vault-regel:
 - Rate-limit og andre containment scopes skal inkludere public key fingerprint
   og domain der dette finnes. Ikke lag defensive state som bare skiller paa
   UUID naar noekkelbinding finnes.
+- JOSE/JWK-verifikasjon skal binde requested `alg` til JWK `alg`, `kty`, `crv`,
+  `use` og `key_ops`, og avvise feil koordinat- eller signaturlengde. En EC-key
+  for en annen kurve skal aldri proeves som om den var P-256.
 
 ## Contracts Og Conditions
 
