@@ -88,6 +88,9 @@ Vault-regel:
 - JOSE/JWK-verifikasjon skal binde requested `alg` til JWK `alg`, `kty`, `crv`,
   `use` og `key_ops`, og avvise feil koordinat- eller signaturlengde. En EC-key
   for en annen kurve skal aldri proeves som om den var P-256.
+- En VC-utsteder skal bevise kontroll over issuer-identiteten i dens eksakte
+  home vault foer signering. Den ferdige credentialen skal verifiseres mot
+  samme issuer-identitet foer den returneres.
 
 ## Contracts Og Conditions
 

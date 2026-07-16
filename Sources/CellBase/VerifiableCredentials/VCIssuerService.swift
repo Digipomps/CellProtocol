@@ -10,30 +10,56 @@
 
 import Foundation
 
-/*
- Issuer takes an Identity or DID and a claim and mint a VC
- 
- */
+enum VCIssuerServiceError: Error, Equatable {
+    case issuerControlProofRequired
+    case generatedCredentialFailedVerification
+}
 
 struct VCIssuerService {
-    
-    func mintVC(for identity: Identity, claiming claim: ValueType, type: String ) async throws -> VCClaim {
+
+    func mintVC(
+        for identity: Identity,
+        claiming claim: ValueType,
+        type: String,
+        issuerIdentity: Identity
+    ) async throws -> VCClaim {
         if case let .object(claimObject) = claim {
-            return try await mintVC(for: identity, claiming: claimObject, type: type)
+            return try await mintVC(
+                for: identity,
+                claiming: claimObject,
+                type: type,
+                issuerIdentity: issuerIdentity
+            )
         }
         throw ValueTypeError.unexpectedValueType
     }
-    
 
-    func mintVC(for identity: Identity, claiming claim: Object, type: String ) async throws -> VCClaim {
-        let issuerIdentity = Identity() // An identity representing the Issuer Entity. Use same for same type of claim
-        
-        // verifiy credential subject before signing - how?
-        
-        
-        var verifiableClaim = try await VCClaim(type: type, issuerIdentity: issuerIdentity, subjectIdentity: identity, credentialSubject: claim)
-        
+    func mintVC(
+        for identity: Identity,
+        claiming claim: Object,
+        type: String,
+        issuerIdentity: Identity
+    ) async throws -> VCClaim {
+        guard await IdentitySigningChallenge.proveControl(
+            of: issuerIdentity,
+            domain: "VerifiableCredentials",
+            resource: "cell:///identity/\(identity.uuid)/claims",
+            action: "issue:\(type)",
+            audience: "VCIssuerService"
+        ) else {
+            throw VCIssuerServiceError.issuerControlProofRequired
+        }
+
+        var verifiableClaim = try await VCClaim(
+            type: type,
+            issuerIdentity: issuerIdentity,
+            subjectIdentity: identity,
+            credentialSubject: claim
+        )
+        try await verifiableClaim.generateProof(issuerIdentity: issuerIdentity)
+        guard try await verifiableClaim.verify(issuer: issuerIdentity) else {
+            throw VCIssuerServiceError.generatedCredentialFailedVerification
+        }
         return verifiableClaim
     }
-    
 }
