@@ -24,6 +24,30 @@ final class EntityScannerCellContractTests: XCTestCase {
         super.tearDown()
     }
 
+    func testScannerPeerDisplayNameStaysInsideMultipeerConnectivityBoundary() {
+        let longASCIIName = String(repeating: "a", count: 80)
+        let normalizedASCIIName = ScannerService.peerDisplayName(displayName: longASCIIName)
+        XCTAssertEqual(normalizedASCIIName, String(repeating: "a", count: 63))
+        XCTAssertEqual(normalizedASCIIName.utf8.count, 63)
+
+        let familyEmoji = "👨‍👩‍👧‍👦"
+        let longUnicodeName = String(repeating: familyEmoji, count: 8)
+        let normalizedUnicodeName = ScannerService.peerDisplayName(displayName: longUnicodeName)
+        XCTAssertFalse(normalizedUnicodeName.isEmpty)
+        XCTAssertLessThanOrEqual(normalizedUnicodeName.utf8.count, 63)
+        XCTAssertTrue(normalizedUnicodeName.allSatisfy { String($0) == familyEmoji })
+
+        let combiningCharacter = "e\u{301}"
+        let normalizedCombiningName = ScannerService.peerDisplayName(
+            displayName: String(repeating: combiningCharacter, count: 40)
+        )
+        XCTAssertLessThanOrEqual(normalizedCombiningName.utf8.count, 63)
+        XCTAssertTrue(normalizedCombiningName.allSatisfy { String($0) == combiningCharacter })
+
+        XCTAssertEqual(ScannerService.peerDisplayName(displayName: "  \n"), "HAVEN")
+        XCTAssertEqual(ScannerService.peerDisplayName(displayName: ""), "HAVEN")
+    }
+
     func testEntityScannerContractsAdvertiseCapabilitiesAndContactRequest() async throws {
         CellBase.exploreContractEnforcementMode = .strict
         let vault = MockIdentityVault()

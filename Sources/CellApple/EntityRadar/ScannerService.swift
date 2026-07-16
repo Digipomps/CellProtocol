@@ -58,6 +58,31 @@ private enum ScannerServiceError: Error {
 // Consider different name
 class ScannerService :  NSObject, ObservableObject {
 
+    private static let maximumPeerDisplayNameUTF8Bytes = 63
+
+    /// `MCPeerID` raises an Objective-C exception, rather than returning an
+    /// error, when its display name is empty or exceeds 63 UTF-8 bytes. Keep
+    /// arbitrary identity profile names outside that crash boundary. An empty
+    /// profile name uses a non-identifying product label; session discovery
+    /// metadata remains responsible for transport correlation.
+    static func peerDisplayName(displayName: String) -> String {
+        let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = trimmedDisplayName.isEmpty ? "HAVEN" : trimmedDisplayName
+
+        var normalized = ""
+        var utf8ByteCount = 0
+        for character in candidate {
+            let characterByteCount = String(character).utf8.count
+            guard utf8ByteCount + characterByteCount <= maximumPeerDisplayNameUTF8Bytes else {
+                break
+            }
+            normalized.append(character)
+            utf8ByteCount += characterByteCount
+        }
+
+        return normalized.isEmpty ? "HAVEN" : normalized
+    }
+
     static var platformSupportsNearbyPrecision: Bool {
 #if os(iOS)
         NISession.isSupported
@@ -200,7 +225,7 @@ class ScannerService :  NSObject, ObservableObject {
     }
 
     init(owner: Identity, serviceDicoveryInfoDict: [String : String] = ["interest" : "*"]) {
-        myPeerId = MCPeerID(displayName: owner.displayName)
+        myPeerId = MCPeerID(displayName: Self.peerDisplayName(displayName: owner.displayName))
         
         self.owner = owner
         
