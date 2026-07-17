@@ -243,6 +243,18 @@ Use `ContractProbeCell` when a target must be probed through the runtime
 surface in staging or post-deploy environments. Use `XCTest` for deterministic
 local and CI verification.
 
+## 🛟 User-owned data resilience
+
+The `v0` protocol foundation for a private, owner-signed representation
+inventory, encrypted 4+2 backup, recovery bootstrap, and health evaluation is
+documented in:
+
+- `Docs/UserOwnedDataResilience_Architecture_NO.md`
+
+The document distinguishes implemented CellProtocol contracts from the
+custodian adapters, scheduled verification/repair, independent recovery vaults,
+and cross-scaffold deployment still required before a production backup claim.
+
 ## 🪪 VC Interoperability Work
 
 Current planning and gap documents for standards-facing Verifiable Credentials

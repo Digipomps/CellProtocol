@@ -74,6 +74,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "signedAgreementEntity")
         self.agreementTemplate.ensureGrant("-w--", for: "signedAgreementEntity.commit")
         self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
+        self.agreementTemplate.ensureGrant("r--s", for: "dataInventory")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
@@ -162,6 +163,14 @@ public class EntityAnchorCell: GeneralCell {
             } else {
                 throw KeypathStorageErrors.denied
             }
+        })
+
+        await addInterceptForGet(requester: owner, key: "dataInventory", getValueIntercept: {
+            keypath, requester in
+            if await self.validateAccess("r---", at: "dataInventory", for: requester) {
+                return try self.storage.get(keypath: keypath)
+            }
+            throw KeypathStorageErrors.denied
         })
 
         await addInterceptForGet(requester: owner, key: "chronicle", getValueIntercept: {
@@ -425,6 +434,7 @@ public class EntityAnchorCell: GeneralCell {
             description: .string("Verifies and immutably persists an owner-signed Contract, then returns an owner-signed read-after-write receipt.")
         )
         await registerExploreContract(requester: requester, key: "entityRepresentation", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity representation."))
+        await registerExploreContract(requester: requester, key: "dataInventory", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the private owner-signed inventory of authorized data representations. Updates are committed through the owner-authorized Entity authority journal."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .set, input: storedValue, returns: identityLinkResult, permissions: ["-w--"], required: false, flowEffects: [identityLinkEffect], description: .string("Stores identity-link state below the owner entity."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads identity-link state below the owner entity."))
         await registerExploreContract(requester: requester, key: "identityLinks.state", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads normalized identity-link runtime state."))
@@ -606,7 +616,7 @@ public class EntityAnchorCell: GeneralCell {
             }
         } catch {
             if Self.isMissingFile(error) {
-                let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "agremments" : .object(Object()),  "chronicle" : .object(Object())]
+                let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "dataInventory" : .object(Object()), "agremments" : .object(Object()),  "chronicle" : .object(Object())]
                 do {
                     let existingJournal = try await self.loadAuthorityJournalIfPresent()
                     try existingJournal.validateStructure()

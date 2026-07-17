@@ -68,7 +68,8 @@ public enum ContentCryptoEnvelopeUtility {
         provider: IdentityKeyRoleProviderProtocol,
         suite: ContentCryptoSuite,
         associatedDataContext: String? = nil,
-        envelopeGeneration: Int? = nil
+        envelopeGeneration: Int? = nil,
+        includeRecipientIdentityMetadata: Bool = true
     ) async throws -> EncryptedContentEnvelope {
         guard suite.keyAgreementAlgorithm == .x25519HKDFSHA256,
               suite.keyWrappingAlgorithm == .x25519SharedSecret,
@@ -113,6 +114,7 @@ public enum ContentCryptoEnvelopeUtility {
 
             let ephemeralKey = Curve25519.KeyAgreement.PrivateKey()
             let sharedSecret = try ephemeralKey.sharedSecretFromKeyAgreement(with: recipientPublicKey)
+            let ephemeralPublicKeyData = ephemeralKey.publicKey.rawRepresentation
             let recipientInfo = Data("\(wrapInfoPrefix)|\(suite.id)|\(recipient.uuid)".utf8)
             let wrappingKey = sharedSecret.hkdfDerivedSymmetricKey(
                 using: SHA256.self,
@@ -122,23 +124,32 @@ public enum ContentCryptoEnvelopeUtility {
             )
             let wrappedKeyBox = try ChaChaPoly.seal(contentKeyData, using: wrappingKey)
 
-            let keyID = provider.keyIdentifier(for: recipient, role: .keyAgreement, secureKey: recipientKey)
+            let keyID = includeRecipientIdentityMetadata
+                ? provider.keyIdentifier(for: recipient, role: .keyAgreement, secureKey: recipientKey)
+                : privacyPreservingKeyIdentifier(
+                    for: recipientKey,
+                    suiteID: suite.id,
+                    role: .keyAgreement,
+                    envelopeNonce: ephemeralPublicKeyData
+                  )
             wrappedRecipients.append(
                 WrappedContentKeyDescriptor(
-                    recipientIdentityUUID: recipient.uuid,
+                    recipientIdentityUUID: includeRecipientIdentityMetadata ? recipient.uuid : nil,
                     recipientKeyID: keyID,
                     algorithm: .x25519SharedSecret,
                     wrappedKeyMaterial: wrappedKeyBox.combined,
                     recipientCurveType: recipientKey.curveType,
                     recipientAlgorithm: recipientKey.algorithm,
-                    ephemeralPublicKey: ephemeralKey.publicKey.rawRepresentation
+                    ephemeralPublicKey: ephemeralPublicKeyData
                 )
             )
         }
 
         let senderKeyID: String?
         if let signingKey = sender.publicSecureKey {
-            senderKeyID = provider.keyIdentifier(for: sender, role: .signing, secureKey: signingKey)
+            senderKeyID = includeRecipientIdentityMetadata
+                ? provider.keyIdentifier(for: sender, role: .signing, secureKey: signingKey)
+                : nil
         } else {
             senderKeyID = nil
         }
@@ -279,9 +290,23 @@ public enum ContentCryptoEnvelopeUtility {
         switch header.suiteID {
         case ContentCryptoSuite.chatMessageV1.id:
             return .chatMessageV1
+        case ContentCryptoSuite.userOwnedBackupV1.id:
+            return .userOwnedBackupV1
         default:
             throw ContentCryptoEnvelopeError.unsupportedSuite
         }
+    }
+
+    private static func privacyPreservingKeyIdentifier(
+        for secureKey: SecureKey,
+        suiteID: String,
+        role: IdentityKeyRole,
+        envelopeNonce: Data
+    ) -> String {
+        var material = Data("HAVEN.OpaqueKeyID.v1|\(suiteID)|\(role.rawValue)|\(secureKey.algorithm.rawValue)|\(secureKey.curveType.rawValue)|".utf8)
+        material.append(secureKey.compressedKey ?? Data())
+        material.append(envelopeNonce)
+        return "opaque-key-" + FlowHasher.sha256Hex(material)
     }
 
     private static func matchingWrappedKey(

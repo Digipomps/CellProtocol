@@ -107,18 +107,22 @@ private extension View {
     }
 
     @ViewBuilder
-    func applySkeletonKeyboardToolbar() -> some View {
+    func applySkeletonKeyboardToolbar(enabled: Bool = true) -> some View {
         #if os(iOS)
-        self.toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button {
-                    dismissSkeletonKeyboardIfNeeded()
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .accessibilityLabel("Skjul tastatur")
+        if enabled {
+            self.toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button {
+                        dismissSkeletonKeyboardIfNeeded()
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .accessibilityLabel("Skjul tastatur")
+                    }
                 }
             }
+        } else {
+            self
         }
         #else
         self
@@ -785,16 +789,18 @@ public struct SkeletonView: View {
     let element: SkeletonElement
 
     let userInfoValue: ValueType?
+    let showsKeyboardToolbar: Bool
     @EnvironmentObject var viewModel: PortholeViewModel
     @Environment(\.skeletonButtonResolutionTransform) private var buttonResolutionTransform
-    public init(element: SkeletonElement, userInfoValue: ValueType? = nil) {
+    public init(element: SkeletonElement, userInfoValue: ValueType? = nil, showsKeyboardToolbar: Bool = true) {
         self.element = element
         self.userInfoValue = userInfoValue
+        self.showsKeyboardToolbar = showsKeyboardToolbar
     }
     
     public var body: some View {
         render(element)
-            .applySkeletonKeyboardToolbar()
+            .applySkeletonKeyboardToolbar(enabled: showsKeyboardToolbar)
     }
 
     private func render(_ element: SkeletonElement) -> AnyView {

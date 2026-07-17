@@ -116,6 +116,22 @@ public struct ContentCryptoSuite: Codable, Equatable, Sendable {
         requiresSenderSignature: true,
         supportsForwardSecrecy: true
     )
+
+    /// Owner-controlled backup payloads use a fresh content key per package and
+    /// wrap that key independently for every approved recovery identity. The
+    /// long-lived recovery keys mean this profile must not claim forward secrecy.
+    public static let userOwnedBackupV1 = ContentCryptoSuite(
+        id: "haven.user-owned-backup.v1",
+        version: 1,
+        purpose: .exportBundle,
+        contentAlgorithm: .chachaPoly,
+        keyAgreementAlgorithm: .x25519HKDFSHA256,
+        keyWrappingAlgorithm: .x25519SharedSecret,
+        signatureAlgorithm: .EdDSA,
+        curveType: .Curve25519,
+        requiresSenderSignature: true,
+        supportsForwardSecrecy: false
+    )
 }
 
 public struct ContentCryptoPolicy: Codable, Equatable, Sendable {

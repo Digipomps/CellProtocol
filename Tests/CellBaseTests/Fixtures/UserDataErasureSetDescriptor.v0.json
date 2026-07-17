@@ -1,0 +1,17 @@
+{
+  "dataShardCount": 4,
+  "fragmentHashes": [
+    "ba613139def0d0c0710c253b1aa370aea938a6bd38cd942694b6bf7674c195c2",
+    "59d431d9f545bc4d260b506ab7f9ba8b7fcea3ee382faa362293f9b232d1c9e2",
+    "23c09d137c5f26cea81816643131a56e29d4b164546c77c6db7f0117b8177e62",
+    "83529bef5b8cf1040498821ae220a9c2a3f10867041bf0de970f979491254c09",
+    "d976b5e99116af65441a955988fd517aba4e3aee40643e27db63ac78ecc3c869",
+    "e04ec6d6b14658d35341d592360cdef5fe881be8490891c44265299d9b3c570a"
+  ],
+  "originalByteCount": 34,
+  "parityShardCount": 2,
+  "payloadHash": "6d26fe001a8a9c09e91dfffdb1632db9ac1e6df3cf25c02fa231d36489d82511",
+  "schema": "haven.user-data-erasure-set.v0",
+  "setID": "ers-3fcbaf70bc850f51f021781678cdbe3909bf9b3d369b049d5404514804244e54",
+  "shardByteCount": 9
+}
