@@ -521,6 +521,45 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         XCTAssertNil(restored.storedOwnerIdentity.identityVault)
     }
 
+    func testVerifiedRuntimeOwnerRemainsPendingUntilMatchingRequesterIsBound() async throws {
+        let owner = try await configuredOwnerAndDocumentRoot(suffix: "owner-rehydrate")
+        let source = await GeneralCell(owner: owner)
+        let restored = try JSONDecoder().decode(
+            GeneralCell.self,
+            from: JSONEncoder().encode(source)
+        )
+
+        let ownerBeforeBinding = await restored.verifiedRuntimeOwnerIdentity()
+        XCTAssertNil(ownerBeforeBinding)
+
+        let attackerVault = MockIdentityVault()
+        let attackerSourceCandidate = await attackerVault.identity(
+            for: "attacker",
+            makeNewIfNotFound: true
+        )
+        let attackerSource = try XCTUnwrap(attackerSourceCandidate)
+        let attacker = Identity(owner.uuid, displayName: "attacker", identityVault: attackerVault)
+        attacker.publicSecureKey = attackerSource.publicSecureKey
+
+        let attackerBound = await restored.bindStoredOwnerToRuntimeIdentity(attacker)
+        let ownerAfterAttacker = await restored.verifiedRuntimeOwnerIdentity()
+        XCTAssertFalse(attackerBound)
+        XCTAssertNil(ownerAfterAttacker)
+
+        let ownerBound = await restored.bindStoredOwnerToRuntimeIdentity(owner)
+        XCTAssertTrue(ownerBound)
+        let reboundOwner = await restored.verifiedRuntimeOwnerIdentity()
+        XCTAssertEqual(reboundOwner?.uuid, owner.uuid)
+        XCTAssertEqual(
+            reboundOwner?.signingPublicKeyFingerprint,
+            owner.signingPublicKeyFingerprint
+        )
+        let reboundVaultReference = await reboundOwner?.identityVault?.identityVaultReference()
+        let ownerVaultReference = await owner.identityVault?.identityVaultReference()
+        XCTAssertEqual(reboundVaultReference, ownerVaultReference)
+        XCTAssertNil(restored.storedOwnerIdentity.identityVault)
+    }
+
     func testMalformedPersistedAgreementFailsDecodeWithoutCrashing() async throws {
         let owner = try await configuredOwnerAndDocumentRoot(suffix: "malformed-agreement")
         let source = await GeneralCell(owner: owner)

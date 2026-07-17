@@ -345,6 +345,20 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         owner.publicIdentitySnapshot()
     }
 
+    /// Returns the process-local owner only while its attached vault can still
+    /// prove control of the signing key stored in this Cell. Hosts use this
+    /// during the second phase of persisted Cell rehydration, after the
+    /// resolver has bound a verified requester with
+    /// `bindStoredOwnerToRuntimeIdentity(_:)`.
+    @_spi(HAVENRuntime)
+    public func verifiedRuntimeOwnerIdentity() async -> Identity? {
+        guard owner.identityVault != nil,
+              await checkIdentityOrigin(owner, against: owner) else {
+            return nil
+        }
+        return owner
+    }
+
     /// Reattaches the persisted owner descriptor to a local runtime vault only
     /// after the candidate proves control of the same signing key.
     @_spi(HAVENRuntime) @discardableResult
