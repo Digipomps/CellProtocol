@@ -89,6 +89,31 @@ private final class LifecycleResponder: CellLifecycleEventResponder {
     }
 }
 
+private final class DurableSnapshotProbeCell: GeneralCell {
+    enum CodingKeys: CodingKey {
+        case value
+    }
+
+    var value: Int
+
+    required init(owner: Identity) async {
+        value = 0
+        await super.init(owner: owner)
+    }
+
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        value = try container.decode(Int.self, forKey: .value)
+        try super.init(from: decoder)
+    }
+
+    override func encode(to encoder: Encoder) throws {
+        try super.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(value, forKey: .value)
+    }
+}
+
 final class CellLifecycleTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
@@ -238,6 +263,41 @@ final class CellLifecycleTests: XCTestCase {
             let second = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity!)
             XCTAssertEqual(first.uuid, second.uuid)
             XCTAssertFalse(second as AnyObject === first as AnyObject)
+        }
+    }
+
+    func testExplicitPersistentSnapshotWritesCurrentStateWithoutWaitingForEviction() async throws {
+        let resolver = CellResolver.sharedInstance
+
+        try await withTempPersistenceContext { _ in
+            let name = "Durable-Snapshot-\(UUID().uuidString)"
+            try await resolver.addCellResolve(
+                name: name,
+                cellScope: .scaffoldUnique,
+                persistency: .persistant,
+                identityDomain: "private",
+                type: DurableSnapshotProbeCell.self
+            )
+
+            let identity = await CellBase.defaultIdentityVault?.identity(
+                for: "private", makeNewIfNotFound: true
+            )
+            let resolved = try await resolver.cellAtEndpoint(
+                endpoint: "cell:///\(name)", requester: identity!
+            )
+            let cell = try XCTUnwrap(resolved as? DurableSnapshotProbeCell)
+            cell.value = 42
+
+            let persisted = await resolver.persistCellSnapshot(cell)
+            XCTAssertTrue(persisted)
+
+            let stored = try XCTUnwrap(
+                resolver.tcUtility?.loadTypedEmitCell(with: cell.uuid)
+                    as? DurableSnapshotProbeCell
+            )
+            XCTAssertEqual(stored.uuid, cell.uuid)
+            XCTAssertEqual(stored.value, 42)
+            XCTAssertFalse(stored as AnyObject === cell as AnyObject)
         }
     }
 

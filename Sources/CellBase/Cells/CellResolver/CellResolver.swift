@@ -510,11 +510,26 @@ public class CellResolver: CellResolverProtocol {
         )
     }
 
+    /// Writes the current state of a declared-persistent Cell without evicting it.
+    ///
+    /// Mutation owners call this at a durability boundary when acknowledging a
+    /// write before the normal lifecycle TTL has elapsed. The resolver retains
+    /// ownership of runtime-readiness checks, type naming, encryption policy and
+    /// persisted-lifecycle tracking.
+    @discardableResult
+    public func persistCellSnapshot(_ cell: Emit) async -> Bool {
+        guard cell.persistancy == .persistant else {
+            return false
+        }
+        return await persistCellIfPossible(cell)
+    }
+
+    @discardableResult
     private func persistCellIfPossible(
         _ cell: Emit,
         preferredTypeName: String? = nil,
         fallbackOwnerIdentityUUID: String? = nil
-    ) async {
+    ) async -> Bool {
         do {
             _ = try await prepareCellForRuntime(cell)
         } catch {
@@ -522,11 +537,11 @@ public class CellResolver: CellResolverProtocol {
                 "Refused to persist Cell \(cell.uuid) before runtime readiness: \(error)",
                 domain: .lifecycle
             )
-            return
+            return false
         }
         guard let tcUtility = self.tcUtility,
               let codableEmit = cell as? Codable else {
-            return
+            return false
         }
         let typeName = preferredTypeName ?? typeNameFromRuntime(type(of: cell))
         await ensurePersistedCellMasterKeyLoaded()
@@ -541,6 +556,7 @@ public class CellResolver: CellResolverProtocol {
             options: writeOptions
         )
         await lifecycleTracker.touchPersistedCell(uuid: cell.uuid)
+        return true
     }
 
     private func deletePersistedCellData(uuid: String) -> Bool {
