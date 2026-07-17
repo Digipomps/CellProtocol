@@ -15,6 +15,7 @@ actor ResolverAuditor {
         case registerAtAlreadyTakenEndpoint
         case duplicatedEndpointName
         case personalInstanceAlreadyRegistered
+        case persistedInstanceAlreadyRegistered
     }
     struct CellInstanceWrapper {
 //        let endpoints: [String] // Deprecate it
@@ -51,6 +52,43 @@ actor ResolverAuditor {
                 try register(name: endpoint, for: cell.uuid)
             }
         }
+    }
+
+    /// Atomically installs a previously validated persisted shared Cell under
+    /// its manifest endpoint. Unlike the legacy `registerReference`, this also
+    /// repairs the name mapping when the UUID is already known, and it never
+    /// replaces a live endpoint or an in-memory instance with an ambiguous
+    /// decoded object.
+    func registerPersistedNamedReference(_ cell: Emit, endpoint: String) throws {
+        if let existingUUID = namedCellsDict[endpoint], existingUUID != cell.uuid {
+            throw AuditorError.registerAtAlreadyTakenEndpoint
+        }
+        if let existingEndpoint = reversedNamedCellsDict[cell.uuid],
+           existingEndpoint != endpoint {
+            throw AuditorError.registerAtAlreadyTakenEndpoint
+        }
+        if let existing = cellInstanceDict[cell.uuid] {
+            guard existing.emit === cell else {
+                throw AuditorError.persistedInstanceAlreadyRegistered
+            }
+        } else {
+            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+        }
+        namedCellsDict[endpoint] = cell.uuid
+        reversedNamedCellsDict[cell.uuid] = endpoint
+    }
+
+    func canRegisterPersistedNamedReference(uuid: String, endpoint: String) -> Bool {
+        if let existingUUID = namedCellsDict[endpoint], existingUUID != uuid {
+            return false
+        }
+        if let existingEndpoint = reversedNamedCellsDict[uuid],
+           existingEndpoint != endpoint {
+            return false
+        }
+        // A decoded restore candidate must never replace or alias a live
+        // in-memory object, even when it claims the same UUID.
+        return cellInstanceDict[uuid] == nil
     }
     
     func register(name: String, for uuid: String) throws {

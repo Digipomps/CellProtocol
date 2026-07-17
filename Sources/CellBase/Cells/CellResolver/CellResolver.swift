@@ -2440,6 +2440,107 @@ public class CellResolver: CellResolverProtocol {
         return typedCellUtility.loadTypedEmitCellResult(with: uuid)
     }
 
+    /// Restores one persistent scaffold-unique Cell from an owner-bound host
+    /// manifest and atomically re-establishes its process-local name mapping.
+    /// This is intentionally SPI-only: callers must already possess the
+    /// trusted runtime-recovery capability and must preserve `missing`,
+    /// `unavailable`, and `rejected` as distinct outcomes.
+    @_spi(CellRuntimeRecovery)
+    public func restorePersistedNamedScaffoldCell<T>(
+        uuid: String,
+        named endpoint: String,
+        as expectedType: T.Type,
+        requester: Identity,
+        authorization: CellResolverRecoveryAuthorization
+    ) async -> PersistedNamedScaffoldCellRestoreResult where T: Emit & OwnerInstantiable {
+        _ = authorization
+        guard let requestedUUID = UUID(uuidString: uuid) else {
+            return .rejected(.invalidUUID)
+        }
+        let normalizedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedEndpoint == endpoint,
+              normalizedEndpoint.isEmpty == false,
+              normalizedEndpoint.contains("/") == false else {
+            return .rejected(.invalidEndpoint)
+        }
+        guard let resolve = await auditor.loadNamedResolve(endpoint) else {
+            return .rejected(.missingResolve)
+        }
+        guard resolve.cellScope == .scaffoldUnique else {
+            return .rejected(.resolveScopeMismatch)
+        }
+        guard resolve.cellPersistancy == .persistant else {
+            return .rejected(.resolvePersistenceMismatch)
+        }
+        guard ObjectIdentifier(resolve.cellType) == ObjectIdentifier(expectedType) else {
+            return .rejected(.resolveTypeMismatch)
+        }
+        guard resolve.owner.uuid == requester.uuid,
+              let resolveOwnerFingerprint = resolve.owner.signingPublicKeyFingerprint,
+              resolveOwnerFingerprint == requester.signingPublicKeyFingerprint else {
+            return .rejected(.resolveOwnerMismatch)
+        }
+
+        let emitCell: Emit
+        switch await loadTypedEmitCellResult(with: uuid) {
+        case .loaded(let loaded):
+            emitCell = loaded
+        case .missing:
+            return .missing
+        case .unavailable:
+            return .unavailable
+        }
+        guard let persistedUUID = UUID(uuidString: emitCell.uuid),
+              persistedUUID == requestedUUID else {
+            return .rejected(.persistedUUIDMismatch)
+        }
+        guard emitCell.cellScope == .scaffoldUnique else {
+            return .rejected(.persistedScopeMismatch)
+        }
+        guard emitCell.persistancy == .persistant else {
+            return .rejected(.persistedPersistenceMismatch)
+        }
+        guard ObjectIdentifier(Swift.type(of: emitCell)) == ObjectIdentifier(expectedType) else {
+            return .rejected(.persistedTypeMismatch)
+        }
+        guard await auditor.canRegisterPersistedNamedReference(
+            uuid: emitCell.uuid,
+            endpoint: endpoint
+        ) else {
+            return .rejected(.endpointConflict)
+        }
+        do {
+            switch try await validateIdentityUniqueOwner(emitCell, requester: requester) {
+            case .valid:
+                break
+            case .mismatchedReference:
+                return .rejected(.ownerMismatch)
+            case .authorityUnproven:
+                return .rejected(.ownerAuthorityUnavailable)
+            }
+        } catch {
+            return .rejected(.ownerAuthorityUnavailable)
+        }
+        do {
+            _ = try await prepareCellForRuntime(emitCell)
+        } catch {
+            return .rejected(.runtimePreparationFailed)
+        }
+        do {
+            try await auditor.registerPersistedNamedReference(emitCell, endpoint: endpoint)
+        } catch {
+            return .rejected(.endpointConflict)
+        }
+        await applyLifecycleTrackingIfNeeded(
+            cell: emitCell,
+            resolve: resolve,
+            endpoint: endpoint,
+            identity: requester
+        )
+        await lifecycleTracker.touchPersistedCell(uuid: emitCell.uuid)
+        return .restored(emitCell)
+    }
+
     private func loadTypedEmitCell(with reference: String, requester: Identity?) async throws -> Emit? {
         guard let uuid = isUUID(reference) ? reference : await auditor.celluuid(for: reference) else {
             return nil

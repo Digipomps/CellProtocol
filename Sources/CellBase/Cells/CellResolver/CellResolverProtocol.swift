@@ -71,3 +71,34 @@ public struct CellResolverRecoveryAuthorization: Sendable {
     @_spi(CellRuntimeRecovery)
     public init() {}
 }
+
+/// The fail-closed outcome of restoring one manifest-bound, shared persistent
+/// Cell. `missing` is the only state in which a trusted host may deliberately
+/// create a replacement. Storage/decryption failures and validation failures
+/// remain distinguishable from absence.
+@_spi(CellRuntimeRecovery)
+public enum PersistedNamedScaffoldCellRestoreResult {
+    case restored(Emit)
+    case missing
+    case unavailable
+    case rejected(PersistedNamedScaffoldCellRestoreRejection)
+}
+
+@_spi(CellRuntimeRecovery)
+public enum PersistedNamedScaffoldCellRestoreRejection: Equatable, Sendable {
+    case invalidUUID
+    case invalidEndpoint
+    case missingResolve
+    case resolveScopeMismatch
+    case resolvePersistenceMismatch
+    case resolveTypeMismatch
+    case resolveOwnerMismatch
+    case persistedUUIDMismatch
+    case persistedScopeMismatch
+    case persistedPersistenceMismatch
+    case persistedTypeMismatch
+    case ownerMismatch
+    case ownerAuthorityUnavailable
+    case runtimePreparationFailed
+    case endpointConflict
+}

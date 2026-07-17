@@ -131,6 +131,257 @@ final class ResolverTests: XCTestCase {
         XCTAssertNotEqual(first.uuid, second.uuid)
     }
 
+    func testPersistedNamedScaffoldRestoreRebindsExactUUIDAfterRuntimeReset() async throws {
+        let resolver = CellResolver.sharedInstance
+        resolver.tcUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        let name = "RestoredScaffold-\(UUID().uuidString)"
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-scaffold-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let cell = await GeneralCell(owner: owner)
+        cell.cellScope = .scaffoldUnique
+        cell.persistancy = .persistant
+        let utility = FixedDecodedCellUtility(cell: cell)
+        CellBase.typedCellUtility = utility
+
+        await resolver.resetRuntimeStateForTesting()
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "persisted-scaffold-owner",
+            type: GeneralCell.self
+        )
+
+        let result = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: cell.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .restored(let restored) = result else {
+            return XCTFail("Expected exact persisted Cell to be restored")
+        }
+        XCTAssertEqual(restored.uuid, cell.uuid)
+        let restoredUUID = await resolver.cellUUID(for: name)
+        XCTAssertEqual(restoredUUID, cell.uuid)
+        let named = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: owner
+        )
+        XCTAssertEqual(named.uuid, cell.uuid)
+    }
+
+    func testPersistedNamedScaffoldRestorePreservesMissingAndUnavailableStates() async throws {
+        let resolver = CellResolver.sharedInstance
+        resolver.tcUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-scaffold-tristate-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let name = "TriStateScaffold-\(UUID().uuidString)"
+        let uuid = UUID().uuidString
+
+        await resolver.resetRuntimeStateForTesting()
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "persisted-scaffold-tristate-owner",
+            type: GeneralCell.self
+        )
+
+        let missingUtility = StatusDecodedCellUtility(result: .missing)
+        CellBase.typedCellUtility = missingUtility
+        let missing = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .missing = missing else {
+            return XCTFail("Missing storage must remain distinguishable")
+        }
+
+        let unavailableUtility = StatusDecodedCellUtility(result: .unavailable)
+        CellBase.typedCellUtility = unavailableUtility
+        let unavailable = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .unavailable = unavailable else {
+            return XCTFail("Unreadable storage must fail closed as unavailable")
+        }
+        let unavailableMapping = await resolver.cellUUID(for: name)
+        XCTAssertNil(unavailableMapping)
+    }
+
+    func testPersistedNamedScaffoldRestoreRejectsScopeTypeAndOwnerMismatch() async throws {
+        let resolver = CellResolver.sharedInstance
+        resolver.tcUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        let resolvedOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-scaffold-validation-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(resolvedOwner)
+        let resolvedOtherOwner = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-scaffold-validation-other",
+            makeNewIfNotFound: true
+        )
+        let otherOwner = try XCTUnwrap(resolvedOtherOwner)
+        let name = "ValidatedScaffold-\(UUID().uuidString)"
+
+        await resolver.resetRuntimeStateForTesting()
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "persisted-scaffold-validation-owner",
+            type: GeneralCell.self
+        )
+
+        let wrongScope = await GeneralCell(owner: owner)
+        wrongScope.cellScope = .identityUnique
+        wrongScope.persistancy = .persistant
+        let wrongScopeUtility = FixedDecodedCellUtility(cell: wrongScope)
+        CellBase.typedCellUtility = wrongScopeUtility
+        let scopeResult = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: wrongScope.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .rejected(.persistedScopeMismatch) = scopeResult else {
+            return XCTFail("A non-scaffold persisted Cell must be rejected")
+        }
+
+        let wrongType = await Goal(owner: owner)
+        wrongType.cellScope = .scaffoldUnique
+        wrongType.persistancy = .persistant
+        let wrongTypeUtility = FixedDecodedCellUtility(cell: wrongType)
+        CellBase.typedCellUtility = wrongTypeUtility
+        let typeResult = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: wrongType.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .rejected(.persistedTypeMismatch) = typeResult else {
+            return XCTFail("A persisted Cell of another type must be rejected")
+        }
+
+        let wrongOwner = await GeneralCell(owner: otherOwner)
+        wrongOwner.cellScope = .scaffoldUnique
+        wrongOwner.persistancy = .persistant
+        let wrongOwnerUtility = FixedDecodedCellUtility(cell: wrongOwner)
+        CellBase.typedCellUtility = wrongOwnerUtility
+        let ownerResult = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: wrongOwner.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .rejected(.ownerMismatch) = ownerResult else {
+            return XCTFail("A Cell owned by another Identity must be rejected")
+        }
+        let rejectedMapping = await resolver.cellUUID(for: name)
+        XCTAssertNil(rejectedMapping)
+    }
+
+    func testPersistedNamedScaffoldRestoreRejectsResolveOwnerMismatch() async throws {
+        let resolver = CellResolver.sharedInstance
+        resolver.tcUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        let requesterValue = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-resolve-requester",
+            makeNewIfNotFound: true
+        )
+        let requester = try XCTUnwrap(requesterValue)
+        let name = "ResolveOwnerMismatch-\(UUID().uuidString)"
+        let cell = await GeneralCell(owner: requester)
+        cell.cellScope = .scaffoldUnique
+        cell.persistancy = .persistant
+        CellBase.typedCellUtility = FixedDecodedCellUtility(cell: cell)
+
+        await resolver.resetRuntimeStateForTesting()
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "persisted-resolve-different-owner",
+            type: GeneralCell.self
+        )
+
+        let result = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: cell.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: requester,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .rejected(.resolveOwnerMismatch) = result else {
+            return XCTFail("A resolve created for another owner context must fail closed")
+        }
+        let mapping = await resolver.cellUUID(for: name)
+        XCTAssertNil(mapping)
+    }
+
+    func testPersistedNamedScaffoldRestoreRejectsEndpointConflictBeforeRegistration() async throws {
+        let resolver = CellResolver.sharedInstance
+        resolver.tcUtility = TypedCellUtility(storage: ResolverTestCellStorage())
+        let ownerValue = await CellBase.defaultIdentityVault?.identity(
+            for: "persisted-endpoint-conflict-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(ownerValue)
+        let name = "RestoreEndpointConflict-\(UUID().uuidString)"
+
+        await resolver.resetRuntimeStateForTesting()
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .scaffoldUnique,
+            persistency: .persistant,
+            identityDomain: "persisted-endpoint-conflict-owner",
+            type: GeneralCell.self
+        )
+        let liveCell = await GeneralCell(owner: owner)
+        liveCell.cellScope = .scaffoldUnique
+        liveCell.persistancy = .persistant
+        try await resolver.registerNamedEmitCell(
+            name: name,
+            emitCell: liveCell,
+            scope: .scaffoldUnique,
+            identity: owner
+        )
+
+        let persistedCandidate = await GeneralCell(owner: owner)
+        persistedCandidate.cellScope = .scaffoldUnique
+        persistedCandidate.persistancy = .persistant
+        CellBase.typedCellUtility = FixedDecodedCellUtility(cell: persistedCandidate)
+        let result = await resolver.restorePersistedNamedScaffoldCell(
+            uuid: persistedCandidate.uuid,
+            named: name,
+            as: GeneralCell.self,
+            requester: owner,
+            authorization: CellResolverRecoveryAuthorization()
+        )
+        guard case .rejected(.endpointConflict) = result else {
+            return XCTFail("A live endpoint must never be replaced during restore")
+        }
+        let mapping = await resolver.cellUUID(for: name)
+        XCTAssertEqual(mapping, liveCell.uuid)
+    }
+
     func testScaffoldUniqueSameForDifferentIdentities() async throws {
         let resolver = CellResolver.sharedInstance
         let name = "ScaffoldShared-\(UUID().uuidString)"
