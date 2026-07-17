@@ -524,6 +524,27 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         }
         return identity
     }
+
+    /// Restores an identity that is already persisted in this vault by its
+    /// exact UUID. Unlike the legacy context lookup, this path is intentionally
+    /// fail-closed: it never accepts a visiting identity and never repairs or
+    /// regenerates missing signing material.
+    public func identity(forUUID uuid: String) async -> Identity? {
+        await ensureInitializedForCurrentDocumentRoot()
+        guard let vaultIdentity = identitiesUUIDDictionary[uuid],
+              vaultIdentity.uuid == uuid,
+              hasSigningKeyMaterial(vaultIdentity) else {
+            return nil
+        }
+        let identity = vaultIdentity.identity
+        guard identity.uuid == uuid else {
+            return nil
+        }
+        identity.identityVault = self
+        identity.homeVaultReference = currentVaultReference()
+        return identity
+    }
+
     func saveIdentities() {
         let identities = Array(identitiesUUIDDictionary.values)
 

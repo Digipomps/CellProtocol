@@ -153,6 +153,111 @@ final class VaporBridgeTransportTests: XCTestCase {
         XCTAssertNotNil(reloadedFirstIdentity, "Switching back to the first root should reload its persisted vault.")
     }
 
+    func testVaporIdentityVaultRestoresExactPersistedUUIDWithoutChangingSigningKey() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDRestore-\(UUID().uuidString)", isDirectory: true)
+        let intermediateRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDRestoreIntermediate-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: intermediateRoot)
+        }
+
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+        let createdCandidate = await VaporIdentityVault.shared.identity(
+            for: "admin-scaffold-owner",
+            makeNewIfNotFound: true
+        )
+        let created = try XCTUnwrap(createdCandidate)
+        let expectedPublicKey = try XCTUnwrap(created.publicSecureKey?.compressedKey)
+
+        CellBase.documentRootPath = intermediateRoot.path
+        _ = await VaporIdentityVault.shared.initialize()
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+
+        let restoredCandidate = await VaporIdentityVault.shared.identity(forUUID: created.uuid)
+        let restored = try XCTUnwrap(restoredCandidate)
+        XCTAssertEqual(restored.uuid, created.uuid)
+        XCTAssertEqual(restored.publicSecureKey?.compressedKey, expectedPublicKey)
+        let payload = Data("admin-owner-restart-proof".utf8)
+        let signature = try await VaporIdentityVault.shared.signMessageForIdentity(
+            messageData: payload,
+            identity: restored
+        )
+        let signatureIsValid = try await VaporIdentityVault.shared.verifySignature(
+            signature: signature,
+            messageData: payload,
+            for: restored
+        )
+        XCTAssertTrue(signatureIsValid)
+        let unknownIdentity = await VaporIdentityVault.shared.identity(forUUID: UUID().uuidString)
+        XCTAssertNil(unknownIdentity)
+    }
+
+    func testVaporIdentityVaultUUIDRestoreRejectsMissingKeyMaterialWithoutRewritingVault() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDMissingKeys-\(UUID().uuidString)", isDirectory: true)
+        let intermediateRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDMissingKeysIntermediate-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: intermediateRoot)
+        }
+
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+        var incomplete = VaporIdentityVault.VaultIdentity()
+        incomplete.uuid = UUID().uuidString
+        incomplete.displayName = "Incomplete persisted owner"
+        incomplete.identityContext = "admin-scaffold-owner"
+        let encoded = try JSONEncoder().encode([incomplete])
+        try await VaporIdentityVault.shared.saveIdentities(jsonData: encoded)
+        let vaultURL = root.appendingPathComponent(VaporIdentityVault.identitiesFileName)
+        let encryptedBeforeLookup = try Data(contentsOf: vaultURL)
+
+        CellBase.documentRootPath = intermediateRoot.path
+        _ = await VaporIdentityVault.shared.initialize()
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+
+        let restored = await VaporIdentityVault.shared.identity(forUUID: incomplete.uuid)
+        XCTAssertNil(restored)
+        XCTAssertEqual(try Data(contentsOf: vaultURL), encryptedBeforeLookup)
+    }
+
+    func testVaporIdentityVaultUUIDRestoreRejectsVaultEncryptedWithWrongMasterKey() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDWrongKey-\(UUID().uuidString)", isDirectory: true)
+        let intermediateRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporIdentityVaultUUIDWrongKeyIntermediate-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: intermediateRoot)
+        }
+
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+        let createdCandidate = await VaporIdentityVault.shared.identity(
+            for: "admin-scaffold-owner-wrong-key",
+            makeNewIfNotFound: true
+        )
+        let created = try XCTUnwrap(createdCandidate)
+
+        CellBase.documentRootPath = intermediateRoot.path
+        _ = await VaporIdentityVault.shared.initialize()
+        let keyURL = root
+            .appendingPathComponent(".secrets", isDirectory: true)
+            .appendingPathComponent("vault-master.key")
+        try Data(repeating: 0xA5, count: 32).write(to: keyURL, options: [.atomic])
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+
+        let restored = await VaporIdentityVault.shared.identity(forUUID: created.uuid)
+        XCTAssertNil(restored)
+    }
+
     func testOversizedInboundPayloadIsRejectedBeforeDecode() async {
         let transport = VaporBridgeTransport()
         let sink = InMemoryCellSecurityEventSink()
