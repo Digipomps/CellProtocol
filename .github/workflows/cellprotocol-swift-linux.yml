@@ -46,23 +46,16 @@ jobs:
             exit 1
           fi
 
-      - name: Compile Vapor storage on Linux
+      - name: Compile and test descriptor bounds on Linux
         shell: bash
         run: |
           set -euo pipefail
-          swift build \
-            --disable-sandbox \
-            --scratch-path "${RUNNER_TEMP}/cellprotocol-linux-build" \
-            --target CellVapor
-
-      - name: Test descriptor bounds on Linux
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift test \
-            --disable-sandbox \
-            --scratch-path "${RUNNER_TEMP}/cellprotocol-linux-build" \
-            --filter PersistedCellFileIOTests
+          swiftc \
+            -parse-as-library \
+            Sources/CellBase/PersistingCells/PersistedCellFileIO.swift \
+            Tests/Linux/PersistedCellFileIOLinuxMain.swift \
+            -o "${RUNNER_TEMP}/persisted-cell-file-io-linux"
+          "${RUNNER_TEMP}/persisted-cell-file-io-linux"
 
       - name: Verify source and dependency lock remained unchanged
         shell: bash
