@@ -65,7 +65,9 @@ jobs:
           mkdir -p \
             "${gate_root}/Sources" \
             "${gate_root}/Tests/DeviceIngressLinuxTests" \
-            "${gate_root}/Tests/DeviceIngressTransportProbe"
+            "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures" \
+            "${gate_root}/Tests/DeviceIngressTransportProbe" \
+            "${gate_root}/Tests/DeviceIngressCompositionRootProbe"
           cp Tests/Linux/DeviceIngressLinuxPackage.swift "${gate_root}/Package.swift"
           cp Tests/Linux/VaporIdentityVaultLinuxPackage.resolved \
             "${gate_root}/Package.resolved"
@@ -80,10 +82,16 @@ jobs:
             "${gate_root}/Sources/KeyPathResolver"
           cp Tests/CellBaseTests/DeviceIngressContractTests.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp Tests/CellBaseTests/Fixtures/DeviceIngress*.b64 \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/TestSupport/MockCellResolver.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"
+          cp Tests/Linux/DeviceIngressCompositionRootPositive.swift \
+            "${gate_root}/Tests/DeviceIngressCompositionRootProbe/"
           swift test \
             --package-path "${gate_root}" \
             --disable-sandbox \
@@ -99,6 +107,12 @@ jobs:
           swift build \
             --package-path "${gate_root}" \
             --target DeviceIngressTransportProbe \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2
+          swift build \
+            --package-path "${gate_root}" \
+            --target DeviceIngressCompositionRootProbe \
             --disable-sandbox \
             --disable-automatic-resolution \
             --jobs 2

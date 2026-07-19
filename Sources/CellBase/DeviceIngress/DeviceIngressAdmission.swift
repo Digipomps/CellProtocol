@@ -586,6 +586,9 @@ public enum DeviceIngressMutationDecision: Sendable {
 /// same Cell operation. Replacing the resolver mapping cannot replace the
 /// already selected object reference.
 public protocol DeviceIngressAuthorityCell: AnyObject {
+    /// Returns bounded, signed policy evidence without mutating identity,
+    /// Agreement, revocation, challenge, registration, or other protected
+    /// state. Mutation belongs exclusively to the receipt-bound commit method.
     func resolveDeviceIngressAuthority(
         for request: DeviceIngressAuthorityRequest
     ) async -> DeviceIngressAuthorityDecision
@@ -879,7 +882,8 @@ public enum DeviceIngressAdmissionCommitOutcome: Sendable {
 
 /// Production implementations must atomically and durably insert the admission
 /// record before returning `.committed`. They must reject duplicate challenge/
-/// nonce records and enforce monotonic authority and revocation generations.
+/// nonce/request/admission records, enforce monotonic authority and revocation
+/// generations, and preserve the same replay decision across process restart.
 public protocol DeviceIngressDurableAdmissionLedger: Sendable {
     func commit(
         _ record: DeviceIngressAdmissionRecord

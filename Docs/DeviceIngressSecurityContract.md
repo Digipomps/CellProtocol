@@ -88,12 +88,20 @@ fallback.
   digest. A changed resolver mapping is rejected before the replacement Cell's
   authority method is invoked.
 
-Golden version-2 challenge and request bytes are stored base64-encoded under
-`Tests/CellBaseTests/Fixtures/`; decoding yields the exact bytes without a file
-line ending. Independent SHA-256 hashes and the issuer UUID/public key are
-pinned in `DeviceIngressWireFixtureTests` before signatures and body/challenge
-digests are verified. The fixture uses P-256 ECDSA, matching Binding's current
-device signing family while remaining independent of Apple-only key storage.
+Golden version-2 challenge, request, and real canonical signed Contract bytes
+are stored base64-encoded under `Tests/CellBaseTests/Fixtures/`; decoding yields
+the exact bytes without a file line ending. Independent SHA-256 hashes and the
+challenge-issuer public key are pinned in `DeviceIngressWireFixtureTests` before
+signatures and body/challenge/Contract digests are verified. The P-256 fixture
+uses three distinct identities: Scaffold challenge issuer, target Cell owner,
+and device subject. The Contract is signed by the target owner for the device
+subject. This matches Binding's current device signing family while remaining
+independent of Apple-only key storage.
+
+The original raw version-1 challenge/request bytes remain immutable negative
+vectors. Their exact hashes and schema labels are pinned, and admission tests
+prove that they reach neither resolver authority, durable ledger, nor Cell
+mutation. Version 1 is never upgraded or re-signed in place.
 
 The fixture is currently the CellProtocol canonical source and a candidate for
 byte-for-byte reuse in Binding. Binding PR #7 and
@@ -102,6 +110,13 @@ shape. They must adopt the version-2 bytes/types and verify the same fixture in
 their own suites before interoperability or physical APNS is claimed. Copying
 field names without verifying the exact signed bytes is not cross-repository
 evidence.
+
+`@_spi(HAVENRuntime)` separates Scaffold composition-root construction APIs
+from a plain transport import. SPI visibility is code organization, not an
+authorization mechanism: possessing the import still grants no capability,
+Agreement, resolver decision, ledger receipt, or Cell mutation. Linux CI builds
+the SPI composition-root probe positively and separately proves that a
+plain-import transport cannot compile a staged-authority call.
 
 ## Replay, durability, and revocation
 
@@ -115,6 +130,15 @@ an in-memory convenience. An implementation must atomically and durably:
 - return a receipt with `atomic_durable_before_cell_mutation` semantics that
   repeats the request hash, target Cell UUID, target owner UUID/fingerprint,
   signed Agreement hash, and authority/revocation generations.
+
+An application implementation must additionally use persistent unique indexes
+for challenge, nonce, request hash, and admission ID; commit the record and
+monotonic generation watermarks in one crash-safe transaction; and return the
+same recorded replay decision after restart. An ambiguous or already committed
+request must never be retried as a new mutation. The authority Cell's mutation
+operation must be idempotent by admission ID while atomically rechecking the
+Agreement and revocation generations. An in-memory actor, a log line, or a
+successful HTTP response does not satisfy this contract.
 
 The persisted admission record and its durable receipt use version-2 schemas.
 The authority Cell's mutation receipt also uses version 2 and repeats the target
@@ -158,6 +182,15 @@ CellScaffold and Binding integrations must separately provide and verify:
 - negative end-to-end tests for wrong host/audience, identity domain, purpose,
   subject, signature, body, challenge, expiry, replay, and revocation; and
 - restart tests proving registrations and authority survive without reseeding.
+
+`resolveDeviceIngressAuthority(for:)` is a read-only policy lookup. It must be
+side-effect-free, bounded, and non-mutating: no identity/Cell creation, no
+credential issuance, no challenge consumption, no Agreement or revocation
+change, no registration write, and no unbounded or attacker-selected remote
+fetch. It returns bounded signed evidence or a typed denial. Durable replay
+consumption occurs only in the application ledger, and protected state changes
+occur only in `commitDeviceIngressMutation(_:)` after a validated durable
+receipt.
 
 APNS credentials, HTTP route names, push tokens, and device-registration bodies
 are intentionally outside CellProtocol. They belong to host adapters and Cells,
