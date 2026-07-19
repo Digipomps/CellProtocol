@@ -68,13 +68,19 @@ let package = Package(
             dependencies: ["CellBase"],
             path: "Tests/DeviceIngressTransportProbe"
         ),
+        .target(
+            name: "DeviceIngressCompositionRootProbe",
+            dependencies: ["CellBase"],
+            path: "Tests/DeviceIngressCompositionRootProbe"
+        ),
         .testTarget(
             name: "DeviceIngressLinuxTests",
             dependencies: [
                 "CellBase",
                 "OpenCombine",
             ],
-            path: "Tests/DeviceIngressLinuxTests"
+            path: "Tests/DeviceIngressLinuxTests",
+            exclude: ["Fixtures"]
         ),
     ]
 )

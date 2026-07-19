@@ -27,6 +27,18 @@ final class DeviceIngressContractTests: XCTestCase {
             admission.mutationReceipt.persistenceSemantics,
             DeviceIngressMutationReceipt.atomicRecheckAndDurableMutation
         )
+        XCTAssertEqual(
+            admission.admissionReceipt.targetOwnerIdentityUUID,
+            fixture.request.authority.targetOwnerIdentityUUID
+        )
+        XCTAssertEqual(
+            admission.admissionReceipt.signedAgreementSHA256,
+            fixture.request.authority.signedAgreementSHA256
+        )
+        XCTAssertEqual(
+            admission.mutationReceipt.targetOwnerIdentityUUID,
+            fixture.request.authority.targetOwnerIdentityUUID
+        )
         XCTAssertEqual(admission.authority.signedAgreementSHA256, fixture.signedAgreementSHA256)
         let requestCount = await fixture.authorityCell.authorityRequestCount()
         let mutationCount = await fixture.authorityCell.mutationCount()
@@ -49,6 +61,31 @@ final class DeviceIngressContractTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? DeviceIngressCanonicalWireError, .payloadTooLarge)
         }
+    }
+
+    func testRawVersion1FixturesFailBeforeResolverLedgerAndMutation() async throws {
+        let fixture = try await makeFixture()
+        let legacyChallenge = try fixtureData(named: "DeviceIngressChallenge.v1.b64")
+        let legacyRequest = try fixtureData(named: "DeviceIngressRequest.v1.b64")
+
+        do {
+            _ = try await fixture.service.admitAndMutate(
+                canonicalRequestData: legacyRequest,
+                protectedBody: fixture.body,
+                canonicalChallengeData: legacyChallenge,
+                now: now
+            )
+            XCTFail("Version-1 wire must not enter the resolver authority path")
+        } catch let error as DeviceIngressCanonicalWireError {
+            XCTAssertEqual(error, .malformedPayload)
+        }
+
+        let authorityRequestCount = await fixture.authorityCell.authorityRequestCount()
+        let admissionCount = await fixture.ledger.committedRecordsSnapshot().count
+        let mutationCount = await fixture.authorityCell.mutationCount()
+        XCTAssertEqual(authorityRequestCount, 0)
+        XCTAssertEqual(admissionCount, 0)
+        XCTAssertEqual(mutationCount, 0)
     }
 
     func testRejectsWrongAudienceDomainPurposeAndSubject() async throws {
@@ -263,6 +300,23 @@ final class DeviceIngressContractTests: XCTestCase {
         )
     }
 
+    func testRequesterCannotRetargetChallengeAfterSigning() async throws {
+        let fixture = try await makeFixture()
+        var retargeted = fixture.request
+        retargeted.authority.targetCellUUID = "99999999-9999-4999-8999-999999999999"
+        retargeted.proof = nil
+        retargeted = try await DeviceIngressEnvelopeSigner.sign(
+            retargeted,
+            with: fixture.subject
+        )
+
+        try await assertRequestError(
+            .challengeMismatch,
+            requestData: retargeted.canonicalWireData(),
+            fixture: fixture
+        )
+    }
+
     func testRejectsReplayBeforeSecondCellMutation() async throws {
         let fixture = try await makeFixture()
         _ = try await admit(fixture)
@@ -332,6 +386,19 @@ final class DeviceIngressContractTests: XCTestCase {
             fixture: fixture
         )
 
+        var legacyAuthority = fixture.request
+        legacyAuthority.authority.schema = "cellprotocol.device-ingress.authority-reference.v1"
+        legacyAuthority.proof = nil
+        legacyAuthority = try await DeviceIngressEnvelopeSigner.sign(
+            legacyAuthority,
+            with: fixture.subject
+        )
+        try await assertRequestError(
+            .invalidAuthorityReference,
+            requestData: legacyAuthority.canonicalWireData(),
+            fixture: fixture
+        )
+
         var overflow = fixture.request
         overflow.authority.authorityGeneration =
             DeviceIngressAuthorityReference.maximumJSONSafeGeneration + 1
@@ -359,6 +426,81 @@ final class DeviceIngressContractTests: XCTestCase {
         try await assertAdmissionError(.revocationRollbackDetected, mode: .lowerGeneration)
     }
 
+    func testRejectsEveryDeclaredConditionUntilVerifiedConditionReceiptsExist() async throws {
+        let fixture = try await makeFixture(mode: .nonEmptyConditions)
+
+        do {
+            _ = try await admit(fixture)
+            XCTFail("A declared Condition must not be treated as evaluated evidence")
+        } catch let error as DeviceIngressValidationError {
+            XCTAssertEqual(error, .agreementConditionsUnsupported)
+        }
+
+        let authorityRequestCount = await fixture.authorityCell.authorityRequestCount()
+        let admissionCount = await fixture.ledger.committedRecordsSnapshot().count
+        let mutationCount = await fixture.authorityCell.mutationCount()
+        XCTAssertEqual(authorityRequestCount, 1)
+        XCTAssertEqual(admissionCount, 0)
+        XCTAssertEqual(mutationCount, 0)
+    }
+
+    func testSignedChallengePinsResolverTargetOwnerAndExactAgreementBytes() async throws {
+        let substitutions: [(Mode, DeviceIngressValidationError, Int)] = [
+            (.wrongResolvedTargetCell, .authorityResolutionMismatch, 0),
+            (.wrongResolvedTargetOwner, .authorityResolutionMismatch, 0),
+            (.wrongSignedAgreementDigest, .agreementProofInvalid, 1),
+        ]
+
+        for (mode, expectedError, expectedAuthorityRequests) in substitutions {
+            let fixture = try await makeFixture(mode: mode)
+            do {
+                _ = try await admit(fixture)
+                XCTFail("Expected resolver/Contract substitution to be rejected for \(mode)")
+            } catch let error as DeviceIngressValidationError {
+                XCTAssertEqual(error, expectedError)
+            }
+            let authorityRequestCount = await fixture.authorityCell.authorityRequestCount()
+            let admissionCount = await fixture.ledger.committedRecordsSnapshot().count
+            let mutationCount = await fixture.authorityCell.mutationCount()
+            XCTAssertEqual(authorityRequestCount, expectedAuthorityRequests)
+            XCTAssertEqual(admissionCount, 0)
+            XCTAssertEqual(mutationCount, 0)
+        }
+    }
+
+    func testCryptographicallyValidAlternateContractCannotReplacePinnedContract() async throws {
+        let fixture = try await makeFixture(mode: .alternateValidAgreement)
+        let alternateContract = try JSONDecoder().decode(
+            Contract.self,
+            from: fixture.authorityEvidenceAgreement
+        )
+        let alternateBindingIsValid = await alternateContract.verifyAuthorizationBinding(
+            expectedIssuer: fixture.targetOwner,
+            expectedSubject: fixture.subject,
+            expectedDomain: DeviceIngressEnvelope.identityDomain,
+            now: now
+        )
+        XCTAssertTrue(alternateBindingIsValid)
+        XCTAssertNotEqual(
+            DeviceIngressCanonicalWire.sha256(fixture.authorityEvidenceAgreement),
+            fixture.request.authority.signedAgreementSHA256
+        )
+
+        do {
+            _ = try await admit(fixture)
+            XCTFail("A different valid Contract must not replace the challenge-pinned bytes")
+        } catch let error as DeviceIngressValidationError {
+            XCTAssertEqual(error, .agreementProofInvalid)
+        }
+
+        let authorityRequestCount = await fixture.authorityCell.authorityRequestCount()
+        let admissionCount = await fixture.ledger.committedRecordsSnapshot().count
+        let mutationCount = await fixture.authorityCell.mutationCount()
+        XCTAssertEqual(authorityRequestCount, 1)
+        XCTAssertEqual(admissionCount, 0)
+        XCTAssertEqual(mutationCount, 0)
+    }
+
     func testRevocationBetweenAdmissionAndMutationConsumesChallengeWithoutMutation() async throws {
         let fixture = try await makeFixture(mode: .revokeBeforeMutation)
         do {
@@ -383,6 +525,16 @@ final class DeviceIngressContractTests: XCTestCase {
         }
         let nonDurableMutationCount = await nonDurable.authorityCell.mutationCount()
         XCTAssertEqual(nonDurableMutationCount, 0)
+
+        let wrongAdmissionPin = try await makeFixture(ledgerMode: .wrongTargetPin)
+        do {
+            _ = try await admit(wrongAdmissionPin)
+            XCTFail("Expected target-pin receipt rejection")
+        } catch let error as DeviceIngressValidationError {
+            XCTAssertEqual(error, .invalidAdmissionReceipt)
+        }
+        let wrongAdmissionPinMutationCount = await wrongAdmissionPin.authorityCell.mutationCount()
+        XCTAssertEqual(wrongAdmissionPinMutationCount, 0)
 
         let invalidMutation = try await makeFixture(mode: .invalidMutationReceipt)
         do {
@@ -428,6 +580,22 @@ final class DeviceIngressContractTests: XCTestCase {
         XCTAssertNotEqual(firstEnvelope.challengeID, secondEnvelope.challengeID)
         XCTAssertNil(firstEnvelope.subject.displayName)
         XCTAssertNil(firstEnvelope.signer.displayName)
+
+        var invalidAuthority = fixture.request.authority
+        invalidAuthority.signedAgreementSHA256 = Data()
+        do {
+            _ = try await DeviceIngressChallengeFactory.issue(
+                operation: .register,
+                audience: audience,
+                subject: fixture.request.subject,
+                authority: invalidAuthority,
+                issuer: fixture.issuer,
+                now: now
+            )
+            XCTFail("Expected the challenge factory to reject an incomplete target pin")
+        } catch let error as DeviceIngressValidationError {
+            XCTAssertEqual(error, .invalidAuthorityReference)
+        }
     }
 
     private enum Mode: Equatable {
@@ -436,8 +604,13 @@ final class DeviceIngressContractTests: XCTestCase {
         case wrongAgreementGrant
         case wrongAgreementSubject
         case tamperedAgreement
+        case nonEmptyConditions
         case higherGeneration
         case lowerGeneration
+        case wrongResolvedTargetCell
+        case wrongResolvedTargetOwner
+        case wrongSignedAgreementDigest
+        case alternateValidAgreement
         case revokeBeforeMutation
         case invalidMutationReceipt
     }
@@ -445,6 +618,7 @@ final class DeviceIngressContractTests: XCTestCase {
     private struct Fixture {
         let issuer: Identity
         let issuerDescriptor: IdentityPublicKeyDescriptor
+        let targetOwner: Identity
         let subject: Identity
         let challenge: DeviceIngressEnvelope
         let challengeData: Data
@@ -455,6 +629,7 @@ final class DeviceIngressContractTests: XCTestCase {
         let ledger: FixtureAdmissionLedger
         let authorityCell: FixtureDeviceIngressAuthorityCell
         let signedAgreementSHA256: Data
+        let authorityEvidenceAgreement: Data
     }
 
     private func makeFixture(
@@ -484,6 +659,16 @@ final class DeviceIngressContractTests: XCTestCase {
         let issuerDescriptor = try XCTUnwrap(
             DeviceIngressIdentityDescriptor.publicDescriptor(for: issuer)
         )
+        let targetOwnerVault = EphemeralIdentityVault()
+        var targetOwner = Identity(
+            "33333333-3333-4333-8333-333333333333",
+            displayName: "Device registration owner",
+            identityVault: targetOwnerVault
+        )
+        await targetOwnerVault.addIdentity(
+            identity: &targetOwner,
+            for: "domain:scaffold:device-registration-owner"
+        )
         let subjectDescriptor = try XCTUnwrap(
             DeviceIngressIdentityDescriptor.publicDescriptor(for: subject)
         )
@@ -509,20 +694,20 @@ final class DeviceIngressContractTests: XCTestCase {
         } else {
             agreementSubject = subject
         }
-        let agreement = Agreement(owner: issuer)
-        agreement.conditions = []
+        let agreement = Agreement(owner: targetOwner)
+        agreement.conditions = mode == .nonEmptyConditions ? [GrantCondition()] : []
         agreement.grants = [Grant(
             keypath: mode == .wrongAgreementGrant
                 ? "deviceIngress.wrong"
                 : try scope.grantKeypath(),
             permission: DeviceIngressOperation.register.requiredAccess
         )]
-        agreement.signatories = [issuer, agreementSubject]
+        agreement.signatories = [targetOwner, agreementSubject]
         agreement.state = .signed
         agreement.duration = 3_600
         let contract = try await Contract.signed(
             agreement: agreement,
-            issuer: issuer,
+            issuer: targetOwner,
             subject: agreementSubject,
             domain: DeviceIngressEnvelope.identityDomain,
             issuedAt: now.addingTimeInterval(-60)
@@ -531,6 +716,31 @@ final class DeviceIngressContractTests: XCTestCase {
             contract.agreement.name = "tampered after signing"
         }
         let canonicalAgreement = try SignedAgreementEntitySupport.canonicalData(contract)
+        let canonicalAgreementSHA256 = DeviceIngressCanonicalWire.sha256(canonicalAgreement)
+        let authorityEvidenceAgreement: Data
+        if mode == .alternateValidAgreement {
+            let alternateAgreement = Agreement(owner: targetOwner)
+            alternateAgreement.name = "Valid but unpinned device ingress Agreement"
+            alternateAgreement.conditions = []
+            alternateAgreement.grants = agreement.grants
+            alternateAgreement.signatories = [targetOwner, subject]
+            alternateAgreement.state = .signed
+            alternateAgreement.duration = agreement.duration
+            let alternateContract = try await Contract.signed(
+                agreement: alternateAgreement,
+                issuer: targetOwner,
+                subject: subject,
+                domain: DeviceIngressEnvelope.identityDomain,
+                issuedAt: now.addingTimeInterval(-60)
+            )
+            authorityEvidenceAgreement = try SignedAgreementEntitySupport.canonicalData(
+                alternateContract
+            )
+        } else {
+            authorityEvidenceAgreement = canonicalAgreement
+        }
+        let targetCellUUID = "66666666-6666-4666-8666-666666666666"
+        let targetOwnerFingerprint = try XCTUnwrap(targetOwner.signingPublicKeyFingerprint)
         let referenceGeneration: UInt64 = mode == .lowerGeneration ? 2 : 1
         let evidenceGeneration: UInt64
         switch mode {
@@ -544,6 +754,12 @@ final class DeviceIngressContractTests: XCTestCase {
         let authority = DeviceIngressAuthorityReference(
             authorityID: "authority-1",
             agreementID: contract.uuid,
+            targetCellUUID: targetCellUUID,
+            targetOwnerIdentityUUID: targetOwner.uuid,
+            targetOwnerSigningKeyFingerprint: targetOwnerFingerprint,
+            signedAgreementSHA256: mode == .wrongSignedAgreementDigest
+                ? Data(repeating: 0, count: 32)
+                : canonicalAgreementSHA256,
             subjectIdentityUUID: subject.uuid,
             subjectSigningKeyFingerprint: subjectFingerprint,
             authorityGeneration: referenceGeneration,
@@ -583,14 +799,24 @@ final class DeviceIngressContractTests: XCTestCase {
         )
         let request = try DeviceIngressCanonicalWire.decodeCanonical(requestData)
         let evidence = DeviceIngressAuthorityEvidence(
-            canonicalSignedAgreement: canonicalAgreement,
+            canonicalSignedAgreement: authorityEvidenceAgreement,
             authorityID: authority.authorityID,
             authorityGeneration: evidenceGeneration,
             revocationLedgerID: authority.revocationLedgerID,
             revocationGeneration: evidenceGeneration
         )
+        let substituteOwnerVault = EphemeralIdentityVault()
+        var substituteOwner = Identity(
+            "77777777-7777-4777-8777-777777777777",
+            displayName: "Substituted resolver owner",
+            identityVault: substituteOwnerVault
+        )
+        await substituteOwnerVault.addIdentity(
+            identity: &substituteOwner,
+            for: "domain:scaffold:substituted-device-ingress"
+        )
         let authorityCell = await FixtureDeviceIngressAuthorityCell(
-            owner: issuer,
+            owner: mode == .wrongResolvedTargetOwner ? substituteOwner : targetOwner,
             decision: mode == .denied
                 ? .denied(reasonCode: "agreement_missing")
                 : .authorized(evidence),
@@ -599,14 +825,17 @@ final class DeviceIngressContractTests: XCTestCase {
                 : mode == .invalidMutationReceipt ? .invalidReceipt : .commit,
             currentAuthorityGeneration: evidenceGeneration,
             currentRevocationGeneration: evidenceGeneration,
-            signedAgreementSHA256: DeviceIngressCanonicalWire.sha256(canonicalAgreement)
+            signedAgreementSHA256: canonicalAgreementSHA256
         )
+        authorityCell.uuid = mode == .wrongResolvedTargetCell
+            ? "88888888-8888-4888-8888-888888888888"
+            : targetCellUUID
         let resolver = MockCellResolver()
         try await resolver.registerNamedEmitCell(
             name: "DeviceRegistration",
             emitCell: authorityCell,
             scope: .scaffoldUnique,
-            identity: issuer
+            identity: targetOwner
         )
         let ledger = FixtureAdmissionLedger(receiptMode: ledgerMode)
         let service = DeviceIngressAdmissionService(
@@ -618,6 +847,7 @@ final class DeviceIngressContractTests: XCTestCase {
         return Fixture(
             issuer: issuer,
             issuerDescriptor: issuerDescriptor,
+            targetOwner: targetOwner,
             subject: subject,
             challenge: challenge,
             challengeData: challengeData,
@@ -627,7 +857,8 @@ final class DeviceIngressContractTests: XCTestCase {
             service: service,
             ledger: ledger,
             authorityCell: authorityCell,
-            signedAgreementSHA256: DeviceIngressCanonicalWire.sha256(canonicalAgreement)
+            signedAgreementSHA256: canonicalAgreementSHA256,
+            authorityEvidenceAgreement: authorityEvidenceAgreement
         )
     }
 
@@ -689,6 +920,16 @@ final class DeviceIngressContractTests: XCTestCase {
         }
     }
 
+    private func fixtureData(named name: String) throws -> Data {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent(name)
+        let encoded = try String(contentsOf: fixtureURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return try XCTUnwrap(Data(base64Encoded: encoded))
+    }
+
     private func milliseconds(_ date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 * 1_000).rounded(.towardZero))
     }
@@ -735,6 +976,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         func commit(
             _ command: DeviceIngressMutationCommand,
             targetCellUUID: String,
+            targetOwnerIdentityUUID: String,
             targetOwnerFingerprint: String
         ) -> DeviceIngressMutationDecision {
             if mutationMode == .revokeBeforeMutation {
@@ -755,6 +997,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
                     admissionID: "invalid",
                     requestSHA256: Data(),
                     targetCellUUID: targetCellUUID,
+                    targetOwnerIdentityUUID: targetOwnerIdentityUUID,
                     targetOwnerSigningKeyFingerprint: targetOwnerFingerprint,
                     signedAgreementSHA256: signedAgreementSHA256,
                     authorityGeneration: currentAuthorityGeneration,
@@ -768,6 +1011,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
                 admissionID: command.admissionRecord.admissionID,
                 requestSHA256: command.admissionRecord.requestSHA256,
                 targetCellUUID: targetCellUUID,
+                targetOwnerIdentityUUID: targetOwnerIdentityUUID,
                 targetOwnerSigningKeyFingerprint: targetOwnerFingerprint,
                 signedAgreementSHA256: signedAgreementSHA256,
                 authorityGeneration: currentAuthorityGeneration,
@@ -829,10 +1073,12 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
     func commitDeviceIngressMutation(
         _ command: DeviceIngressMutationCommand
     ) async -> DeviceIngressMutationDecision {
-        let fingerprint = storedOwnerIdentity.signingPublicKeyFingerprint ?? ""
+        let owner = storedOwnerIdentity
+        let fingerprint = owner.signingPublicKeyFingerprint ?? ""
         return await state.commit(
             command,
             targetCellUUID: uuid,
+            targetOwnerIdentityUUID: owner.uuid,
             targetOwnerFingerprint: fingerprint
         )
     }
@@ -845,6 +1091,7 @@ private actor FixtureAdmissionLedger: DeviceIngressDurableAdmissionLedger {
     enum ReceiptMode {
         case valid
         case nonDurable
+        case wrongTargetPin
     }
 
     private var records: [DeviceIngressAdmissionRecord] = []
@@ -866,11 +1113,20 @@ private actor FixtureAdmissionLedger: DeviceIngressDurableAdmissionLedger {
         return .committed(DeviceIngressAdmissionReceipt(
             admissionID: record.admissionID,
             recordSHA256: DeviceIngressCanonicalWire.sha256(canonical),
+            requestSHA256: record.requestSHA256,
+            targetCellUUID: receiptMode == .wrongTargetPin
+                ? "99999999-9999-4999-8999-999999999999"
+                : record.targetCellUUID,
+            targetOwnerIdentityUUID: record.targetOwnerIdentityUUID,
+            targetOwnerSigningKeyFingerprint: record.targetOwnerSigningKeyFingerprint,
+            signedAgreementSHA256: record.signedAgreementSHA256,
+            authorityGeneration: record.authorityGeneration,
+            revocationGeneration: record.revocationGeneration,
             durableSequence: UInt64(records.count),
             committedAtMilliseconds: record.admittedAtMilliseconds,
-            persistenceSemantics: receiptMode == .valid
-                ? DeviceIngressAdmissionReceipt.durableBeforeMutation
-                : "memory_only"
+            persistenceSemantics: receiptMode == .nonDurable
+                ? "memory_only"
+                : DeviceIngressAdmissionReceipt.durableBeforeMutation
         ))
     }
 

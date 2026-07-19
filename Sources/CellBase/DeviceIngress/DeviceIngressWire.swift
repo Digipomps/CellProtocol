@@ -60,17 +60,22 @@ public enum DeviceIngressEnvelopeKind: String, Codable, Sendable {
 
 /// A non-secret pointer to resolver-owned authorization state.
 ///
-/// These identifiers grant no authority. A resolver-mediated target Cell must
-/// resolve the exact Agreement, subject, generation and revocation generation
-/// before an ingress request can be admitted.
+/// These identifiers grant no authority. The Scaffold-signed reference pins
+/// the resolver target Cell, owner signing key, exact signed Agreement bytes,
+/// subject, authority generation and revocation generation before an ingress
+/// request can be admitted.
 public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.authority-reference.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.authority-reference.v2"
     public static let maximumAuthorityLifetimeMilliseconds: Int64 = 30 * 24 * 60 * 60 * 1_000
     public static let maximumJSONSafeGeneration: UInt64 = 9_007_199_254_740_991
 
     public var schema: String
     public var authorityID: String
     public var agreementID: String
+    public var targetCellUUID: String
+    public var targetOwnerIdentityUUID: String
+    public var targetOwnerSigningKeyFingerprint: String
+    public var signedAgreementSHA256: Data
     public var subjectIdentityUUID: String
     public var subjectSigningKeyFingerprint: String
     public var authorityGeneration: UInt64
@@ -79,10 +84,15 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
     public var issuedAtMilliseconds: Int64
     public var validUntilMilliseconds: Int64
 
-    init(
+    @_spi(HAVENRuntime)
+    public init(
         schema: String = Self.currentSchema,
         authorityID: String,
         agreementID: String,
+        targetCellUUID: String,
+        targetOwnerIdentityUUID: String,
+        targetOwnerSigningKeyFingerprint: String,
+        signedAgreementSHA256: Data,
         subjectIdentityUUID: String,
         subjectSigningKeyFingerprint: String,
         authorityGeneration: UInt64,
@@ -94,6 +104,10 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
         self.schema = schema
         self.authorityID = authorityID
         self.agreementID = agreementID
+        self.targetCellUUID = targetCellUUID
+        self.targetOwnerIdentityUUID = targetOwnerIdentityUUID
+        self.targetOwnerSigningKeyFingerprint = targetOwnerSigningKeyFingerprint
+        self.signedAgreementSHA256 = signedAgreementSHA256
         self.subjectIdentityUUID = subjectIdentityUUID
         self.subjectSigningKeyFingerprint = subjectSigningKeyFingerprint
         self.authorityGeneration = authorityGeneration
@@ -134,7 +148,7 @@ public struct DeviceIngressIdentityProof: Codable, Equatable, Sendable {
 /// body bytes by SHA-256. `proof` is excluded from signing material but included
 /// in the canonical on-wire representation.
 public struct DeviceIngressEnvelope: Codable, Equatable, Sendable, CanonicalPayloadSignable {
-    public static let currentSchema = "cellprotocol.device-ingress.envelope.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.envelope.v2"
     public static let purpose = "purpose://access.audit.privacy/device-notification-callback"
     public static let identityDomain = "domain:device:notification-callback"
     public static let maximumEncodedBytes = 65_536
@@ -446,10 +460,17 @@ public enum DeviceIngressChallengeFactory {
             expiresAtMilliseconds: nowMilliseconds + lifetimeMilliseconds,
             signer: issuerDescriptor
         )
-        return try await DeviceIngressEnvelopeSigner.sign(
+        let canonicalData = try await DeviceIngressEnvelopeSigner.sign(
             unsigned,
             with: issuer
         ).canonicalWireData()
+        _ = try DeviceIngressEnvelopeVerifier.verifyChallenge(
+            canonicalData: canonicalData,
+            expectedAudience: audience,
+            expectedIssuer: issuerDescriptor,
+            now: now
+        )
+        return canonicalData
     }
 }
 

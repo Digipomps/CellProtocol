@@ -1,9 +1,8 @@
 import CellBase
 
-// The Linux workflow first type-checks this external transport surface as a
-// positive module-resolution control. It then enables the bypass attempt and
-// proves that the same source can no longer type-check through a normal import.
-func attemptTransportAuthorityBypass(
+// Plain transport code can name verified request values, but it cannot invoke
+// the internal staged resolver-authority operation.
+func attemptStagedAuthorityFromTransport(
     _ request: DeviceIngressAuthorityRequest,
     resolver: any CellResolverProtocol
 ) async throws {
