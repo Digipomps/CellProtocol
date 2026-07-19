@@ -138,53 +138,6 @@ final class PersistenceTests: XCTestCase {
         XCTAssertThrowsError(try CellStoragePathPolicy.existingURL(symlink, under: storageRoot))
     }
 
-    func testPersistedCellReaderAcceptsExactBoundaryAndRejectsOneByteOver() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("persisted-cell-bounded-reader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let exactURL = root.appendingPathComponent("exact")
-        let overURL = root.appendingPathComponent("over")
-        let testLimit = 4_096
-        let exact = Data(repeating: 0xA5, count: testLimit)
-        try exact.write(to: exactURL)
-        try Data(repeating: 0x5A, count: testLimit + 1).write(to: overURL)
-
-        XCTAssertEqual(
-            try PersistedCellFileIO.readRegularFile(at: exactURL, maximumBytes: testLimit),
-            exact
-        )
-        XCTAssertThrowsError(
-            try PersistedCellFileIO.readRegularFile(at: overURL, maximumBytes: testLimit)
-        ) { error in
-            XCTAssertEqual(
-                error as? PersistedCellFileIO.ReadError,
-                .storedCellTooLarge
-            )
-        }
-    }
-
-    func testPersistedCellReaderRejectsFinalSymlinkWithoutLeakingPathOrContents() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("persisted-cell-symlink-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let marker = "private-cell-content-marker"
-        let targetURL = root.appendingPathComponent("target")
-        let symlinkURL = root.appendingPathComponent("typedCell.json")
-        try Data(marker.utf8).write(to: targetURL)
-        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
-
-        XCTAssertThrowsError(try PersistedCellFileIO.readStoredCell(at: symlinkURL)) { error in
-            XCTAssertEqual(error as? PersistedCellFileIO.ReadError, .invalidFile)
-            let description = String(describing: error)
-            XCTAssertFalse(description.contains(root.path))
-            XCTAssertFalse(description.contains(marker))
-        }
-    }
-
     func testFileSystemStorageRejectsProductionLimitBeforeDecode() async throws {
         try await withSeparateTempHomeAndDocumentRoot { _, documentRoot in
             let uuid = "oversized-cell"
@@ -298,3 +251,74 @@ final class PersistenceTests: XCTestCase {
     }
 }
 #endif
+
+/// Cross-platform coverage for the descriptor reader itself. Keep these tests
+/// outside `canImport(CellVapor)` so the Glibc implementation is exercised by
+/// the Linux gate even when the test target does not link the Vapor product.
+final class PersistedCellFileIOTests: XCTestCase {
+    func testReaderAcceptsExactBoundaryAndRejectsOneByteOver() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("persisted-cell-bounded-reader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exactURL = root.appendingPathComponent("exact")
+        let overURL = root.appendingPathComponent("over")
+        let testLimit = 4_096
+        let exact = Data(repeating: 0xA5, count: testLimit)
+        try exact.write(to: exactURL)
+        try Data(repeating: 0x5A, count: testLimit + 1).write(to: overURL)
+
+        XCTAssertEqual(
+            try PersistedCellFileIO.readRegularFile(at: exactURL, maximumBytes: testLimit),
+            exact
+        )
+        XCTAssertThrowsError(
+            try PersistedCellFileIO.readRegularFile(at: overURL, maximumBytes: testLimit)
+        ) { error in
+            XCTAssertEqual(
+                error as? PersistedCellFileIO.ReadError,
+                .storedCellTooLarge
+            )
+        }
+    }
+
+    func testReaderRejectsFinalSymlinkWithoutLeakingPathOrContents() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("persisted-cell-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let marker = "private-cell-content-marker"
+        let targetURL = root.appendingPathComponent("target")
+        let symlinkURL = root.appendingPathComponent("typedCell.json")
+        try Data(marker.utf8).write(to: targetURL)
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        XCTAssertThrowsError(try PersistedCellFileIO.readStoredCell(at: symlinkURL)) { error in
+            XCTAssertEqual(error as? PersistedCellFileIO.ReadError, .invalidFile)
+            let description = String(describing: error)
+            XCTAssertFalse(description.contains(root.path))
+            XCTAssertFalse(description.contains(marker))
+        }
+    }
+
+    func testReaderRejectsHardLinkAndDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("persisted-cell-file-kind-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let targetURL = root.appendingPathComponent("target")
+        let hardLinkURL = root.appendingPathComponent("typedCell.json")
+        try Data("persisted-cell".utf8).write(to: targetURL)
+        try FileManager.default.linkItem(at: targetURL, to: hardLinkURL)
+
+        XCTAssertThrowsError(try PersistedCellFileIO.readStoredCell(at: hardLinkURL)) { error in
+            XCTAssertEqual(error as? PersistedCellFileIO.ReadError, .invalidFile)
+        }
+        XCTAssertThrowsError(try PersistedCellFileIO.readStoredCell(at: root)) { error in
+            XCTAssertEqual(error as? PersistedCellFileIO.ReadError, .invalidFile)
+        }
+    }
+}
