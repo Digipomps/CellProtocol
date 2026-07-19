@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
-@testable import CellBase
+@_spi(HAVENRuntime) @testable import CellBase
 
 #if canImport(CellVapor)
 import CellVapor
@@ -136,6 +136,74 @@ final class PersistenceTests: XCTestCase {
         let symlink = storageRoot.appendingPathComponent("linked-outside", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: outsideRoot)
         XCTAssertThrowsError(try CellStoragePathPolicy.existingURL(symlink, under: storageRoot))
+    }
+
+    func testPersistedCellReaderAcceptsExactBoundaryAndRejectsOneByteOver() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("persisted-cell-bounded-reader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let exactURL = root.appendingPathComponent("exact")
+        let overURL = root.appendingPathComponent("over")
+        let testLimit = 4_096
+        let exact = Data(repeating: 0xA5, count: testLimit)
+        try exact.write(to: exactURL)
+        try Data(repeating: 0x5A, count: testLimit + 1).write(to: overURL)
+
+        XCTAssertEqual(
+            try PersistedCellFileIO.readRegularFile(at: exactURL, maximumBytes: testLimit),
+            exact
+        )
+        XCTAssertThrowsError(
+            try PersistedCellFileIO.readRegularFile(at: overURL, maximumBytes: testLimit)
+        ) { error in
+            XCTAssertEqual(
+                error as? PersistedCellFileIO.ReadError,
+                .storedCellTooLarge
+            )
+        }
+    }
+
+    func testPersistedCellReaderRejectsFinalSymlinkWithoutLeakingPathOrContents() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("persisted-cell-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let marker = "private-cell-content-marker"
+        let targetURL = root.appendingPathComponent("target")
+        let symlinkURL = root.appendingPathComponent("typedCell.json")
+        try Data(marker.utf8).write(to: targetURL)
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        XCTAssertThrowsError(try PersistedCellFileIO.readStoredCell(at: symlinkURL)) { error in
+            XCTAssertEqual(error as? PersistedCellFileIO.ReadError, .invalidFile)
+            let description = String(describing: error)
+            XCTAssertFalse(description.contains(root.path))
+            XCTAssertFalse(description.contains(marker))
+        }
+    }
+
+    func testFileSystemStorageRejectsProductionLimitBeforeDecode() async throws {
+        try await withSeparateTempHomeAndDocumentRoot { _, documentRoot in
+            let uuid = "oversized-cell"
+            let cellDirectory = documentRoot.appendingPathComponent(uuid, isDirectory: true)
+            let cellFile = cellDirectory.appendingPathComponent("typedCell.json")
+            try FileManager.default.createDirectory(at: cellDirectory, withIntermediateDirectories: true)
+            XCTAssertTrue(FileManager.default.createFile(atPath: cellFile.path, contents: nil))
+            let handle = try FileHandle(forWritingTo: cellFile)
+            try handle.truncate(atOffset: UInt64(PersistedCellFileIO.maximumStoredCellBytes + 1))
+            try handle.close()
+
+            let decoder = CellJSONCoder()
+            XCTAssertThrowsError(try FileSystemCellStorage().loadEmitCell(with: uuid, decoder: decoder)) { error in
+                XCTAssertEqual(
+                    error as? FileSystemCellStorage.StorageError,
+                    .storedCellTooLarge
+                )
+            }
+        }
     }
 
     func testFileSystemStorageRejectsPathTraversal() async throws {
