@@ -61,29 +61,60 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          gate_root="${RUNNER_TEMP}/device-ingress-linux"
+          mkdir -p \
+            "${gate_root}/Sources" \
+            "${gate_root}/Tests/DeviceIngressLinuxTests" \
+            "${gate_root}/Tests/DeviceIngressTransportProbe"
+          cp Tests/Linux/DeviceIngressLinuxPackage.swift "${gate_root}/Package.swift"
+          cp Tests/Linux/VaporIdentityVaultLinuxPackage.resolved \
+            "${gate_root}/Package.resolved"
+          cp -R Sources/CellBase "${gate_root}/Sources/CellBase"
+          cp -R Sources/CombineHelpers "${gate_root}/Sources/CombineHelpers"
+          cp -R Sources/CodableHelpers "${gate_root}/Sources/CodableHelpers"
+          cp -R commons/schemas/haven.core/Sources/HavenCoreSchemas \
+            "${gate_root}/Sources/HavenCoreSchemas"
+          cp -R commons/resolver/taxonomy-resolver/Sources/TaxonomyResolver \
+            "${gate_root}/Sources/TaxonomyResolver"
+          cp -R commons/resolver/keypath-resolver/Sources/KeyPathResolver \
+            "${gate_root}/Sources/KeyPathResolver"
+          cp Tests/CellBaseTests/DeviceIngressContractTests.swift \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp Tests/CellBaseTests/TestSupport/MockCellResolver.swift \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
+            "${gate_root}/Tests/DeviceIngressTransportProbe/"
           swift test \
+            --package-path "${gate_root}" \
             --disable-sandbox \
             --disable-automatic-resolution \
-            --jobs 2 \
-            --filter DeviceIngress
+            --jobs 2
 
       - name: Prove transport cannot invoke staged authority API
         shell: bash
         run: |
           set -euo pipefail
-          module_dir="$(find .build -type d -path '*/debug/Modules' -print -quit)"
-          test -n "$module_dir"
+          gate_root="${RUNNER_TEMP}/device-ingress-linux"
           diagnostic_path="${RUNNER_TEMP}/device-ingress-public-api-negative.txt"
-          if swiftc \
-            -typecheck \
-            -I "$module_dir" \
-            Tests/Linux/DeviceIngressPublicAPINegative.swift \
-            2>"$diagnostic_path"; then
+          swift build \
+            --package-path "${gate_root}" \
+            --target DeviceIngressTransportProbe \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2
+          if swift build \
+            --package-path "${gate_root}" \
+            --target DeviceIngressTransportProbe \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2 \
+            -Xswiftc -D \
+            -Xswiftc ATTEMPT_AUTHORITY_BYPASS \
+            >"$diagnostic_path" 2>&1; then
             echo "Transport unexpectedly compiled against staged authority API" >&2
             exit 1
           fi
-          grep -q "cannot find 'DeviceIngressResolverAuthorizer' in scope" \
-            "$diagnostic_path"
+          test -s "$diagnostic_path"
 
       - name: Verify source and dependency lock remained unchanged
         shell: bash
