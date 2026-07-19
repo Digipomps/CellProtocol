@@ -3,16 +3,19 @@
 
 import Foundation
 import CFileUtils
-import CellBase
+@_spi(HAVENRuntime) import CellBase
 
 public struct FileSystemCellStorage: CellStorage {
     
     private let dataFilename = "typedCell.json"
     
-    public enum StorageError: Error {
+    public enum StorageError: Error, Equatable {
         case noDocumentRoot
         case invalidDataInStorage
         case unableToCreateDirectory
+        case invalidStoredCellFile
+        case storedCellTooLarge
+        case unableToReadStoredCell
     }
     
     public init() {}
@@ -23,7 +26,7 @@ public struct FileSystemCellStorage: CellStorage {
             under: CellApple.getCellsDocumentsDirectory()
         )
         let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: cellURL)
-        let stored = try Data(contentsOf: typedCellURL)
+        let stored = try readStoredCell(at: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(stored: stored, uuid: uuid)
         
         let cell = try decoder.decodeEmitCell(from: cellJson)
@@ -40,7 +43,7 @@ public struct FileSystemCellStorage: CellStorage {
             under: CellApple.getDocumentsDirectory()
         )
         let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: cellURL)
-        let stored = try Data(contentsOf: typedCellURL)
+        let stored = try readStoredCell(at: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(
             stored: stored,
             uuid: cellURL.lastPathComponent
@@ -59,7 +62,7 @@ public struct FileSystemCellStorage: CellStorage {
             under: CellApple.getDocumentsDirectory()
         )
         let typedCellURL = try CellStoragePathPolicy.filename(dataFilename, under: confinedCellURL)
-        let stored = try Data(contentsOf: typedCellURL)
+        let stored = try readStoredCell(at: typedCellURL)
         let cellJson = try CellPersistenceCrypto.decodeFromStorage(
             stored: stored,
             uuid: confinedCellURL.lastPathComponent
@@ -92,6 +95,9 @@ public struct FileSystemCellStorage: CellStorage {
             uuid: uuid,
             options: options
         )
+        guard persistedData.count <= PersistedCellFileIO.maximumStoredCellBytes else {
+            throw StorageError.storedCellTooLarge
+        }
         let directoryURL = try cellDirectoryURL(uuid: uuid)
         let directory = directoryURL.path.cString(using: .utf8)
         if !directoryExists(directory) {
@@ -113,5 +119,26 @@ public struct FileSystemCellStorage: CellStorage {
     }
     func getDocumentsDirectory() -> URL {
         CellApple.getDocumentsDirectory()
+    }
+
+    private func readStoredCell(at url: URL) throws -> Data {
+        do {
+            return try PersistedCellFileIO.readStoredCell(at: url)
+        } catch let error as PersistedCellFileIO.ReadError {
+            switch error {
+            case .missing:
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: CocoaError.Code.fileReadNoSuchFile.rawValue,
+                    userInfo: [:]
+                )
+            case .invalidFile:
+                throw StorageError.invalidStoredCellFile
+            case .storedCellTooLarge:
+                throw StorageError.storedCellTooLarge
+            case .readFailed:
+                throw StorageError.unableToReadStoredCell
+            }
+        }
     }
 }
