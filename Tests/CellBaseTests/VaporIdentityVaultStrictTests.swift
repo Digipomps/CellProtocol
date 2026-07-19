@@ -268,6 +268,26 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
             requests,
             expectedRevision: plan.revision
         )
+        var expectedBindings: [VaporIdentityVaultBindingSummary] = []
+        for request in requests {
+            let identity = try await VaporIdentityVault.shared.requireIdentity(
+                expectedUUID: request.uuid,
+                for: request.context
+            )
+            expectedBindings.append(
+                VaporIdentityVaultBindingSummary(
+                    uuid: request.uuid,
+                    context: request.context,
+                    signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint)
+                )
+            )
+        }
+        expectedBindings.sort {
+            if $0.context == $1.context {
+                return $0.uuid.utf8.lexicographicallyPrecedes($1.uuid.utf8)
+            }
+            return $0.context.utf8.lexicographicallyPrecedes($1.context.utf8)
+        }
         let vaultFileURL = vaultURL(in: root)
         let keyFileURL = masterKeyURL(in: root)
         try setPermissions(0o400, at: keyFileURL)
@@ -283,6 +303,7 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         XCTAssertEqual(inventory.revision, provisioned.revision)
         XCTAssertEqual(inventory.bindingCount, requests.count)
         XCTAssertEqual(inventory.bindings.count, inventory.bindingCount)
+        XCTAssertEqual(inventory.bindings, expectedBindings)
         XCTAssertEqual(
             inventory.bindings.map(\.context),
             [
