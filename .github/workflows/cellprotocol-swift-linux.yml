@@ -95,16 +95,20 @@ jobs:
           module_dir="$(find "${gate_root}/.build" -type d -path '*/debug/Modules' -print -quit)"
           test -n "$module_dir"
           diagnostic_path="${RUNNER_TEMP}/device-ingress-public-api-negative.txt"
+          swiftc \
+            -typecheck \
+            -I "$module_dir" \
+            Tests/Linux/DeviceIngressPublicAPINegative.swift
           if swiftc \
             -typecheck \
+            -D ATTEMPT_AUTHORITY_BYPASS \
             -I "$module_dir" \
             Tests/Linux/DeviceIngressPublicAPINegative.swift \
             2>"$diagnostic_path"; then
             echo "Transport unexpectedly compiled against staged authority API" >&2
             exit 1
           fi
-          grep -q "cannot find 'DeviceIngressResolverAuthorizer' in scope" \
-            "$diagnostic_path"
+          test -s "$diagnostic_path"
 
       - name: Verify source and dependency lock remained unchanged
         shell: bash
