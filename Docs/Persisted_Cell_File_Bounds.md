@@ -27,10 +27,13 @@ It leaves substantial headroom for ordinary JSON state and is not a wire-format
 change. Writes above the same limit are refused so a runtime cannot create a
 file that it will reject on restart.
 
-Before rollout, operations must run a size-only inventory over the target
-volume while the service is quiesced. Any existing regular `typedCell.json`
-above 64 MiB blocks rollout and requires an explicit migration/capacity review;
-the file must never be truncated or silently skipped.
+Before rollout, operations must stop or quiesce every writer, hold the exclusive
+deployment and volume lock, and run a size-only `lstat` inventory over every
+`typedCell.json` in the target volume. The inventory must not read file
+contents. A stat failure, symlink, non-regular file, multiply-linked file, or
+any file above exactly 67,108,864 bytes blocks rollout and requires explicit
+migration/capacity review. Inventory and rollout automation must never trim,
+delete, rewrite, or silently skip a blocking file.
 
 Raising this limit is a compatibility and capacity decision. It requires a
 measured legitimate payload, bounded-memory tests at the new exact boundary,
