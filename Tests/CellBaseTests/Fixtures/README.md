@@ -18,3 +18,10 @@ descriptor for UTF-8 payload `HAVEN user data erasure fixture v0`. Other
 runtimes must produce the same payload hash, set ID, shard sizing, and six
 metadata-bound fragment hashes. Object member ordering and whitespace are not
 contractual.
+
+`DeviceIngressChallenge.v3.b64`, `DeviceIngressRequest.v3.b64`,
+`DeviceIngressSignedContract.v3.b64`, and `DeviceIngressResponse.v3.b64` are
+one byte-pinned, cryptographically bound DeviceIngress registration exchange.
+The requester's locally derived response expectation, not server-provided
+admission metadata, is the response-verification authority. The v1 and v2
+envelope fixtures remain pinned negative vectors and must fail closed.

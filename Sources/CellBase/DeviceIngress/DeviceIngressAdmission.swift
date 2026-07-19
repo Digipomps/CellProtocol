@@ -37,12 +37,12 @@ public enum DeviceIngressValidationError: Error, Equatable, Sendable {
     case revocationRollbackDetected
     case agreementProofInvalid
     case agreementConditionsUnsupported
-    case replayDetected
     case admissionLedgerRollback
     case admissionLedgerUnavailable
     case invalidAdmissionReceipt
     case mutationDenied(String)
     case invalidMutationReceipt
+    case committedResponseUnavailable
 }
 
 public struct DeviceIngressVerifiedPair: Sendable {
@@ -218,6 +218,7 @@ public enum DeviceIngressEnvelopeVerifier {
         }
         try validateAuthority(
             envelope.authority,
+            operation: envelope.operation,
             subject: envelope.subject,
             envelopeIssuedAtMilliseconds: envelope.issuedAtMilliseconds,
             nowMilliseconds: nowMilliseconds
@@ -243,6 +244,7 @@ public enum DeviceIngressEnvelopeVerifier {
 
     private static func validateAuthority(
         _ authority: DeviceIngressAuthorityReference,
+        operation: DeviceIngressOperation,
         subject: IdentityPublicKeyDescriptor,
         envelopeIssuedAtMilliseconds: Int64,
         nowMilliseconds: Int64
@@ -263,6 +265,26 @@ public enum DeviceIngressEnvelopeVerifier {
               authority.revocationGeneration
                 <= DeviceIngressAuthorityReference.maximumJSONSafeGeneration else {
             throw DeviceIngressValidationError.invalidAuthorityReference
+        }
+        let contentPolicy = authority.contentPolicy
+        guard contentPolicy.schema == DeviceIngressContentPolicy.currentSchema,
+              contentPolicy.requestBodyContentContractSHA256.count == 32,
+              contentPolicy.responseContentContractSHA256.count == 32,
+              contentPolicy.responseRetentionPolicy
+                == .sameCellDurableUntilRequestExpiry,
+              contentPolicy.subjectResponseRetentionRequiresStorageGrant,
+              operation.requiredAccess == "rw-s" else {
+            throw DeviceIngressValidationError.invalidAuthorityReference
+        }
+        switch operation {
+        case .resolve:
+            guard contentPolicy.resolvedPayloadContentContractSHA256?.count == 32 else {
+                throw DeviceIngressValidationError.invalidAuthorityReference
+            }
+        case .register, .submit:
+            guard contentPolicy.resolvedPayloadContentContractSHA256 == nil else {
+                throw DeviceIngressValidationError.invalidAuthorityReference
+            }
         }
         guard validIdentityUUID(authority.subjectIdentityUUID),
               authority.subjectIdentityUUID == subject.uuid,
@@ -382,7 +404,7 @@ public enum DeviceIngressAuthorityPath: String, Codable, Sendable {
 /// Exact signed Agreement scope. The hash of this canonical structure is the
 /// only Grant keypath accepted for an ingress operation.
 public struct DeviceIngressAgreementScope: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.agreement-scope.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.agreement-scope.v2"
 
     public let schema: String
     public let operation: DeviceIngressOperation
@@ -393,13 +415,15 @@ public struct DeviceIngressAgreementScope: Codable, Equatable, Sendable {
     public let purpose: String
     public let audience: String
     public let identityDomain: String
+    public let contentPolicy: DeviceIngressContentPolicy
 
     public init(request: DeviceIngressAuthorityRequest) {
         self.init(
             operation: request.operation,
             purpose: request.purpose,
             audience: request.audience,
-            identityDomain: request.identityDomain
+            identityDomain: request.identityDomain,
+            contentPolicy: request.authority.contentPolicy
         )
     }
 
@@ -407,7 +431,8 @@ public struct DeviceIngressAgreementScope: Codable, Equatable, Sendable {
         operation: DeviceIngressOperation,
         purpose: String = DeviceIngressEnvelope.purpose,
         audience: String,
-        identityDomain: String = DeviceIngressEnvelope.identityDomain
+        identityDomain: String = DeviceIngressEnvelope.identityDomain,
+        contentPolicy: DeviceIngressContentPolicy
     ) {
         schema = Self.currentSchema
         self.operation = operation
@@ -418,6 +443,7 @@ public struct DeviceIngressAgreementScope: Codable, Equatable, Sendable {
         self.purpose = purpose
         self.audience = audience
         self.identityDomain = identityDomain
+        self.contentPolicy = contentPolicy
     }
 
     public func canonicalData() throws -> Data {
@@ -529,59 +555,154 @@ public struct DeviceIngressMutationCommand: Sendable {
 }
 
 public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.mutation-receipt.v2"
-    public static let atomicRecheckAndDurableMutation =
-        "same_cell_atomic_authority_recheck_and_durable_mutation"
+    public static let currentSchema = "cellprotocol.device-ingress.mutation-receipt.v3"
+    public static let atomicMutationAndResponse =
+        "same_cell_atomic_authority_recheck_durable_mutation_and_response"
 
     public let schema: String
+    public let responseID: String
+    public let operation: DeviceIngressOperation
     public let admissionID: String
     public let requestSHA256: Data
+    public let challengeSHA256: Data
+    public let bodySHA256: Data
     public let targetCellUUID: String
     public let targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
+    public let subjectIdentityUUID: String
+    public let subjectSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64
+    public let revocationLedgerID: String
     public let revocationGeneration: UInt64
+    public let contentPolicySHA256: Data
     public let mutationRecordSHA256: Data
+    public let operationResultSHA256: Data
+    public let durableSequence: UInt64
     public let committedAtMilliseconds: Int64
     public let persistenceSemantics: String
 
     public init(
         schema: String = Self.currentSchema,
+        responseID: String,
+        operation: DeviceIngressOperation,
         admissionID: String,
         requestSHA256: Data,
+        challengeSHA256: Data,
+        bodySHA256: Data,
         targetCellUUID: String,
         targetOwnerIdentityUUID: String,
         targetOwnerSigningKeyFingerprint: String,
+        subjectIdentityUUID: String,
+        subjectSigningKeyFingerprint: String,
         signedAgreementSHA256: Data,
         authorityGeneration: UInt64,
+        revocationLedgerID: String,
         revocationGeneration: UInt64,
+        contentPolicySHA256: Data,
         mutationRecordSHA256: Data,
+        operationResultSHA256: Data,
+        durableSequence: UInt64,
         committedAtMilliseconds: Int64,
-        persistenceSemantics: String = Self.atomicRecheckAndDurableMutation
+        persistenceSemantics: String = Self.atomicMutationAndResponse
     ) {
         self.schema = schema
+        self.responseID = responseID
+        self.operation = operation
         self.admissionID = admissionID
         self.requestSHA256 = requestSHA256
+        self.challengeSHA256 = challengeSHA256
+        self.bodySHA256 = bodySHA256
         self.targetCellUUID = targetCellUUID
         self.targetOwnerIdentityUUID = targetOwnerIdentityUUID
         self.targetOwnerSigningKeyFingerprint = targetOwnerSigningKeyFingerprint
+        self.subjectIdentityUUID = subjectIdentityUUID
+        self.subjectSigningKeyFingerprint = subjectSigningKeyFingerprint
         self.signedAgreementSHA256 = signedAgreementSHA256
         self.authorityGeneration = authorityGeneration
+        self.revocationLedgerID = revocationLedgerID
         self.revocationGeneration = revocationGeneration
+        self.contentPolicySHA256 = contentPolicySHA256
         self.mutationRecordSHA256 = mutationRecordSHA256
+        self.operationResultSHA256 = operationResultSHA256
+        self.durableSequence = durableSequence
         self.committedAtMilliseconds = committedAtMilliseconds
         self.persistenceSemantics = persistenceSemantics
+    }
+
+    public func canonicalData() throws -> Data {
+        try DeviceIngressCanonicalWire.canonicalData(for: self, excludingTopLevelKeys: [])
+    }
+
+    @_spi(HAVENRuntime)
+    public static func responseID(
+        admissionID: String,
+        requestSHA256: Data,
+        mutationRecordSHA256: Data,
+        operationResultSHA256: Data
+    ) throws -> String {
+        let material = DeviceIngressResponseIDMaterial(
+            admissionID: admissionID,
+            requestSHA256: requestSHA256,
+            mutationRecordSHA256: mutationRecordSHA256,
+            operationResultSHA256: operationResultSHA256
+        )
+        return DeviceIngressCanonicalWire.base64URL(
+            DeviceIngressCanonicalWire.sha256(
+                try DeviceIngressCanonicalWire.canonicalData(
+                    for: material,
+                    excludingTopLevelKeys: []
+                )
+            )
+        )
+    }
+}
+
+private struct DeviceIngressResponseIDMaterial: Codable {
+    let schema: String
+    let admissionID: String
+    let requestSHA256: Data
+    let mutationRecordSHA256: Data
+    let operationResultSHA256: Data
+
+    init(
+        admissionID: String,
+        requestSHA256: Data,
+        mutationRecordSHA256: Data,
+        operationResultSHA256: Data
+    ) {
+        schema = "cellprotocol.device-ingress.response-id-material.v1"
+        self.admissionID = admissionID
+        self.requestSHA256 = requestSHA256
+        self.mutationRecordSHA256 = mutationRecordSHA256
+        self.operationResultSHA256 = operationResultSHA256
+    }
+}
+
+public struct DeviceIngressCommittedMutation: Sendable {
+    public let receipt: DeviceIngressMutationReceipt
+    public let canonicalResponseData: Data
+
+    @_spi(HAVENRuntime)
+    public init(
+        receipt: DeviceIngressMutationReceipt,
+        canonicalResponseData: Data
+    ) {
+        self.receipt = receipt
+        self.canonicalResponseData = canonicalResponseData
     }
 }
 
 public enum DeviceIngressMutationDecision: Sendable {
-    case committed(DeviceIngressMutationReceipt)
+    case committed(DeviceIngressCommittedMutation)
+    case replay(existing: DeviceIngressCommittedMutation)
     case denied(reasonCode: String)
+    case unavailable
 }
 
 /// Implemented by the resolver-selected authority Cell, never by HTTP or
-/// another transport adapter. `commitDeviceIngressMutation` must serialize a
+/// another transport adapter. `commitOrReturnExistingDeviceIngressMutation`
+/// must serialize a
 /// fresh Agreement/revocation-generation CAS and the durable mutation in the
 /// same Cell operation. Replacing the resolver mapping cannot replace the
 /// already selected object reference.
@@ -593,7 +714,12 @@ public protocol DeviceIngressAuthorityCell: AnyObject {
         for request: DeviceIngressAuthorityRequest
     ) async -> DeviceIngressAuthorityDecision
 
-    func commitDeviceIngressMutation(
+    /// Atomically commits the target mutation and exact signed response, or
+    /// returns the byte-identical response already stored for `admissionID`.
+    /// Implementations must key idempotency by the complete admission record,
+    /// recheck current Agreement/revocation generations and never reconstruct
+    /// or re-sign a replayed response.
+    func commitOrReturnExistingDeviceIngressMutation(
         _ command: DeviceIngressMutationCommand
     ) async -> DeviceIngressMutationDecision
 }
@@ -760,7 +886,7 @@ enum DeviceIngressResolverAuthorizer {
 }
 
 public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.admission-record.v2"
+    public static let currentSchema = "cellprotocol.device-ingress.admission-record.v3"
 
     public let schema: String
     public let admissionID: String
@@ -779,16 +905,15 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
     public let revocationGeneration: UInt64
     public let subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
+    public let contentPolicy: DeviceIngressContentPolicy
     public let operation: DeviceIngressOperation
     public let capability: String
     public let issuedAtMilliseconds: Int64
     public let expiresAtMilliseconds: Int64
-    public let admittedAtMilliseconds: Int64
 
     public init(
         verifiedPair: DeviceIngressVerifiedPair,
-        resolvedAuthority: DeviceIngressResolvedAuthority,
-        admittedAt: Date
+        resolvedAuthority: DeviceIngressResolvedAuthority
     ) {
         let request = verifiedPair.request
         schema = Self.currentSchema
@@ -810,13 +935,11 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
         revocationGeneration = resolvedAuthority.revocationGeneration
         subjectIdentityUUID = resolvedAuthority.subjectIdentityUUID
         subjectSigningKeyFingerprint = resolvedAuthority.subjectSigningKeyFingerprint
+        contentPolicy = request.authority.contentPolicy
         operation = request.operation
         capability = request.capability
         issuedAtMilliseconds = request.issuedAtMilliseconds
         expiresAtMilliseconds = request.expiresAtMilliseconds
-        admittedAtMilliseconds = Int64(
-            (admittedAt.timeIntervalSince1970 * 1_000).rounded(.towardZero)
-        )
     }
 
     public func canonicalData() throws -> Data {
@@ -825,7 +948,7 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
 }
 
 public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.admission-receipt.v2"
+    public static let currentSchema = "cellprotocol.device-ingress.admission-receipt.v3"
     public static let durableBeforeMutation = "atomic_durable_before_cell_mutation"
 
     public let schema: String
@@ -837,7 +960,9 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
     public let targetOwnerSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64
+    public let revocationLedgerID: String
     public let revocationGeneration: UInt64
+    public let contentPolicySHA256: Data
     public let durableSequence: UInt64
     public let committedAtMilliseconds: Int64
     public let persistenceSemantics: String
@@ -852,7 +977,9 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
         targetOwnerSigningKeyFingerprint: String,
         signedAgreementSHA256: Data,
         authorityGeneration: UInt64,
+        revocationLedgerID: String,
         revocationGeneration: UInt64,
+        contentPolicySHA256: Data,
         durableSequence: UInt64,
         committedAtMilliseconds: Int64,
         persistenceSemantics: String = Self.durableBeforeMutation
@@ -866,16 +993,31 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
         self.targetOwnerSigningKeyFingerprint = targetOwnerSigningKeyFingerprint
         self.signedAgreementSHA256 = signedAgreementSHA256
         self.authorityGeneration = authorityGeneration
+        self.revocationLedgerID = revocationLedgerID
         self.revocationGeneration = revocationGeneration
+        self.contentPolicySHA256 = contentPolicySHA256
         self.durableSequence = durableSequence
         self.committedAtMilliseconds = committedAtMilliseconds
         self.persistenceSemantics = persistenceSemantics
     }
 }
 
+public struct DeviceIngressPersistedAdmission: Sendable {
+    public let record: DeviceIngressAdmissionRecord
+    public let receipt: DeviceIngressAdmissionReceipt
+
+    public init(
+        record: DeviceIngressAdmissionRecord,
+        receipt: DeviceIngressAdmissionReceipt
+    ) {
+        self.record = record
+        self.receipt = receipt
+    }
+}
+
 public enum DeviceIngressAdmissionCommitOutcome: Sendable {
-    case committed(DeviceIngressAdmissionReceipt)
-    case replay(existingAdmissionID: String)
+    case committed(DeviceIngressPersistedAdmission)
+    case replay(existing: DeviceIngressPersistedAdmission)
     case generationRollback
     case unavailable
 }
@@ -896,19 +1038,28 @@ public struct DeviceIngressCompletedAdmission: Sendable {
     public let record: DeviceIngressAdmissionRecord
     public let admissionReceipt: DeviceIngressAdmissionReceipt
     public let mutationReceipt: DeviceIngressMutationReceipt
+    public let response: DeviceIngressOperationResponse
+    public let canonicalResponseData: Data
+    public let isReplay: Bool
 
     init(
         pair: DeviceIngressVerifiedPair,
         authority: DeviceIngressResolvedAuthority,
         record: DeviceIngressAdmissionRecord,
         admissionReceipt: DeviceIngressAdmissionReceipt,
-        mutationReceipt: DeviceIngressMutationReceipt
+        mutationReceipt: DeviceIngressMutationReceipt,
+        response: DeviceIngressOperationResponse,
+        canonicalResponseData: Data,
+        isReplay: Bool
     ) {
         self.pair = pair
         self.authority = authority
         self.record = record
         self.admissionReceipt = admissionReceipt
         self.mutationReceipt = mutationReceipt
+        self.response = response
+        self.canonicalResponseData = canonicalResponseData
+        self.isReplay = isReplay
     }
 }
 
@@ -940,24 +1091,32 @@ enum DeviceIngressAdmissionPipeline {
             resolver: resolver,
             now: now
         )
-        let record = DeviceIngressAdmissionRecord(
+        let proposedRecord = DeviceIngressAdmissionRecord(
             verifiedPair: pair,
-            resolvedAuthority: authorizedTarget.resolved,
-            admittedAt: now
+            resolvedAuthority: authorizedTarget.resolved
         )
-        let outcome = await ledger.commit(record)
-        let receipt: DeviceIngressAdmissionReceipt
+        let outcome = await ledger.commit(proposedRecord)
+        let persistedAdmission: DeviceIngressPersistedAdmission
+        let ledgerIsReplay: Bool
         switch outcome {
         case .committed(let value):
-            receipt = value
-        case .replay:
-            throw DeviceIngressValidationError.replayDetected
+            persistedAdmission = value
+            ledgerIsReplay = false
+        case .replay(let existing):
+            persistedAdmission = existing
+            ledgerIsReplay = true
         case .generationRollback:
             throw DeviceIngressValidationError.admissionLedgerRollback
         case .unavailable:
             throw DeviceIngressValidationError.admissionLedgerUnavailable
         }
+        let record = persistedAdmission.record
+        let receipt = persistedAdmission.receipt
+        guard record == proposedRecord else {
+            throw DeviceIngressValidationError.invalidAdmissionReceipt
+        }
         let expectedRecordHash = DeviceIngressCanonicalWire.sha256(try record.canonicalData())
+        let contentPolicySHA256 = try record.contentPolicy.canonicalSHA256()
         guard receipt.schema == DeviceIngressAdmissionReceipt.currentSchema,
               receipt.admissionID == record.admissionID,
               receipt.recordSHA256 == expectedRecordHash,
@@ -968,14 +1127,20 @@ enum DeviceIngressAdmissionPipeline {
                 == record.targetOwnerSigningKeyFingerprint,
               receipt.signedAgreementSHA256 == record.signedAgreementSHA256,
               receipt.authorityGeneration == record.authorityGeneration,
+              receipt.revocationLedgerID == record.revocationLedgerID,
               receipt.revocationGeneration == record.revocationGeneration,
+              receipt.contentPolicySHA256 == contentPolicySHA256,
               receipt.durableSequence > 0,
-              receipt.committedAtMilliseconds >= record.admittedAtMilliseconds,
+              receipt.committedAtMilliseconds >= record.issuedAtMilliseconds,
               receipt.committedAtMilliseconds < record.expiresAtMilliseconds,
               receipt.persistenceSemantics == DeviceIngressAdmissionReceipt.durableBeforeMutation else {
             throw DeviceIngressValidationError.invalidAdmissionReceipt
         }
-        let mutationDecision = await authorizedTarget.cell.commitDeviceIngressMutation(
+        let canonicalResponseData: Data
+        let mutationReceipt: DeviceIngressMutationReceipt
+        let targetIsReplay: Bool
+        let mutationDecision = await authorizedTarget.cell
+            .commitOrReturnExistingDeviceIngressMutation(
             DeviceIngressMutationCommand(
                 authorityRequest: authorizedTarget.request,
                 admissionRecord: record,
@@ -983,28 +1148,59 @@ enum DeviceIngressAdmissionPipeline {
                 protectedBody: protectedBody
             )
         )
-        let mutationReceipt: DeviceIngressMutationReceipt
         switch mutationDecision {
         case .committed(let value):
-            mutationReceipt = value
+            mutationReceipt = value.receipt
+            canonicalResponseData = value.canonicalResponseData
+            targetIsReplay = false
+        case .replay(let existing):
+            mutationReceipt = existing.receipt
+            canonicalResponseData = existing.canonicalResponseData
+            targetIsReplay = true
         case .denied(let reasonCode):
             throw DeviceIngressValidationError.mutationDenied(reasonCode)
+        case .unavailable:
+            throw DeviceIngressValidationError.committedResponseUnavailable
         }
         guard mutationReceipt.schema == DeviceIngressMutationReceipt.currentSchema,
+              mutationReceipt.operation == record.operation,
               mutationReceipt.admissionID == record.admissionID,
               mutationReceipt.requestSHA256 == record.requestSHA256,
+              mutationReceipt.challengeSHA256 == record.challengeSHA256,
+              mutationReceipt.bodySHA256 == record.bodySHA256,
               mutationReceipt.targetCellUUID == record.targetCellUUID,
               mutationReceipt.targetOwnerIdentityUUID == record.targetOwnerIdentityUUID,
               mutationReceipt.targetOwnerSigningKeyFingerprint
                 == record.targetOwnerSigningKeyFingerprint,
+              mutationReceipt.subjectIdentityUUID == record.subjectIdentityUUID,
+              mutationReceipt.subjectSigningKeyFingerprint
+                == record.subjectSigningKeyFingerprint,
               mutationReceipt.signedAgreementSHA256 == record.signedAgreementSHA256,
               mutationReceipt.authorityGeneration == record.authorityGeneration,
+              mutationReceipt.revocationLedgerID == record.revocationLedgerID,
               mutationReceipt.revocationGeneration == record.revocationGeneration,
+              mutationReceipt.contentPolicySHA256 == contentPolicySHA256,
               mutationReceipt.mutationRecordSHA256.count == 32,
+              mutationReceipt.operationResultSHA256.count == 32,
+              mutationReceipt.durableSequence > 0,
+              mutationReceipt.durableSequence
+                <= DeviceIngressAuthorityReference.maximumJSONSafeGeneration,
               mutationReceipt.committedAtMilliseconds >= receipt.committedAtMilliseconds,
               mutationReceipt.committedAtMilliseconds < record.expiresAtMilliseconds,
               mutationReceipt.persistenceSemantics
-                == DeviceIngressMutationReceipt.atomicRecheckAndDurableMutation else {
+                == DeviceIngressMutationReceipt.atomicMutationAndResponse else {
+            throw DeviceIngressValidationError.invalidMutationReceipt
+        }
+        let response: DeviceIngressOperationResponse
+        do {
+            response = try DeviceIngressOperationResponseVerifier.verify(
+                canonicalData: canonicalResponseData,
+                expectation: DeviceIngressResponseExpectation(verifiedPair: pair)
+            )
+        } catch {
+            throw DeviceIngressValidationError.invalidMutationReceipt
+        }
+        guard response.mutationReceipt == mutationReceipt else {
             throw DeviceIngressValidationError.invalidMutationReceipt
         }
         return DeviceIngressCompletedAdmission(
@@ -1012,7 +1208,10 @@ enum DeviceIngressAdmissionPipeline {
             authority: authorizedTarget.resolved,
             record: record,
             admissionReceipt: receipt,
-            mutationReceipt: mutationReceipt
+            mutationReceipt: mutationReceipt,
+            response: response,
+            canonicalResponseData: canonicalResponseData,
+            isReplay: ledgerIsReplay || targetIsReplay
         )
     }
 }

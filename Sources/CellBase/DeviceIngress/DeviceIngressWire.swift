@@ -50,7 +50,11 @@ public enum DeviceIngressOperation: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    public var requiredAccess: String { "-w--" }
+    /// Every ingress action returns a requester-visible result and mutates
+    /// Cell-owned state. The canonical response may be retained by the
+    /// requester as restart evidence, so Storage is explicit rather than
+    /// inferred from read or write access.
+    public var requiredAccess: String { "rw-s" }
 }
 
 public enum DeviceIngressEnvelopeKind: String, Codable, Sendable {
@@ -64,8 +68,56 @@ public enum DeviceIngressEnvelopeKind: String, Codable, Sendable {
 /// the resolver target Cell, owner signing key, exact signed Agreement bytes,
 /// subject, authority generation and revocation generation before an ingress
 /// request can be admitted.
+public enum DeviceIngressResponseRetentionPolicy: String, Codable, Sendable {
+    /// The target Cell stores the exact signed response in the same atomic
+    /// transaction as its mutation, and may return it only until the signed
+    /// request expires. Retention by the requester requires the `s` Grant.
+    case sameCellDurableUntilRequestExpiry =
+        "same_cell_durable_until_request_expiry_subject_storage_grant_required"
+}
+
+/// Content and retention policy pinned by the issuer-signed challenge, the
+/// requester-signed envelope and the owner-signed Agreement.
+public struct DeviceIngressContentPolicy: Codable, Equatable, Sendable {
+    public static let currentSchema = "cellprotocol.device-ingress.content-policy.v1"
+
+    public var schema: String
+    public var requestBodyContentContractSHA256: Data
+    public var responseContentContractSHA256: Data
+    public var resolvedPayloadContentContractSHA256: Data?
+    public var responseRetentionPolicy: DeviceIngressResponseRetentionPolicy
+    public var subjectResponseRetentionRequiresStorageGrant: Bool
+
+    @_spi(HAVENRuntime)
+    public init(
+        schema: String = Self.currentSchema,
+        requestBodyContentContractSHA256: Data,
+        responseContentContractSHA256: Data,
+        resolvedPayloadContentContractSHA256: Data? = nil,
+        responseRetentionPolicy: DeviceIngressResponseRetentionPolicy =
+            .sameCellDurableUntilRequestExpiry,
+        subjectResponseRetentionRequiresStorageGrant: Bool = true
+    ) {
+        self.schema = schema
+        self.requestBodyContentContractSHA256 = requestBodyContentContractSHA256
+        self.responseContentContractSHA256 = responseContentContractSHA256
+        self.resolvedPayloadContentContractSHA256 = resolvedPayloadContentContractSHA256
+        self.responseRetentionPolicy = responseRetentionPolicy
+        self.subjectResponseRetentionRequiresStorageGrant =
+            subjectResponseRetentionRequiresStorageGrant
+    }
+
+    public func canonicalData() throws -> Data {
+        try DeviceIngressCanonicalWire.canonicalData(for: self, excludingTopLevelKeys: [])
+    }
+
+    public func canonicalSHA256() throws -> Data {
+        DeviceIngressCanonicalWire.sha256(try canonicalData())
+    }
+}
+
 public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.authority-reference.v2"
+    public static let currentSchema = "cellprotocol.device-ingress.authority-reference.v3"
     public static let maximumAuthorityLifetimeMilliseconds: Int64 = 30 * 24 * 60 * 60 * 1_000
     public static let maximumJSONSafeGeneration: UInt64 = 9_007_199_254_740_991
 
@@ -81,6 +133,7 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
     public var authorityGeneration: UInt64
     public var revocationLedgerID: String
     public var revocationGeneration: UInt64
+    public var contentPolicy: DeviceIngressContentPolicy
     public var issuedAtMilliseconds: Int64
     public var validUntilMilliseconds: Int64
 
@@ -98,6 +151,7 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
         authorityGeneration: UInt64,
         revocationLedgerID: String,
         revocationGeneration: UInt64,
+        contentPolicy: DeviceIngressContentPolicy,
         issuedAtMilliseconds: Int64,
         validUntilMilliseconds: Int64
     ) {
@@ -113,6 +167,7 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
         self.authorityGeneration = authorityGeneration
         self.revocationLedgerID = revocationLedgerID
         self.revocationGeneration = revocationGeneration
+        self.contentPolicy = contentPolicy
         self.issuedAtMilliseconds = issuedAtMilliseconds
         self.validUntilMilliseconds = validUntilMilliseconds
     }
@@ -148,7 +203,7 @@ public struct DeviceIngressIdentityProof: Codable, Equatable, Sendable {
 /// body bytes by SHA-256. `proof` is excluded from signing material but included
 /// in the canonical on-wire representation.
 public struct DeviceIngressEnvelope: Codable, Equatable, Sendable, CanonicalPayloadSignable {
-    public static let currentSchema = "cellprotocol.device-ingress.envelope.v2"
+    public static let currentSchema = "cellprotocol.device-ingress.envelope.v3"
     public static let purpose = "purpose://access.audit.privacy/device-notification-callback"
     public static let identityDomain = "domain:device:notification-callback"
     public static let maximumEncodedBytes = 65_536
@@ -475,6 +530,38 @@ public enum DeviceIngressChallengeFactory {
 }
 
 public enum DeviceIngressRequestFactory {
+    public static func prepare(
+        canonicalChallengeData: Data,
+        protectedBody: Data,
+        requester: Identity,
+        domainBinding: IdentityDomainBinding,
+        expectedAudience: String,
+        expectedChallengeIssuer: IdentityPublicKeyDescriptor,
+        now: Date = Date()
+    ) async throws -> DeviceIngressPreparedRequest {
+        let canonicalRequestData = try await signRequest(
+            canonicalChallengeData: canonicalChallengeData,
+            protectedBody: protectedBody,
+            requester: requester,
+            domainBinding: domainBinding,
+            expectedAudience: expectedAudience,
+            expectedChallengeIssuer: expectedChallengeIssuer,
+            now: now
+        )
+        let verified = try DeviceIngressEnvelopeVerifier.verifyRequest(
+            canonicalData: canonicalRequestData,
+            protectedBody: protectedBody,
+            canonicalChallengeData: canonicalChallengeData,
+            expectedAudience: expectedAudience,
+            expectedChallengeIssuer: expectedChallengeIssuer,
+            now: now
+        )
+        return DeviceIngressPreparedRequest(
+            canonicalRequestData: canonicalRequestData,
+            expectation: DeviceIngressResponseExpectation(verifiedPair: verified)
+        )
+    }
+
     public static func sign(
         canonicalChallengeData: Data,
         protectedBody: Data,
@@ -483,6 +570,26 @@ public enum DeviceIngressRequestFactory {
         expectedAudience: String,
         expectedChallengeIssuer: IdentityPublicKeyDescriptor,
         now: Date = Date()
+    ) async throws -> Data {
+        try await prepare(
+            canonicalChallengeData: canonicalChallengeData,
+            protectedBody: protectedBody,
+            requester: requester,
+            domainBinding: domainBinding,
+            expectedAudience: expectedAudience,
+            expectedChallengeIssuer: expectedChallengeIssuer,
+            now: now
+        ).canonicalRequestData
+    }
+
+    private static func signRequest(
+        canonicalChallengeData: Data,
+        protectedBody: Data,
+        requester: Identity,
+        domainBinding: IdentityDomainBinding,
+        expectedAudience: String,
+        expectedChallengeIssuer: IdentityPublicKeyDescriptor,
+        now: Date
     ) async throws -> Data {
         let challenge = try DeviceIngressEnvelopeVerifier.verifyChallenge(
             canonicalData: canonicalChallengeData,
