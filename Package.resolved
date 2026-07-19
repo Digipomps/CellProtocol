@@ -50,7 +50,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Digipomps/FileUtils-c.git",
       "state" : {
-        "branch" : "main",
         "revision" : "26f365ca39955ee693e138ef028560df3bdf218c"
       }
     },
