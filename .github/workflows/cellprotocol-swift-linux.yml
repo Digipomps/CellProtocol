@@ -1,0 +1,71 @@
+name: CellProtocol Swift Linux
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cellprotocol-swift-linux.yml"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Sources/**"
+      - "Tests/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cellprotocol-swift-linux.yml"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Sources/**"
+      - "Tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cellprotocol-swift-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persisted-cell-file-bounds:
+    name: Persisted Cell file bounds
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Verify toolchain and immutable dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          test -f Package.resolved
+          if grep -Eq '"kind"[[:space:]]*:[[:space:]]*"localSourceControl"' Package.resolved; then
+            echo "Package.resolved contains a local source-control dependency" >&2
+            exit 1
+          fi
+
+      - name: Compile Vapor storage on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build \
+            --disable-sandbox \
+            --scratch-path "${RUNNER_TEMP}/cellprotocol-linux-build" \
+            --target CellVapor
+
+      - name: Test descriptor bounds on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test \
+            --disable-sandbox \
+            --scratch-path "${RUNNER_TEMP}/cellprotocol-linux-build" \
+            --filter PersistedCellFileIOTests
+
+      - name: Verify source and dependency lock remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests
