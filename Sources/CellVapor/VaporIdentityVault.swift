@@ -91,6 +91,31 @@ public struct VaporIdentityVaultRequestedBindingInventory: Codable, Equatable, S
     }
 }
 
+/// Complete offline projection of every persisted identity binding. The
+/// tuples are operationally sensitive and are intended only for an exclusive,
+/// stopped-service migration or owner-signed manifest ceremony. They must
+/// never be exposed through an application route or written to ordinary logs.
+public struct VaporIdentityVaultCompleteBindingInventory: Codable, Equatable, Sendable {
+    public static let schema = "haven.vapor-identity-vault.complete-binding-inventory.v1"
+
+    public let schema: String
+    public let revision: VaporIdentityVaultRevision
+    public let bindingCount: Int
+    public let bindings: [VaporIdentityVaultBindingSummary]
+
+    public init(
+        schema: String = Self.schema,
+        revision: VaporIdentityVaultRevision,
+        bindingCount: Int,
+        bindings: [VaporIdentityVaultBindingSummary]
+    ) {
+        self.schema = schema
+        self.revision = revision
+        self.bindingCount = bindingCount
+        self.bindings = bindings
+    }
+}
+
 public struct VaporIdentityVaultStrictLoadResult: Codable, Equatable, Sendable {
     public static let schema = "haven.vapor-identity-vault.strict-load.v1"
 
@@ -1497,6 +1522,27 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
 
         return VaporIdentityVaultRequestedBindingInventory(
             revision: parsedVault.revision,
+            bindings: bindings
+        )
+    }
+
+    /// Offline-only complete inventory for a stopped-service migration. The
+    /// complete encrypted vault is authenticated before projection. This does
+    /// not create, heal, migrate, publish, or write state, and an activated
+    /// strict serving runtime is rejected.
+    public func inspectAllExistingBindings() async throws
+        -> VaporIdentityVaultCompleteBindingInventory {
+        guard strictRuntimeDocumentRootPath == nil else {
+            throw VaporIdentityVaultStrictError.requestedInventoryOfflineRequired
+        }
+        let parsedVault = try strictReadVault(allowMissing: false)
+        let bindings = bindingSummaries(for: parsedVault)
+        guard bindings.count == parsedVault.identities.count else {
+            throw VaporIdentityVaultStrictError.inconsistentKeyMaterial
+        }
+        return VaporIdentityVaultCompleteBindingInventory(
+            revision: parsedVault.revision,
+            bindingCount: bindings.count,
             bindings: bindings
         )
     }

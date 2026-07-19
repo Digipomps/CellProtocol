@@ -254,6 +254,90 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
     }
 
+    func testCompleteBindingInventoryIsCanonicalCompleteAndWriteFree() async throws {
+        let root = try await preparedVaultRoot(label: "complete-inventory")
+        let requests = [
+            request(uuid: "complete-z", context: "domain:complete:z"),
+            request(uuid: "complete-a", context: "domain:complete:a"),
+            request(uuid: "complete-m", context: "domain:complete:m")
+        ]
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning(requests)
+        let provisioned = try await VaporIdentityVault.shared.provisionIdentities(
+            requests,
+            expectedRevision: plan.revision
+        )
+        let vaultFileURL = vaultURL(in: root)
+        let keyFileURL = masterKeyURL(in: root)
+        try setPermissions(0o400, at: keyFileURL)
+        let vaultBytes = try Data(contentsOf: vaultFileURL)
+        let keyBytes = try Data(contentsOf: keyFileURL)
+        let vaultModificationDate = try modificationDate(vaultFileURL)
+        let keyModificationDate = try modificationDate(keyFileURL)
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+
+        let inventory = try await VaporIdentityVault.shared.inspectAllExistingBindings()
+
+        XCTAssertEqual(inventory.schema, VaporIdentityVaultCompleteBindingInventory.schema)
+        XCTAssertEqual(inventory.revision, provisioned.revision)
+        XCTAssertEqual(inventory.bindingCount, requests.count)
+        XCTAssertEqual(inventory.bindings.count, inventory.bindingCount)
+        XCTAssertEqual(
+            inventory.bindings.map(\.context),
+            ["domain:complete:a", "domain:complete:m", "domain:complete:z"]
+        )
+        XCTAssertEqual(Set(inventory.bindings.map(\.uuid)), Set(requests.map(\.uuid)))
+        XCTAssertTrue(inventory.bindings.allSatisfy {
+            $0.signingKeyFingerprint.isEmpty == false
+        })
+        let encoded = try JSONEncoder().encode(inventory)
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                VaporIdentityVaultCompleteBindingInventory.self,
+                from: encoded
+            ),
+            inventory
+        )
+        let serialized = String(decoding: encoded, as: UTF8.self)
+        for forbidden in ["privateKey", "privateSigningKey", "displayName", root.path] {
+            XCTAssertFalse(serialized.contains(forbidden), forbidden)
+        }
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+        XCTAssertEqual(try modificationDate(vaultFileURL), vaultModificationDate)
+        XCTAssertEqual(try modificationDate(keyFileURL), keyModificationDate)
+    }
+
+    func testCompleteBindingInventoryRejectsServingRuntimeAndTamperWithoutMutation() async throws {
+        let root = try await preparedVaultRoot(label: "complete-inventory-offline")
+        let persisted = request(
+            uuid: "complete-offline",
+            context: "domain:complete:offline"
+        )
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning([persisted])
+        _ = try await VaporIdentityVault.shared.provisionIdentities(
+            [persisted],
+            expectedRevision: plan.revision
+        )
+        let vaultFileURL = vaultURL(in: root)
+        let keyFileURL = masterKeyURL(in: root)
+        let vaultBytes = try Data(contentsOf: vaultFileURL)
+        let keyBytes = try Data(contentsOf: keyFileURL)
+        _ = try await VaporIdentityVault.shared.activateStrictRuntimeMode()
+
+        try await assertCompleteInventoryError(.requestedInventoryOfflineRequired)
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+        var tampered = vaultBytes
+        tampered[tampered.index(before: tampered.endIndex)] ^= 0x01
+        try tampered.write(to: vaultFileURL)
+        try setPermissions(0o600, at: vaultFileURL)
+        try await assertCompleteInventoryError(.authenticationFailed)
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), tampered)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+    }
+
     func testBatchProvisioningIsAtomicIdempotentAndSurvivesColdReload() async throws {
         let root = try await preparedVaultRoot(label: "batch")
         let requests = [
@@ -945,6 +1029,19 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
                 forRequestedContexts: contexts
             )
             XCTFail("Expected requested binding inventory to fail", file: file, line: line)
+        } catch let error as VaporIdentityVaultStrictError {
+            XCTAssertEqual(error, expected, file: file, line: line)
+        }
+    }
+
+    private func assertCompleteInventoryError(
+        _ expected: VaporIdentityVaultStrictError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        do {
+            _ = try await VaporIdentityVault.shared.inspectAllExistingBindings()
+            XCTFail("Expected complete binding inventory to fail", file: file, line: line)
         } catch let error as VaporIdentityVaultStrictError {
             XCTAssertEqual(error, expected, file: file, line: line)
         }
