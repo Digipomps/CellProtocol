@@ -1,0 +1,125 @@
+name: Vapor identity vault Swift Linux
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/vapor-identity-vault-linux.yml"
+      - "Tests/Linux/VaporIdentityVaultLinuxPackage.swift"
+      - "Tests/Linux/VaporIdentityVaultLinuxPackage.resolved"
+      - "Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift"
+      - "Sources/CellBase/**"
+      - "Sources/CellVapor/VaporIdentityVault.swift"
+      - "Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/vapor-identity-vault-linux.yml"
+      - "Tests/Linux/VaporIdentityVaultLinuxPackage.swift"
+      - "Tests/Linux/VaporIdentityVaultLinuxPackage.resolved"
+      - "Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift"
+      - "Sources/CellBase/**"
+      - "Sources/CellVapor/VaporIdentityVault.swift"
+      - "Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vapor-identity-vault-linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-vault-storage:
+    name: Vapor identity vault strict storage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Verify toolchain and immutable inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          test -f Tests/Linux/VaporIdentityVaultLinuxPackage.resolved
+          if grep -Eq '"kind"[[:space:]]*:[[:space:]]*"localSourceControl"' Package.resolved; then
+            echo "Root Package.resolved contains a local source-control dependency" >&2
+            exit 1
+          fi
+
+      - name: Assemble exact-source Linux gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_root="${RUNNER_TEMP}/vapor-identity-vault-linux"
+          mkdir -p \
+            "${gate_root}/Sources" \
+            "${gate_root}/Tests/VaporIdentityVaultLinuxTests"
+          cp Tests/Linux/VaporIdentityVaultLinuxPackage.swift "${gate_root}/Package.swift"
+          cp Tests/Linux/VaporIdentityVaultLinuxPackage.resolved "${gate_root}/Package.resolved"
+          cp -R Sources/CellBase "${gate_root}/Sources/CellBase"
+          cp -R Sources/CombineHelpers "${gate_root}/Sources/CombineHelpers"
+          cp -R Sources/CodableHelpers "${gate_root}/Sources/CodableHelpers"
+          cp -R commons/schemas/haven.core/Sources/HavenCoreSchemas \
+            "${gate_root}/Sources/HavenCoreSchemas"
+          cp -R commons/resolver/taxonomy-resolver/Sources/TaxonomyResolver \
+            "${gate_root}/Sources/TaxonomyResolver"
+          cp -R commons/resolver/keypath-resolver/Sources/KeyPathResolver \
+            "${gate_root}/Sources/KeyPathResolver"
+          mkdir -p "${gate_root}/Sources/CellVapor"
+          cp Sources/CellVapor/VaporIdentityVault.swift \
+            "${gate_root}/Sources/CellVapor/VaporIdentityVault.swift"
+          GATE_ROOT="${gate_root}" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path("Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift").read_text()
+          marker = "struct VaporBridgeIdentitySnapshot: Sendable"
+          start = source.index(marker)
+          opening = source.index("{", start)
+          depth = 0
+          end = None
+          for offset, character in enumerate(source[opening:], start=opening):
+              if character == "{":
+                  depth += 1
+              elif character == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = offset + 1
+                      break
+          if end is None:
+              raise RuntimeError("VaporBridgeIdentitySnapshot definition is incomplete")
+          output = (
+              "import Foundation\nimport CellBase\n\n"
+              + source[start:end]
+              + "\n"
+          )
+          destination = Path(os.environ["GATE_ROOT"]) / "Sources/CellVapor/VaporBridgeIdentitySnapshot.swift"
+          destination.write_text(output)
+          PY
+          cp Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift \
+            "${gate_root}/Tests/VaporIdentityVaultLinuxTests/VaporIdentityVaultStrictTests.swift"
+
+      - name: Build and test production vault source on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test \
+            --package-path "${RUNNER_TEMP}/vapor-identity-vault-linux" \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2 \
+            --filter VaporIdentityVaultStrictTests
+
+      - name: Verify repository inputs remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- \
+            Package.swift \
+            Package.resolved \
+            Sources \
+            Tests
