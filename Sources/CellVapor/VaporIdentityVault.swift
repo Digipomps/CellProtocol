@@ -68,6 +68,29 @@ public struct VaporIdentityVaultBindingSummary: Codable, Equatable, Sendable {
     }
 }
 
+/// A deliberately bounded, requested-only projection of persisted identity
+/// bindings. UUID/context/fingerprint tuples remain operationally sensitive:
+/// callers must keep this offline and must not expose it on a public route.
+public struct VaporIdentityVaultRequestedBindingInventory: Codable, Equatable, Sendable {
+    public static let schema = "haven.vapor-identity-vault.requested-binding-inventory.v1"
+    public static let maximumRequestedContextCount = 256
+    public static let maximumContextUTF8Length = 1_024
+
+    public let schema: String
+    public let revision: VaporIdentityVaultRevision
+    public let bindings: [VaporIdentityVaultBindingSummary]
+
+    public init(
+        schema: String = Self.schema,
+        revision: VaporIdentityVaultRevision,
+        bindings: [VaporIdentityVaultBindingSummary]
+    ) {
+        self.schema = schema
+        self.revision = revision
+        self.bindings = bindings
+    }
+}
+
 public struct VaporIdentityVaultStrictLoadResult: Codable, Equatable, Sendable {
     public static let schema = "haven.vapor-identity-vault.strict-load.v1"
 
@@ -186,6 +209,11 @@ public enum VaporIdentityVaultStrictError: Error, Equatable, Sendable {
     case duplicateUUID
     case duplicateContext
     case invalidIdentityDescriptor
+    case requestedContextSetEmpty
+    case requestedContextLimitExceeded
+    case requestedContextInvalid
+    case requestedContextDuplicate
+    case requestedInventoryOfflineRequired
     case incompleteKeyMaterial
     case inconsistentKeyMaterial
     case identityNotFound
@@ -218,6 +246,11 @@ public enum VaporIdentityVaultStrictError: Error, Equatable, Sendable {
         case .duplicateUUID: return "identity_vault_duplicate_uuid"
         case .duplicateContext: return "identity_vault_duplicate_context"
         case .invalidIdentityDescriptor: return "identity_vault_descriptor_invalid"
+        case .requestedContextSetEmpty: return "identity_vault_requested_context_set_empty"
+        case .requestedContextLimitExceeded: return "identity_vault_requested_context_limit_exceeded"
+        case .requestedContextInvalid: return "identity_vault_requested_context_invalid"
+        case .requestedContextDuplicate: return "identity_vault_requested_context_duplicate"
+        case .requestedInventoryOfflineRequired: return "identity_vault_requested_inventory_offline_required"
         case .incompleteKeyMaterial: return "identity_vault_key_material_incomplete"
         case .inconsistentKeyMaterial: return "identity_vault_key_material_inconsistent"
         case .identityNotFound: return "identity_vault_identity_missing"
@@ -1401,6 +1434,71 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         let parsedVault = try strictReadVault(allowMissing: strictRuntimeDocumentRootPath == nil)
         publishStrictVault(parsedVault)
         return strictLoadResult(for: parsedVault)
+    }
+
+    /// Offline-only inspection of the existing bindings for an exact, bounded
+    /// set of requested contexts. The complete vault is still authenticated and
+    /// validated before projection, but no unrequested binding, private key,
+    /// display name, or private property is returned. A serving process with an
+    /// activated strict runtime is rejected; runtime binding checks must instead
+    /// use `requireIdentity(expectedUUID:for:)`. This method never creates,
+    /// heals, migrates, publishes, or writes vault state.
+    public func inspectExistingBindings(
+        forRequestedContexts requestedContexts: [String]
+    ) async throws -> VaporIdentityVaultRequestedBindingInventory {
+        guard requestedContexts.isEmpty == false else {
+            throw VaporIdentityVaultStrictError.requestedContextSetEmpty
+        }
+        guard requestedContexts.count
+                <= VaporIdentityVaultRequestedBindingInventory.maximumRequestedContextCount else {
+            throw VaporIdentityVaultStrictError.requestedContextLimitExceeded
+        }
+
+        var uniqueContexts = Set<String>()
+        for context in requestedContexts {
+            guard isValidIdentityField(
+                context,
+                maximumUTF8Length: VaporIdentityVaultRequestedBindingInventory.maximumContextUTF8Length
+            ) else {
+                throw VaporIdentityVaultStrictError.requestedContextInvalid
+            }
+            guard uniqueContexts.insert(context).inserted else {
+                throw VaporIdentityVaultStrictError.requestedContextDuplicate
+            }
+        }
+
+        guard strictRuntimeDocumentRootPath == nil else {
+            throw VaporIdentityVaultStrictError.requestedInventoryOfflineRequired
+        }
+        let parsedVault = try strictReadVault(allowMissing: false)
+
+        let requested = uniqueContexts
+        let bindings = try parsedVault.identities.compactMap {
+            vaultIdentity -> VaporIdentityVaultBindingSummary? in
+            guard let context = vaultIdentity.identityContext,
+                  requested.contains(context) else {
+                return nil
+            }
+            guard let fingerprint = vaultIdentity.identity.signingPublicKeyFingerprint,
+                  fingerprint.isEmpty == false else {
+                throw VaporIdentityVaultStrictError.inconsistentKeyMaterial
+            }
+            return VaporIdentityVaultBindingSummary(
+                uuid: vaultIdentity.uuid,
+                context: context,
+                signingKeyFingerprint: fingerprint
+            )
+        }.sorted {
+            if $0.context == $1.context {
+                return $0.uuid.utf8.lexicographicallyPrecedes($1.uuid.utf8)
+            }
+            return $0.context.utf8.lexicographicallyPrecedes($1.context.utf8)
+        }
+
+        return VaporIdentityVaultRequestedBindingInventory(
+            revision: parsedVault.revision,
+            bindings: bindings
+        )
     }
 
     /// Requires one exact UUID/context binding from a strictly validated vault.

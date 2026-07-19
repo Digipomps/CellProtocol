@@ -72,6 +72,188 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         XCTAssertEqual(try modificationDate(keyURL), keyModificationDate)
     }
 
+    func testRequestedBindingInventoryIsRequestedOnlyCanonicalAndWriteFree() async throws {
+        let root = try await preparedVaultRoot(label: "requested-inventory")
+        let requests = [
+            request(uuid: "inventory-z", context: "domain:inventory:z"),
+            request(uuid: "inventory-hidden", context: "domain:inventory:hidden"),
+            request(uuid: "inventory-a", context: "domain:inventory:a")
+        ]
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning(requests)
+        let provisioned = try await VaporIdentityVault.shared.provisionIdentities(
+            requests,
+            expectedRevision: plan.revision
+        )
+        let vaultURL = vaultURL(in: root)
+        let keyURL = masterKeyURL(in: root)
+        try setPermissions(0o400, at: keyURL)
+        let vaultBytes = try Data(contentsOf: vaultURL)
+        let keyBytes = try Data(contentsOf: keyURL)
+        let vaultModificationDate = try modificationDate(vaultURL)
+        let keyModificationDate = try modificationDate(keyURL)
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+
+        let first = try await VaporIdentityVault.shared.inspectExistingBindings(
+            forRequestedContexts: [
+                "domain:inventory:z",
+                "domain:inventory:missing",
+                "domain:inventory:a"
+            ]
+        )
+        let second = try await VaporIdentityVault.shared.inspectExistingBindings(
+            forRequestedContexts: [
+                "domain:inventory:a",
+                "domain:inventory:z",
+                "domain:inventory:missing"
+            ]
+        )
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.schema, VaporIdentityVaultRequestedBindingInventory.schema)
+        XCTAssertEqual(first.revision, provisioned.revision)
+        XCTAssertEqual(
+            first.bindings.map(\.context),
+            ["domain:inventory:a", "domain:inventory:z"]
+        )
+        XCTAssertEqual(first.bindings.map(\.uuid), ["inventory-a", "inventory-z"])
+        XCTAssertTrue(first.bindings.allSatisfy { $0.signingKeyFingerprint.isEmpty == false })
+        let provisionedFingerprints = Dictionary(
+            uniqueKeysWithValues: provisioned.bindings.map { ($0.uuid, $0.signingKeyFingerprint) }
+        )
+        XCTAssertTrue(first.bindings.allSatisfy {
+            provisionedFingerprints[$0.uuid] == $0.signingKeyFingerprint
+        })
+        XCTAssertFalse(first.bindings.contains { $0.uuid == "inventory-hidden" })
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                VaporIdentityVaultRequestedBindingInventory.self,
+                from: JSONEncoder().encode(first)
+            ),
+            first
+        )
+        XCTAssertEqual(try Data(contentsOf: vaultURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyURL), keyBytes)
+        XCTAssertEqual(try modificationDate(vaultURL), vaultModificationDate)
+        XCTAssertEqual(try modificationDate(keyURL), keyModificationDate)
+    }
+
+    func testRequestedBindingInventoryRejectsInvalidDuplicateAndUnboundedInputsBeforeDiskAccess() async throws {
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+        let parent = try makeTemporaryDirectory(label: "requested-inventory-invalid")
+        let missingRoot = parent.appendingPathComponent("must-not-be-created", isDirectory: true)
+        CellBase.documentRootPath = missingRoot.path
+
+        try await assertRequestedInventoryError(.requestedContextSetEmpty, contexts: [])
+        try await assertRequestedInventoryError(
+            .requestedContextDuplicate,
+            contexts: ["domain:duplicate", "domain:duplicate"]
+        )
+        try await assertRequestedInventoryError(
+            .requestedContextInvalid,
+            contexts: [" domain:leading-space"]
+        )
+        try await assertRequestedInventoryError(
+            .requestedContextInvalid,
+            contexts: ["domain:null\0byte"]
+        )
+        try await assertRequestedInventoryError(
+            .requestedContextInvalid,
+            contexts: [String(repeating: "x", count: 1_025)]
+        )
+        try await assertRequestedInventoryError(
+            .requestedContextLimitExceeded,
+            contexts: (0...VaporIdentityVaultRequestedBindingInventory.maximumRequestedContextCount)
+                .map { "domain:bounded:\($0)" }
+        )
+        try await assertRequestedInventoryError(
+            .vaultMissing,
+            contexts: ["domain:valid-but-missing"]
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missingRoot.path))
+        XCTAssertEqual(
+            VaporIdentityVaultStrictError.requestedContextDuplicate.reasonCode,
+            "identity_vault_requested_context_duplicate"
+        )
+        XCTAssertEqual(
+            VaporIdentityVaultStrictError.requestedContextLimitExceeded.reasonCode,
+            "identity_vault_requested_context_limit_exceeded"
+        )
+    }
+
+    func testRequestedBindingInventoryRejectsTamperAndMissingMasterKeyWithoutMutation() async throws {
+        let root = try await preparedVaultRoot(label: "requested-inventory-tamper")
+        let persisted = request(uuid: "inventory-tamper", context: "domain:inventory:tamper")
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning([persisted])
+        _ = try await VaporIdentityVault.shared.provisionIdentities(
+            [persisted],
+            expectedRevision: plan.revision
+        )
+        let vaultFileURL = vaultURL(in: root)
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+
+        var tamperedBytes = try Data(contentsOf: vaultFileURL)
+        tamperedBytes[tamperedBytes.index(before: tamperedBytes.endIndex)] ^= 0x01
+        try tamperedBytes.write(to: vaultFileURL)
+        try setPermissions(0o600, at: vaultFileURL)
+        try await assertRequestedInventoryError(
+            .authenticationFailed,
+            contexts: [persisted.context]
+        )
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), tamperedBytes)
+
+        let restoredRoot = try await preparedVaultRoot(label: "requested-inventory-key-missing")
+        let second = request(uuid: "inventory-key", context: "domain:inventory:key")
+        let secondPlan = try await VaporIdentityVault.shared.inspectProvisioning([second])
+        _ = try await VaporIdentityVault.shared.provisionIdentities(
+            [second],
+            expectedRevision: secondPlan.revision
+        )
+        let secondVaultURL = vaultURL(in: restoredRoot)
+        let secondVaultBytes = try Data(contentsOf: secondVaultURL)
+        try FileManager.default.removeItem(at: masterKeyURL(in: restoredRoot))
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+
+        try await assertRequestedInventoryError(
+            .masterKeyMissing,
+            contexts: [second.context]
+        )
+        XCTAssertEqual(try Data(contentsOf: secondVaultURL), secondVaultBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: masterKeyURL(in: restoredRoot).path))
+    }
+
+    func testRequestedBindingInventoryRejectsActivatedStrictRuntimeWithoutReadingOrWriting() async throws {
+        let root = try await preparedVaultRoot(label: "requested-inventory-offline-only")
+        let persisted = request(uuid: "inventory-offline", context: "domain:inventory:offline")
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning([persisted])
+        _ = try await VaporIdentityVault.shared.provisionIdentities(
+            [persisted],
+            expectedRevision: plan.revision
+        )
+        let vaultFileURL = vaultURL(in: root)
+        let keyFileURL = masterKeyURL(in: root)
+        let vaultBytes = try Data(contentsOf: vaultFileURL)
+        let keyBytes = try Data(contentsOf: keyFileURL)
+        let vaultModificationDate = try modificationDate(vaultFileURL)
+        let keyModificationDate = try modificationDate(keyFileURL)
+        _ = try await VaporIdentityVault.shared.activateStrictRuntimeMode()
+
+        try await assertRequestedInventoryError(
+            .requestedInventoryOfflineRequired,
+            contexts: [persisted.context]
+        )
+
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+        XCTAssertEqual(try modificationDate(vaultFileURL), vaultModificationDate)
+        XCTAssertEqual(try modificationDate(keyFileURL), keyModificationDate)
+        XCTAssertEqual(
+            VaporIdentityVaultStrictError.requestedInventoryOfflineRequired.reasonCode,
+            "identity_vault_requested_inventory_offline_required"
+        )
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+    }
+
     func testBatchProvisioningIsAtomicIdempotentAndSurvivesColdReload() async throws {
         let root = try await preparedVaultRoot(label: "batch")
         let requests = [
@@ -198,11 +380,13 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         second.identityContext = "domain:second"
         try await writeLegacyRecords([first, second], root: root)
         try await assertStrictLoadError(.duplicateUUID)
+        try await assertRequestedInventoryError(.duplicateUUID, contexts: ["domain:first"])
 
         second.uuid = "different"
         second.identityContext = first.identityContext
         try await writeLegacyRecords([first, second], root: root)
         try await assertStrictLoadError(.duplicateContext)
+        try await assertRequestedInventoryError(.duplicateContext, contexts: ["domain:first"])
     }
 
     func testStrictLoadRejectsIncompleteAndCryptographicallyInconsistentKeys() async throws {
@@ -745,6 +929,22 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         do {
             _ = try await VaporIdentityVault.shared.loadStrict()
             XCTFail("Expected strict vault load to fail", file: file, line: line)
+        } catch let error as VaporIdentityVaultStrictError {
+            XCTAssertEqual(error, expected, file: file, line: line)
+        }
+    }
+
+    private func assertRequestedInventoryError(
+        _ expected: VaporIdentityVaultStrictError,
+        contexts: [String],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        do {
+            _ = try await VaporIdentityVault.shared.inspectExistingBindings(
+                forRequestedContexts: contexts
+            )
+            XCTFail("Expected requested binding inventory to fail", file: file, line: line)
         } catch let error as VaporIdentityVaultStrictError {
             XCTAssertEqual(error, expected, file: file, line: line)
         }
