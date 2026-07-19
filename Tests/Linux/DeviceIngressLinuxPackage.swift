@@ -63,6 +63,11 @@ let package = Package(
             ],
             path: "Sources/CellBase"
         ),
+        .target(
+            name: "DeviceIngressTransportProbe",
+            dependencies: ["CellBase"],
+            path: "Tests/DeviceIngressTransportProbe"
+        ),
         .testTarget(
             name: "DeviceIngressLinuxTests",
             dependencies: [

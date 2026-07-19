@@ -64,7 +64,8 @@ jobs:
           gate_root="${RUNNER_TEMP}/device-ingress-linux"
           mkdir -p \
             "${gate_root}/Sources" \
-            "${gate_root}/Tests/DeviceIngressLinuxTests"
+            "${gate_root}/Tests/DeviceIngressLinuxTests" \
+            "${gate_root}/Tests/DeviceIngressTransportProbe"
           cp Tests/Linux/DeviceIngressLinuxPackage.swift "${gate_root}/Package.swift"
           cp Tests/Linux/VaporIdentityVaultLinuxPackage.resolved \
             "${gate_root}/Package.resolved"
@@ -81,6 +82,8 @@ jobs:
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/CellBaseTests/TestSupport/MockCellResolver.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
+            "${gate_root}/Tests/DeviceIngressTransportProbe/"
           swift test \
             --package-path "${gate_root}" \
             --disable-sandbox \
@@ -92,19 +95,22 @@ jobs:
         run: |
           set -euo pipefail
           gate_root="${RUNNER_TEMP}/device-ingress-linux"
-          module_dir="$(find "${gate_root}/.build" -type d -path '*/debug/Modules' -print -quit)"
-          test -n "$module_dir"
           diagnostic_path="${RUNNER_TEMP}/device-ingress-public-api-negative.txt"
-          swiftc \
-            -typecheck \
-            -I "$module_dir" \
-            Tests/Linux/DeviceIngressPublicAPINegative.swift
-          if swiftc \
-            -typecheck \
-            -D ATTEMPT_AUTHORITY_BYPASS \
-            -I "$module_dir" \
-            Tests/Linux/DeviceIngressPublicAPINegative.swift \
-            2>"$diagnostic_path"; then
+          swift build \
+            --package-path "${gate_root}" \
+            --target DeviceIngressTransportProbe \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2
+          if swift build \
+            --package-path "${gate_root}" \
+            --target DeviceIngressTransportProbe \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2 \
+            -Xswiftc -D \
+            -Xswiftc ATTEMPT_AUTHORITY_BYPASS \
+            >"$diagnostic_path" 2>&1; then
             echo "Transport unexpectedly compiled against staged authority API" >&2
             exit 1
           fi
