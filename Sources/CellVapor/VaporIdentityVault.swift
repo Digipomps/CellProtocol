@@ -91,6 +91,33 @@ public struct VaporIdentityVaultRequestedBindingInventory: Codable, Equatable, S
     }
 }
 
+/// Complete projection of every persisted identity binding from a process
+/// whose strict serving mode has not been activated. The process-local gate is
+/// not proof that another process is stopped or that the caller owns an
+/// exclusive volume lease. Callers must establish that external boundary and
+/// bind their output to `revision`. The tuples are operationally sensitive and
+/// must never be exposed through an application route or ordinary logs.
+public struct VaporIdentityVaultCompleteBindingInventory: Codable, Equatable, Sendable {
+    public static let schema = "haven.vapor-identity-vault.complete-binding-inventory.v1"
+
+    public let schema: String
+    public let revision: VaporIdentityVaultRevision
+    public let bindingCount: Int
+    public let bindings: [VaporIdentityVaultBindingSummary]
+
+    public init(
+        schema: String = Self.schema,
+        revision: VaporIdentityVaultRevision,
+        bindingCount: Int,
+        bindings: [VaporIdentityVaultBindingSummary]
+    ) {
+        self.schema = schema
+        self.revision = revision
+        self.bindingCount = bindingCount
+        self.bindings = bindings
+    }
+}
+
 public struct VaporIdentityVaultStrictLoadResult: Codable, Equatable, Sendable {
     public static let schema = "haven.vapor-identity-vault.strict-load.v1"
 
@@ -1501,6 +1528,32 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         )
     }
 
+    /// Process-local, non-serving complete inventory for a stopped-service
+    /// migration. The complete encrypted vault is authenticated before
+    /// projection. This does not create, heal, migrate, publish, or write
+    /// state, and an activated strict serving runtime is rejected.
+    ///
+    /// This method cannot prove that another process is stopped or that its
+    /// caller holds the required exclusive volume/deploy lease. The consumer
+    /// must enforce that boundary and revalidate the returned exact revision
+    /// before using the inventory in a migration or signed manifest ceremony.
+    public func inspectAllExistingBindings() async throws
+        -> VaporIdentityVaultCompleteBindingInventory {
+        guard strictRuntimeDocumentRootPath == nil else {
+            throw VaporIdentityVaultStrictError.requestedInventoryOfflineRequired
+        }
+        let parsedVault = try strictReadVault(allowMissing: false)
+        let bindings = bindingSummaries(for: parsedVault)
+        guard bindings.count == parsedVault.identities.count else {
+            throw VaporIdentityVaultStrictError.inconsistentKeyMaterial
+        }
+        return VaporIdentityVaultCompleteBindingInventory(
+            revision: parsedVault.revision,
+            bindingCount: bindings.count,
+            bindings: bindings
+        )
+    }
+
     /// Requires one exact UUID/context binding from a strictly validated vault.
     /// It never heals, aliases, migrates, provisions, or writes.
     public func requireIdentity(expectedUUID: String, for context: String) async throws -> Identity {
@@ -1753,7 +1806,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 signingKeyFingerprint: fingerprint
             )
         }.sorted {
-            $0.context == $1.context ? $0.uuid < $1.uuid : $0.context < $1.context
+            if $0.context == $1.context {
+                return $0.uuid.utf8.lexicographicallyPrecedes($1.uuid.utf8)
+            }
+            return $0.context.utf8.lexicographicallyPrecedes($1.context.utf8)
         }
     }
 

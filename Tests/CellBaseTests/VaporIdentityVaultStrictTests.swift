@@ -6,6 +6,8 @@ import XCTest
 @_spi(Testing) @testable import CellVapor
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
 #endif
 
 final class VaporIdentityVaultStrictTests: XCTestCase {
@@ -252,6 +254,119 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
             "identity_vault_requested_inventory_offline_required"
         )
         await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+    }
+
+    func testCompleteBindingInventoryIsCanonicalCompleteAndWriteFree() async throws {
+        let root = try await preparedVaultRoot(label: "complete-inventory")
+        let requests = [
+            request(uuid: "complete-z", context: "domain:complete:z"),
+            request(uuid: "complete-a", context: "domain:complete:a"),
+            request(uuid: "complete-m", context: "domain:complete:m"),
+            request(uuid: "complete-unicode-composed", context: "domain:complete:éa"),
+            request(uuid: "complete-unicode-decomposed", context: "domain:complete:e\u{301}b")
+        ]
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning(requests)
+        let provisioned = try await VaporIdentityVault.shared.provisionIdentities(
+            requests,
+            expectedRevision: plan.revision
+        )
+        var expectedBindings: [VaporIdentityVaultBindingSummary] = []
+        for request in requests {
+            let identity = try await VaporIdentityVault.shared.requireIdentity(
+                expectedUUID: request.uuid,
+                for: request.context
+            )
+            expectedBindings.append(
+                VaporIdentityVaultBindingSummary(
+                    uuid: request.uuid,
+                    context: request.context,
+                    signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint)
+                )
+            )
+        }
+        expectedBindings.sort {
+            if $0.context == $1.context {
+                return $0.uuid.utf8.lexicographicallyPrecedes($1.uuid.utf8)
+            }
+            return $0.context.utf8.lexicographicallyPrecedes($1.context.utf8)
+        }
+        let vaultFileURL = vaultURL(in: root)
+        let keyFileURL = masterKeyURL(in: root)
+        try setPermissions(0o400, at: keyFileURL)
+        let vaultBytes = try Data(contentsOf: vaultFileURL)
+        let keyBytes = try Data(contentsOf: keyFileURL)
+        let vaultModificationDate = try modificationDate(vaultFileURL)
+        let keyModificationDate = try modificationDate(keyFileURL)
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+
+        let inventory = try await VaporIdentityVault.shared.inspectAllExistingBindings()
+
+        XCTAssertEqual(inventory.schema, VaporIdentityVaultCompleteBindingInventory.schema)
+        XCTAssertEqual(inventory.revision, provisioned.revision)
+        XCTAssertEqual(inventory.bindingCount, requests.count)
+        XCTAssertEqual(inventory.bindings.count, inventory.bindingCount)
+        XCTAssertEqual(inventory.bindings, expectedBindings)
+        XCTAssertEqual(
+            inventory.bindings.map(\.context),
+            [
+                "domain:complete:a",
+                "domain:complete:e\u{301}b",
+                "domain:complete:m",
+                "domain:complete:z",
+                "domain:complete:éa"
+            ]
+        )
+        XCTAssertEqual(Set(inventory.bindings.map(\.uuid)), Set(requests.map(\.uuid)))
+        XCTAssertTrue(inventory.bindings.allSatisfy {
+            $0.signingKeyFingerprint.isEmpty == false
+        })
+        let encoded = try JSONEncoder().encode(inventory)
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                VaporIdentityVaultCompleteBindingInventory.self,
+                from: encoded
+            ),
+            inventory
+        )
+        let serialized = String(decoding: encoded, as: UTF8.self)
+        for forbidden in ["privateKey", "privateSigningKey", "displayName", root.path] {
+            XCTAssertFalse(serialized.contains(forbidden), forbidden)
+        }
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+        XCTAssertEqual(try modificationDate(vaultFileURL), vaultModificationDate)
+        XCTAssertEqual(try modificationDate(keyFileURL), keyModificationDate)
+    }
+
+    func testCompleteBindingInventoryRejectsServingRuntimeAndTamperWithoutMutation() async throws {
+        let root = try await preparedVaultRoot(label: "complete-inventory-offline")
+        let persisted = request(
+            uuid: "complete-offline",
+            context: "domain:complete:offline"
+        )
+        let plan = try await VaporIdentityVault.shared.inspectProvisioning([persisted])
+        _ = try await VaporIdentityVault.shared.provisionIdentities(
+            [persisted],
+            expectedRevision: plan.revision
+        )
+        let vaultFileURL = vaultURL(in: root)
+        let keyFileURL = masterKeyURL(in: root)
+        let vaultBytes = try Data(contentsOf: vaultFileURL)
+        let keyBytes = try Data(contentsOf: keyFileURL)
+        _ = try await VaporIdentityVault.shared.activateStrictRuntimeMode()
+
+        try await assertCompleteInventoryError(.requestedInventoryOfflineRequired)
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), vaultBytes)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
+
+        await VaporIdentityVault.shared.resetStrictRuntimeModeForTesting()
+        var tampered = vaultBytes
+        tampered[tampered.index(before: tampered.endIndex)] ^= 0x01
+        try tampered.write(to: vaultFileURL)
+        try setPermissions(0o600, at: vaultFileURL)
+        try await assertCompleteInventoryError(.authenticationFailed)
+        XCTAssertEqual(try Data(contentsOf: vaultFileURL), tampered)
+        XCTAssertEqual(try Data(contentsOf: keyFileURL), keyBytes)
     }
 
     func testBatchProvisioningIsAtomicIdempotentAndSurvivesColdReload() async throws {
@@ -846,9 +961,15 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         _ = try await VaporIdentityVault.shared.activateStrictRuntimeMode()
         let keyURL = masterKeyURL(in: root)
         let originalKey = try Data(contentsOf: keyURL)
+        let pinnedOriginalHandle = try FileHandle(forReadingFrom: keyURL)
+        defer { try? pinnedOriginalHandle.close() }
+        let originalInode = try inode(at: keyURL)
         let replacementKey = Data(repeating: 0x5A, count: 32).base64EncodedData()
-        try replacementKey.write(to: keyURL, options: [.atomic])
-        try setPermissions(0o600, at: keyURL)
+        let replacementInode = try replaceRegularFileAtomically(
+            at: keyURL,
+            with: replacementKey
+        )
+        XCTAssertNotEqual(replacementInode, originalInode)
 
         do {
             _ = try await VaporIdentityVault.shared.verifyStrictRuntimeBackingStore()
@@ -862,8 +983,12 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         )
         XCTAssertNil(failedClosedLookup)
 
-        try originalKey.write(to: keyURL, options: [.atomic])
-        try setPermissions(0o600, at: keyURL)
+        let restoredInode = try replaceRegularFileAtomically(
+            at: keyURL,
+            with: originalKey
+        )
+        XCTAssertNotEqual(restoredInode, originalInode)
+        XCTAssertNotEqual(restoredInode, replacementInode)
         do {
             _ = try await VaporIdentityVault.shared.verifyStrictRuntimeBackingStore()
             XCTFail("Restoring bytes on a different inode must still require a restart")
@@ -950,6 +1075,19 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         }
     }
 
+    private func assertCompleteInventoryError(
+        _ expected: VaporIdentityVaultStrictError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        do {
+            _ = try await VaporIdentityVault.shared.inspectAllExistingBindings()
+            XCTFail("Expected complete binding inventory to fail", file: file, line: line)
+        } catch let error as VaporIdentityVaultStrictError {
+            XCTAssertEqual(error, expected, file: file, line: line)
+        }
+    }
+
     private func vaultURL(in root: URL) -> URL {
         root.appendingPathComponent(VaporIdentityVault.identitiesFileName, isDirectory: false)
     }
@@ -962,6 +1100,77 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
     private func modificationDate(_ url: URL) throws -> Date {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         return try XCTUnwrap(attributes[.modificationDate] as? Date)
+    }
+
+    private func inode(at url: URL) throws -> UInt64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return try XCTUnwrap(attributes[.systemFileNumber] as? NSNumber).uint64Value
+    }
+
+    private func replaceRegularFileAtomically(at targetURL: URL, with data: Data) throws -> UInt64 {
+        let temporaryURL = targetURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(targetURL.lastPathComponent).strict-test-\(UUID().uuidString).tmp",
+            isDirectory: false
+        )
+        let descriptor: Int32
+#if canImport(Darwin)
+        descriptor = Darwin.open(
+            temporaryURL.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+#elseif canImport(Glibc)
+        descriptor = Glibc.open(
+            temporaryURL.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode_t(0o600)
+        )
+#else
+        descriptor = -1
+#endif
+        guard descriptor >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+
+        var shouldRemoveTemporaryFile = true
+        defer {
+            if shouldRemoveTemporaryFile {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        try setPermissions(0o600, at: temporaryURL)
+
+        let stagedInode = try inode(at: temporaryURL)
+        let targetInode = try inode(at: targetURL)
+        guard stagedInode != targetInode else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST))
+        }
+#if canImport(Darwin)
+        let renameStatus = Darwin.rename(temporaryURL.path, targetURL.path)
+#elseif canImport(Glibc)
+        let renameStatus = Glibc.rename(temporaryURL.path, targetURL.path)
+#else
+        let renameStatus = -1
+#endif
+        guard renameStatus == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        shouldRemoveTemporaryFile = false
+
+        let installedInode = try inode(at: targetURL)
+        guard installedInode == stagedInode else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
+        }
+        return installedInode
     }
 
     private func setPermissions(_ permissions: Int, at url: URL) throws {
