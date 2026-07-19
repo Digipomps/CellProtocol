@@ -121,6 +121,16 @@ The authority Cell's mutation receipt also uses version 2 and repeats the target
 owner UUID as well as its signing-key fingerprint. A receipt from version 1 or
 with any mismatched pin is rejected before success is returned.
 
+### Conditions are fail-closed
+
+A signed `Condition` is a requirement declaration, not evidence that the
+requirement was evaluated. Device ingress currently rejects every Contract
+whose Agreement contains one or more Conditions. It does not call a Condition's
+generic resolver method and does not infer success from the target Cell's
+authorization response. Support may be added only with condition-specific,
+authority-pinned, fresh evaluation receipts that are bound into the signed
+Contract/admission record and rechecked at use time.
+
 A process crash after a durable commit may require the client to obtain a new
 challenge; replaying the old envelope remains forbidden. A process crash before
 durable commit must not produce a successful receipt or Cell mutation.

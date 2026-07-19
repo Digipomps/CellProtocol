@@ -36,6 +36,7 @@ public enum DeviceIngressValidationError: Error, Equatable, Sendable {
     case authorityGenerationStale
     case revocationRollbackDetected
     case agreementProofInvalid
+    case agreementConditionsUnsupported
     case replayDetected
     case admissionLedgerRollback
     case admissionLedgerUnavailable
@@ -696,6 +697,12 @@ enum DeviceIngressResolverAuthorizer {
             throw error
         } catch {
             throw DeviceIngressValidationError.agreementProofInvalid
+        }
+        guard contract.agreement.conditions.isEmpty else {
+            // A Condition declaration is not evidence that its policy was
+            // evaluated. Device ingress must remain closed until this path can
+            // verify condition-specific, authority-pinned receipts at use time.
+            throw DeviceIngressValidationError.agreementConditionsUnsupported
         }
         guard contract.uuid == reference.agreementID,
               milliseconds(contract.issuedAt) == reference.issuedAtMilliseconds,

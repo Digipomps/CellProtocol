@@ -401,6 +401,24 @@ final class DeviceIngressContractTests: XCTestCase {
         try await assertAdmissionError(.revocationRollbackDetected, mode: .lowerGeneration)
     }
 
+    func testRejectsEveryDeclaredConditionUntilVerifiedConditionReceiptsExist() async throws {
+        let fixture = try await makeFixture(mode: .nonEmptyConditions)
+
+        do {
+            _ = try await admit(fixture)
+            XCTFail("A declared Condition must not be treated as evaluated evidence")
+        } catch let error as DeviceIngressValidationError {
+            XCTAssertEqual(error, .agreementConditionsUnsupported)
+        }
+
+        let authorityRequestCount = await fixture.authorityCell.authorityRequestCount()
+        let admissionCount = await fixture.ledger.committedRecordsSnapshot().count
+        let mutationCount = await fixture.authorityCell.mutationCount()
+        XCTAssertEqual(authorityRequestCount, 1)
+        XCTAssertEqual(admissionCount, 0)
+        XCTAssertEqual(mutationCount, 0)
+    }
+
     func testSignedChallengePinsResolverTargetOwnerAndExactAgreementBytes() async throws {
         let substitutions: [(Mode, DeviceIngressValidationError, Int)] = [
             (.wrongResolvedTargetCell, .authorityResolutionMismatch, 0),
@@ -528,6 +546,7 @@ final class DeviceIngressContractTests: XCTestCase {
         case wrongAgreementGrant
         case wrongAgreementSubject
         case tamperedAgreement
+        case nonEmptyConditions
         case higherGeneration
         case lowerGeneration
         case wrongResolvedTargetCell
@@ -605,7 +624,7 @@ final class DeviceIngressContractTests: XCTestCase {
             agreementSubject = subject
         }
         let agreement = Agreement(owner: issuer)
-        agreement.conditions = []
+        agreement.conditions = mode == .nonEmptyConditions ? [GrantCondition()] : []
         agreement.grants = [Grant(
             keypath: mode == .wrongAgreementGrant
                 ? "deviceIngress.wrong"
