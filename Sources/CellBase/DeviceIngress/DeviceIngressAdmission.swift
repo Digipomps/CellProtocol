@@ -249,6 +249,10 @@ public enum DeviceIngressEnvelopeVerifier {
         guard authority.schema == DeviceIngressAuthorityReference.currentSchema,
               validIdentifier(authority.authorityID),
               validIdentifier(authority.agreementID),
+              validIdentityUUID(authority.targetCellUUID),
+              validIdentityUUID(authority.targetOwnerIdentityUUID),
+              validIdentifier(authority.targetOwnerSigningKeyFingerprint),
+              authority.signedAgreementSHA256.count == 32,
               validIdentifier(authority.subjectIdentityUUID),
               validIdentifier(authority.subjectSigningKeyFingerprint),
               validIdentifier(authority.revocationLedgerID),
@@ -524,7 +528,7 @@ public struct DeviceIngressMutationCommand: Sendable {
 }
 
 public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.mutation-receipt.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.mutation-receipt.v2"
     public static let atomicRecheckAndDurableMutation =
         "same_cell_atomic_authority_recheck_and_durable_mutation"
 
@@ -532,6 +536,7 @@ public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
     public let admissionID: String
     public let requestSHA256: Data
     public let targetCellUUID: String
+    public let targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64
@@ -545,6 +550,7 @@ public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
         admissionID: String,
         requestSHA256: Data,
         targetCellUUID: String,
+        targetOwnerIdentityUUID: String,
         targetOwnerSigningKeyFingerprint: String,
         signedAgreementSHA256: Data,
         authorityGeneration: UInt64,
@@ -557,6 +563,7 @@ public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
         self.admissionID = admissionID
         self.requestSHA256 = requestSHA256
         self.targetCellUUID = targetCellUUID
+        self.targetOwnerIdentityUUID = targetOwnerIdentityUUID
         self.targetOwnerSigningKeyFingerprint = targetOwnerSigningKeyFingerprint
         self.signedAgreementSHA256 = signedAgreementSHA256
         self.authorityGeneration = authorityGeneration
@@ -623,6 +630,13 @@ enum DeviceIngressResolverAuthorizer {
         ) else {
             throw DeviceIngressValidationError.authorityCellUnavailable
         }
+        let reference = request.authority
+        guard target.uuid == reference.targetCellUUID,
+              targetOwnerDescriptor.uuid == reference.targetOwnerIdentityUUID,
+              DeviceIngressEnvelopeVerifier.signingKeyFingerprint(for: targetOwnerDescriptor)
+                == reference.targetOwnerSigningKeyFingerprint else {
+            throw DeviceIngressValidationError.authorityResolutionMismatch
+        }
         let decision = await authorityCell.resolveDeviceIngressAuthority(for: request)
         let evidence: DeviceIngressAuthorityEvidence
         switch decision {
@@ -660,6 +674,12 @@ enum DeviceIngressResolverAuthorizer {
         guard evidence.canonicalSignedAgreement.isEmpty == false,
               evidence.canonicalSignedAgreement.count
                 <= DeviceIngressAuthorityEvidence.maximumSignedAgreementBytes else {
+            throw DeviceIngressValidationError.agreementProofInvalid
+        }
+        let signedAgreementSHA256 = DeviceIngressCanonicalWire.sha256(
+            evidence.canonicalSignedAgreement
+        )
+        guard signedAgreementSHA256 == reference.signedAgreementSHA256 else {
             throw DeviceIngressValidationError.agreementProofInvalid
         }
         let contract: Contract
@@ -713,9 +733,7 @@ enum DeviceIngressResolverAuthorizer {
             targetOwner: targetOwnerDescriptor,
             authorityID: reference.authorityID,
             agreementID: reference.agreementID,
-            signedAgreementSHA256: DeviceIngressCanonicalWire.sha256(
-                evidence.canonicalSignedAgreement
-            ),
+            signedAgreementSHA256: signedAgreementSHA256,
             agreementGrantKeypath: grantKeypath,
             subjectIdentityUUID: reference.subjectIdentityUUID,
             subjectSigningKeyFingerprint: reference.subjectSigningKeyFingerprint,
@@ -732,7 +750,7 @@ enum DeviceIngressResolverAuthorizer {
 }
 
 public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.admission-record.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.admission-record.v2"
 
     public let schema: String
     public let admissionID: String
@@ -741,6 +759,7 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
     public let bodySHA256: Data
     public let nonceSHA256: Data
     public let targetCellUUID: String
+    public let targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
     public let authorityID: String
     public let authorityGeneration: UInt64
@@ -769,6 +788,7 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
         bodySHA256 = verifiedPair.bodySHA256
         nonceSHA256 = DeviceIngressCanonicalWire.sha256(request.nonce)
         targetCellUUID = resolvedAuthority.targetCellUUID
+        targetOwnerIdentityUUID = resolvedAuthority.targetOwner.uuid
         targetOwnerSigningKeyFingerprint = DeviceIngressEnvelopeVerifier.signingKeyFingerprint(
             for: resolvedAuthority.targetOwner
         ) ?? ""
@@ -795,12 +815,19 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
 }
 
 public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
-    public static let currentSchema = "cellprotocol.device-ingress.admission-receipt.v1"
+    public static let currentSchema = "cellprotocol.device-ingress.admission-receipt.v2"
     public static let durableBeforeMutation = "atomic_durable_before_cell_mutation"
 
     public let schema: String
     public let admissionID: String
     public let recordSHA256: Data
+    public let requestSHA256: Data
+    public let targetCellUUID: String
+    public let targetOwnerIdentityUUID: String
+    public let targetOwnerSigningKeyFingerprint: String
+    public let signedAgreementSHA256: Data
+    public let authorityGeneration: UInt64
+    public let revocationGeneration: UInt64
     public let durableSequence: UInt64
     public let committedAtMilliseconds: Int64
     public let persistenceSemantics: String
@@ -809,6 +836,13 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
         schema: String = Self.currentSchema,
         admissionID: String,
         recordSHA256: Data,
+        requestSHA256: Data,
+        targetCellUUID: String,
+        targetOwnerIdentityUUID: String,
+        targetOwnerSigningKeyFingerprint: String,
+        signedAgreementSHA256: Data,
+        authorityGeneration: UInt64,
+        revocationGeneration: UInt64,
         durableSequence: UInt64,
         committedAtMilliseconds: Int64,
         persistenceSemantics: String = Self.durableBeforeMutation
@@ -816,6 +850,13 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
         self.schema = schema
         self.admissionID = admissionID
         self.recordSHA256 = recordSHA256
+        self.requestSHA256 = requestSHA256
+        self.targetCellUUID = targetCellUUID
+        self.targetOwnerIdentityUUID = targetOwnerIdentityUUID
+        self.targetOwnerSigningKeyFingerprint = targetOwnerSigningKeyFingerprint
+        self.signedAgreementSHA256 = signedAgreementSHA256
+        self.authorityGeneration = authorityGeneration
+        self.revocationGeneration = revocationGeneration
         self.durableSequence = durableSequence
         self.committedAtMilliseconds = committedAtMilliseconds
         self.persistenceSemantics = persistenceSemantics
@@ -909,6 +950,14 @@ enum DeviceIngressAdmissionPipeline {
         guard receipt.schema == DeviceIngressAdmissionReceipt.currentSchema,
               receipt.admissionID == record.admissionID,
               receipt.recordSHA256 == expectedRecordHash,
+              receipt.requestSHA256 == record.requestSHA256,
+              receipt.targetCellUUID == record.targetCellUUID,
+              receipt.targetOwnerIdentityUUID == record.targetOwnerIdentityUUID,
+              receipt.targetOwnerSigningKeyFingerprint
+                == record.targetOwnerSigningKeyFingerprint,
+              receipt.signedAgreementSHA256 == record.signedAgreementSHA256,
+              receipt.authorityGeneration == record.authorityGeneration,
+              receipt.revocationGeneration == record.revocationGeneration,
               receipt.durableSequence > 0,
               receipt.committedAtMilliseconds >= record.admittedAtMilliseconds,
               receipt.committedAtMilliseconds < record.expiresAtMilliseconds,
@@ -934,6 +983,7 @@ enum DeviceIngressAdmissionPipeline {
               mutationReceipt.admissionID == record.admissionID,
               mutationReceipt.requestSHA256 == record.requestSHA256,
               mutationReceipt.targetCellUUID == record.targetCellUUID,
+              mutationReceipt.targetOwnerIdentityUUID == record.targetOwnerIdentityUUID,
               mutationReceipt.targetOwnerSigningKeyFingerprint
                 == record.targetOwnerSigningKeyFingerprint,
               mutationReceipt.signedAgreementSHA256 == record.signedAgreementSHA256,
@@ -956,9 +1006,11 @@ enum DeviceIngressAdmissionPipeline {
     }
 }
 
-/// A Scaffold composition root creates one instance with its pinned issuer,
-/// resolver and durable ledger. Transport adapters can submit bytes, but cannot
-/// choose or replace the trust context and cannot invoke staged authorization.
+/// A Scaffold composition root creates one instance with its pinned challenge
+/// issuer, resolver and durable ledger. Each challenge additionally pins the
+/// target Cell, owner signing key and signed Contract hash. Transport adapters
+/// can submit bytes, but cannot choose or replace the trust context and cannot
+/// invoke staged authorization.
 public actor DeviceIngressAdmissionService {
     private let expectedAudience: String
     private let expectedChallengeIssuer: IdentityPublicKeyDescriptor
