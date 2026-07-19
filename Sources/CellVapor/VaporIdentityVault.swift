@@ -91,10 +91,12 @@ public struct VaporIdentityVaultRequestedBindingInventory: Codable, Equatable, S
     }
 }
 
-/// Complete offline projection of every persisted identity binding. The
-/// tuples are operationally sensitive and are intended only for an exclusive,
-/// stopped-service migration or owner-signed manifest ceremony. They must
-/// never be exposed through an application route or written to ordinary logs.
+/// Complete projection of every persisted identity binding from a process
+/// whose strict serving mode has not been activated. The process-local gate is
+/// not proof that another process is stopped or that the caller owns an
+/// exclusive volume lease. Callers must establish that external boundary and
+/// bind their output to `revision`. The tuples are operationally sensitive and
+/// must never be exposed through an application route or ordinary logs.
 public struct VaporIdentityVaultCompleteBindingInventory: Codable, Equatable, Sendable {
     public static let schema = "haven.vapor-identity-vault.complete-binding-inventory.v1"
 
@@ -1526,10 +1528,15 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         )
     }
 
-    /// Offline-only complete inventory for a stopped-service migration. The
-    /// complete encrypted vault is authenticated before projection. This does
-    /// not create, heal, migrate, publish, or write state, and an activated
-    /// strict serving runtime is rejected.
+    /// Process-local, non-serving complete inventory for a stopped-service
+    /// migration. The complete encrypted vault is authenticated before
+    /// projection. This does not create, heal, migrate, publish, or write
+    /// state, and an activated strict serving runtime is rejected.
+    ///
+    /// This method cannot prove that another process is stopped or that its
+    /// caller holds the required exclusive volume/deploy lease. The consumer
+    /// must enforce that boundary and revalidate the returned exact revision
+    /// before using the inventory in a migration or signed manifest ceremony.
     public func inspectAllExistingBindings() async throws
         -> VaporIdentityVaultCompleteBindingInventory {
         guard strictRuntimeDocumentRootPath == nil else {
@@ -1799,7 +1806,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                 signingKeyFingerprint: fingerprint
             )
         }.sorted {
-            $0.context == $1.context ? $0.uuid < $1.uuid : $0.context < $1.context
+            if $0.context == $1.context {
+                return $0.uuid.utf8.lexicographicallyPrecedes($1.uuid.utf8)
+            }
+            return $0.context.utf8.lexicographicallyPrecedes($1.context.utf8)
         }
     }
 

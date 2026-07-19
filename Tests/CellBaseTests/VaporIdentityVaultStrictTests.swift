@@ -259,7 +259,9 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         let requests = [
             request(uuid: "complete-z", context: "domain:complete:z"),
             request(uuid: "complete-a", context: "domain:complete:a"),
-            request(uuid: "complete-m", context: "domain:complete:m")
+            request(uuid: "complete-m", context: "domain:complete:m"),
+            request(uuid: "complete-unicode-composed", context: "domain:complete:éa"),
+            request(uuid: "complete-unicode-decomposed", context: "domain:complete:e\u{301}b")
         ]
         let plan = try await VaporIdentityVault.shared.inspectProvisioning(requests)
         let provisioned = try await VaporIdentityVault.shared.provisionIdentities(
@@ -283,7 +285,13 @@ final class VaporIdentityVaultStrictTests: XCTestCase {
         XCTAssertEqual(inventory.bindings.count, inventory.bindingCount)
         XCTAssertEqual(
             inventory.bindings.map(\.context),
-            ["domain:complete:a", "domain:complete:m", "domain:complete:z"]
+            [
+                "domain:complete:a",
+                "domain:complete:e\u{301}b",
+                "domain:complete:m",
+                "domain:complete:z",
+                "domain:complete:éa"
+            ]
         )
         XCTAssertEqual(Set(inventory.bindings.map(\.uuid)), Set(requests.map(\.uuid)))
         XCTAssertTrue(inventory.bindings.allSatisfy {
