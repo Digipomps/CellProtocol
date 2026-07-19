@@ -57,6 +57,34 @@ jobs:
             -o "${RUNNER_TEMP}/persisted-cell-file-io-linux"
           "${RUNNER_TEMP}/persisted-cell-file-io-linux"
 
+      - name: Compile and test device ingress authority on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test \
+            --disable-sandbox \
+            --disable-automatic-resolution \
+            --jobs 2 \
+            --filter DeviceIngress
+
+      - name: Prove transport cannot invoke staged authority API
+        shell: bash
+        run: |
+          set -euo pipefail
+          module_dir="$(find .build -type d -path '*/debug/Modules' -print -quit)"
+          test -n "$module_dir"
+          diagnostic_path="${RUNNER_TEMP}/device-ingress-public-api-negative.txt"
+          if swiftc \
+            -typecheck \
+            -I "$module_dir" \
+            Tests/Linux/DeviceIngressPublicAPINegative.swift \
+            2>"$diagnostic_path"; then
+            echo "Transport unexpectedly compiled against staged authority API" >&2
+            exit 1
+          fi
+          grep -q "cannot find 'DeviceIngressResolverAuthorizer' in scope" \
+            "$diagnostic_path"
+
       - name: Verify source and dependency lock remained unchanged
         shell: bash
         run: |
