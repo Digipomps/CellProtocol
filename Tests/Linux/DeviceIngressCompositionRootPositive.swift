@@ -16,6 +16,10 @@ func makePinnedAuthorityReferenceForCompositionRoot() -> DeviceIngressAuthorityR
         authorityGeneration: 1,
         revocationLedgerID: "revocation-ledger-1",
         revocationGeneration: 1,
+        contentPolicy: DeviceIngressContentPolicy(
+            requestBodyContentContractSHA256: Data(repeating: 0x01, count: 32),
+            responseContentContractSHA256: Data(repeating: 0x02, count: 32)
+        ),
         issuedAtMilliseconds: 1,
         validUntilMilliseconds: 2
     )

@@ -25,7 +25,7 @@ final class DeviceIngressContractTests: XCTestCase {
         )
         XCTAssertEqual(
             admission.mutationReceipt.persistenceSemantics,
-            DeviceIngressMutationReceipt.atomicRecheckAndDurableMutation
+            DeviceIngressMutationReceipt.atomicMutationAndResponse
         )
         XCTAssertEqual(
             admission.admissionReceipt.targetOwnerIdentityUUID,
@@ -317,16 +317,14 @@ final class DeviceIngressContractTests: XCTestCase {
         )
     }
 
-    func testRejectsReplayBeforeSecondCellMutation() async throws {
+    func testReplayReturnsByteIdenticalResponseWithoutSecondCellMutation() async throws {
         let fixture = try await makeFixture()
-        _ = try await admit(fixture)
+        let first = try await admit(fixture)
+        let second = try await admit(fixture)
 
-        do {
-            _ = try await admit(fixture)
-            XCTFail("Expected a replay rejection")
-        } catch let error as DeviceIngressValidationError {
-            XCTAssertEqual(error, .replayDetected)
-        }
+        XCTAssertFalse(first.isReplay)
+        XCTAssertTrue(second.isReplay)
+        XCTAssertEqual(first.canonicalResponseData, second.canonicalResponseData)
         let requestCount = await fixture.authorityCell.authorityRequestCount()
         let mutationCount = await fixture.authorityCell.mutationCount()
         let recordCount = await fixture.ledger.committedRecordsSnapshot().count
@@ -335,14 +333,60 @@ final class DeviceIngressContractTests: XCTestCase {
         XCTAssertEqual(recordCount, 1)
     }
 
-    func testConcurrentReplayProducesOneMutationAndOneRejection() async throws {
+    func testRequesterVerifiesResponseFromLocalExpectationAndRejectsTampering() async throws {
         let fixture = try await makeFixture()
-        async let first = admissionOutcome(fixture)
-        async let second = admissionOutcome(fixture)
-        let concurrentOutcomes = await (first, second)
-        let outcomes = [concurrentOutcomes.0, concurrentOutcomes.1].sorted()
+        let admission = try await admit(fixture)
 
-        XCTAssertEqual(outcomes, ["replayDetected", "success"])
+        let verified = try DeviceIngressOperationResponseVerifier.verify(
+            canonicalData: admission.canonicalResponseData,
+            expectation: fixture.expectation
+        )
+        XCTAssertEqual(verified, admission.response)
+        XCTAssertEqual(verified.subjectIdentityUUID, fixture.subject.uuid)
+        let responseText = try XCTUnwrap(
+            String(data: admission.canonicalResponseData, encoding: .utf8)
+        )
+        XCTAssertFalse(responseText.contains("pushToken"))
+        XCTAssertFalse(responseText.contains("private"))
+
+        var tampered = verified
+        var signature = try XCTUnwrap(tampered.proof?.signature)
+        signature[0] ^= 0x01
+        tampered.proof?.signature = signature
+        XCTAssertThrowsError(
+            try DeviceIngressOperationResponseVerifier.verify(
+                canonicalData: tampered.canonicalWireData(),
+                expectation: fixture.expectation
+            )
+        ) { error in
+            XCTAssertEqual(error as? DeviceIngressResponseValidationError, .invalidProof)
+        }
+
+        let unrelatedFixture = try await makeFixture()
+        XCTAssertThrowsError(
+            try DeviceIngressOperationResponseVerifier.verify(
+                canonicalData: admission.canonicalResponseData,
+                expectation: unrelatedFixture.expectation
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? DeviceIngressResponseValidationError,
+                .admissionBindingMismatch
+            )
+        }
+    }
+
+    func testConcurrentReplayProducesOneMutationAndTwoIdenticalResponses() async throws {
+        let fixture = try await makeFixture()
+        async let first = admit(fixture)
+        async let second = admit(fixture)
+        let concurrentOutcomes = try await (first, second)
+
+        XCTAssertEqual(
+            concurrentOutcomes.0.canonicalResponseData,
+            concurrentOutcomes.1.canonicalResponseData
+        )
+        XCTAssertTrue(concurrentOutcomes.0.isReplay || concurrentOutcomes.1.isReplay)
         let mutationCount = await fixture.authorityCell.mutationCount()
         let recordCount = await fixture.ledger.committedRecordsSnapshot().count
         XCTAssertEqual(mutationCount, 1)
@@ -624,6 +668,7 @@ final class DeviceIngressContractTests: XCTestCase {
         let challengeData: Data
         let request: DeviceIngressEnvelope
         let requestData: Data
+        let expectation: DeviceIngressResponseExpectation
         let body: Data
         let service: DeviceIngressAdmissionService
         let ledger: FixtureAdmissionLedger
@@ -674,9 +719,14 @@ final class DeviceIngressContractTests: XCTestCase {
         )
         let subjectFingerprint = try XCTUnwrap(subject.signingPublicKeyFingerprint)
 
+        let contentPolicy = DeviceIngressContentPolicy(
+            requestBodyContentContractSHA256: Data(repeating: 0xA1, count: 32),
+            responseContentContractSHA256: Data(repeating: 0xB2, count: 32)
+        )
         let scope = DeviceIngressAgreementScope(
             operation: .register,
-            audience: audience
+            audience: audience,
+            contentPolicy: contentPolicy
         )
         let agreementSubject: Identity
         if mode == .wrongAgreementSubject {
@@ -765,6 +815,7 @@ final class DeviceIngressContractTests: XCTestCase {
             authorityGeneration: referenceGeneration,
             revocationLedgerID: "device-revocations-1",
             revocationGeneration: referenceGeneration,
+            contentPolicy: contentPolicy,
             issuedAtMilliseconds: milliseconds(
                 Date(timeIntervalSince1970: contract.issuedAt)
             ),
@@ -788,7 +839,7 @@ final class DeviceIngressContractTests: XCTestCase {
         let body = Data(#"{"participantId":"binding-participant","pushToken":"private"}"#.utf8)
         let bindingCandidate = await subjectVault.identityDomainBinding(for: subject)
         let binding = try XCTUnwrap(bindingCandidate)
-        let requestData = try await DeviceIngressRequestFactory.sign(
+        let preparedRequest = try await DeviceIngressRequestFactory.prepare(
             canonicalChallengeData: challengeData,
             protectedBody: body,
             requester: subject,
@@ -797,6 +848,7 @@ final class DeviceIngressContractTests: XCTestCase {
             expectedChallengeIssuer: issuerDescriptor,
             now: now
         )
+        let requestData = preparedRequest.canonicalRequestData
         let request = try DeviceIngressCanonicalWire.decodeCanonical(requestData)
         let evidence = DeviceIngressAuthorityEvidence(
             canonicalSignedAgreement: authorityEvidenceAgreement,
@@ -853,6 +905,7 @@ final class DeviceIngressContractTests: XCTestCase {
             challengeData: challengeData,
             request: request,
             requestData: requestData,
+            expectation: preparedRequest.expectation,
             body: body,
             service: service,
             ledger: ledger,
@@ -948,8 +1001,11 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
     private actor State {
         var requests: [DeviceIngressAuthorityRequest] = []
         var mutationAdmissionIDs: [String] = []
+        var committedMutations: [String: DeviceIngressCommittedMutation] = [:]
+        var inFlightMutations: [String: Task<DeviceIngressCommittedMutation?, Never>] = [:]
         let decision: DeviceIngressAuthorityDecision
         let mutationMode: MutationMode
+        let targetOwner: Identity?
         var currentAuthorityGeneration: UInt64
         var currentRevocationGeneration: UInt64
         let signedAgreementSHA256: Data
@@ -957,12 +1013,14 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         init(
             decision: DeviceIngressAuthorityDecision,
             mutationMode: MutationMode,
+            targetOwner: Identity?,
             currentAuthorityGeneration: UInt64,
             currentRevocationGeneration: UInt64,
             signedAgreementSHA256: Data
         ) {
             self.decision = decision
             self.mutationMode = mutationMode
+            self.targetOwner = targetOwner
             self.currentAuthorityGeneration = currentAuthorityGeneration
             self.currentRevocationGeneration = currentRevocationGeneration
             self.signedAgreementSHA256 = signedAgreementSHA256
@@ -973,12 +1031,24 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
             return decision
         }
 
-        func commit(
+        func commitOrReturnExisting(
             _ command: DeviceIngressMutationCommand,
-            targetCellUUID: String,
-            targetOwnerIdentityUUID: String,
-            targetOwnerFingerprint: String
-        ) -> DeviceIngressMutationDecision {
+            targetCellUUID: String
+        ) async -> DeviceIngressMutationDecision {
+            guard let targetOwner,
+                  let targetOwnerFingerprint = targetOwner.signingPublicKeyFingerprint else {
+                return .unavailable
+            }
+            let admissionID = command.admissionRecord.admissionID
+            if let existing = committedMutations[admissionID] {
+                return .replay(existing: existing)
+            }
+            if let pending = inFlightMutations[admissionID] {
+                guard let existing = await pending.value else {
+                    return .unavailable
+                }
+                return .replay(existing: existing)
+            }
             if mutationMode == .revokeBeforeMutation {
                 currentRevocationGeneration += 1
                 return .denied(reasonCode: "revoked_before_mutation")
@@ -993,32 +1063,150 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
                     == currentRevocationGeneration,
                   command.admissionRecord.signedAgreementSHA256
                     == signedAgreementSHA256 else {
-                return .committed(DeviceIngressMutationReceipt(
+                return .committed(DeviceIngressCommittedMutation(
+                    receipt: DeviceIngressMutationReceipt(
+                    responseID: "invalid",
+                    operation: command.admissionRecord.operation,
                     admissionID: "invalid",
                     requestSHA256: Data(),
+                    challengeSHA256: Data(),
+                    bodySHA256: Data(),
                     targetCellUUID: targetCellUUID,
-                    targetOwnerIdentityUUID: targetOwnerIdentityUUID,
+                    targetOwnerIdentityUUID: targetOwner.uuid,
                     targetOwnerSigningKeyFingerprint: targetOwnerFingerprint,
+                    subjectIdentityUUID: command.admissionRecord.subjectIdentityUUID,
+                    subjectSigningKeyFingerprint:
+                        command.admissionRecord.subjectSigningKeyFingerprint,
                     signedAgreementSHA256: signedAgreementSHA256,
                     authorityGeneration: currentAuthorityGeneration,
+                    revocationLedgerID: command.admissionRecord.revocationLedgerID,
                     revocationGeneration: currentRevocationGeneration,
+                    contentPolicySHA256: Data(),
                     mutationRecordSHA256: Data(),
+                    operationResultSHA256: Data(),
+                    durableSequence: 0,
                     committedAtMilliseconds: command.admissionReceipt.committedAtMilliseconds
+                    ),
+                    canonicalResponseData: Data()
                 ))
             }
-            mutationAdmissionIDs.append(command.admissionRecord.admissionID)
-            return .committed(DeviceIngressMutationReceipt(
-                admissionID: command.admissionRecord.admissionID,
-                requestSHA256: command.admissionRecord.requestSHA256,
+            let sequence = UInt64(mutationAdmissionIDs.count + 1)
+            let task = Task<DeviceIngressCommittedMutation?, Never> {
+                do {
+                    return try await Self.makeCommittedMutation(
+                        command: command,
+                        targetCellUUID: targetCellUUID,
+                        targetOwner: targetOwner,
+                        targetOwnerFingerprint: targetOwnerFingerprint,
+                        authorityGeneration: currentAuthorityGeneration,
+                        revocationGeneration: currentRevocationGeneration,
+                        signedAgreementSHA256: signedAgreementSHA256,
+                        durableSequence: sequence
+                    )
+                } catch { return nil }
+            }
+            inFlightMutations[admissionID] = task
+            guard let committed = await task.value else {
+                inFlightMutations[admissionID] = nil
+                return .unavailable
+            }
+            inFlightMutations[admissionID] = nil
+            committedMutations[admissionID] = committed
+            mutationAdmissionIDs.append(admissionID)
+            return .committed(committed)
+        }
+
+        private static func makeCommittedMutation(
+            command: DeviceIngressMutationCommand,
+            targetCellUUID: String,
+            targetOwner: Identity,
+            targetOwnerFingerprint: String,
+            authorityGeneration: UInt64,
+            revocationGeneration: UInt64,
+            signedAgreementSHA256: Data,
+            durableSequence: UInt64
+        ) async throws -> DeviceIngressCommittedMutation {
+            let record = command.admissionRecord
+            let committedAt = command.admissionReceipt.committedAtMilliseconds
+            let result: DeviceIngressOperationResult
+            switch record.operation {
+            case .register:
+                result = .registration(DeviceIngressRegistrationReceipt(
+                    registrationID: "registration-1",
+                    deviceIdentityUUID: record.subjectIdentityUUID,
+                    registrationGeneration: 1,
+                    durableSequence: durableSequence,
+                    state: .activeConsented,
+                    registrationRecordSHA256:
+                        DeviceIngressCanonicalWire.sha256(command.protectedBody),
+                    committedAtMilliseconds: committedAt
+                ))
+            case .resolve:
+                result = .resolvedTicket(DeviceIngressResolvedTicket(
+                    ticketID: "ticket-1",
+                    ticketSequence: 1,
+                    recipientDeviceIdentityUUID: record.subjectIdentityUUID,
+                    payloadSchema: "haven.device-callback.test.v1",
+                    payloadContentContractSHA256:
+                        record.contentPolicy.resolvedPayloadContentContractSHA256 ?? Data(),
+                    canonicalPayload: Data(#"{"task":"test"}"#.utf8),
+                    issuedAtMilliseconds: record.issuedAtMilliseconds,
+                    expiresAtMilliseconds: record.expiresAtMilliseconds
+                ))
+            case .submit:
+                result = .submission(DeviceIngressSubmissionReceipt(
+                    ticketID: "ticket-1",
+                    ticketSequence: 1,
+                    submittedBodySHA256: record.bodySHA256,
+                    resultRecordSHA256:
+                        DeviceIngressCanonicalWire.sha256(command.protectedBody),
+                    durableSequence: durableSequence,
+                    disposition: .accepted,
+                    committedAtMilliseconds: committedAt
+                ))
+            }
+            let resultSHA256 = DeviceIngressCanonicalWire.sha256(try result.canonicalData())
+            let mutationRecordSHA256 = DeviceIngressCanonicalWire.sha256(
+                command.protectedBody + resultSHA256
+            )
+            let responseID = try DeviceIngressMutationReceipt.responseID(
+                admissionID: record.admissionID,
+                requestSHA256: record.requestSHA256,
+                mutationRecordSHA256: mutationRecordSHA256,
+                operationResultSHA256: resultSHA256
+            )
+            let receipt = DeviceIngressMutationReceipt(
+                responseID: responseID,
+                operation: record.operation,
+                admissionID: record.admissionID,
+                requestSHA256: record.requestSHA256,
+                challengeSHA256: record.challengeSHA256,
+                bodySHA256: record.bodySHA256,
                 targetCellUUID: targetCellUUID,
-                targetOwnerIdentityUUID: targetOwnerIdentityUUID,
+                targetOwnerIdentityUUID: targetOwner.uuid,
                 targetOwnerSigningKeyFingerprint: targetOwnerFingerprint,
+                subjectIdentityUUID: record.subjectIdentityUUID,
+                subjectSigningKeyFingerprint: record.subjectSigningKeyFingerprint,
                 signedAgreementSHA256: signedAgreementSHA256,
-                authorityGeneration: currentAuthorityGeneration,
-                revocationGeneration: currentRevocationGeneration,
-                mutationRecordSHA256: DeviceIngressCanonicalWire.sha256(command.protectedBody),
-                committedAtMilliseconds: command.admissionReceipt.committedAtMilliseconds
-            ))
+                authorityGeneration: authorityGeneration,
+                revocationLedgerID: record.revocationLedgerID,
+                revocationGeneration: revocationGeneration,
+                contentPolicySHA256: try record.contentPolicy.canonicalSHA256(),
+                mutationRecordSHA256: mutationRecordSHA256,
+                operationResultSHA256: resultSHA256,
+                durableSequence: durableSequence,
+                committedAtMilliseconds: committedAt
+            )
+            let responseData = try await DeviceIngressOperationResponseFactory.sign(
+                command: command,
+                mutationReceipt: receipt,
+                result: result,
+                signer: targetOwner
+            )
+            return DeviceIngressCommittedMutation(
+                receipt: receipt,
+                canonicalResponseData: responseData
+            )
         }
     }
 
@@ -1028,6 +1216,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         state = State(
             decision: .denied(reasonCode: "unconfigured"),
             mutationMode: .commit,
+            targetOwner: owner,
             currentAuthorityGeneration: 0,
             currentRevocationGeneration: 0,
             signedAgreementSHA256: Data()
@@ -1046,6 +1235,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         state = State(
             decision: decision,
             mutationMode: mutationMode,
+            targetOwner: owner,
             currentAuthorityGeneration: currentAuthorityGeneration,
             currentRevocationGeneration: currentRevocationGeneration,
             signedAgreementSHA256: signedAgreementSHA256
@@ -1057,6 +1247,7 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         state = State(
             decision: .denied(reasonCode: "decoded_fixture_denied"),
             mutationMode: .commit,
+            targetOwner: nil,
             currentAuthorityGeneration: 0,
             currentRevocationGeneration: 0,
             signedAgreementSHA256: Data()
@@ -1070,16 +1261,12 @@ private final class FixtureDeviceIngressAuthorityCell: GeneralCell, DeviceIngres
         await state.resolve(request)
     }
 
-    func commitDeviceIngressMutation(
+    func commitOrReturnExistingDeviceIngressMutation(
         _ command: DeviceIngressMutationCommand
     ) async -> DeviceIngressMutationDecision {
-        let owner = storedOwnerIdentity
-        let fingerprint = owner.signingPublicKeyFingerprint ?? ""
-        return await state.commit(
+        return await state.commitOrReturnExisting(
             command,
-            targetCellUUID: uuid,
-            targetOwnerIdentityUUID: owner.uuid,
-            targetOwnerFingerprint: fingerprint
+            targetCellUUID: uuid
         )
     }
 
@@ -1094,8 +1281,8 @@ private actor FixtureAdmissionLedger: DeviceIngressDurableAdmissionLedger {
         case wrongTargetPin
     }
 
+    private var admissionsByNonce: [Data: DeviceIngressPersistedAdmission] = [:]
     private var records: [DeviceIngressAdmissionRecord] = []
-    private var nonceDigests: Set<Data> = []
     private let receiptMode: ReceiptMode
 
     init(receiptMode: ReceiptMode = .valid) {
@@ -1103,14 +1290,19 @@ private actor FixtureAdmissionLedger: DeviceIngressDurableAdmissionLedger {
     }
 
     func commit(_ record: DeviceIngressAdmissionRecord) async -> DeviceIngressAdmissionCommitOutcome {
-        guard nonceDigests.insert(record.nonceSHA256).inserted else {
-            return .replay(existingAdmissionID: record.admissionID)
+        if let existing = admissionsByNonce[record.nonceSHA256] {
+            guard existing.record == record else {
+                return .generationRollback
+            }
+            return .replay(existing: existing)
         }
-        records.append(record)
         guard let canonical = try? record.canonicalData() else {
             return .unavailable
         }
-        return .committed(DeviceIngressAdmissionReceipt(
+        guard let contentPolicySHA256 = try? record.contentPolicy.canonicalSHA256() else {
+            return .unavailable
+        }
+        let receipt = DeviceIngressAdmissionReceipt(
             admissionID: record.admissionID,
             recordSHA256: DeviceIngressCanonicalWire.sha256(canonical),
             requestSHA256: record.requestSHA256,
@@ -1121,13 +1313,19 @@ private actor FixtureAdmissionLedger: DeviceIngressDurableAdmissionLedger {
             targetOwnerSigningKeyFingerprint: record.targetOwnerSigningKeyFingerprint,
             signedAgreementSHA256: record.signedAgreementSHA256,
             authorityGeneration: record.authorityGeneration,
+            revocationLedgerID: record.revocationLedgerID,
             revocationGeneration: record.revocationGeneration,
-            durableSequence: UInt64(records.count),
-            committedAtMilliseconds: record.admittedAtMilliseconds,
+            contentPolicySHA256: contentPolicySHA256,
+            durableSequence: UInt64(records.count + 1),
+            committedAtMilliseconds: record.issuedAtMilliseconds,
             persistenceSemantics: receiptMode == .nonDurable
                 ? "memory_only"
                 : DeviceIngressAdmissionReceipt.durableBeforeMutation
-        ))
+        )
+        let persisted = DeviceIngressPersistedAdmission(record: record, receipt: receipt)
+        records.append(record)
+        admissionsByNonce[record.nonceSHA256] = persisted
+        return .committed(persisted)
     }
 
     func committedRecordsSnapshot() -> [DeviceIngressAdmissionRecord] { records }
