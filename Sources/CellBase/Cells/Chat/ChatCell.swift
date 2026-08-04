@@ -117,7 +117,7 @@ public final class ChatCell: GeneralCell {
         var lastAction: String
         var presence: String
 
-        func objectValue() -> Object {
+        func objectValue(presentationScopeID: String) -> Object {
             [
                 "id": .string(id),
                 "displayName": .string(displayName),
@@ -127,6 +127,11 @@ public final class ChatCell: GeneralCell {
                 "lastAction": .string(lastAction),
                 "presence": .string(presence),
                 "initials": .string(ChatPresentation.initials(from: displayName)),
+                "presentation": .object(ChatPresentation.participantPresentation(
+                    displayName: displayName,
+                    scopeID: presentationScopeID,
+                    participantID: id
+                )),
                 "presenceLabel": .string(ChatPresentation.presenceLabel(for: presence, lastAction: lastAction)),
                 "joinedDisplay": .string(ChatPresentation.absoluteTimestamp(from: joinedAt)),
                 "lastSeenDisplay": .string(ChatPresentation.absoluteTimestamp(from: lastSeenAt)),
@@ -639,7 +644,7 @@ public final class ChatCell: GeneralCell {
         await registerGet(key: "audience", owner: owner) { [weak self] requester in
             guard let self else { return .string("failure") }
             guard await self.canRead(requester, keypath: "audience") else { return .string("denied") }
-            return .object(self.audiencePayload())
+            return .object(self.audiencePayload(for: requester))
         }
 
         await registerGet(key: "audience.mode", owner: owner) { [weak self] requester in
@@ -657,7 +662,7 @@ public final class ChatCell: GeneralCell {
             self.audienceMode = mode
             self.noteAudienceMembershipMutation(reason: "audienceModeChanged")
             self.invalidateAllPreparedEnvelopeDrafts()
-            return .object(self.audiencePayload())
+            return .object(self.audiencePayload(for: requester))
         }
 
         await registerGet(key: "audience.inheritedRecipients", owner: owner) { [weak self] requester in
@@ -705,7 +710,7 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "audience.inviteIdentities", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.inviteIdentities") else { return .string("denied") }
-            return .object(self.inviteIdentities(from: payload, source: "manual"))
+            return .object(self.inviteIdentities(from: payload, source: "manual", requester: requester))
         }
 
         await registerSet(key: "audience.generateInvitationArtifacts", owner: owner) { [weak self] requester, payload in
@@ -729,25 +734,25 @@ public final class ChatCell: GeneralCell {
         await registerSet(key: "audience.acceptInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.acceptInvites") else { return .string("denied") }
-            return self.updateInvitationStatuses(from: payload, to: .accepted)
+            return self.updateInvitationStatuses(from: payload, to: .accepted, requester: requester)
         }
 
         await registerSet(key: "audience.declineInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.declineInvites") else { return .string("denied") }
-            return self.updateInvitationStatuses(from: payload, to: .declined)
+            return self.updateInvitationStatuses(from: payload, to: .declined, requester: requester)
         }
 
         await registerSet(key: "audience.revokeInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.revokeInvites") else { return .string("denied") }
-            return self.updateInvitationStatuses(from: payload, to: .revoked)
+            return self.updateInvitationStatuses(from: payload, to: .revoked, requester: requester)
         }
 
         await registerSet(key: "audience.removeContextMembers", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.removeContextMembers") else { return .string("denied") }
-            return self.removeContextMembers(from: payload)
+            return self.removeContextMembers(from: payload, requester: requester)
         }
 
         await registerSet(key: "audience.clearInvites", owner: owner) { [weak self] requester, payload in
@@ -759,7 +764,7 @@ public final class ChatCell: GeneralCell {
             self.invitationRecordsByIdentityUUID.removeAll()
             self.noteAudienceMembershipMutation(reason: "invitesCleared")
             self.invalidateAllPreparedEnvelopeDrafts()
-            return .object(self.audiencePayload())
+            return .object(self.audiencePayload(for: requester))
         }
 
         await registerGet(key: "compose.body", owner: owner) { [weak self] requester in
@@ -1017,7 +1022,7 @@ public final class ChatCell: GeneralCell {
     }
 
     private func participantsPayload() -> ValueType {
-        .list(sortedParticipants().map { .object($0.objectValue()) })
+        .list(sortedParticipants().map { .object($0.objectValue(presentationScopeID: uuid)) })
     }
 
     private func statePayload(for requester: Identity) -> Object {
@@ -1028,7 +1033,7 @@ public final class ChatCell: GeneralCell {
             "messages": messagesPayload(),
             "participants": participantsPayload(),
             "members": participantsPayload(),
-            "audience": .object(audiencePayload()),
+            "audience": .object(audiencePayload(for: requester)),
             "messageCount": .integer(chatMessageHistory.count),
             "participantCount": .integer(participantRecords.count),
             "messagesLimit": .integer(messagesLimit),
@@ -1388,7 +1393,7 @@ public final class ChatCell: GeneralCell {
         return nil
     }
 
-    private func audiencePayload() -> Object {
+    private func audiencePayload(for requester: Identity) -> Object {
         let inheritedRecipients = contextRecipientIdentities()
         let resolvedRecipients = currentRecipientIdentities()
         let invitationRecords = sortedInvitationRecords()
@@ -1404,6 +1409,11 @@ public final class ChatCell: GeneralCell {
             "inheritedRecipients": .list(contextAudienceRecipientObjects()),
             "invitedRecipients": .list(invitedAudienceRecipientObjects()),
             "resolvedRecipients": .list(resolvedAudienceRecipientObjects()),
+            "groupPresentation": .object(ChatPresentation.groupPresentation(
+                members: resolvedRecipients.map { (participantID: $0.uuid, displayName: $0.displayName) },
+                scopeID: uuid,
+                excludingParticipantID: requester.uuid
+            )),
             "invitations": .list(invitationObjects()),
             "invitationLedgerCount": .integer(invitationArtifactLedgerByInvitationID.count),
             "inheritedCount": .integer(max(inheritedRecipients.count - 1, 0)),
@@ -1478,6 +1488,11 @@ public final class ChatCell: GeneralCell {
         .object([
             "identityUUID": .string(identity.uuid),
             "displayName": .string(identity.displayName),
+            "presentation": .object(ChatPresentation.participantPresentation(
+                displayName: identity.displayName,
+                scopeID: uuid,
+                participantID: identity.uuid
+            )),
             "source": .string(source),
             "isOwner": .bool(identity.uuid == owner.uuid),
             "hasKeyAgreementKey": .bool(identity.publicKeyAgreementSecureKey != nil),
@@ -1591,7 +1606,7 @@ public final class ChatCell: GeneralCell {
     }
 
     private func messageObject(for message: ChatMessage) -> Object {
-        var object = message.messageObject()
+        var object = message.messageObject(presentationScopeID: uuid)
         if let encryptedRecord = encryptedMessageRecordsByMessageID[message.id] {
             object["cryptoState"] = .string("encryptedCompanionAvailable")
             object["encryptedCompanionAvailable"] = .bool(true)
@@ -1936,7 +1951,7 @@ public final class ChatCell: GeneralCell {
                         "idempotent": .bool(true),
                         "invitationID": .string(artifact.invitationID),
                         "acceptanceID": .string(acceptance.acceptanceID),
-                        "audience": .object(audiencePayload()),
+                        "audience": .object(audiencePayload(for: requester)),
                         "invitation": .object(record.objectValue())
                     ])
                 }
@@ -1972,7 +1987,7 @@ public final class ChatCell: GeneralCell {
                 "idempotent": .bool(false),
                 "invitationID": .string(artifact.invitationID),
                 "acceptanceID": .string(acceptance.acceptanceID),
-                "audience": .object(audiencePayload()),
+                "audience": .object(audiencePayload(for: requester)),
                 "invitation": .object(record.objectValue())
             ])
         } catch {
@@ -1980,7 +1995,7 @@ public final class ChatCell: GeneralCell {
         }
     }
 
-    private func inviteIdentities(from payload: ValueType, source: String) -> Object {
+    private func inviteIdentities(from payload: ValueType, source: String, requester: Identity) -> Object {
         let newIdentities = identities(from: payload)
         let resolvedFromIDs = stringListValue(payload)?.compactMap { resolveIdentity(explicitUUID: $0) } ?? []
         let allIdentities = deduplicatedIdentities(from: newIdentities + resolvedFromIDs)
@@ -2015,10 +2030,14 @@ public final class ChatCell: GeneralCell {
         syncAcceptedInvitedIdentitiesFromInvitationRecords()
         noteAudienceMembershipMutation(reason: "inviteesUpdated")
         invalidateAllPreparedEnvelopeDrafts()
-        return audiencePayload()
+        return audiencePayload(for: requester)
     }
 
-    private func updateInvitationStatuses(from payload: ValueType, to status: ChatInvitationStatus) -> ValueType {
+    private func updateInvitationStatuses(
+        from payload: ValueType,
+        to status: ChatInvitationStatus,
+        requester: Identity
+    ) -> ValueType {
         let knownInvitationIDs = Set(invitationRecordsByIdentityUUID.keys)
         let idsToUpdate: Set<String>
         switch invitationTargetSelection(from: payload) {
@@ -2047,10 +2066,10 @@ public final class ChatCell: GeneralCell {
         syncAcceptedInvitedIdentitiesFromInvitationRecords()
         noteAudienceMembershipMutation(reason: "invitationStatusChanged:\(status.rawValue)")
         invalidateAllPreparedEnvelopeDrafts()
-        return .object(audiencePayload())
+        return .object(audiencePayload(for: requester))
     }
 
-    private func removeContextMembers(from payload: ValueType) -> ValueType {
+    private func removeContextMembers(from payload: ValueType, requester: Identity) -> ValueType {
         let removableContextMemberIDs = Set(participantRecords.keys.filter { $0 != owner.uuid })
         let idsToRemove: Set<String>
         switch invitationTargetSelection(from: payload) {
@@ -2079,7 +2098,7 @@ public final class ChatCell: GeneralCell {
             invalidateAllPreparedEnvelopeDrafts()
         }
 
-        return .object(audiencePayload())
+        return .object(audiencePayload(for: requester))
     }
 
     private enum InvitationTargetSelection {
@@ -2729,7 +2748,7 @@ public final class ChatCell: GeneralCell {
         var flowElement = FlowElement(
             id: participant.id,
             title: "Chat participant",
-            content: .object(participant.objectValue()),
+            content: .object(participant.objectValue(presentationScopeID: uuid)),
             properties: FlowElement.Properties(type: .event, contentType: .object)
         )
         flowElement.topic = "chat.participant"
@@ -3578,6 +3597,37 @@ public final class ChatCell: GeneralCell {
         ]
     }
 
+    private static func participantPresentationSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "schema": ExploreContract.schema(type: "string"),
+                "kind": ExploreContract.schema(type: "string"),
+                "text": ExploreContract.oneOfSchema(options: [
+                    ExploreContract.schema(type: "string"),
+                    .null
+                ]),
+                "styleRole": ExploreContract.schema(type: "string")
+            ],
+            requiredKeys: ["schema", "kind", "text", "styleRole"],
+            description: "Display-only participant mark. It carries no authority, raw identifier, media, or cross-chat seed."
+        )
+    }
+
+    private static func groupPresentationSchema() -> ValueType {
+        ExploreContract.objectSchema(
+            properties: [
+                "schema": ExploreContract.schema(type: "string"),
+                "kind": ExploreContract.schema(type: "string"),
+                "marks": ExploreContract.listSchema(item: participantPresentationSchema()),
+                "participantCount": ExploreContract.schema(type: "integer"),
+                "visibleCount": ExploreContract.schema(type: "integer"),
+                "overflowCount": ExploreContract.schema(type: "integer")
+            ],
+            requiredKeys: ["schema", "kind", "marks", "participantCount", "visibleCount", "overflowCount"],
+            description: "Viewer-relative, conversation-scoped composite of at most three display-only participant marks."
+        )
+    }
+
     private static func messageSchema() -> ValueType {
         ExploreContract.objectSchema(
             properties: [
@@ -3587,6 +3637,7 @@ public final class ChatCell: GeneralCell {
                 "ownerUUID": ExploreContract.schema(type: "string"),
                 "ownerDisplayName": ExploreContract.schema(type: "string"),
                 "ownerInitials": ExploreContract.schema(type: "string"),
+                "ownerPresentation": participantPresentationSchema(),
                 "content": ExploreContract.schema(type: "string"),
                 "contentType": ExploreContract.schema(type: "string"),
                 "preview": ExploreContract.schema(type: "string"),
@@ -3630,6 +3681,7 @@ public final class ChatCell: GeneralCell {
                 "lastAction": ExploreContract.schema(type: "string"),
                 "presence": ExploreContract.schema(type: "string"),
                 "initials": ExploreContract.schema(type: "string"),
+                "presentation": participantPresentationSchema(),
                 "presenceLabel": ExploreContract.schema(type: "string"),
                 "messageCountLabel": ExploreContract.schema(type: "string"),
                 "activitySummary": ExploreContract.schema(type: "string")
@@ -3857,6 +3909,7 @@ public final class ChatCell: GeneralCell {
             properties: [
                 "identityUUID": ExploreContract.schema(type: "string"),
                 "displayName": ExploreContract.schema(type: "string"),
+                "presentation": participantPresentationSchema(),
                 "source": ExploreContract.schema(type: "string"),
                 "isOwner": ExploreContract.schema(type: "bool"),
                 "hasKeyAgreementKey": ExploreContract.schema(type: "bool"),
@@ -4022,6 +4075,7 @@ public final class ChatCell: GeneralCell {
                 "inheritedRecipients": ExploreContract.listSchema(item: audienceRecipientSchema()),
                 "invitedRecipients": ExploreContract.listSchema(item: audienceRecipientSchema()),
                 "resolvedRecipients": ExploreContract.listSchema(item: audienceRecipientSchema()),
+                "groupPresentation": groupPresentationSchema(),
                 "invitations": ExploreContract.listSchema(item: invitationSchema()),
                 "invitationLedgerCount": ExploreContract.schema(type: "integer"),
                 "inheritedCount": ExploreContract.schema(type: "integer"),

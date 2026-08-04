@@ -74,6 +74,222 @@ final class ChatCellTests: XCTestCase {
         XCTAssertEqual(after, before)
     }
 
+    func testParticipantInitialsAndFallbackAreUnicodeAndControlSafe() {
+        XCTAssertEqual(ChatPresentation.initials(from: "Ada Lovelace"), "AL")
+        XCTAssertEqual(ChatPresentation.initials(from: "single"), "S")
+        XCTAssertEqual(ChatPresentation.initials(from: "李小龍"), "李")
+        XCTAssertEqual(ChatPresentation.initials(from: "ليلى منصور"), "لم")
+        XCTAssertEqual(ChatPresentation.initials(from: "e\u{301} mile"), "ÉM")
+        XCTAssertEqual(ChatPresentation.initials(from: "ßeta"), "S")
+        XCTAssertEqual(ChatPresentation.initials(from: "ßeta Brown"), "SB")
+        XCTAssertEqual(ChatPresentation.initials(from: "\u{202E}Alice \u{0007}Brown"), "AB")
+        XCTAssertEqual(ChatPresentation.initials(from: "👩‍💻 🌈"), "")
+
+        let generic = ChatPresentation.participantPresentation(
+            displayName: "👩‍💻 🌈",
+            scopeID: "chat-a",
+            participantID: "participant-a"
+        )
+        XCTAssertEqual(generic["schema"], .string("haven.chat.participant-presentation.v1"))
+        XCTAssertEqual(generic["kind"], .string("generic"))
+        XCTAssertEqual(generic["text"], .null)
+        XCTAssertEqual(Set(generic.keys), Set(["schema", "kind", "text", "styleRole"]))
+    }
+
+    func testParticipantStyleRoleIsDeterministicScopedAndNonIdentifying() {
+        let participantID = "domain-scoped-participant"
+        let first = ChatPresentation.participantPresentation(
+            displayName: "Ada Lovelace",
+            scopeID: "chat-a",
+            participantID: participantID
+        )
+        let repeated = ChatPresentation.participantPresentation(
+            displayName: "Ada Lovelace",
+            scopeID: "chat-a",
+            participantID: participantID
+        )
+        XCTAssertEqual(first, repeated)
+        XCTAssertEqual(first["kind"], .string("initials"))
+        XCTAssertEqual(first["text"], .string("AL"))
+        XCTAssertEqual(Set(first.keys), Set(["schema", "kind", "text", "styleRole"]))
+
+        let scopedRoles = Set((0 ..< 16).compactMap { index -> String? in
+            let mark = ChatPresentation.participantPresentation(
+                displayName: "Ada Lovelace",
+                scopeID: "chat-\(index)",
+                participantID: participantID
+            )
+            guard case let .string(styleRole)? = mark["styleRole"] else { return nil }
+            return styleRole
+        })
+        XCTAssertGreaterThan(scopedRoles.count, 1)
+        XCTAssertTrue(scopedRoles.allSatisfy { $0.hasPrefix("participant-tone-") })
+        XCTAssertNil(first["participantID"])
+        XCTAssertNil(first["scopeID"])
+        XCTAssertNil(first["seed"])
+        XCTAssertNil(first["uuid"])
+        XCTAssertNil(first["actorKind"])
+    }
+
+    func testMessagePresentationKeepsHistoricalDisplayNameSnapshot() throws {
+        let identity = Identity(
+            "00000000-0000-0000-0000-000000000001",
+            displayName: "Alice Example",
+            identityVault: nil
+        )
+        let message = ChatMessage(
+            id: "message-1",
+            owner: identity,
+            content: "Hei",
+            createdAt: "2026-07-21T10:00:00.000Z"
+        )
+        identity.displayName = "Renamed Person"
+
+        let object = message.messageObject(presentationScopeID: "chat-a")
+        XCTAssertEqual(object["ownerDisplayName"], .string("Alice Example"))
+        XCTAssertEqual(object["ownerInitials"], .string("AE"))
+        guard case let .object(ownerPresentation)? = object["ownerPresentation"] else {
+            return XCTFail("Expected ownerPresentation")
+        }
+        XCTAssertEqual(ownerPresentation["text"], .string("AE"))
+        XCTAssertNil(ownerPresentation["participantID"])
+
+        let encoded = try JSONEncoder().encode(message)
+        let restored = try JSONDecoder().decode(ChatMessage.self, from: encoded)
+        XCTAssertEqual(restored.messageObject()["ownerDisplayName"], .string("Alice Example"))
+        guard case let .object(restoredPresentation)? = restored.messageObject()["ownerPresentation"] else {
+            return XCTFail("Expected restored ownerPresentation")
+        }
+        XCTAssertEqual(restoredPresentation["styleRole"], .string("participant-tone-default"))
+
+        var legacyJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacyJSON.removeValue(forKey: "ownerDisplayNameSnapshot")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyJSON, options: [.sortedKeys])
+        let legacy = try JSONDecoder().decode(ChatMessage.self, from: legacyData)
+        XCTAssertNil(legacy.ownerDisplayNameSnapshot)
+        XCTAssertEqual(legacy.messageObject()["ownerDisplayName"], .string("Renamed Person"))
+    }
+
+    func testAudienceGroupPresentationIsViewerRelativeBoundedAndDeterministic() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "Owner", makeNewIfNotFound: true)!
+        let alpha = await vault.identity(for: "Alpha", makeNewIfNotFound: true)!
+        let beta = await vault.identity(for: "Beta", makeNewIfNotFound: true)!
+        let gamma = await vault.identity(for: "Gamma", makeNewIfNotFound: true)!
+        let delta = await vault.identity(for: "Delta", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        _ = try await cell.flow(requester: alpha)
+        let oneToOneAudience = try await cell.get(keypath: "audience", requester: owner)
+        guard case let .object(oneToOneObject) = oneToOneAudience,
+              case let .object(oneToOnePresentation)? = oneToOneObject["groupPresentation"],
+              case let .list(oneToOneMarks)? = oneToOnePresentation["marks"] else {
+            return XCTFail("Expected one-to-one groupPresentation")
+        }
+        XCTAssertEqual(oneToOnePresentation["kind"], .string("person"))
+        XCTAssertEqual(oneToOnePresentation["participantCount"], .integer(1))
+        XCTAssertEqual(oneToOnePresentation["visibleCount"], .integer(1))
+        XCTAssertEqual(oneToOnePresentation["overflowCount"], .integer(0))
+        XCTAssertEqual(oneToOneMarks.count, 1)
+        guard case let .object(counterpartMark) = oneToOneMarks[0] else {
+            return XCTFail("Expected counterpart presentation mark")
+        }
+        XCTAssertEqual(counterpartMark["text"], .string("A"))
+
+        for participant in [beta, gamma, delta] {
+            _ = try await cell.flow(requester: participant)
+        }
+        let groupAudience = try await cell.get(keypath: "audience", requester: owner)
+        guard case let .object(groupObject) = groupAudience,
+              case let .object(groupPresentation)? = groupObject["groupPresentation"],
+              case let .list(groupMarks)? = groupPresentation["marks"] else {
+            return XCTFail("Expected group presentation")
+        }
+        XCTAssertEqual(groupPresentation["kind"], .string("group"))
+        XCTAssertEqual(groupPresentation["participantCount"], .integer(4))
+        XCTAssertEqual(groupPresentation["visibleCount"], .integer(3))
+        XCTAssertEqual(groupPresentation["overflowCount"], .integer(1))
+        XCTAssertEqual(groupMarks.count, 3)
+        for mark in groupMarks {
+            guard case let .object(markObject) = mark else {
+                return XCTFail("Expected presentation mark object")
+            }
+            XCTAssertEqual(Set(markObject.keys), Set(["schema", "kind", "text", "styleRole"]))
+        }
+
+        let repeatedAudience = try await cell.get(keypath: "audience", requester: owner)
+        guard case let .object(repeatedObject) = repeatedAudience else {
+            return XCTFail("Expected repeated audience object")
+        }
+        // ValueType equality returns false for every .object and .list, so the
+        // repeat has to be compared field by field.
+        guard case let .object(repeatedPresentation)? = repeatedObject["groupPresentation"],
+              case let .list(repeatedMarks)? = repeatedPresentation["marks"] else {
+            return XCTFail("Expected repeated group presentation")
+        }
+        XCTAssertEqual(Set(repeatedPresentation.keys), Set(groupPresentation.keys))
+        for key in ["schema", "kind", "participantCount", "visibleCount", "overflowCount"] {
+            XCTAssertEqual(repeatedPresentation[key], groupPresentation[key])
+        }
+        XCTAssertEqual(repeatedMarks.count, groupMarks.count)
+        for (repeatedMark, originalMark) in zip(repeatedMarks, groupMarks) {
+            guard case let .object(repeatedMarkObject) = repeatedMark,
+                  case let .object(originalMarkObject) = originalMark else {
+                return XCTFail("Expected presentation mark objects")
+            }
+            for key in ["schema", "kind", "text", "styleRole"] {
+                XCTAssertEqual(repeatedMarkObject[key], originalMarkObject[key])
+            }
+        }
+    }
+
+    func testChangedRosterNameDoesNotRewriteHistoricalMessagePresentation() async throws {
+        let previousDebugFlag = CellBase.debugValidateAccessForEverything
+        CellBase.debugValidateAccessForEverything = true
+        defer { CellBase.debugValidateAccessForEverything = previousDebugFlag }
+
+        let vault = ChatCellTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "Owner", makeNewIfNotFound: true)!
+        let member = await vault.identity(for: "Alice Example", makeNewIfNotFound: true)!
+        let cell = await ChatCell(owner: owner)
+
+        _ = try await cell.set(keypath: "sendMessage", value: .string("Historikk"), requester: member)
+        member.displayName = "Renamed Person"
+        _ = try await cell.get(keypath: "participants", requester: member)
+
+        let messagesValue = try await cell.get(keypath: "messages", requester: owner)
+        guard case let .list(messages) = messagesValue,
+              case let .object(message)? = messages.first else {
+            return XCTFail("Expected historical message")
+        }
+        XCTAssertEqual(message["ownerDisplayName"], .string("Alice Example"))
+        XCTAssertEqual(message["ownerInitials"], .string("AE"))
+
+        let participantsValue = try await cell.get(keypath: "participants", requester: owner)
+        guard case let .list(participants) = participantsValue,
+              let renamed = participants.compactMap({ value -> Object? in
+                  guard case let .object(object) = value,
+                        object["id"] == .string(member.uuid) else {
+                      return nil
+                  }
+                  return object
+              }).first,
+              case let .object(presentation)? = renamed["presentation"] else {
+            return XCTFail("Expected renamed roster participant")
+        }
+        XCTAssertEqual(renamed["displayName"], .string("Renamed Person"))
+        XCTAssertEqual(presentation["text"], .string("RP"))
+        XCTAssertEqual(renamed["presence"], .string("present"))
+        XCTAssertNil(renamed["offline"])
+        XCTAssertNil(presentation["actorKind"])
+    }
+
     func testSendMessageUpdatesMessagesParticipantsAndFlow() async throws {
         let previousDebugFlag = CellBase.debugValidateAccessForEverything
         CellBase.debugValidateAccessForEverything = true
@@ -588,6 +804,19 @@ final class ChatCellTests: XCTestCase {
             input: .string("hei"),
             requester: outsider
         )
+
+        for (key, additiveProperty) in [
+            ("messages", "ownerPresentation"),
+            ("participants", "presentation"),
+            ("audience", "groupPresentation")
+        ] {
+            let contract = try await cell.contract(for: key, method: .get, requester: owner)
+            let contractJSON = try contract.jsonString()
+            XCTAssertTrue(
+                contractJSON.contains("\"\(additiveProperty)\""),
+                "Expected GET \(key) Explore schema to advertise \(additiveProperty)"
+            )
+        }
 
         let sent = try await cell.set(
             keypath: "sendMessage",
@@ -1553,10 +1782,14 @@ final class ChatCellTests: XCTestCase {
             requester: owner
         )
         guard case let .object(removalObject)? = removalResponse,
-              case let .list(resolvedRecipients)? = removalObject["resolvedRecipients"] else {
+              case let .list(resolvedRecipients)? = removalObject["resolvedRecipients"],
+              case let .object(groupPresentation)? = removalObject["groupPresentation"] else {
             XCTFail("Expected audience state after removing a context member")
             return
         }
+        XCTAssertEqual(groupPresentation["participantCount"], .integer(1))
+        XCTAssertEqual(groupPresentation["kind"], .string("person"))
+        XCTAssertNil(groupPresentation["removedParticipantCount"])
 
         let resolvedIDs = resolvedRecipients.compactMap { value -> String? in
             guard case let .object(object) = value,

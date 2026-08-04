@@ -4,16 +4,76 @@
 import Foundation
 
 enum ChatPresentation {
+    static let participantPresentationSchema = "haven.chat.participant-presentation.v1"
+    static let groupPresentationSchema = "haven.chat.group-presentation.v1"
+
     static func initials(from displayName: String) -> String {
-        let words = displayName
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
+        let sanitized = removingUnsafePresentationControls(from: displayName)
+        let words = sanitized
+            .split(whereSeparator: isInitialSeparator)
             .prefix(2)
-        let token = words.compactMap { $0.first.map(String.init) }.joined()
-        if token.isEmpty == false {
-            return token.uppercased()
+        return words.compactMap(firstLetterOrNumber).map { initial in
+            String(String(initial).uppercased().prefix(1))
+        }.joined()
+    }
+
+    static func participantPresentation(
+        displayName: String,
+        scopeID: String?,
+        participantID: String
+    ) -> Object {
+        let initials = initials(from: displayName)
+        return [
+            "schema": .string(participantPresentationSchema),
+            "kind": .string(initials.isEmpty ? "generic" : "initials"),
+            "text": initials.isEmpty ? .null : .string(initials),
+            "styleRole": .string(styleRole(scopeID: scopeID, participantID: participantID))
+        ]
+    }
+
+    static func groupPresentation(
+        members: [(participantID: String, displayName: String)],
+        scopeID: String,
+        excludingParticipantID: String?,
+        visibleLimit: Int = 3
+    ) -> Object {
+        let visibleCapacity = max(0, visibleLimit)
+        let orderedMembers = members
+            .filter { $0.participantID != excludingParticipantID }
+            .sorted { lhs, rhs in
+                let lhsOrder = stableScopedHash(scopeID: scopeID, participantID: lhs.participantID)
+                let rhsOrder = stableScopedHash(scopeID: scopeID, participantID: rhs.participantID)
+                if lhsOrder != rhsOrder {
+                    return lhsOrder < rhsOrder
+                }
+                return lhs.participantID < rhs.participantID
+            }
+        let visibleMembers = orderedMembers.prefix(visibleCapacity)
+        let marks = visibleMembers.map { member in
+            ValueType.object(participantPresentation(
+                displayName: member.displayName,
+                scopeID: scopeID,
+                participantID: member.participantID
+            ))
+        }
+        let kind: String
+        switch orderedMembers.count {
+        case 0:
+            kind = "empty"
+        case 1:
+            kind = "person"
+        default:
+            kind = "group"
         }
 
-        return String(displayName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2)).uppercased()
+        return [
+            "schema": .string(groupPresentationSchema),
+            "kind": .string(kind),
+            "marks": .list(marks),
+            "participantCount": .integer(orderedMembers.count),
+            "visibleCount": .integer(marks.count),
+            "overflowCount": .integer(max(orderedMembers.count - marks.count, 0))
+        ]
     }
 
     static func isMarkdown(contentType: String) -> Bool {
@@ -139,6 +199,62 @@ enum ChatPresentation {
 
     private static func date(from iso8601: String) -> Date? {
         timestampFormatter.date(from: iso8601)
+    }
+
+    private static func firstLetterOrNumber(in word: Substring) -> Character? {
+        word.first(where: { character in
+            character.unicodeScalars.contains(where: { scalar in
+                CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
+            })
+        })
+    }
+
+    private static func isInitialSeparator(_ character: Character) -> Bool {
+        if character.isWhitespace || character == "_" {
+            return true
+        }
+        return character.unicodeScalars.contains { scalar in
+            CharacterSet(charactersIn: "-").contains(scalar) || scalar.properties.generalCategory == .dashPunctuation
+        }
+    }
+
+    private static func removingUnsafePresentationControls(from raw: String) -> String {
+        raw.unicodeScalars.reduce(into: "") { result, scalar in
+            guard CharacterSet.controlCharacters.contains(scalar) == false,
+                  isBidirectionalControl(scalar) == false else {
+                return
+            }
+            result.unicodeScalars.append(scalar)
+        }
+    }
+
+    private static func isBidirectionalControl(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x061C, 0x200E, 0x200F, 0x202A ... 0x202E, 0x2066 ... 0x2069, 0xFEFF:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func styleRole(scopeID: String?, participantID: String) -> String {
+        guard let scopeID,
+              scopeID.isEmpty == false,
+              participantID.isEmpty == false else {
+            return "participant-tone-default"
+        }
+        let tone = Int(stableScopedHash(scopeID: scopeID, participantID: participantID) % 8) + 1
+        return "participant-tone-\(tone)"
+    }
+
+    private static func stableScopedHash(scopeID: String, participantID: String) -> UInt64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        let scopedInput = "\(participantPresentationSchema)\u{0}\(scopeID)\u{0}\(participantID)"
+        for byte in scopedInput.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1_099_511_628_211
+        }
+        return hash
     }
 
     private static func escapeMarkdown(_ raw: String) -> String {
