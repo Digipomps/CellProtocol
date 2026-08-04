@@ -349,6 +349,104 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertEqual(restoredAdmission, .signContract)
     }
 
+    func testPolicyBoundAgreementRequiresExactTemplateBinding() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "policy-owner", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "policy-requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        let expectedBinding = try AuthorizationPolicyBinding(
+            policyID: "policy.ai.provider-invocation",
+            policyVersion: "1",
+            policyDigest: "sha256:" + String(repeating: "a", count: 64),
+            configDigest: "sha256:" + String(repeating: "b", count: 64),
+            taxonomyDigest: "sha256:" + String(repeating: "c", count: 64),
+            actionFamily: "provider_invocation"
+        )
+        cell.agreementTemplate.authorizationPolicyBinding = expectedBinding
+
+        let unbound = Agreement(owner: owner)
+        unbound.conditions = []
+        unbound.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        let unboundState = await cell.addAgreement(unbound, for: requester, authorizedBy: owner)
+        XCTAssertEqual(unboundState, .rejected)
+
+        let mismatched = Agreement(owner: owner)
+        mismatched.conditions = []
+        mismatched.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        mismatched.authorizationPolicyBinding = try AuthorizationPolicyBinding(
+            policyID: "policy.ai.provider-invocation",
+            policyVersion: "2",
+            policyDigest: "sha256:" + String(repeating: "d", count: 64),
+            configDigest: expectedBinding.configDigest,
+            taxonomyDigest: expectedBinding.taxonomyDigest,
+            actionFamily: "provider_invocation"
+        )
+        let mismatchedState = await cell.addAgreement(mismatched, for: requester, authorizedBy: owner)
+        XCTAssertEqual(mismatchedState, .rejected)
+
+        let matching = Agreement(owner: owner)
+        matching.conditions = []
+        matching.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        matching.authorizationPolicyBinding = expectedBinding
+        let matchingState = await cell.addAgreement(matching, for: requester, authorizedBy: owner)
+        XCTAssertEqual(matchingState, .signed)
+        let matchingContractAllowsAccess = await cell.validateAccess("rw--", at: "ai.invoke", for: requester)
+        XCTAssertTrue(matchingContractAllowsAccess)
+        let decision = await cell.authorizationDecision(
+            requestedAccess: "rw--",
+            at: "ai.invoke",
+            for: requester
+        )
+        XCTAssertEqual(decision.path, .signedContract)
+        XCTAssertTrue(decision.agreementRef?.hasPrefix("agreement://") == true)
+        XCTAssertTrue(decision.contractRef?.hasPrefix("contract://") == true)
+        XCTAssertTrue(decision.grantRef?.hasPrefix("grant://") == true)
+        XCTAssertEqual(decision.authorizationPolicyBinding, expectedBinding)
+    }
+
+    func testChangingPolicyBindingRevokesPreviouslyIssuedContract() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "binding-owner", makeNewIfNotFound: true)!
+        let requester = await vault.identity(for: "binding-requester", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        let firstBinding = try AuthorizationPolicyBinding(
+            policyID: "policy.ai.provider-invocation",
+            policyVersion: "1",
+            policyDigest: "sha256:" + String(repeating: "a", count: 64),
+            configDigest: "sha256:" + String(repeating: "b", count: 64),
+            taxonomyDigest: "sha256:" + String(repeating: "c", count: 64),
+            actionFamily: "provider_invocation"
+        )
+        cell.agreementTemplate.authorizationPolicyBinding = firstBinding
+
+        let request = Agreement(owner: owner)
+        request.conditions = []
+        request.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        request.authorizationPolicyBinding = firstBinding
+        let issuedState = await cell.addAgreement(request, for: requester, authorizedBy: owner)
+        XCTAssertEqual(issuedState, .signed)
+        let accessBeforePolicyChange = await cell.validateAccess("rw--", at: "ai.invoke", for: requester)
+        XCTAssertTrue(accessBeforePolicyChange)
+
+        cell.agreementTemplate.authorizationPolicyBinding = try AuthorizationPolicyBinding(
+            policyID: firstBinding.policyID,
+            policyVersion: "2",
+            policyDigest: "sha256:" + String(repeating: "d", count: 64),
+            configDigest: firstBinding.configDigest,
+            taxonomyDigest: firstBinding.taxonomyDigest,
+            actionFamily: firstBinding.actionFamily
+        )
+
+        let accessAfterPolicyChange = await cell.validateAccess("rw--", at: "ai.invoke", for: requester)
+        XCTAssertFalse(accessAfterPolicyChange)
+    }
+
     func testAgreementRequestCannotOutliveCurrentTemplate() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault

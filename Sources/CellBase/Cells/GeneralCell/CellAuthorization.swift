@@ -47,6 +47,12 @@ public struct CellAuthorizationDecision: Codable, Sendable {
     public var requiredAction: String?
     public var canAutoResolve: Bool?
     public var developerHint: String?
+    /// Exact authority evidence selected for this decision. These references
+    /// are descriptive evidence; they never grant access independently.
+    public var agreementRef: String?
+    public var contractRef: String?
+    public var grantRef: String?
+    public var authorizationPolicyBinding: AuthorizationPolicyBinding?
 
     public init(
         allowed: Bool,
@@ -57,7 +63,11 @@ public struct CellAuthorizationDecision: Codable, Sendable {
         userMessage: String? = nil,
         requiredAction: String? = nil,
         canAutoResolve: Bool? = nil,
-        developerHint: String? = nil
+        developerHint: String? = nil,
+        agreementRef: String? = nil,
+        contractRef: String? = nil,
+        grantRef: String? = nil,
+        authorizationPolicyBinding: AuthorizationPolicyBinding? = nil
     ) {
         self.allowed = allowed
         self.path = path
@@ -68,6 +78,10 @@ public struct CellAuthorizationDecision: Codable, Sendable {
         self.requiredAction = requiredAction
         self.canAutoResolve = canAutoResolve
         self.developerHint = developerHint
+        self.agreementRef = agreementRef
+        self.contractRef = contractRef
+        self.grantRef = grantRef
+        self.authorizationPolicyBinding = authorizationPolicyBinding
     }
 }
 

@@ -45,6 +45,8 @@ public struct Contract: Codable {
             .map { "\(String(reflecting: type(of: $0))):\($0.uuid)" }
             .sorted()
             .joined(separator: ",")
+        let authorizationPolicyBinding = agreement.authorizationPolicyBinding?
+            .authorizationDeduplicationKey ?? "unbound"
         return [
             subject.uuid,
             subject.signingPublicKeyFingerprint ?? "missing-subject-key",
@@ -53,6 +55,7 @@ public struct Contract: Codable {
             agreement.owner.signingPublicKeyFingerprint ?? "missing-owner-key",
             grants,
             conditions,
+            authorizationPolicyBinding,
             String(agreement.duration)
         ].joined(separator: "|")
     }
