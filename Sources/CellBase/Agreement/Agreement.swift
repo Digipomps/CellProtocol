@@ -11,6 +11,7 @@ public class Agreement: Codable, Grantable {
     public var signatories = [Identity]() 
     public var conditions = [any Condition]()
     public var grants = [Grant]()
+    public var authorizationPolicyBinding: AuthorizationPolicyBinding?
     public var duration: Int = 60*60*24*365 // Remember to add start date...
     var timestamp: Int? // seconds from 01.01.71
     
@@ -23,6 +24,7 @@ public class Agreement: Codable, Grantable {
         case signatories
         case conditions
         case grants
+        case authorizationPolicyBinding
         case duration
         case timestamp
     }
@@ -48,6 +50,10 @@ public class Agreement: Codable, Grantable {
         if values.contains(.grants) {
             grants = try values.decode([Grant].self, forKey: .grants)
         }
+        authorizationPolicyBinding = try values.decodeIfPresent(
+            AuthorizationPolicyBinding.self,
+            forKey: .authorizationPolicyBinding
+        )
         duration = try values.decodeIfPresent(Int.self, forKey: .duration) ?? Self.defaultDuration
         if values.contains(.timestamp) {
             timestamp = try? values.decode(Int.self, forKey: .timestamp)
@@ -65,6 +71,7 @@ public class Agreement: Codable, Grantable {
         signatories = [owner]
         grants = [Grant(),Grant("Feed grant", keypath: "feed", permission: "r---")]
         conditions = [GrantCondition()]
+        authorizationPolicyBinding = nil
     }
 
     private static let defaultDuration = 60 * 60 * 24 * 365
@@ -102,6 +109,7 @@ public class Agreement: Codable, Grantable {
         signatories = [owner]
         grants = [Grant(),Grant("Feed grant", keypath: "feed", permission: "r---")]
         conditions = [GrantCondition()]
+        authorizationPolicyBinding = nil
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -142,6 +150,7 @@ public class Agreement: Codable, Grantable {
         }
         
         try container.encode(grants, forKey: .grants)
+        try container.encodeIfPresent(authorizationPolicyBinding, forKey: .authorizationPolicyBinding)
         try container.encode(duration, forKey: .duration)
     }
 

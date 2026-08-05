@@ -1385,6 +1385,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
               TimeInterval(request.duration) <= Contract.maximumDuration,
               !request.grants.isEmpty,
               request.grants.allSatisfy({ agreementTemplate.checkGrant(requestedGrant: $0) }),
+              request.authorizationPolicyBinding == agreementTemplate.authorizationPolicyBinding,
               conditionsMatchTemplate(request.conditions, agreementTemplate.conditions) else {
             return nil
         }
@@ -1397,6 +1398,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         derived.signatories = [owner, subject]
         derived.conditions = agreementTemplate.conditions
         derived.grants = request.grants
+        derived.authorizationPolicyBinding = agreementTemplate.authorizationPolicyBinding
         derived.duration = request.duration
         return derived
     }
@@ -1933,7 +1935,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private struct AuthorizationEvidence {
         var ownerReferenceMatches: Bool
         var ownerProofValid: Bool
-        var contracts: [Agreement]
+        var contracts: [Contract]
     }
 
     private func authorizationEvidence(for identity: Identity) async -> AuthorizationEvidence {
@@ -1947,7 +1949,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
             ownerProofValid: ownerProofValid,
-            contracts: ownerReferenceMatches ? [] : await contractsForIdentity(identity)
+            contracts: ownerReferenceMatches ? [] : await authorizationContracts(for: identity)
         )
     }
 
@@ -1968,14 +1970,28 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             ? false
             : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
 
-        return CellAuthorizationPolicy.decide(
+        var decision = CellAuthorizationPolicy.decide(
             request: request,
             ownerReferenceMatches: evidence.ownerReferenceMatches,
             ownerUUIDMatches: owner.uuid == identity.uuid,
             ownerProofValid: evidence.ownerProofValid,
-            contracts: evidence.contracts,
+            contracts: evidence.contracts.map(\.agreement),
             cellSpecificAllowed: cellSpecificAllowed
         )
+        if decision.path == .signedContract {
+            let requestedGrant = Grant(keypath: keypath, permission: requestedAccess)
+            if let contract = evidence.contracts.first(where: {
+                $0.agreement.checkGrant(requestedGrant: requestedGrant)
+            }), let grant = contract.agreement.grants.first(where: {
+                $0.granted(requestedGrant)
+            }) {
+                decision.agreementRef = "agreement://\(contract.agreement.uuid)"
+                decision.contractRef = "contract://\(contract.uuid)"
+                decision.grantRef = "grant://\(grant.uuid)"
+                decision.authorizationPolicyBinding = contract.agreement.authorizationPolicyBinding
+            }
+        }
+        return decision
     }
 
     private func recordSecurityEvent(for decision: CellAuthorizationDecision) async {
@@ -2029,11 +2045,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         (await currentAuthorizationSnapshot()).members
     }
     
-    func contractsForIdentity(_ identity: Identity) async -> [Agreement] {
+    private func authorizationContracts(for identity: Identity) async -> [Contract] {
         guard !Self.isEvaluatingAuthorizationConditions else {
             return []
         }
-        var relevantContracts = [Agreement]()
+        var relevantContracts = [Contract]()
         for currentContract in await authorizationContracts() {
             guard await currentContract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
@@ -2043,6 +2059,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 continue
             }
             guard currentContract.agreement.grants.allSatisfy({ agreementTemplate.checkGrant(requestedGrant: $0) }),
+                  currentContract.agreement.authorizationPolicyBinding == agreementTemplate.authorizationPolicyBinding,
                   conditionsMatchTemplate(currentContract.agreement.conditions, agreementTemplate.conditions),
                   currentContract.agreement.duration > 0,
                   currentContract.agreement.duration <= agreementTemplate.duration,
@@ -2059,9 +2076,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                   await checkIdentityOrigin(identity, against: currentContract.subject) else {
                 continue
             }
-            relevantContracts.append(currentContract.agreement)
+            relevantContracts.append(currentContract)
         }
         return relevantContracts
+    }
+
+    func contractsForIdentity(_ identity: Identity) async -> [Agreement] {
+        await authorizationContracts(for: identity).map(\.agreement)
     }
 
     /// Resolver admission for a known concrete Cell UUID. This only proves

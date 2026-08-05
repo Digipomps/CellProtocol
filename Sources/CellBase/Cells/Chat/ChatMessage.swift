@@ -10,6 +10,7 @@ public struct ChatMessage: Codable {
     public let contentType: String
     public let topic: String
     public let createdAt: String
+    public let ownerDisplayNameSnapshot: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -17,7 +18,8 @@ public struct ChatMessage: Codable {
         content: String,
         contentType: String = "text/plain",
         topic: String = "chat",
-        createdAt: String? = nil
+        createdAt: String? = nil,
+        ownerDisplayNameSnapshot: String? = nil
     ) {
         self.id = id
         self.owner = owner
@@ -25,16 +27,27 @@ public struct ChatMessage: Codable {
         self.contentType = contentType
         self.topic = topic
         self.createdAt = createdAt ?? Self.timestampString()
+        self.ownerDisplayNameSnapshot = ownerDisplayNameSnapshot ?? owner.displayName
     }
 
     public func messageObject() -> Object {
+        messageObject(presentationScopeID: nil)
+    }
+
+    func messageObject(presentationScopeID: String?) -> Object {
         var messageObject: Object = [:]
         let preview = ChatPresentation.preview(for: content)
+        let displayName = ownerDisplayNameSnapshot ?? owner.displayName
         messageObject["id"] = .string(id)
         messageObject["owner"] = .identity(owner)
         messageObject["ownerUUID"] = .string(owner.uuid)
-        messageObject["ownerDisplayName"] = .string(owner.displayName)
-        messageObject["ownerInitials"] = .string(ChatPresentation.initials(from: owner.displayName))
+        messageObject["ownerDisplayName"] = .string(displayName)
+        messageObject["ownerInitials"] = .string(ChatPresentation.initials(from: displayName))
+        messageObject["ownerPresentation"] = .object(ChatPresentation.participantPresentation(
+            displayName: displayName,
+            scopeID: presentationScopeID,
+            participantID: owner.uuid
+        ))
         messageObject["content"] = .string(content)
         messageObject["contentPreview"] = .string(preview)
         messageObject["contentRichText"] = .string(ChatPresentation.richTextContent(from: content, contentType: contentType))

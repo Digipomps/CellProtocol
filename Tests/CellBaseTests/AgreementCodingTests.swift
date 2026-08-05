@@ -67,6 +67,60 @@ final class AgreementCodingTests: XCTestCase {
         XCTAssertEqual(decoded.state, .template)
     }
 
+    func testAuthorizationPolicyBindingRoundTripsAndLegacyAgreementRemainsUnbound() throws {
+        let owner = Identity("agreement-policy-owner", displayName: "Agreement Owner", identityVault: nil)
+        let agreement = Agreement(owner: owner)
+        agreement.authorizationPolicyBinding = try makeAuthorizationPolicyBinding(hex: "a")
+
+        let roundTripped = try JSONDecoder().decode(
+            Agreement.self,
+            from: JSONEncoder().encode(agreement)
+        )
+        XCTAssertEqual(roundTripped.authorizationPolicyBinding, agreement.authorizationPolicyBinding)
+
+        let legacyData = try removingKeys(["authorizationPolicyBinding"], from: agreement)
+        let legacy = try JSONDecoder().decode(Agreement.self, from: legacyData)
+        XCTAssertNil(legacy.authorizationPolicyBinding)
+    }
+
+    func testAuthorizationPolicyBindingRejectsUnknownFieldsAndUnsupportedVersions() throws {
+        let binding = try makeAuthorizationPolicyBinding(hex: "b")
+        var object = try jsonObject(from: JSONEncoder().encode(binding))
+        object["futureAuthority"] = true
+        let unknownFieldData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+
+        XCTAssertThrowsError(try JSONDecoder().decode(AuthorizationPolicyBinding.self, from: unknownFieldData)) {
+            XCTAssertEqual($0 as? AuthorizationPolicyBindingError, .unknownField("futureAuthority"))
+        }
+
+        object.removeValue(forKey: "futureAuthority")
+        object["schema"] = "cellprotocol.authorization-policy-binding.v2"
+        let futureSchemaData = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(AuthorizationPolicyBinding.self, from: futureSchemaData)) {
+            XCTAssertEqual(
+                $0 as? AuthorizationPolicyBindingError,
+                .unsupportedSchema("cellprotocol.authorization-policy-binding.v2")
+            )
+        }
+    }
+
+    func testAuthorizationPolicyBindingRejectsNonASCIIDigestCharacters() throws {
+        let invalidDigest = "sha256:" + String(repeating: "١", count: 64)
+
+        XCTAssertThrowsError(
+            try AuthorizationPolicyBinding(
+                policyID: "policy.ai.provider-invocation",
+                policyVersion: "1",
+                policyDigest: invalidDigest,
+                configDigest: digest("a"),
+                taxonomyDigest: digest("b"),
+                actionFamily: "provider_invocation"
+            )
+        ) {
+            XCTAssertEqual($0 as? AuthorizationPolicyBindingError, .invalidField("policyDigest"))
+        }
+    }
+
     func testGrantDecodesLegacyPayloadWithoutUUID() throws {
         let grant = Grant("Legacy grant", keypath: "state", permission: "r---")
         let legacyData = try removingKeys(["uuid"], from: grant)
@@ -227,6 +281,37 @@ final class AgreementCodingTests: XCTestCase {
         contract.agreement.addGrant("r---", for: "tampered")
         let tamperedSignature = await contract.verifySignature()
         XCTAssertFalse(tamperedSignature)
+    }
+
+    func testContractSignatureAndAuthorizationDeduplicationBindPolicyCeiling() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+
+        let owner = await vault.identity(for: "policy-owner", makeNewIfNotFound: true)!
+        let subject = await vault.identity(for: "policy-subject", makeNewIfNotFound: true)!
+        let agreement = Agreement(owner: owner)
+        agreement.conditions = []
+        agreement.grants = [Grant(keypath: "ai.invoke", permission: "rw--")]
+        agreement.signatories.append(subject)
+        agreement.state = .signed
+        agreement.authorizationPolicyBinding = try makeAuthorizationPolicyBinding(hex: "c")
+
+        let contract = try await Contract.signed(
+            agreement: agreement,
+            issuer: owner,
+            subject: subject,
+            domain: "private"
+        )
+        let originalDeduplicationKey = contract.authorizationDeduplicationKey
+        let signatureBeforeTampering = await contract.verifySignature()
+        XCTAssertTrue(signatureBeforeTampering)
+
+        contract.agreement.authorizationPolicyBinding = try makeAuthorizationPolicyBinding(hex: "d")
+        let signatureAfterTampering = await contract.verifySignature()
+        XCTAssertFalse(signatureAfterTampering)
+        XCTAssertNotEqual(contract.authorizationDeduplicationKey, originalDeduplicationKey)
     }
 
     func testDecodedContractVerifiesWithoutIssuerOrGlobalVault() async throws {
@@ -398,5 +483,21 @@ final class AgreementCodingTests: XCTestCase {
     private func jsonObject(from data: Data) throws -> [String: Any] {
         let object = try JSONSerialization.jsonObject(with: data)
         return try XCTUnwrap(object as? [String: Any])
+    }
+
+    private func makeAuthorizationPolicyBinding(hex: Character) throws -> AuthorizationPolicyBinding {
+        let digest = digest(hex)
+        return try AuthorizationPolicyBinding(
+            policyID: "policy.ai.provider-invocation",
+            policyVersion: "1",
+            policyDigest: digest,
+            configDigest: digest,
+            taxonomyDigest: digest,
+            actionFamily: "provider_invocation"
+        )
+    }
+
+    private func digest(_ character: Character) -> String {
+        "sha256:" + String(repeating: String(character), count: 64)
     }
 }
