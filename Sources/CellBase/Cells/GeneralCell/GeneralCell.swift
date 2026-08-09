@@ -1944,7 +1944,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             ? await checkIdentityOrigin(identity, against: owner)
             : false
         if ownerReferenceMatches && !ownerProofValid {
-            print("General. Got owner identity but it failed to prove ownership!")
+            print("General \(String(reflecting: type(of: self))). Got owner identity but it failed to prove ownership!")
         }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
