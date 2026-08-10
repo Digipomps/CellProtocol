@@ -1047,6 +1047,46 @@ final class ResolverTests: XCTestCase {
         }
     }
 
+    func testAuditorReattachesElectedPersonalInstanceOnlyAfterMemoryEviction() async throws {
+        let auditor = ResolverAuditor()
+        let identity = Identity(
+            "personal-reattach-owner",
+            displayName: "Personal Reattach Owner",
+            identityVault: nil
+        )
+        let live = TestEmitCell(owner: identity, uuid: "personal-reattach-cell")
+        let decoded = TestEmitCell(owner: identity, uuid: live.uuid)
+
+        try await auditor.registerPersonalReference(
+            live,
+            endpoint: "PersonalReattach",
+            identity: identity
+        )
+        do {
+            try await auditor.registerPersonalReference(
+                decoded,
+                endpoint: "PersonalReattach",
+                identity: identity
+            )
+            XCTFail("A decoded object must not replace the live elected instance")
+        } catch ResolverAuditor.AuditorError.personalInstanceAlreadyRegistered {
+            // expected
+        }
+
+        await auditor.evictCellInstance(uuid: live.uuid)
+        try await auditor.registerPersonalReference(
+            decoded,
+            endpoint: "PersonalReattach",
+            identity: identity
+        )
+
+        let restored = await auditor.loadIdentityCellInstance(
+            name: "PersonalReattach",
+            identity: identity
+        )
+        XCTAssertTrue(restored === decoded)
+    }
+
     func testRegistrationWaitsForReadinessAndFailureNeverPublishesCell() async throws {
         let resolver = CellResolver.sharedInstance
         let resolvedOwner = await CellBase.defaultIdentityVault?.identity(

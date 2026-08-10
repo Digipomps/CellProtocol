@@ -166,11 +166,17 @@ actor ResolverAuditor {
             guard registeredUUID == cell.uuid else {
                 throw AuditorError.registerAtAlreadyTakenEndpoint
             }
-            guard let registered = cellInstanceDict[cell.uuid],
-                  registered.emit === cell else {
-                throw AuditorError.personalInstanceAlreadyRegistered
+            if let registered = cellInstanceDict[cell.uuid] {
+                guard registered.emit === cell else {
+                    throw AuditorError.personalInstanceAlreadyRegistered
+                }
+                _ = cellInstanceDict[cell.uuid]?.increment()
+            } else {
+                // The identity/endpoint mapping is the already elected winner.
+                // Reattach its decoded instance only after the live object has
+                // been evicted; never replace a live object claiming that UUID.
+                cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
             }
-            _ = cellInstanceDict[cell.uuid]?.increment()
             return
         }
 
