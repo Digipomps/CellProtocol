@@ -2012,7 +2012,20 @@ public class CellResolver: CellResolverProtocol {
         cell.cellScope = resolve.cellScope
         cell.persistancy = resolve.cellPersistancy
         _ = try await prepareCellForRuntime(cell)
-        try await auditor.registerPersonalReference(cell, endpoint: endpoint, identity: identity)
+        do {
+            try await auditor.registerPersonalReference(cell, endpoint: endpoint, identity: identity)
+        } catch ResolverAuditor.AuditorError.registerAtAlreadyTakenEndpoint {
+            guard let registered = await auditor.loadIdentityCellInstance(
+                name: endpoint,
+                identity: identity
+            ), case .valid = try await validateIdentityUniqueOwner(
+                registered,
+                requester: identity
+            ) else {
+                throw CellSetupError.ownerAuthorityUnavailable
+            }
+            return registered
+        }
         // Push notification for updated personal cell register
         var flowElement = FlowElement(title: "Resolver event", content: .string("registered_identity_named_cell"), properties: FlowElement.Properties(type: .event, contentType: .string))
         flowElement.topic = "register"
