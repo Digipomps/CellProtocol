@@ -3,6 +3,7 @@
 
 import Foundation
 import CombineHelpers
+import Crypto
 
 #if canImport(Combine)
 import Combine
@@ -123,6 +124,22 @@ private enum RemoteCellBridgeRouteError: Error {
 
 //Remember to keep track of instantiated Cell in local address space
 public class CellResolver: CellResolverProtocol {
+    /// Keeps the signing-challenge scope bounded while retaining a deterministic
+    /// binding to the complete transport endpoint (including contract query data).
+    public static func remoteBridgeAuthorityChallengeResource(
+        for logicalEndpoint: String
+    ) -> String {
+        guard logicalEndpoint.count > IdentitySigningChallenge.maximumScopeCharacters else {
+            return logicalEndpoint
+        }
+        let digest = Data(SHA256.hash(data: Data(logicalEndpoint.utf8)))
+        let base64URL = digest.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "urn:cellprotocol:remote-bridge:endpoint:sha256:\(base64URL)"
+    }
+
     var namedCellResolves = [String : CellResolve]()
     var loadCellFacilitators = [String : CellClusterFacilitator]()
     var resolverEmitter: FlowElementPusherCell? = nil
@@ -166,6 +183,15 @@ public class CellResolver: CellResolverProtocol {
     private init() {
         startLifecycleSweepLoop()
     }
+
+#if DEBUG
+    /// Creates an isolated resolver for tests that exercise process-global
+    /// runtime wiring without sharing named resolves or identity references.
+    @_spi(Testing)
+    public static func makeIsolatedForTesting() -> CellResolver {
+        CellResolver()
+    }
+#endif
 
     deinit {
         lifecycleSweepTask?.cancel()
@@ -2250,7 +2276,7 @@ public class CellResolver: CellResolverProtocol {
         let provedControl = await IdentitySigningChallenge.proveControl(
             of: ownedRequester,
             domain: "cellprotocol.remote-bridge",
-            resource: logicalEndpoint,
+            resource: Self.remoteBridgeAuthorityChallengeResource(for: logicalEndpoint),
             action: "resolve",
             audience: "CellResolver"
         )
