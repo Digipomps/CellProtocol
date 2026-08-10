@@ -26,6 +26,11 @@ public class PortholeViewModel: ObservableObject {
     @Published private var actionFeedbackStates: [String: ActionFeedbackState] = [:]
     
     @Published var skeleton = SkeletonDescriptions.skeletonDescriptionFromJson().skeleton
+    /// Name of the `CellConfiguration` currently applied to this Porthole, kept in
+    /// lockstep with `skeleton` via `applyCellConfiguration`. This is the single
+    /// source of truth `SkeletonNavigationBar` items compare their
+    /// `activeConfigurationName` against to resolve cross-configuration active state.
+    @Published private(set) var currentConfigurationName: String?
 
     @Published var outWardMenuConfigurations = [CellConfiguration]()
     @Published var connectionsMenuConfigurations = [CellConfiguration]()
@@ -247,6 +252,7 @@ public class PortholeViewModel: ObservableObject {
     func applyCellConfiguration(cellConfiguration: CellConfiguration) {
 //        print("Applying cellConf: \(cellConfiguration)")
         self.skeleton = cellConfiguration.skeleton
+        self.currentConfigurationName = cellConfiguration.name
     }
     
     func loadCellConfiguration(_ cellConfiguration: CellConfiguration) {

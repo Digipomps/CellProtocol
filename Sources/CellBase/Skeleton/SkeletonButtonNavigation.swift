@@ -3,6 +3,23 @@
 
 import Foundation
 
+extension SkeletonNavigationBarItem {
+    /// Adapts this item to a `SkeletonButton` so navigation resolution
+    /// (`SkeletonButtonNavigation`) and action execution (`SkeletonButton.execute`)
+    /// are reused verbatim instead of reimplemented for `NavigationBar`.
+    public func asSkeletonButton() -> SkeletonButton {
+        SkeletonButton(
+            keypath: keypath,
+            label: label,
+            url: url,
+            payload: payload,
+            keypathKeypath: keypathKeypath,
+            labelKeypath: labelKeypath,
+            payloadKeypath: payloadKeypath
+        )
+    }
+}
+
 public enum SkeletonButtonNavigation {
     public static func isNavigationButton(_ button: SkeletonButton) -> Bool {
         button.keypath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

@@ -2050,6 +2050,167 @@ public struct SkeletonTabs: Codable, Identifiable {
     }
 }
 
+/// A single destination in a `SkeletonNavigationBar`.
+///
+/// An item is either an in-page action (`keypath` non-empty: tapping it calls
+/// `set(keypath:value:)` on the current configuration, mirroring `SkeletonButton`)
+/// or a cross-configuration navigation (`keypath` empty + `url` present, the same
+/// convention `SkeletonButtonNavigation.isNavigationButton` already recognizes for
+/// `SkeletonButton`). Only one of the two "active" signals applies per item, matching
+/// whichever destination kind it is:
+/// - `activeValue`: for in-page items, compared against the bar's
+///   `activeStateKeypath` current value.
+/// - `activeConfigurationName`: for cross-configuration items, compared against the
+///   name of the CellConfiguration currently loaded by the renderer.
+public struct SkeletonNavigationBarItem: Codable, Identifiable {
+    public var id = UUID()
+    public var keypath: String
+    public var label: String
+    public var url: String?
+    public var payload: ValueType?
+    public var keypathKeypath: String?
+    public var labelKeypath: String?
+    public var payloadKeypath: String?
+    public var activeValue: String?
+    public var activeConfigurationName: String?
+    public var modifiers: SkeletonModifiers?
+
+    public init(
+        keypath: String,
+        label: String,
+        url: String? = nil,
+        payload: ValueType? = nil,
+        keypathKeypath: String? = nil,
+        labelKeypath: String? = nil,
+        payloadKeypath: String? = nil,
+        activeValue: String? = nil,
+        activeConfigurationName: String? = nil,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.keypath = keypath
+        self.label = label
+        self.url = url
+        self.payload = payload
+        self.keypathKeypath = keypathKeypath
+        self.labelKeypath = labelKeypath
+        self.payloadKeypath = payloadKeypath
+        self.activeValue = activeValue
+        self.activeConfigurationName = activeConfigurationName
+        self.modifiers = modifiers
+    }
+
+    public enum CodingKeys: CodingKey {
+        case id
+        case keypath
+        case label
+        case url
+        case payload
+        case keypathKeypath
+        case labelKeypath
+        case payloadKeypath
+        case activeValue
+        case activeConfigurationName
+        case modifiers
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let id = try container.decodeIfPresent(UUID.self, forKey: .id) {
+            self.id = id
+        }
+        self.keypath = try container.decode(String.self, forKey: .keypath)
+        self.label = try container.decode(String.self, forKey: .label)
+        self.url = try container.decodeIfPresent(String.self, forKey: .url)
+        self.payload = try container.decodeIfPresent(ValueType.self, forKey: .payload)
+        self.keypathKeypath = try container.decodeIfPresent(String.self, forKey: .keypathKeypath)
+        self.labelKeypath = try container.decodeIfPresent(String.self, forKey: .labelKeypath)
+        self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
+        self.activeValue = try container.decodeIfPresent(String.self, forKey: .activeValue)
+        self.activeConfigurationName = try container.decodeIfPresent(String.self, forKey: .activeConfigurationName)
+        self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.keypath, forKey: .keypath)
+        try container.encode(self.label, forKey: .label)
+        try container.encodeIfPresent(self.url, forKey: .url)
+        try container.encodeIfPresent(self.payload, forKey: .payload)
+        try container.encodeIfPresent(self.keypathKeypath, forKey: .keypathKeypath)
+        try container.encodeIfPresent(self.labelKeypath, forKey: .labelKeypath)
+        try container.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
+        try container.encodeIfPresent(self.activeValue, forKey: .activeValue)
+        try container.encodeIfPresent(self.activeConfigurationName, forKey: .activeConfigurationName)
+        try container.encodeIfPresent(self.modifiers, forKey: .modifiers)
+    }
+}
+
+/// A bottom-anchored app-navigation bar, distinct from `SkeletonTabs`.
+///
+/// `Tabs` selection is pure in-page state (`activeTabStateKeypath` compared against
+/// panel ids). `NavigationBar` additionally supports items that navigate to a whole
+/// different `CellConfiguration` (see `SkeletonNavigationBarItem`), so "which item is
+/// active" cannot be answered by a single state-keypath comparison the way `Tabs`
+/// answers it — the renderer resolves each item's active flag independently based on
+/// its destination kind.
+public struct SkeletonNavigationBar: Codable, Identifiable {
+    public var id = UUID()
+    /// Root-state keypath read to determine which in-page item (if any) is active,
+    /// compared against each item's `activeValue`. Mirrors `SkeletonTabs.activeTabStateKeypath`.
+    public var activeStateKeypath: String?
+    public var items: [SkeletonNavigationBarItem]
+    public var modifiers: SkeletonModifiers?
+
+    enum ElementKey: CodingKey { case NavigationBar }
+    public enum CodingKeys: CodingKey {
+        case id
+        case activeStateKeypath
+        case items
+        case modifiers
+    }
+
+    public init(
+        id: UUID = UUID(),
+        activeStateKeypath: String? = nil,
+        items: [SkeletonNavigationBarItem],
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.id = id
+        self.activeStateKeypath = activeStateKeypath
+        self.items = items
+        self.modifiers = modifiers
+    }
+
+    public init(from decoder: any Decoder) throws {
+        if let last = decoder.codingPath.last, last.stringValue == "NavigationBar" {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id)
+            if let decodedID { self.id = decodedID }
+            self.activeStateKeypath = try container.decodeIfPresent(String.self, forKey: .activeStateKeypath)
+            self.items = try container.decode([SkeletonNavigationBarItem].self, forKey: .items)
+            self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
+        } else {
+            let wrapper = try decoder.container(keyedBy: ElementKey.self)
+            let container = try wrapper.nestedContainer(keyedBy: CodingKeys.self, forKey: .NavigationBar)
+            let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id)
+            if let decodedID { self.id = decodedID }
+            self.activeStateKeypath = try container.decodeIfPresent(String.self, forKey: .activeStateKeypath)
+            self.items = try container.decode([SkeletonNavigationBarItem].self, forKey: .items)
+            self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: ElementKey.self)
+        var elementContainer = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .NavigationBar)
+        try elementContainer.encode(self.id, forKey: .id)
+        try elementContainer.encodeIfPresent(self.activeStateKeypath, forKey: .activeStateKeypath)
+        try elementContainer.encode(self.items, forKey: .items)
+        try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
+    }
+}
+
 // New structs added as per instructions:
 
 public enum SkeletonGridColumnType: String, Codable { case fixed, flexible, adaptive }
@@ -2577,6 +2738,7 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     case ScrollView(SkeletonScrollView)
     case Section(SkeletonSection)
     case Tabs(SkeletonTabs)
+    case NavigationBar(SkeletonNavigationBar)
     case ZStack(SkeletonZStack)
     case Grid(SkeletonGrid)
     case Toggle(SkeletonToggle)
@@ -2636,7 +2798,10 @@ public indirect enum SkeletonElement : Codable, Identifiable {
 
         case .Tabs(let value):
             return value.id
-            
+
+        case .NavigationBar(let value):
+            return value.id
+
         case .ZStack(let value):
             return value.id
             
@@ -2731,6 +2896,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return decode(SkeletonSection.self, wrap: SkeletonElement.Section)
         case "Tabs":
             return decode(SkeletonTabs.self, wrap: SkeletonElement.Tabs)
+        case "NavigationBar":
+            return decode(SkeletonNavigationBar.self, wrap: SkeletonElement.NavigationBar)
         case "ZStack":
             return decode(SkeletonZStack.self, wrap: SkeletonElement.ZStack)
         case "Grid":
@@ -2863,6 +3030,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case let .Section(value):
             try container.encode(value)
         case let .Tabs(value):
+            try container.encode(value)
+        case let .NavigationBar(value):
             try container.encode(value)
         case let .ZStack(value):
             try container.encode(value)
