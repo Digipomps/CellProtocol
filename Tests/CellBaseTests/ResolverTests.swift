@@ -412,6 +412,55 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(first.uuid, third.uuid)
     }
 
+    func testConcurrentIdentityUniqueResolutionReturnsOneOwnerBoundCell() async throws {
+        let resolver = CellResolver.sharedInstance
+        let name = "IdentityConcurrent-\(UUID().uuidString)"
+        try await resolver.addCellResolve(
+            name: name,
+            cellScope: .identityUnique,
+            identityDomain: "private",
+            type: GeneralCell.self
+        )
+        let resolvedRequester = await CellBase.defaultIdentityVault?.identity(
+            for: "identity-concurrent-requester-\(UUID().uuidString)",
+            makeNewIfNotFound: true
+        )
+        let requester = try XCTUnwrap(resolvedRequester)
+
+        let resolvedUUIDs = try await withThrowingTaskGroup(
+            of: String.self,
+            returning: [String].self
+        ) { group in
+            for _ in 0..<16 {
+                group.addTask {
+                    try await resolver.cellAtEndpoint(
+                        endpoint: "cell:///\(name)",
+                        requester: requester
+                    ).uuid
+                }
+            }
+
+            var uuids: [String] = []
+            for try await uuid in group {
+                uuids.append(uuid)
+            }
+            return uuids
+        }
+
+        XCTAssertEqual(resolvedUUIDs.count, 16)
+        XCTAssertEqual(Set(resolvedUUIDs).count, 1)
+        let resolved = try await resolver.cellAtEndpoint(
+            endpoint: "cell:///\(name)",
+            requester: requester
+        )
+        let owner = try await resolved.getOwner(requester: requester)
+        XCTAssertEqual(owner.uuid, requester.uuid)
+        XCTAssertEqual(
+            owner.signingPublicKeyFingerprint,
+            requester.signingPublicKeyFingerprint
+        )
+    }
+
     func testIdentityUniqueDirectUUIDResolutionAcceptsVerifiedContractOnly() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = try XCTUnwrap(CellBase.defaultIdentityVault)
@@ -883,6 +932,50 @@ final class ResolverTests: XCTestCase {
         XCTAssertEqual(mappings[owner.uuid]?["Existing"], existing.uuid)
         XCTAssertEqual(mappings[owner.uuid]?["Concurrent"], concurrent.uuid)
         XCTAssertEqual(mappings[owner.uuid]?["RestoredOnly"], "restored-cell")
+    }
+
+    func testConcurrentPersonalRegistrationKeepsOneIdentityUniqueEndpointWinner() async throws {
+        let auditor = ResolverAuditor()
+        let owner = Identity(
+            "identity-unique-registration-owner",
+            displayName: "Identity Unique Registration Owner",
+            identityVault: nil
+        )
+        let first = TestEmitCell(owner: owner, uuid: "identity-unique-registration-first")
+        let second = TestEmitCell(owner: owner, uuid: "identity-unique-registration-second")
+
+        let successes = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+            for cell in [first, second] {
+                group.addTask {
+                    do {
+                        try await auditor.registerPersonalReference(
+                            cell,
+                            endpoint: "Personal",
+                            identity: owner
+                        )
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+
+            var count = 0
+            for await succeeded in group where succeeded {
+                count += 1
+            }
+            return count
+        }
+
+        XCTAssertEqual(successes, 1)
+        let mappings = await auditor.identityNamedCells()
+        let winnerUUID = try XCTUnwrap(mappings[owner.uuid]?["Personal"])
+        XCTAssertTrue([first.uuid, second.uuid].contains(winnerUUID))
+        let winner = await auditor.loadIdentityCellInstance(
+            name: "Personal",
+            identity: owner
+        )
+        XCTAssertEqual(winner?.uuid, winnerUUID)
     }
 
     func testResolverRecoveryRequiresRequesterSigningControl() async throws {

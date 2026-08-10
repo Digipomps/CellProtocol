@@ -162,21 +162,37 @@ actor ResolverAuditor {
             "registerPersonalReference endpoint=\(endpoint) identity=\(identity.uuid) cell=\(cell.uuid)",
             domain: .resolver
         )
-        if let _ = personalCellReferenceDict[identity.uuid] {
-            let refCount = cellInstanceDict[cell.uuid]?.increment()
-            if refCount == nil {
-                cellInstanceDict[cell.uuid] = CellInstanceWrapper( emit: cell)
-                personalCellReferenceDict[identity.uuid]?[endpoint] =  cell.uuid
-                
+        if let registeredUUID = personalCellReferenceDict[identity.uuid]?[endpoint] {
+            guard registeredUUID == cell.uuid else {
+                throw AuditorError.registerAtAlreadyTakenEndpoint
             }
-        } else {
-            if (cellInstanceDict[cell.uuid] != nil) {
+            guard let registered = cellInstanceDict[cell.uuid],
+                  registered.emit === cell else {
                 throw AuditorError.personalInstanceAlreadyRegistered
             }
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper( emit: cell)
-            personalCellReferenceDict[identity.uuid] = [endpoint : cell.uuid]
+            _ = cellInstanceDict[cell.uuid]?.increment()
+            return
         }
-        
+
+        if personalCellReferenceDict[identity.uuid] == nil {
+            guard cellInstanceDict[cell.uuid] == nil else {
+                throw AuditorError.personalInstanceAlreadyRegistered
+            }
+            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+            personalCellReferenceDict[identity.uuid] = [endpoint: cell.uuid]
+            return
+        }
+
+        if let registered = cellInstanceDict[cell.uuid] {
+            guard registered.emit === cell else {
+                throw AuditorError.personalInstanceAlreadyRegistered
+            }
+            _ = cellInstanceDict[cell.uuid]?.increment()
+        } else {
+            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+        }
+
+        personalCellReferenceDict[identity.uuid]?[endpoint] = cell.uuid
     }
     
 
