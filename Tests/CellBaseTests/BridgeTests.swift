@@ -1522,6 +1522,46 @@ final class BridgeTests: XCTestCase {
         XCTAssertNil(globallyRegisteredBridgeUUID)
     }
 
+    func testCellResolverDirectWebSocketBridgeBindsOversizedContractURLByDigest() async throws {
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+
+        let contractPayload = String(
+            repeating: "contract-payload-b64url-segment-",
+            count: 80
+        )
+        let endpoint = "wss://oversized-authority.example/Porthole?contract_payload_b64url=\(contractPayload)"
+        XCTAssertGreaterThan(endpoint.count, IdentitySigningChallenge.maximumScopeCharacters)
+
+        let ownerValue = await vault.identity(
+            for: "oversized-authority-owner",
+            makeNewIfNotFound: true
+        )
+        let owner = try XCTUnwrap(ownerValue)
+        let resolved = try await resolver.cellAtEndpoint(
+            endpoint: endpoint,
+            requester: owner
+        )
+
+        let challengeResource = CellResolver.remoteBridgeAuthorityChallengeResource(
+            for: endpoint
+        )
+        XCTAssertTrue(challengeResource.hasPrefix("urn:cellprotocol:remote-bridge:endpoint:sha256:"))
+        XCTAssertLessThanOrEqual(
+            challengeResource.count,
+            IdentitySigningChallenge.maximumScopeCharacters
+        )
+        XCTAssertFalse(challengeResource.contains(contractPayload))
+        XCTAssertFalse(resolved.uuid.isEmpty)
+        let recordedURL = try XCTUnwrap(RecordingBridgeTransport.recordedSetupURLs().first)
+        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 1)
+        XCTAssertTrue(recordedURL.absoluteString.contains(contractPayload))
+    }
+
     func testCellResolverRouteReplacementWhileSetupIsPendingCannotPublishStaleBridge() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()
