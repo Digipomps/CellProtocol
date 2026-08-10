@@ -44,10 +44,17 @@ public enum CellSetupError: Error {
     case ownerAuthorityUnavailable
 }
 
+private enum IdentityUniqueOwnerAuthorityFailure: String {
+    case storedSigningFingerprintMissing = "stored_signing_fingerprint_missing"
+    case signingFingerprintMismatch = "signing_fingerprint_mismatch"
+    case runtimeOwnerBindingFailed = "runtime_owner_binding_failed"
+    case requesterSigningControlFailed = "requester_signing_control_failed"
+}
+
 private enum IdentityUniqueOwnerValidation {
     case valid
     case mismatchedReference
-    case authorityUnproven
+    case authorityUnproven(IdentityUniqueOwnerAuthorityFailure)
 }
 
 private enum PersonalCellPersistenceLoadError: Error {
@@ -2625,18 +2632,43 @@ public class CellResolver: CellResolverProtocol {
         guard storedOwner.uuid == requester.uuid else {
             return .mismatchedReference
         }
-        guard storedOwner.signingPublicKeyFingerprint != nil,
-              storedOwner.signingPublicKeyFingerprint == requester.signingPublicKeyFingerprint else {
-            return .authorityUnproven
+        guard let storedFingerprint = storedOwner.signingPublicKeyFingerprint else {
+            return identityUniqueOwnerAuthorityUnproven(
+                .storedSigningFingerprintMissing,
+                for: emitCell
+            )
+        }
+        guard storedFingerprint == requester.signingPublicKeyFingerprint else {
+            return identityUniqueOwnerAuthorityUnproven(
+                .signingFingerprintMismatch,
+                for: emitCell
+            )
         }
         if let generalCell = emitCell as? GeneralCell {
             return await generalCell.bindStoredOwnerToRuntimeIdentity(requester)
                 ? .valid
-                : .authorityUnproven
+                : identityUniqueOwnerAuthorityUnproven(
+                    .runtimeOwnerBindingFailed,
+                    for: emitCell
+                )
         }
         return await requesterProvesSigningControl(requester)
             ? .valid
-            : .authorityUnproven
+            : identityUniqueOwnerAuthorityUnproven(
+                .requesterSigningControlFailed,
+                for: emitCell
+            )
+    }
+
+    private func identityUniqueOwnerAuthorityUnproven(
+        _ failure: IdentityUniqueOwnerAuthorityFailure,
+        for emitCell: Emit
+    ) -> IdentityUniqueOwnerValidation {
+        print(
+            "IdentityUnique owner validation failed reason=\(failure.rawValue) "
+                + "cellType=\(String(reflecting: Swift.type(of: emitCell)))"
+        )
+        return .authorityUnproven(failure)
     }
 
     /// A concrete UUID may be resolved by either its proven owner or a subject
