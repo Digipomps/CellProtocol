@@ -184,6 +184,15 @@ public class CellResolver: CellResolverProtocol {
         startLifecycleSweepLoop()
     }
 
+#if DEBUG
+    /// Creates an isolated resolver for tests that exercise process-global
+    /// runtime wiring without sharing named resolves or identity references.
+    @_spi(Testing)
+    public static func makeIsolatedForTesting() -> CellResolver {
+        CellResolver()
+    }
+#endif
+
     deinit {
         lifecycleSweepTask?.cancel()
         runtimeShadowTask?.cancel()
