@@ -2664,9 +2664,10 @@ public class CellResolver: CellResolverProtocol {
         _ failure: IdentityUniqueOwnerAuthorityFailure,
         for emitCell: Emit
     ) -> IdentityUniqueOwnerValidation {
-        print(
+        CellBase.diagnosticLog(
             "IdentityUnique owner validation failed reason=\(failure.rawValue) "
-                + "cellType=\(String(reflecting: Swift.type(of: emitCell)))"
+                + "cellType=\(String(reflecting: Swift.type(of: emitCell)))",
+            domain: .resolver
         )
         return .authorityUnproven(failure)
     }
