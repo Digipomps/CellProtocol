@@ -1745,8 +1745,14 @@ public struct SkeletonButton: Codable, Identifiable {
     public var keypathKeypath: String?
     public var labelKeypath: String?
     public var payloadKeypath: String?
+    /// SF Symbol name (e.g. "person.circle", "calendar", "message"), matching the
+    /// convention `SkeletonImage.name` already uses for `type == "system"` images.
+    /// Web renderers translate this into their own icon set (see the
+    /// SF-Symbol-to-Lucide mapping table in skeleton-runtime.js) rather than the
+    /// protocol carrying platform-specific icon identifiers.
+    public var icon: String?
     public var modifiers: SkeletonModifiers?
-    
+
     public init(
         keypath: String,
         label: String,
@@ -1754,7 +1760,8 @@ public struct SkeletonButton: Codable, Identifiable {
         payload: ValueType? = nil,
         keypathKeypath: String? = nil,
         labelKeypath: String? = nil,
-        payloadKeypath: String? = nil
+        payloadKeypath: String? = nil,
+        icon: String? = nil
     ) {
         self.keypath = keypath
         self.label = label
@@ -1763,8 +1770,9 @@ public struct SkeletonButton: Codable, Identifiable {
         self.keypathKeypath = keypathKeypath
         self.labelKeypath = labelKeypath
         self.payloadKeypath = payloadKeypath
+        self.icon = icon
     }
-    
+
     public enum CodingKeys: CodingKey {
         case id
         case keypath
@@ -1774,16 +1782,17 @@ public struct SkeletonButton: Codable, Identifiable {
         case keypathKeypath
         case labelKeypath
         case payloadKeypath
+        case icon
         case modifiers
     }
-    
+
     enum ElementKey: CodingKey { case Button }
-    
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         //        self.elements = try container.decode(SkeletonElementList.self, forKey: .elements)
 //        print("Decode SkeletonButton")
-        
+
         if let id =  try container.decodeIfPresent(UUID.self, forKey: .id) {
             self.id = id
         }
@@ -1794,17 +1803,18 @@ public struct SkeletonButton: Codable, Identifiable {
         self.keypathKeypath = try container.decodeIfPresent(String.self, forKey: .keypathKeypath)
         self.labelKeypath = try container.decodeIfPresent(String.self, forKey: .labelKeypath)
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
+        self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
-        
-        
+
+
     }
-    
+
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: ElementKey.self)
-        
+
         var elementContainer = container.nestedContainer(keyedBy: CodingKeys.self,
                                                          forKey: .Button)
-        
+
         try elementContainer.encode(self.keypath, forKey: .keypath)
         try elementContainer.encode(self.label, forKey: .label)
         try elementContainer.encodeIfPresent(self.url, forKey: .url)
@@ -1812,6 +1822,7 @@ public struct SkeletonButton: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.keypathKeypath, forKey: .keypathKeypath)
         try elementContainer.encodeIfPresent(self.labelKeypath, forKey: .labelKeypath)
         try elementContainer.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
+        try elementContainer.encodeIfPresent(self.icon, forKey: .icon)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
         
