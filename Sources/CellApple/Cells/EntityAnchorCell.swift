@@ -78,6 +78,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
+        self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
         
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         
@@ -143,6 +144,14 @@ public class EntityAnchorCell: GeneralCell {
                 return try await self.authorityCommitStateValue()
             }
             throw KeypathStorageErrors.denied
+        })
+
+        await addInterceptForGet(requester: owner, key: "entityContactSchema", getValueIntercept: {
+            _, requester in
+            guard await self.validateAccess("r---", at: "entityContactSchema", for: requester) else {
+                throw KeypathStorageErrors.denied
+            }
+            return EntityValidatedContactRecordV1.schemaValue()
         })
 
         await addInterceptForGet(requester: owner, key: "signedAgreementEntity", getValueIntercept: {
@@ -244,6 +253,7 @@ public class EntityAnchorCell: GeneralCell {
             guard await self.validateAccess("-w--", at: "relations", for: requester) else {
                 throw KeypathStorageErrors.denied
             }
+            try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
                 do {
 //                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
                     // If keypath points to identities
@@ -448,6 +458,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
+        await registerExploreContract(requester: requester, key: "entityContactSchema", method: .get, input: .null, returns: EntityValidatedContactRecordV1.schemaExploreReturn(), permissions: ["r---"], required: true, description: .string("Reads the value-free, fail-closed schema for owner-signed validated contact persistence."))
         await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
         await registerExploreContract(
             requester: requester,
@@ -684,6 +695,7 @@ public class EntityAnchorCell: GeneralCell {
 
     public override func installCellRuntimeBindingsForAccess() async throws {
         let bindingOwner = storedOwnerIdentity
+        await initialLoading()
         await setupPermissions(owner: bindingOwner)
         await setupKeys(owner: bindingOwner)
     }
@@ -747,7 +759,8 @@ public class EntityAnchorCell: GeneralCell {
     func set(keypath: String, value: ValueType) async throws {
         // Validate
         // Check if it is a change
-        
+        try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
+
         // write to storage
         try self.storage.set(keypath: keypath, setValue: value)
         try await saveKeypathStorage(entity: self.storage)
@@ -771,6 +784,7 @@ public class EntityAnchorCell: GeneralCell {
             guard await requesterProvesOwnership(requester) else {
                 throw EntityAuthorityCommitError.requesterMismatch
             }
+            try EntityValidatedContactRecordV1.validatePersistenceEnvelope(envelope)
             // The stored descriptor is intentionally public-only. After an explicit
             // ownership proof, the active requester supplies the vault-backed signer.
             let authority = requester
