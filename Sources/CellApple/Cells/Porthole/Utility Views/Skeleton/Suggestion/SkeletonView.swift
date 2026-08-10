@@ -1734,7 +1734,9 @@ private struct CellActionButtonView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
                     case .idle:
-                        EmptyView()
+                        if let iconName = skeletonButton.icon, iconName.isEmpty == false {
+                            Image(systemName: iconName)
+                        }
                     }
 
                     renderStyledButtonLabel(labelText, modifiers: skeletonButton.modifiers)
