@@ -162,21 +162,43 @@ actor ResolverAuditor {
             "registerPersonalReference endpoint=\(endpoint) identity=\(identity.uuid) cell=\(cell.uuid)",
             domain: .resolver
         )
-        if let _ = personalCellReferenceDict[identity.uuid] {
-            let refCount = cellInstanceDict[cell.uuid]?.increment()
-            if refCount == nil {
-                cellInstanceDict[cell.uuid] = CellInstanceWrapper( emit: cell)
-                personalCellReferenceDict[identity.uuid]?[endpoint] =  cell.uuid
-                
+        if let registeredUUID = personalCellReferenceDict[identity.uuid]?[endpoint] {
+            guard registeredUUID == cell.uuid else {
+                throw AuditorError.registerAtAlreadyTakenEndpoint
             }
-        } else {
-            if (cellInstanceDict[cell.uuid] != nil) {
+            if let registered = cellInstanceDict[cell.uuid] {
+                guard registered.emit === cell else {
+                    throw AuditorError.personalInstanceAlreadyRegistered
+                }
+                _ = cellInstanceDict[cell.uuid]?.increment()
+            } else {
+                // The identity/endpoint mapping is the already elected winner.
+                // Reattach its decoded instance only after the live object has
+                // been evicted; never replace a live object claiming that UUID.
+                cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+            }
+            return
+        }
+
+        if personalCellReferenceDict[identity.uuid] == nil {
+            guard cellInstanceDict[cell.uuid] == nil else {
                 throw AuditorError.personalInstanceAlreadyRegistered
             }
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper( emit: cell)
-            personalCellReferenceDict[identity.uuid] = [endpoint : cell.uuid]
+            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+            personalCellReferenceDict[identity.uuid] = [endpoint: cell.uuid]
+            return
         }
-        
+
+        if let registered = cellInstanceDict[cell.uuid] {
+            guard registered.emit === cell else {
+                throw AuditorError.personalInstanceAlreadyRegistered
+            }
+            _ = cellInstanceDict[cell.uuid]?.increment()
+        } else {
+            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+        }
+
+        personalCellReferenceDict[identity.uuid]?[endpoint] = cell.uuid
     }
     
 
