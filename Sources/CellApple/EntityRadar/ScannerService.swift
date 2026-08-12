@@ -53,6 +53,7 @@ protocol ConnectServiceDelegate {
 private enum ScannerServiceError: Error {
     case peerNotConnected(String)
     case noConnectedPeers
+    case invalidCommand(String)
 }
 
 // Consider different name
@@ -81,6 +82,25 @@ class ScannerService :  NSObject, ObservableObject {
         }
 
         return normalized.isEmpty ? "HAVEN" : normalized
+    }
+
+    /// Multipeer peer names are visible on the local network before a HAVEN
+    /// identity has been verified. Use a rotating, session-scoped label rather
+    /// than the owner's profile name. The session UUID remains transport
+    /// correlation only and never grants authority.
+    static func privatePeerDisplayName(sessionUUID: String) -> String {
+        let suffix = sessionUUID
+            .filter { $0.isLetter || $0.isNumber }
+            .prefix(8)
+            .lowercased()
+        guard suffix.isEmpty == false else {
+            return "HAVEN"
+        }
+        return peerDisplayName(displayName: "HAVEN-\(suffix)")
+    }
+
+    static func validateInboundBridgeData(_ data: Data) throws {
+        try BridgeInboundPayloadValidator().validate(data)
     }
 
     static var platformSupportsNearbyPrecision: Bool {
@@ -127,7 +147,7 @@ class ScannerService :  NSObject, ObservableObject {
     var radarDelegate : ConnectServiceDelegate?
     var bridgeDelegate: BridgeDelegateProtocol?
 
-    let mySessionUUID = UUID().uuidString
+    let mySessionUUID: String
 
     var transportMode: String {
         "multipeerconnectivity"
@@ -225,7 +245,9 @@ class ScannerService :  NSObject, ObservableObject {
     }
 
     init(owner: Identity, serviceDicoveryInfoDict: [String : String] = ["interest" : "*"]) {
-        myPeerId = MCPeerID(displayName: Self.peerDisplayName(displayName: owner.displayName))
+        let sessionUUID = UUID().uuidString
+        mySessionUUID = sessionUUID
+        myPeerId = MCPeerID(displayName: Self.privatePeerDisplayName(sessionUUID: sessionUUID))
         
         self.owner = owner
         
@@ -465,7 +487,7 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
     }
 
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
-        NSLog("%@", "foundPeer: \(peerID) info: \(String(describing: info))")
+        NSLog("%@", "foundPeer discovered")
 //        NSLog("%@", "invitePeer: \(peerID)")
         guard let remoteUUID = info?["uuid"] else {
             print("Did not find remote uuid in info!")
@@ -584,7 +606,7 @@ extension ScannerService : MCSessionDelegate {
     }
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        NSLog("%@", "didReceiveData: \(data)")
+        NSLog("%@", "didReceiveData bytes=\(data.count)")
         Task { [weak self] in
             guard let self = self else { return }
             do {
@@ -683,7 +705,8 @@ extension ScannerService : BridgeTransportProtocol {
     }
     // BridgeDelegateProtocol
     private func  extractCommandFromData(_ data: Data, from peerID: MCPeerID? = nil) async throws {
-        print("extract command: \(String(describing: String(data: data, encoding: .utf8)))")
+        try Self.validateInboundBridgeData(data)
+        print("extract command bytes: \(data.count)")
 //        try await connected()
         let decoder = JSONDecoder()
         do {
@@ -696,7 +719,9 @@ extension ScannerService : BridgeTransportProtocol {
                 return
             }
             if let delegate = bridgeDelegate {
-                let currentCommand = Command(rawValue:  bridgeCommand.cmd)!
+                guard let currentCommand = Command(rawValue: bridgeCommand.cmd) else {
+                    throw ScannerServiceError.invalidCommand(bridgeCommand.cmd)
+                }
                 
                 switch currentCommand {
                 case .response:

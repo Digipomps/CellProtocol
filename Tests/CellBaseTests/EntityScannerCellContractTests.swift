@@ -48,6 +48,30 @@ final class EntityScannerCellContractTests: XCTestCase {
         XCTAssertEqual(ScannerService.peerDisplayName(displayName: ""), "HAVEN")
     }
 
+    func testScannerUsesSessionScopedNonIdentifyingPeerName() {
+        let peerName = ScannerService.privatePeerDisplayName(
+            sessionUUID: "01234567-89AB-CDEF-0123-456789ABCDEF"
+        )
+
+        XCTAssertEqual(peerName, "HAVEN-01234567")
+        XCTAssertLessThanOrEqual(peerName.utf8.count, 63)
+    }
+
+    func testScannerRejectsOversizedInboundBridgePayloadBeforeDecode() {
+        let data = Data(
+            repeating: 0x41,
+            count: BridgeInboundPayloadValidator.defaultMaximumBytes + 1
+        )
+
+        XCTAssertThrowsError(try ScannerService.validateInboundBridgeData(data)) { error in
+            guard case let BridgeInboundPayloadError.tooLarge(actualBytes, maximumBytes) = error else {
+                return XCTFail("Expected tooLarge, got \(error)")
+            }
+            XCTAssertEqual(actualBytes, data.count)
+            XCTAssertEqual(maximumBytes, BridgeInboundPayloadValidator.defaultMaximumBytes)
+        }
+    }
+
     func testEntityScannerContractsAdvertiseCapabilitiesAndContactRequest() async throws {
         CellBase.exploreContractEnforcementMode = .strict
         let vault = MockIdentityVault()

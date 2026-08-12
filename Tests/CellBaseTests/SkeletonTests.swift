@@ -128,6 +128,65 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(textField.autocomplete?.allowsCustomValue, false)
     }
 
+    func testButtonIconEncodesAndDecodes() throws {
+        let element = SkeletonElement.Button(SkeletonButton(
+            keypath: "arendalsukaParticipant.participant.setActiveTab",
+            label: "Program",
+            payload: .string("program"),
+            icon: "calendar"
+        ))
+
+        let data = try JSONEncoder().encode(element)
+        let json = decodeJSONObject(data)
+        let buttonJSON = json["Button"] as? [String: Any]
+        XCTAssertEqual(buttonJSON?["icon"] as? String, "calendar")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Button(button) = decoded else {
+            XCTFail("Expected Button element")
+            return
+        }
+        XCTAssertEqual(button.icon, "calendar")
+    }
+
+    func testButtonWithoutIconOmitsIconKeyAndDecodesNil() throws {
+        let element = SkeletonElement.Button(SkeletonButton(
+            keypath: "arendalsukaParticipant.participant.refreshFromAtlas",
+            label: "Oppdater program"
+        ))
+
+        let data = try JSONEncoder().encode(element)
+        let json = decodeJSONObject(data)
+        let buttonJSON = json["Button"] as? [String: Any]
+        XCTAssertNil(buttonJSON?["icon"], "icon key should be omitted when nil, matching SkeletonImage.name's encodeIfPresent convention")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Button(button) = decoded else {
+            XCTFail("Expected Button element")
+            return
+        }
+        XCTAssertNil(button.icon)
+    }
+
+    func testButtonDecodesLegacyJSONWithoutIconField() throws {
+        let json = """
+        {
+          "Button": {
+            "keypath": "arendalsukaParticipant.participant.refreshFromAtlas",
+            "label": "Oppdater program"
+          }
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let element = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Button(button) = element else {
+            XCTFail("Expected Button element")
+            return
+        }
+        XCTAssertEqual(button.label, "Oppdater program")
+        XCTAssertNil(button.icon)
+    }
+
     func testFileUploadEncodesWithWrapperKey() throws {
         let element = SkeletonElement.FileUpload(SkeletonFileUpload(
             title: "Upload image",
