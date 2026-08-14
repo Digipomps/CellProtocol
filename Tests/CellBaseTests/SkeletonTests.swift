@@ -737,6 +737,25 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(json["motionSourceRole"] as? String, "suggestion-card")
     }
 
+    func testModifiersEncodeAndDecodeWrap() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.wrap = true
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+        XCTAssertEqual(json["wrap"] as? Bool, true)
+
+        let decoded = try JSONDecoder().decode(SkeletonModifiers.self, from: data)
+        XCTAssertEqual(decoded.wrap, true)
+
+        let legacyJSON = """
+        {
+          "styleRole": "interest-chip-row"
+        }
+        """
+        let legacy = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(legacyJSON.utf8))
+        XCTAssertNil(legacy.wrap)
+    }
+
     func testModifiersDecodeMotionMetadataAndStayBackwardCompatible() throws {
         let motionJSON = """
         {

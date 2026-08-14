@@ -836,6 +836,16 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(spacer.modifiers)
             )
         case .HStack(let h):
+            if h.modifiers?.wrap == true {
+                return AnyView(
+                    FlowLayout(spacing: h.spacing.map { CGFloat($0) } ?? 8) {
+                        ForEach(h.elements, id: \.id) { el in
+                            render(el)
+                        }
+                    }
+                    .applySkeletonModifiers(h.modifiers)
+                )
+            }
             return AnyView(
                 HStack(alignment: .center, spacing: h.spacing.map { CGFloat($0) } ?? 8) {
                     ForEach(h.elements, id: \.id) { el in

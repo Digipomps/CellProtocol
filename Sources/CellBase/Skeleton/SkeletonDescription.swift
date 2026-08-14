@@ -534,6 +534,11 @@ public struct SkeletonModifiers: Codable {
     public var borderColor: String?
     public var opacity: Double?
     public var hidden: Bool?
+    // When true on a container element (HStack, List), children wrap onto
+    // additional rows instead of overflowing/clipping on one axis, each
+    // sized to its own content (flexbox flex-wrap, not a fixed-track grid).
+    // Meaningless on non-container elements; renderers ignore it there.
+    public var wrap: Bool?
     public var visibility: SkeletonVisibilityRule?
     
     public var foregroundColor: String?
@@ -581,6 +586,7 @@ public struct SkeletonModifiers: Codable {
         case borderColor
         case opacity
         case hidden
+        case wrap
         case visibility
         case foregroundColor
         case fontStyle
@@ -628,6 +634,7 @@ public struct SkeletonModifiers: Codable {
         self.borderColor = Self.decodeLossy(String.self, from: container, forKey: .borderColor)
         self.opacity = Self.decodeLossy(Double.self, from: container, forKey: .opacity)
         self.hidden = Self.decodeLossy(Bool.self, from: container, forKey: .hidden)
+        self.wrap = Self.decodeLossy(Bool.self, from: container, forKey: .wrap)
         self.visibility = Self.decodeLossy(SkeletonVisibilityRule.self, from: container, forKey: .visibility)
         self.foregroundColor = Self.decodeLossy(String.self, from: container, forKey: .foregroundColor)
         self.fontStyle = Self.decodeLossy(String.self, from: container, forKey: .fontStyle)
