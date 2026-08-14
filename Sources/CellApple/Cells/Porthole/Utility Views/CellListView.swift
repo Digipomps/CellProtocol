@@ -165,11 +165,23 @@ struct CellListView: View {
         skeletonList.selectionMode ?? .none
     }
 
+    private var wrapsRows: Bool {
+        skeletonList.modifiers?.wrap == true
+    }
+
     var body: some View {
         ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(Array(rows.indices), id: \.self) { index in
-                    rowView(for: rows[index], index: index)
+            if wrapsRows {
+                FlowLayout(spacing: 8) {
+                    ForEach(Array(rows.indices), id: \.self) { index in
+                        rowView(for: rows[index], index: index)
+                    }
+                }
+            } else {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(rows.indices), id: \.self) { index in
+                        rowView(for: rows[index], index: index)
+                    }
                 }
             }
         }
@@ -219,7 +231,7 @@ struct CellListView: View {
             }
         }
         .contentShape(Rectangle())
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: wrapsRows ? nil : .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
