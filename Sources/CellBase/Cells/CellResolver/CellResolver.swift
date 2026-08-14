@@ -1966,8 +1966,18 @@ public class CellResolver: CellResolverProtocol {
         cell.cellScope = resolve.cellScope
         cell.persistancy = resolve.cellPersistancy
         _ = try await prepareCellForRuntime(cell)
-        try await auditor.registerReference(cell, endpoint: reference)
-        
+        do {
+            try await auditor.registerReference(cell, endpoint: reference)
+        } catch ResolverAuditor.AuditorError.registerAtAlreadyTakenEndpoint {
+            // Another concurrent requester's first resolve of this named cell
+            // won the race to register it between our lookup and our own
+            // register call. Discard this redundant instance rather than
+            // failing the resolve outright, and hand back the winner so both
+            // requesters share the same shared Cell.
+            await auditor.evictCellInstance(uuid: cell.uuid)
+            return await loadCellFromMemory(name: reference)
+        }
+
         var flowElement = FlowElement(title: "Resolver event", content: .string("registered_named_cell"), properties: FlowElement.Properties(type: .event, contentType: .string))
         flowElement.topic = "register"
         if let resolverEmitter = withStateLock({ self.resolverEmitter })
