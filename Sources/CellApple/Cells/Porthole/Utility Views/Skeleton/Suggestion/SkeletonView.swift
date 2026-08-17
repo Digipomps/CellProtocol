@@ -856,14 +856,21 @@ public struct SkeletonView: View {
                 .applySkeletonModifiers(h.modifiers)
             )
         case .VStack(let v):
-            return AnyView(
+            let (navigationBar, restElements) = extractNavigationBar(from: v.elements)
+            let stack = AnyView(
                 VStack(alignment: .center, spacing: v.spacing.map { CGFloat($0) } ?? 8) {
-                    ForEach(v.elements, id: \.id) { el in
+                    ForEach(restElements, id: \.id) { el in
                         render(el)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .applySkeletonModifiers(v.modifiers)
+            )
+            guard let navigationBar else { return stack }
+            return AnyView(
+                stack.safeAreaInset(edge: .bottom, spacing: 0) {
+                    renderNavigationBar(navigationBar)
+                }
             )
         case .List(let skeletonList):
             return AnyView(
@@ -915,11 +922,13 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(div.modifiers)
             )
         case .ScrollView(let sc):
+            let (navigationBar, restElements) = extractNavigationBar(from: sc.elements)
+            let scrollContent: AnyView
             if sc.axis == "horizontal" {
-                return AnyView(
+                scrollContent = AnyView(
                     ScrollView(.horizontal) {
                         HStack {
-                            ForEach(sc.elements, id: \.id) { el in
+                            ForEach(restElements, id: \.id) { el in
                                 render(el)
                             }
                         }
@@ -928,10 +937,10 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(sc.modifiers)
                 )
             } else {
-                return AnyView(
+                scrollContent = AnyView(
                     ScrollView(.vertical) {
                         VStack {
-                            ForEach(sc.elements, id: \.id) { el in
+                            ForEach(restElements, id: \.id) { el in
                                 render(el)
                             }
                         }
@@ -940,6 +949,12 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(sc.modifiers)
                 )
             }
+            guard let navigationBar else { return scrollContent }
+            return AnyView(
+                scrollContent.safeAreaInset(edge: .bottom, spacing: 0) {
+                    renderNavigationBar(navigationBar)
+                }
+            )
         case .Section(let sec):
             return AnyView(
                 VStack(alignment: .center, spacing: 8) {
@@ -981,6 +996,8 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(tabs.modifiers)
                     .environmentObject(viewModel)
             )
+        case .NavigationBar(let navigationBar):
+            return renderNavigationBar(navigationBar)
         case .Visualization(let visualization):
             return AnyView(
                 CellVisualizationView(skeletonVisualization: visualization, userInfoValue: userInfoValue)
@@ -1055,6 +1072,8 @@ public struct SkeletonView: View {
             modifiers = value.modifiers
         case .Tabs(let value):
             modifiers = value.modifiers
+        case .NavigationBar(let value):
+            modifiers = value.modifiers
         case .ZStack(let value):
             modifiers = value.modifiers
         case .Grid(let value):
@@ -1078,6 +1097,40 @@ public struct SkeletonView: View {
             return true
         }
         return visibility.isVisible(root: userInfoValue, item: userInfoValue, context: userInfoValue)
+    }
+
+    /// Pulls a `NavigationBar` out of a container's direct children so it can be
+    /// anchored to the container's bottom edge instead of laid out inline. Only the
+    /// top level of `elements` is scanned — a `NavigationBar` nested deeper inside
+    /// its own child container is left in place and rendered inline there, since it
+    /// then belongs to that nested container's scroll region, not this one. If more
+    /// than one `NavigationBar` appears at the same level, the first is lifted and
+    /// any additional ones render inline (a CellConfiguration authoring mistake, not
+    /// something to silently paper over).
+    private func extractNavigationBar(
+        from elements: SkeletonElementList
+    ) -> (SkeletonNavigationBar?, SkeletonElementList) {
+        var navigationBar: SkeletonNavigationBar?
+        var rest: SkeletonElementList = []
+        for el in elements {
+            if case .NavigationBar(let bar) = el, navigationBar == nil {
+                navigationBar = bar
+            } else {
+                rest.append(el)
+            }
+        }
+        return (navigationBar, rest)
+    }
+
+    private func renderNavigationBar(_ bar: SkeletonNavigationBar) -> AnyView {
+        guard skeletonElementIsVisible(.NavigationBar(bar)) else {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            CellNavigationBarView(skeletonNavigationBar: bar, userInfoValue: userInfoValue)
+                .applySkeletonModifiers(bar.modifiers)
+                .environmentObject(viewModel)
+        )
     }
 
     private func describe(_ value: ValueType) -> String {
@@ -3101,6 +3154,134 @@ private struct CellTabsView: View {
         }
 
         _ = try await target.set(keypath: keypath, value: payload, requester: requester)
+    }
+}
+
+/// Renders a `SkeletonNavigationBar`. Unlike `CellTabsView`, whose items are always
+/// in-page state, an item here can be either an in-page action (empty `url`) or a
+/// cross-configuration navigation (empty `keypath` + `url`, the same convention
+/// `SkeletonButtonNavigation.isNavigationButton` recognizes for `SkeletonButton`), so
+/// "is this item active" is resolved differently per item depending on which kind it
+/// is — see `isActive(_:)`.
+private struct CellNavigationBarView: View {
+    let skeletonNavigationBar: SkeletonNavigationBar
+    let userInfoValue: ValueType?
+    @State private var activeStateValue: String = ""
+    @EnvironmentObject var viewModel: PortholeViewModel
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(skeletonNavigationBar.items) { item in
+                navigationBarItemButton(item)
+            }
+        }
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+        .task(id: refreshTaskID()) {
+            await loadActiveState()
+        }
+    }
+
+    private func refreshTaskID() -> String {
+        "\(skeletonNavigationBar.activeStateKeypath ?? "__no_active_state__")::\(viewModel.localMutationVersion)"
+    }
+
+    /// Cross-configuration items are active when the renderer's currently loaded
+    /// `CellConfiguration.name` matches `activeConfigurationName`; in-page items are
+    /// active when the bar's `activeStateKeypath` currently reads back their
+    /// `activeValue`. An item that omits the relevant field never highlights as
+    /// active rather than falling back to a guess.
+    private func isActive(_ item: SkeletonNavigationBarItem) -> Bool {
+        if SkeletonButtonNavigation.isNavigationButton(item.asSkeletonButton()) {
+            guard let activeConfigurationName = item.activeConfigurationName else {
+                return false
+            }
+            return activeConfigurationName == viewModel.currentConfigurationName
+        }
+        guard let activeValue = item.activeValue else {
+            return false
+        }
+        return activeValue == activeStateValue
+    }
+
+    private func navigationBarItemButton(_ item: SkeletonNavigationBarItem) -> some View {
+        let active = isActive(item)
+        return Button {
+            Task {
+                await activate(item)
+            }
+        } label: {
+            Text(resolvedLabel(for: item))
+                .font(.subheadline)
+                .fontWeight(active ? .semibold : .regular)
+                .foregroundStyle(active ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("skeleton.navigationBar.item.\(item.id.uuidString)")
+        .accessibilityValue(active ? "Selected" : "")
+    }
+
+    private func resolvedLabel(for item: SkeletonNavigationBarItem) -> String {
+        guard let labelKeypath = item.labelKeypath, labelKeypath.isEmpty == false,
+              let userInfoValue,
+              let resolved = userInfoValue[labelKeypath],
+              let text = skeletonDisplayStringValue(resolved) else {
+            return item.label
+        }
+        return text
+    }
+
+    private func activate(_ item: SkeletonNavigationBarItem) async {
+        let button = item.asSkeletonButton()
+        if SkeletonButtonNavigation.isNavigationButton(button) {
+            _ = await SkeletonButtonNavigationExecution.open(button) { url, completion in
+                openURL(url, completion: completion)
+            }
+            return
+        }
+
+        guard let requester = await viewModel.executionRequesterIdentity() else {
+            return
+        }
+        _ = await button.execute(requester: requester)
+        await MainActor.run {
+            viewModel.markLocalMutation()
+        }
+        await loadActiveState()
+    }
+
+    private func loadActiveState() async {
+        guard let activeStateKeypath = skeletonNavigationBar.activeStateKeypath,
+              activeStateKeypath.isEmpty == false,
+              let value = try? await fetchValue(at: activeStateKeypath),
+              let stringValue = skeletonStringValue(value) else {
+            return
+        }
+        await MainActor.run {
+            activeStateValue = stringValue
+        }
+    }
+
+    private func fetchValue(at keypath: String) async throws -> ValueType {
+        guard let resolver = CellBase.defaultCellResolver,
+              let requester = await viewModel.executionRequesterIdentity() else {
+            throw CellBaseError.noIdentity
+        }
+
+        let (targetURL, childKeypath) = try resolveSkeletonTarget(for: keypath)
+        guard let target = try await resolver.cellAtEndpoint(
+            endpoint: targetURL.absoluteString,
+            requester: requester
+        ) as? Meddle else {
+            throw SkeletonSetActionError.unresolvedTarget(targetURL.absoluteString)
+        }
+
+        return try await target.get(keypath: childKeypath, requester: requester)
     }
 }
 

@@ -1410,6 +1410,99 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(unsupported.elementType, "Conditional")
         XCTAssertEqual(unsupported.reason, "Unknown skeleton element type")
     }
+
+    func testNavigationBarEncodeDecodeWrapped() throws {
+        let element = SkeletonElement.NavigationBar(SkeletonNavigationBar(
+            activeStateKeypath: "arendalsukaParticipant.participant.activeTab",
+            items: [
+                SkeletonNavigationBarItem(
+                    keypath: "",
+                    label: "CoPilot",
+                    url: "/porthole?configurationName=Co-Pilot%20Chat",
+                    activeConfigurationName: "Co-Pilot Chat"
+                ),
+                SkeletonNavigationBarItem(
+                    keypath: "arendalsukaParticipant.participant.setActiveTab",
+                    label: "Program",
+                    payload: .string("program"),
+                    activeValue: "program"
+                ),
+                SkeletonNavigationBarItem(
+                    keypath: "arendalsukaParticipant.participant.setActiveTab",
+                    label: "Møter",
+                    payload: .string("chat"),
+                    activeValue: "chat"
+                )
+            ]
+        ))
+
+        let data = try JSONEncoder().encode(element)
+        let json = decodeJSONObject(data)
+        let navigationBarJSON = json["NavigationBar"] as? [String: Any]
+        XCTAssertEqual(navigationBarJSON?["activeStateKeypath"] as? String, "arendalsukaParticipant.participant.activeTab")
+        let itemsJSON = navigationBarJSON?["items"] as? [[String: Any]]
+        XCTAssertEqual(itemsJSON?.count, 3)
+        XCTAssertEqual(itemsJSON?.first?["url"] as? String, "/porthole?configurationName=Co-Pilot%20Chat")
+        XCTAssertEqual(itemsJSON?.first?["activeConfigurationName"] as? String, "Co-Pilot Chat")
+        XCTAssertEqual(itemsJSON?[1]["activeValue"] as? String, "program")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .NavigationBar(navigationBar) = decoded else {
+            XCTFail("Expected NavigationBar element")
+            return
+        }
+        XCTAssertEqual(navigationBar.activeStateKeypath, "arendalsukaParticipant.participant.activeTab")
+        XCTAssertEqual(navigationBar.items.map(\.label), ["CoPilot", "Program", "Møter"])
+        XCTAssertEqual(navigationBar.items[0].activeConfigurationName, "Co-Pilot Chat")
+        XCTAssertNil(navigationBar.items[0].activeValue)
+        XCTAssertEqual(navigationBar.items[1].activeValue, "program")
+        XCTAssertNil(navigationBar.items[1].activeConfigurationName)
+    }
+
+    func testNavigationBarDirectDecodeSupportsWrappedTypePayload() throws {
+        let json = """
+        {
+          "NavigationBar": {
+            "activeStateKeypath": "state.activeTab",
+            "items": [
+              { "keypath": "state.setActiveTab", "label": "Program", "activeValue": "program" }
+            ]
+          }
+        }
+        """
+        let bar = try JSONDecoder().decode(SkeletonNavigationBar.self, from: Data(json.utf8))
+        XCTAssertEqual(bar.activeStateKeypath, "state.activeTab")
+        XCTAssertEqual(bar.items.first?.label, "Program")
+        XCTAssertEqual(bar.items.first?.activeValue, "program")
+    }
+
+    func testNavigationBarItemDistinguishesInPageActionFromCrossConfigurationNavigation() throws {
+        let crossConfigurationItem = SkeletonNavigationBarItem(
+            keypath: "",
+            label: "CoPilot",
+            url: "https://example.com/porthole?configurationName=Co-Pilot%20Chat",
+            activeConfigurationName: "Co-Pilot Chat"
+        )
+        XCTAssertTrue(SkeletonButtonNavigation.isNavigationButton(crossConfigurationItem.asSkeletonButton()))
+
+        let inPageItem = SkeletonNavigationBarItem(
+            keypath: "arendalsukaParticipant.participant.setActiveTab",
+            label: "Program",
+            payload: .string("program"),
+            activeValue: "program"
+        )
+        XCTAssertFalse(SkeletonButtonNavigation.isNavigationButton(inPageItem.asSkeletonButton()))
+    }
+
+    func testNavigationBarItemDecodesWithoutOptionalActiveFields() throws {
+        let json = """
+        { "keypath": "state.action", "label": "Untracked" }
+        """
+        let item = try JSONDecoder().decode(SkeletonNavigationBarItem.self, from: Data(json.utf8))
+        XCTAssertNil(item.activeValue)
+        XCTAssertNil(item.activeConfigurationName)
+        XCTAssertNil(item.url)
+    }
 }
 
 private extension SkeletonElement {
