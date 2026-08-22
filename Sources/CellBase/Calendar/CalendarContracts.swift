@@ -18,6 +18,12 @@ public enum CalendarContract {
     public static let flowTopic = "calendar"
 
     public enum Keys {
+        /// The bare root every `calendar.*` key hangs off. A skeleton that
+        /// references this cell under the label `calendar` binds
+        /// `calendar.calendar.state`, and `GeneralCell` resolves that by walking
+        /// down from the root — so the root has to be served, or every binding
+        /// under it reads back `notFound`.
+        public static let root = "calendar"
         public static let state = "calendar.state"
         public static let collections = "calendar.collections"
         public static let items = "calendar.items"

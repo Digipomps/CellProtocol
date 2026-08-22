@@ -31,7 +31,7 @@ extension PerspectiveNodeRelation: Codable {
         let value = try singleValueContainer.decode(String.self)
         self = try Self(rawValue: value) ?? { throw StringEnumError.decodeError(value) }()
     }
-    
+
     public func encode(to encoder: Encoder) throws {
         var singleValueContainer = encoder.singleValueContainer()
         try singleValueContainer.encode(self.rawValue)
@@ -59,9 +59,22 @@ public class PerspectiveNodeImpl: PerspectiveNode, Referenceable {
     
 //    public var description: String?
     
-    public var reference: String { // Interest id
+    /// Opaque, stable identity for this node.
+    ///
+    /// When nil the reference falls back to `name`, which is what every node
+    /// did before. That fallback is fine for purposes and interests — their
+    /// names *are* their identity. It is wrong for people: two people share a
+    /// name, and a graph keyed on names both collides them and turns the
+    /// persisted perspective into a plaintext list of everyone you know.
+    /// Anything representing a person sets this to a salted, local identifier.
+    public var nodeIdentifier: String?
+
+    public var reference: String {
         get {
-            return name // For now we use the name
+            if let nodeIdentifier, !nodeIdentifier.isEmpty {
+                return nodeIdentifier
+            }
+            return name
         }
     }
     
