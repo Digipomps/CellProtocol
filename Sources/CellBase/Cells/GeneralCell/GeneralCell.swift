@@ -1052,7 +1052,19 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                         switch event {
                         case .value(let flowElement):
                             let transformedFlowElement: FlowElement?
-                            if let intercept = await subscriptionIntercepts.loadFeedIntercept() {
+                            if let topicHandler = await subscriptionIntercepts.resolveFeedIntercept(
+                                topic: flowElement.topic
+                            ) {
+                                if flowElement.hops >= GeneralCell.maximumFlowElementHops {
+                                    CellBase.diagnosticLog(
+                                        "flow_hop_limit_exceeded topic=\(flowElement.topic) label=\(label) hops=\(flowElement.hops)",
+                                        domain: .flow)
+                                    continue
+                                }
+                                var forwarded = flowElement
+                                forwarded.hops = flowElement.hops + 1
+                                transformedFlowElement = await topicHandler(forwarded, label, requester)
+                            } else if let intercept = await subscriptionIntercepts.loadFeedIntercept() {
                                 transformedFlowElement = await intercept(flowElement, requester)
                             } else {
                                 transformedFlowElement = flowElement
@@ -2201,6 +2213,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await self.intercepts.storeFeedIntercept(intercept)
         }
     }
+
+    /// Registrerer en handtering for et topic. Returnerer false hvis topicet
+    /// allerede er tatt, eller hvis kalleren ikke har lov - kollisjonen logges.
+    ///
+    /// Topic kan vaere eksakt ("consent"), et prefiks ("agreement.*") eller
+    /// fangstallen "*". Eksklusiv dispatch: treffer en handtering, avgjor den
+    /// alene, og den gamle enkelt-intercepten kjorer ikke.
+    @discardableResult
+    public func addInterceptForTopic(
+        requester: Identity,
+        topic: String,
+        intercept: @escaping LabelledFlowElementIntercept
+    ) async -> Bool {
+        guard await isAllowedToSetupIntercepts(requester: requester) else { return false }
+        return await self.intercepts.storeFeedIntercept(topic: topic, intercept)
+    }
+
+    /// Hoyeste antall videresendinger gjennom topic-intercepts for et element
+    /// stoppes. Et register som trigger skriv kan ellers sykle.
+    public static let maximumFlowElementHops = 8
     
     
     @available(*, deprecated)
