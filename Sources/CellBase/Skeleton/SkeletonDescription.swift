@@ -524,7 +524,16 @@ public struct SkeletonModifiers: Codable {
     public var height: Double?
     public var hAlignment: String? // leading, center, trailing
     public var vAlignment: String? // top, center, bottom
+    // When set on a row inside a List/Grid's flowElementSkeleton, resolves
+    // hAlignment from this keypath on the row's own item data instead of the
+    // static hAlignment above - e.g. a chat message list where each row's
+    // alignment depends on whether that message's authorUUID is the viewer's
+    // own. Ignored outside a per-item row context; falls back to the static
+    // hAlignment (if any) when the keypath is absent or doesn't resolve.
+    public var hAlignmentKeypath: String?
     public var background: String? // hex color like #RRGGBBAA or #RRGGBB
+    // Same per-item resolution as hAlignmentKeypath, for background.
+    public var backgroundKeypath: String?
     public var cornerRadius: Double?
     public var shadowRadius: Double?
     public var shadowX: Double?
@@ -542,6 +551,8 @@ public struct SkeletonModifiers: Codable {
     public var visibility: SkeletonVisibilityRule?
     
     public var foregroundColor: String?
+    // Same per-item resolution as hAlignmentKeypath, for foregroundColor.
+    public var foregroundColorKeypath: String?
     public var fontStyle: String?
     public var fontSize: Double?
     public var fontWeight: String?
@@ -576,7 +587,9 @@ public struct SkeletonModifiers: Codable {
         case height
         case hAlignment
         case vAlignment
+        case hAlignmentKeypath
         case background
+        case backgroundKeypath
         case cornerRadius
         case shadowRadius
         case shadowX
@@ -589,6 +602,7 @@ public struct SkeletonModifiers: Codable {
         case wrap
         case visibility
         case foregroundColor
+        case foregroundColorKeypath
         case fontStyle
         case fontSize
         case fontWeight
@@ -624,7 +638,9 @@ public struct SkeletonModifiers: Codable {
         self.height = Self.decodeLossy(Double.self, from: container, forKey: .height)
         self.hAlignment = Self.decodeLossy(String.self, from: container, forKey: .hAlignment)
         self.vAlignment = Self.decodeLossy(String.self, from: container, forKey: .vAlignment)
+        self.hAlignmentKeypath = Self.decodeLossy(String.self, from: container, forKey: .hAlignmentKeypath)
         self.background = Self.decodeLossy(String.self, from: container, forKey: .background)
+        self.backgroundKeypath = Self.decodeLossy(String.self, from: container, forKey: .backgroundKeypath)
         self.cornerRadius = Self.decodeLossy(Double.self, from: container, forKey: .cornerRadius)
         self.shadowRadius = Self.decodeLossy(Double.self, from: container, forKey: .shadowRadius)
         self.shadowX = Self.decodeLossy(Double.self, from: container, forKey: .shadowX)
@@ -637,6 +653,7 @@ public struct SkeletonModifiers: Codable {
         self.wrap = Self.decodeLossy(Bool.self, from: container, forKey: .wrap)
         self.visibility = Self.decodeLossy(SkeletonVisibilityRule.self, from: container, forKey: .visibility)
         self.foregroundColor = Self.decodeLossy(String.self, from: container, forKey: .foregroundColor)
+        self.foregroundColorKeypath = Self.decodeLossy(String.self, from: container, forKey: .foregroundColorKeypath)
         self.fontStyle = Self.decodeLossy(String.self, from: container, forKey: .fontStyle)
         self.fontSize = Self.decodeLossy(Double.self, from: container, forKey: .fontSize)
         self.fontWeight = Self.decodeLossy(String.self, from: container, forKey: .fontWeight)
