@@ -12,7 +12,17 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
     public var content: FlowElementValueType
     public var properties: FlowElement.Properties?
     public var origin: String? // uri refering to the cell the feed item originated in (optional)
-    
+
+    /// Antall ganger dette elementet har blitt videresendt gjennom en
+    /// topic-intercept. Et register som *trigger skriv* kan skape semantiske
+    /// lokker: handteringen skriver til en malcelle, malcellen emitterer flow,
+    /// og flyten kommer tilbake. overflowState vokter bufferoverlop, ikke sykler.
+    ///
+    /// Grensen handheves i GeneralCell sin dispatch. Telleren virker bare naar
+    /// handteringer som lager NYE elementer forer den videre - se
+    /// FlowElement.continuing(from:).
+    public var hops: Int = 0
+
     enum CodingKeys: String, CodingKey {
         case id
         case title
@@ -20,6 +30,7 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         case content
         case properties
         case origin
+        case hops
     }
     public struct Properties: Codable, Hashable {
         public var mimetype: String? = nil
@@ -35,6 +46,15 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
     
     public static func == (lhs: FlowElement, rhs: FlowElement) -> Bool {
         return lhs.id == rhs.id
+    }
+
+    /// Lager et nytt element som viderefoerer hopp-telleren fra et innkommende.
+    /// En handtering som konstruerer et nytt FlowElement som svar paa et annet
+    /// MAA bruke denne - ellers nullstilles telleren og lokkevernet er borte.
+    public func continuing(from source: FlowElement) -> FlowElement {
+        var element = self
+        element.hops = source.hops
+        return element
     }
     
     public init() { // for testing
@@ -64,6 +84,8 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         title = try values.decode(String.self, forKey: .title)
         properties = try? values.decode(Properties.self, forKey: .properties)
         origin = try? values.decodeIfPresent(String.self, forKey: .origin)
+        // Persisterte elementer fra for denne endringen har ingen hops-nokkel.
+        hops = (try? values.decodeIfPresent(Int.self, forKey: .hops)) as? Int ?? 0
         do {
         switch properties?.contentType {
         case .string:
@@ -121,6 +143,9 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         try container.encode(properties, forKey: .properties)
         if origin != nil {
             try container.encode(origin, forKey: .origin)
+        }
+        if hops != 0 {
+            try container.encode(hops, forKey: .hops)
         }
         switch content {
         case let .string(value):
