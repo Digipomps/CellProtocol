@@ -74,6 +74,7 @@ open class CalendarStoreCell: GeneralCell {
 
     private func setup(owner: Identity) async {
         for key in [
+            CalendarContract.Keys.root,
             CalendarContract.Keys.state,
             CalendarContract.Keys.collections,
             CalendarContract.Keys.items,
@@ -91,6 +92,33 @@ open class CalendarStoreCell: GeneralCell {
             CalendarContract.Keys.exportCalendar
         ] {
             agreementTemplate.ensureGrant("rw--", for: key)
+        }
+
+        // The root read. A configuration that references this cell under the
+        // label `calendar` binds `calendar.calendar.state`; `GeneralCell`
+        // resolves nested reads by walking down from the root, so without this
+        // the whole subtree answers `notFound` even though every leaf below is
+        // registered.
+        await registerGet(
+            key: CalendarContract.Keys.root,
+            owner: owner,
+            returns: ExploreContract.schema(
+                type: "object",
+                description: "Object holding the calendar store's readable keys: state, collections, items, occurrences, permissionStatus."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Root calendar read. Every `calendar.<field>` binding resolves through this value.")
+        ) { requester in
+            guard await self.validateAccess("r---", at: CalendarContract.Keys.root, for: requester) else { return .string("denied") }
+            let window = Self.defaultWindow(now: Date())
+            return .object([
+                "state": .object(self.stateObject()),
+                "collections": .list(self.orderedCollections().map { .object($0.asObject()) }),
+                "items": .list(self.orderedItems().map { .object($0.asObject()) }),
+                "occurrences": .list(self.occurrences(start: window.start, end: window.end).map { .object($0.asObject()) }),
+                "permissionStatus": .object(Self.localPermissionStatus())
+            ])
         }
 
         await registerGet(

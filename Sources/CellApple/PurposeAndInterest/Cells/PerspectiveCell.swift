@@ -80,6 +80,8 @@ public class PerspectiveCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "addPurpose")
         self.agreementTemplate.ensureGrant("rw--", for: "matchPurpose")
         self.agreementTemplate.ensureGrant("rw--", for: "perspective")
+        // See PerspectiveCell+Entities.swift
+        setupEntityPermissions()
     }
     
     private func setupKeys(owner: Identity) async  {
@@ -97,6 +99,23 @@ public class PerspectiveCell: GeneralCell {
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "activePurpose", for: requester) {
                 return await self.activePurposesPayload(minPurposeWeight: 0.0, limit: 50, includeInterests: true, referenceMode: .both)
+            }
+            return .string("denied")
+        })
+
+        // Two registrations, on purpose.
+        //
+        // The root key is what a skeleton binds to: `GeneralCell` resolves nested
+        // reads by walking down from the root, so without it `perspective` itself —
+        // and every root-binding probe — comes back notFound.
+        //
+        // `perspective.state` stays registered because it is the key consumers and
+        // the runtime readiness contract actually name. Exact matches win, so the
+        // two never disagree: both return the same snapshot.
+        await addInterceptForGet(requester: owner, key: "perspective", getValueIntercept:  { [weak self] keypath, requester in
+            guard let self = self else { return .string("failure") }
+            if await self.validateAccess("r---", at: "perspective", for: requester) {
+                return .object(["state": await self.perspectiveStatePayload()])
             }
             return .string("denied")
         })
@@ -168,6 +187,10 @@ public class PerspectiveCell: GeneralCell {
             }
             return .string("denied")
         })
+
+        // Entities: who is in my picture of the world, and which cell put them
+        // there. See PerspectiveCell+Entities.swift.
+        await setupEntityKeys(owner: owner)
     }
     
     private func loadPerspective() async throws {
@@ -328,26 +351,11 @@ public class PerspectiveCell: GeneralCell {
     }
 
     private func slugify(_ raw: String) -> String {
-        let folded = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-        let slug = folded
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return slug.isEmpty ? "unknown" : slug
+        PortableReference.slugify(raw)
     }
 
     private func portableRef(kind: String, localRef: String?, name: String?) -> String? {
-        let candidate = (localRef?.isEmpty == false) ? localRef! : (name ?? "")
-        guard !candidate.isEmpty else { return nil }
-        if candidate.contains("://") {
-            let parts = candidate.components(separatedBy: "://")
-            if parts.count == 2 {
-                return "\(kind)://\(slugify(parts[1]))"
-            }
-        }
-        return "\(kind)://\(slugify(candidate))"
+        PortableReference.make(kind: kind, localReference: localRef, name: name)
     }
 
     private func purposeKey(_ purpose: PurposeSnapshot) -> String {
@@ -470,11 +478,14 @@ public class PerspectiveCell: GeneralCell {
     private func perspectiveStatePayload() async -> ValueType {
         let activePurposeCount = (await context.getActivePurposes(minWeight: 0.0, limit: Int.max)).count
         let activeInterestCount = (await context.getActiveInterests(minWeight: 0.0, limit: Int.max)).count
+        let activeEntityCount = (await context.getActiveEntities(minWeight: 0.0, limit: Int.max)).count
         return .object([
             "status": .string("ready"),
             "activePurposeCount": .integer(activePurposeCount),
             "activeInterestCount": .integer(activeInterestCount),
-            "activePurposes": await activePurposesPayload(minPurposeWeight: 0.0, limit: 25, includeInterests: true, referenceMode: .both)
+            "activeEntityCount": .integer(activeEntityCount),
+            "activePurposes": await activePurposesPayload(minPurposeWeight: 0.0, limit: 25, includeInterests: true, referenceMode: .both),
+            "activeEntities": await entitiesPayload(minWeight: 0.0, limit: 25)
         ])
     }
 
@@ -901,6 +912,23 @@ public class PerspectiveCell: GeneralCell {
 
         await registerExploreContract(
             requester: requester,
+            key: "perspective",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [
+                    ExploreContract.schema(type: "object", description: "Object with a `state` field holding the perspective state snapshot."),
+                    ExploreContract.schema(type: "string")
+                ],
+                description: "Returns an object whose `state` field holds the perspective state snapshot, or a denial/failure string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Root perspective read. `perspective.state` and nested fields resolve through this value.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
             key: "perspective.state",
             method: .get,
             input: .null,
@@ -910,7 +938,7 @@ public class PerspectiveCell: GeneralCell {
             ),
             permissions: ["r---"],
             required: false,
-            description: .string("Returns perspective status, counts, and the current active-purpose snapshot.")
+            description: .string("Returns perspective status, counts, and the current active-purpose and active-entity snapshot.")
         )
 
         await registerExploreContract(

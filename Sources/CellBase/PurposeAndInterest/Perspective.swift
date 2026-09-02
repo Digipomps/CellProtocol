@@ -131,6 +131,11 @@ public actor Perspective {
     var entityRepresentationNameReferences = [String : [String]]() // Name of entity pointing to references
     var entityRepresentationReferencesDict = [String : EntityRepresentation]()
     var entityRepresentation = [EntityRepresentation]()
+
+    /// Last applied projection epoch per projecting cell. Keeps a delayed write
+    /// from resurrecting entities a newer write already removed.
+    /// See `PerspectiveEntityProjection.swift`.
+    var projectionEpochs = [String : Int]()
     
     var stateNameReferences = [String : [String]]() // Name of purpose pointing to references
     var stateRepresentationReferencesDict = [String : Interest]()
@@ -218,16 +223,49 @@ public actor Perspective {
     }
     
     public func addEntityRepresentation(_ entityRepresentation: EntityRepresentation) {
-        print("Adding entityRepresentation: \(entityRepresentation.name)")
-        if var purposeRefList = purposeNameReferences[entityRepresentation.name] {
-            purposeRefList.append(entityRepresentation.reference)
-        } else {
-            entityRepresentationNameReferences[entityRepresentation.name] = [entityRepresentation.reference]
+        // Three bugs lived here: the name index was read from
+        // `purposeNameReferences`, the appended list was a discarded copy, and
+        // `entityRepresentationReferencesDict` was never populated at all — so
+        // `findENtityRepresentationByReference` could not find something added
+        // one line earlier, and `updateEntityRepresentation` threw
+        // `noEntityForReference` on every first insert.
+        let reference = entityRepresentation.reference
+        CellBase.diagnosticLog("Perspective adding entity \(reference)", domain: .semantics)
+
+        var references = entityRepresentationNameReferences[entityRepresentation.name] ?? []
+        if !references.contains(reference) {
+            references.append(reference)
         }
-        
-//        if 0 == purpose.isA.count && 0 == purpose.hasA.count && 0 == purpose.partOf.count {
-            interestsAndPurposesContainer?.entities.append(entityRepresentation)
-//        }
+        entityRepresentationNameReferences[entityRepresentation.name] = references
+
+        entityRepresentationReferencesDict[reference] = entityRepresentation
+
+        if let index = entityRepresentation_index(of: reference) {
+            self.entityRepresentation[index] = entityRepresentation
+        } else {
+            self.entityRepresentation.append(entityRepresentation)
+        }
+
+        if let container = interestsAndPurposesContainer {
+            if let index = container.entities.firstIndex(where: { $0.reference == reference }) {
+                interestsAndPurposesContainer?.entities[index] = entityRepresentation
+            } else {
+                interestsAndPurposesContainer?.entities.append(entityRepresentation)
+            }
+        }
+    }
+
+    private func entityRepresentation_index(of reference: String) -> Int? {
+        entityRepresentation.firstIndex { $0.reference == reference }
+    }
+
+    /// Drops one entity from the persisted container.
+    ///
+    /// The container stays private — this is the one door into it from the
+    /// entity-projection extension, so nothing else can reach past the
+    /// bookkeeping in `removeEntityRepresentation`.
+    func detachEntityFromContainer(reference: String) {
+        interestsAndPurposesContainer?.entities.removeAll { $0.reference == reference }
     }
     
     
@@ -786,9 +824,11 @@ public actor Perspective {
         let reference = sourceEntityRepresentation.reference
 
         guard let targetEntity = findENtityRepresentationByReference(reference) else {
+            // First insert is a success, not an error. Throwing here made every
+            // caller treat a perfectly good add as a failure.
             addEntityRepresentation(sourceEntityRepresentation)
             try self.persistContext()
-            throw PerspectiveError.noEntityForReference(reference)
+            return
         }
         if targetEntity.name != sourceEntityRepresentation.name { // Maybe create new? will not happen with current reference implementation
             print("Names of entities don't match! incoming: \(sourceEntityRepresentation.name) target: \(targetEntity.name)")

@@ -1287,6 +1287,50 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(pathComponents[1].count, 36)
     }
 
+    func testCellResolverAutomaticRemoteRoutesUseCleartextOnlyForLoopback() async throws {
+        let previousWebSocketSecurityPolicy = CellBase.webSocketSecurityPolicy
+        CellBase.webSocketSecurityPolicy = .developmentOnlyInsecureAllowed
+        defer { CellBase.webSocketSecurityPolicy = previousWebSocketSecurityPolicy }
+        XCTAssertTrue(CellBase.allowsInsecureWebSockets)
+
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "ws")
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+
+        let publicHost = "automatic-route-\(UUID().uuidString.lowercased()).example"
+        let loopbackHost = "127.0.0.1"
+        let route = RemoteCellHostRoute(
+            websocketEndpoint: "bridgehead",
+            schemePreference: .automatic
+        )
+        resolver.registerRemoteCellHost(publicHost, route: route)
+        resolver.registerRemoteCellHost(loopbackHost, route: route)
+        defer {
+            resolver.unregisterRemoteCellHost(publicHost)
+            resolver.unregisterRemoteCellHost(loopbackHost)
+        }
+
+        let requesterValue = await vault.identity(for: "automatic-route-owner", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterValue)
+        _ = try await resolver.cellAtEndpoint(
+            endpoint: "cell://\(publicHost)/PublicRuntimeSurface",
+            requester: requester
+        )
+        _ = try await resolver.cellAtEndpoint(
+            endpoint: "cell://\(loopbackHost)/LoopbackRuntimeSurface",
+            requester: requester
+        )
+
+        let setupURLs = RecordingBridgeTransport.recordedSetupURLs()
+        XCTAssertEqual(setupURLs.count, 2)
+        XCTAssertEqual(setupURLs.first(where: { $0.host == publicHost })?.scheme, "wss")
+        XCTAssertEqual(setupURLs.first(where: { $0.host == loopbackHost })?.scheme, "ws")
+    }
+
     func testCellResolverRouteReplacementInvalidatesCachedRemoteBridge() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()

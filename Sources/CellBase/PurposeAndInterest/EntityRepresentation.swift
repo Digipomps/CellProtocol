@@ -64,9 +64,20 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
     var person: Entity = [:]
     var identities: [Identity] = []
     public var agreementRefs: [AgreementReference] = []
+
+    /// Which cell projected this node into the perspective, e.g.
+    /// `cell:///Relations`. Nodes the owner created by hand leave it nil.
+    ///
+    /// This is what makes a projection reversible: replacing the set from one
+    /// source removes exactly the nodes that source put there, and nothing
+    /// else. Without it, deleting a relation would have no way to reach the
+    /// perspective and the graph would only ever grow.
+    public var projectionSource: String?
     
-    public init(interests: [Weight<Interest>] = [], purposes: [Weight<Purpose>] = [], entities: [Weight<EntityRepresentation>] = [], states: [Weight<Interest>] = [], name: String, types: [Weight<EntityRepresentation>] = [], subTypes: [Weight<EntityRepresentation>] = [], parts: [Weight<EntityRepresentation>] = [], partOf:[ Weight<EntityRepresentation>] = [], fulfilled: Fullfilled = Fullfilled(), person: Entity = [:], identities: [Identity] = [], agreementRefs: [AgreementReference] = []) {
+    public init(interests: [Weight<Interest>] = [], purposes: [Weight<Purpose>] = [], entities: [Weight<EntityRepresentation>] = [], states: [Weight<Interest>] = [], name: String, types: [Weight<EntityRepresentation>] = [], subTypes: [Weight<EntityRepresentation>] = [], parts: [Weight<EntityRepresentation>] = [], partOf:[ Weight<EntityRepresentation>] = [], fulfilled: Fullfilled = Fullfilled(), person: Entity = [:], identities: [Identity] = [], agreementRefs: [AgreementReference] = [], nodeIdentifier: String? = nil, projectionSource: String? = nil) {
         super.init()
+        self.nodeIdentifier = nodeIdentifier
+        self.projectionSource = projectionSource
         self.interests = interests
         self.purposes = purposes
         self.entities = entities
@@ -96,7 +107,8 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         case states
         case constraint
         case agreementRefs
-        
+        case nodeIdentifier
+        case projectionSource
     }
     
     required public init(from decoder: Decoder) throws {
@@ -112,6 +124,8 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         self.entities = try container.decode([Weight<EntityRepresentation>].self, forKey: .entities)
         self.states = try container.decode([Weight<Interest>].self, forKey: .states)
         self.agreementRefs = (try? container.decode([AgreementReference].self, forKey: .agreementRefs)) ?? []
+        self.nodeIdentifier = try? container.decodeIfPresent(String.self, forKey: .nodeIdentifier)
+        self.projectionSource = try? container.decodeIfPresent(String.self, forKey: .projectionSource)
     }
     
     public override func encode(to encoder: Encoder) throws { // TODO: Check this override
@@ -129,8 +143,14 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         try container.encodeIfPresent(self.states as? [Weight<Interest>], forKey: .states)
         try container.encodeIfPresent(self.entities as? [Weight<EntityRepresentation>], forKey: .entities)
         try container.encode(self.agreementRefs, forKey: .agreementRefs)
+        try container.encodeIfPresent(self.nodeIdentifier, forKey: .nodeIdentifier)
+        try container.encodeIfPresent(self.projectionSource, forKey: .projectionSource)
 
-        // TODO: add encoding of person, fulfilled and identities ...and relations???
+        // `person`, `fulfilled` and `identities` are deliberately NOT encoded.
+        // For a projected relation they would carry another living person's
+        // contact details into a graph whose whole job is to be matched and
+        // compared against others. Keep the perspective to names, weights and
+        // interests; the reachable detail stays in the relations cell.
     
     }
     

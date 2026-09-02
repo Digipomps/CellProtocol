@@ -883,9 +883,12 @@ public struct SkeletonText: Codable, Identifiable {
                 return String(integer)
             case .object(let object):
                 if let keypath {
-                    if let returnObjectValue = try? object.get(keypath: keypath),
-                    let responseString = try? returnObjectValue.jsonString() {
-                        return skeletonUserFacingString(responseString)
+                    // Scalars must render as themselves. jsonString() wraps a
+                    // string in quotes, so every bound value used to arrive in
+                    // the UI as "Klar" instead of Klar. stringValue(from:)
+                    // already encodes composites and passes scalars through.
+                    if let returnObjectValue = try? object.get(keypath: keypath) {
+                        return stringValue(from: returnObjectValue)
                     } else {
                         return skeletonUnavailableUserMessage
                     }

@@ -1541,7 +1541,7 @@ public class CellResolver: CellResolverProtocol {
         let resolvedScheme: String
         switch route.schemePreference {
         case .automatic:
-            resolvedScheme = CellBase.allowsInsecureWebSockets ? "ws" : "wss"
+            resolvedScheme = allowsAutomaticInsecureWebSocket(for: host) ? "ws" : "wss"
         case .ws:
             resolvedScheme = "ws"
         case .wss:
@@ -1589,7 +1589,11 @@ public class CellResolver: CellResolverProtocol {
             throw CellResolverError.invalidRemoteCellReference(endpoint: cellEndpointURL.absoluteString)
         }
 
-        let resolvedScheme = try remoteWebSocketScheme(for: route, endpoint: cellEndpointURL.absoluteString)
+        let resolvedScheme = try remoteWebSocketScheme(
+            for: route,
+            host: host,
+            endpoint: cellEndpointURL.absoluteString
+        )
 
         let cellPath = trimmedSlashes(cellEndpointURL.path)
         guard !cellPath.isEmpty else {
@@ -1623,12 +1627,13 @@ public class CellResolver: CellResolverProtocol {
 
     private func remoteWebSocketScheme(
         for route: RemoteCellHostRoute,
+        host: String,
         endpoint: String
     ) throws -> String {
         let resolvedScheme: String
         switch route.schemePreference {
         case .automatic:
-            resolvedScheme = CellBase.allowsInsecureWebSockets ? "ws" : "wss"
+            resolvedScheme = allowsAutomaticInsecureWebSocket(for: host) ? "ws" : "wss"
         case .ws:
             resolvedScheme = "ws"
         case .wss:
@@ -1639,6 +1644,16 @@ public class CellResolver: CellResolverProtocol {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: endpoint)
         }
         return resolvedScheme
+    }
+
+    private func allowsAutomaticInsecureWebSocket(for host: String) -> Bool {
+        guard CellBase.allowsInsecureWebSockets else { return false }
+        let normalizedHost = normalizedHostKey(host)
+        return normalizedHost == "127.0.0.1"
+            || normalizedHost == "::1"
+            || normalizedHost == "[::1]"
+            || normalizedHost == "localhost"
+            || normalizedHost.hasSuffix(".local")
     }
 
     private func normalizedHostKey(_ host: String) -> String {
@@ -2164,12 +2179,16 @@ public class CellResolver: CellResolverProtocol {
         principal: ProvenRemoteBridgePrincipal,
         routeSnapshot: RemoteCellHostRouteSnapshot
     ) async throws -> Emit {
-        guard endpointUrl.host != nil else {
+        guard let host = endpointUrl.host else {
             throw CellResolverError.invalidRemoteCellReference(endpoint: logicalEndpoint)
         }
         let route = routeSnapshot.route
         let identity = principal.requester
-        let transportScheme = try remoteWebSocketScheme(for: route, endpoint: logicalEndpoint)
+        let transportScheme = try remoteWebSocketScheme(
+            for: route,
+            host: host,
+            endpoint: logicalEndpoint
+        )
         let cellBridgeUUID = UUID().uuidString
         let transport: BridgeTransportProtocol
         let finalizedConnectionURL: URL
@@ -2234,6 +2253,7 @@ public class CellResolver: CellResolverProtocol {
         }
         let resolvedScheme = try remoteWebSocketScheme(
             for: route,
+            host: host,
             endpoint: cellEndpointURL.absoluteString
         )
         let routePath = trimmedSlashes(route.websocketEndpoint)

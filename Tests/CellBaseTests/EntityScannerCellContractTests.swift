@@ -96,6 +96,24 @@ final class EntityScannerCellContractTests: XCTestCase {
             expectedInputType: "oneOf",
             expectedReturnType: "oneOf"
         )
+        for key in ["disclosurePolicy", "probeResult"] {
+            try await CellContractHarness.assertAdvertisedKey(
+                on: cell,
+                key: key,
+                requester: owner,
+                expectedMethod: .get,
+                expectedInputType: "null"
+            )
+        }
+        for key in ["approveBeacon", "respondToInvitation"] {
+            try await CellContractHarness.assertAdvertisedKey(
+                on: cell,
+                key: key,
+                requester: owner,
+                expectedMethod: .set,
+                expectedInputType: "object"
+            )
+        }
         try await CellContractHarness.assertPermissions(
             on: cell,
             key: "requestContact",
@@ -163,7 +181,12 @@ final class EntityScannerCellContractTests: XCTestCase {
             "acceptContact",
             "exportEncounter",
             "exportEncounterJSON",
-            "sharedToken"
+            "sharedToken",
+            "setDisclosurePolicy",
+            "approveBeacon",
+            "probeRequest",
+            "probeDetail",
+            "respondToInvitation"
         ])
         let actionGrants = decoded.agreementTemplate.grants.filter { actionKeys.contains($0.keypath) }
         XCTAssertEqual(actionGrants.count, actionKeys.count)

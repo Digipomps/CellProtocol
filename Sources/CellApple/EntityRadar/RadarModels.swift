@@ -29,6 +29,11 @@ public struct RadarEntityUpdate: Hashable {
     public var distanceMeters: Double?
     public var direction: RadarDirection3D?
     public var matchScore: Double?
+    public var kind: NearbyEntityKind?
+    public var beaconOverlapCount: Int
+    public var probeDisclosure: [String]?
+    public var matchedPurposeTokens: [String]
+    public var matchedInterestTokens: [String]
     public var timestamp: Date
 
     public init(
@@ -40,6 +45,11 @@ public struct RadarEntityUpdate: Hashable {
         distanceMeters: Double? = nil,
         direction: RadarDirection3D? = nil,
         matchScore: Double? = nil,
+        kind: NearbyEntityKind? = nil,
+        beaconOverlapCount: Int = 0,
+        probeDisclosure: [String]? = nil,
+        matchedPurposeTokens: [String] = [],
+        matchedInterestTokens: [String] = [],
         timestamp: Date = Date()
     ) {
         self.remoteUUID = remoteUUID
@@ -50,6 +60,11 @@ public struct RadarEntityUpdate: Hashable {
         self.distanceMeters = distanceMeters
         self.direction = direction
         self.matchScore = matchScore
+        self.kind = kind
+        self.beaconOverlapCount = beaconOverlapCount
+        self.probeDisclosure = probeDisclosure
+        self.matchedPurposeTokens = matchedPurposeTokens
+        self.matchedInterestTokens = matchedInterestTokens
         self.timestamp = timestamp
     }
 }
@@ -73,6 +88,11 @@ public struct NearbyEntity: Identifiable, Hashable {
     public var distanceMeters: Double?
     public var direction: RadarDirection3D?
     public var matchScore: Double?
+    public var kind: NearbyEntityKind?
+    public var beaconOverlapCount: Int
+    public var probeDisclosure: [String]?
+    public var matchedPurposeTokens: [String]
+    public var matchedInterestTokens: [String]
     public var firstSeenAt: Date
     public var lastSeenAt: Date
 
@@ -89,6 +109,11 @@ public struct NearbyEntity: Identifiable, Hashable {
         self.distanceMeters = update.distanceMeters
         self.direction = update.direction
         self.matchScore = update.matchScore
+        self.kind = update.kind
+        self.beaconOverlapCount = update.beaconOverlapCount
+        self.probeDisclosure = update.probeDisclosure
+        self.matchedPurposeTokens = update.matchedPurposeTokens
+        self.matchedInterestTokens = update.matchedInterestTokens
         self.firstSeenAt = update.timestamp
         self.lastSeenAt = update.timestamp
     }
@@ -119,6 +144,21 @@ public struct NearbyEntity: Identifiable, Hashable {
         }
         if let matchScore = update.matchScore {
             self.matchScore = matchScore
+        }
+        if let kind = update.kind {
+            self.kind = kind
+        }
+        if update.beaconOverlapCount > 0 || self.beaconOverlapCount == 0 {
+            self.beaconOverlapCount = update.beaconOverlapCount
+        }
+        if let probeDisclosure = update.probeDisclosure {
+            self.probeDisclosure = probeDisclosure
+        }
+        if !update.matchedPurposeTokens.isEmpty || self.matchedPurposeTokens.isEmpty {
+            self.matchedPurposeTokens = update.matchedPurposeTokens
+        }
+        if !update.matchedInterestTokens.isEmpty || self.matchedInterestTokens.isEmpty {
+            self.matchedInterestTokens = update.matchedInterestTokens
         }
         if update.timestamp < self.firstSeenAt {
             self.firstSeenAt = update.timestamp
@@ -188,6 +228,11 @@ public enum RadarEventParser {
         let distanceMeters = extractDouble(object["distanceMeters"])
         let direction = extractDirection(object["direction"])
         let matchScore = extractDouble(object["matchScore"])
+        let kind = extractString(object["entityKind"]).flatMap(NearbyEntityKind.init(rawValue:))
+        let beaconOverlapCount = extractInt(object["beaconOverlapCount"]) ?? 0
+        let probeDisclosure = extractProbeDisclosure(object["probeDisclosure"])
+        let matchedPurposeTokens = extractStringList(object["matchedPurposeTokens"]) ?? []
+        let matchedInterestTokens = extractStringList(object["matchedInterestTokens"]) ?? []
 
         let update = RadarEntityUpdate(
             remoteUUID: remoteUUID,
@@ -198,6 +243,11 @@ public enum RadarEventParser {
             distanceMeters: distanceMeters,
             direction: direction,
             matchScore: matchScore,
+            kind: kind,
+            beaconOverlapCount: beaconOverlapCount,
+            probeDisclosure: probeDisclosure,
+            matchedPurposeTokens: matchedPurposeTokens,
+            matchedInterestTokens: matchedInterestTokens,
             timestamp: timestamp
         )
 
@@ -248,6 +298,33 @@ public enum RadarEventParser {
             return Double(number)
         case let .string(string):
             return Double(string)
+        default:
+            return nil
+        }
+    }
+
+    private static func extractInt(_ value: ValueType?) -> Int? {
+        guard let value else { return nil }
+        switch value {
+        case let .integer(integer), let .number(integer):
+            return integer
+        case let .float(float):
+            return Int(float)
+        case let .string(string):
+            return Int(string)
+        default:
+            return nil
+        }
+    }
+
+    private static func extractProbeDisclosure(_ value: ValueType?) -> [String]? {
+        guard let value else { return nil }
+        switch value {
+        case let .list(list):
+            return list.compactMap(extractString)
+        case let .object(object):
+            guard case let .list(references)? = object["references"] else { return nil }
+            return references.compactMap(extractString)
         default:
             return nil
         }
