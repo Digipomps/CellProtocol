@@ -955,6 +955,23 @@ public struct SkeletonView: View {
                     renderNavigationBar(navigationBar)
                 }
             )
+        case .Overlay(let ov):
+            // Naar overlayet skal vises avgjoeres av modifiers.visibility, som
+            // byggeren setter fra presentedKeypath. Da gaar bade web og binding
+            // gjennom den samme, allerede fungerende maskineriet, og dette
+            // elementet bidrar bare med rammen rundt.
+            return AnyView(
+                VStack(alignment: .leading, spacing: 8) {
+                    if let title = ov.title {
+                        SwiftUI.Text(title)
+                            .font(.headline)
+                    }
+                    ForEach(ov.elements, id: \.id) { el in
+                        render(el)
+                    }
+                }
+                .applySkeletonModifiers(ov.modifiers)
+            )
         case .Section(let sec):
             return AnyView(
                 VStack(alignment: .center, spacing: 8) {
@@ -1067,6 +1084,8 @@ public struct SkeletonView: View {
         case .Divider(let value):
             modifiers = value.modifiers
         case .ScrollView(let value):
+            modifiers = value.modifiers
+        case .Overlay(let value):
             modifiers = value.modifiers
         case .Section(let value):
             modifiers = value.modifiers

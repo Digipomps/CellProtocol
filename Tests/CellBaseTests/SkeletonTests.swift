@@ -1512,4 +1512,68 @@ private extension SkeletonElement {
         }
         return try visualization.spec?.jsonString()
     }
+
+    func testOverlayEncodeDecodeWrapped() throws {
+        let overlay = SkeletonOverlay(
+            presentedKeypath: "corr.admin.accessRequests.selectedRequest",
+            dismissActionKeypath: "corr.admin.clearSelection",
+            title: "Forespørsel",
+            presentation: "drawer",
+            elements: [.Text(SkeletonText(text: "Detalj"))]
+        )
+        let element = SkeletonElement.Overlay(overlay)
+        let data = try JSONEncoder().encode(element)
+
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(Array(object.keys), ["Overlay"], "elementet skal kodes under sin egen nokkel")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case .Overlay(let roundTrip) = decoded else {
+            return XCTFail("forventet et Overlay, fikk \(decoded)")
+        }
+        XCTAssertEqual(roundTrip.presentedKeypath, overlay.presentedKeypath)
+        XCTAssertEqual(roundTrip.dismissActionKeypath, overlay.dismissActionKeypath)
+        XCTAssertEqual(roundTrip.title, overlay.title)
+        XCTAssertEqual(roundTrip.presentation, overlay.presentation)
+        XCTAssertEqual(roundTrip.elements.count, 1)
+    }
+
+    func testOverlayDecodesFromWrappedJSON() throws {
+        let json = """
+        {
+          "Overlay": {
+            "presentedKeypath": "admin.selected",
+            "dismissActionKeypath": "admin.clearSelection",
+            "title": "Detaljer",
+            "presentation": "sheet",
+            "elements": [{ "Text": { "text": "Innhold" } }]
+          }
+        }
+        """
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case .Overlay(let overlay) = decoded else {
+            return XCTFail("forventet et Overlay, fikk \(decoded)")
+        }
+        XCTAssertEqual(overlay.presentedKeypath, "admin.selected")
+        XCTAssertEqual(overlay.dismissActionKeypath, "admin.clearSelection")
+        XCTAssertEqual(overlay.presentation, "sheet")
+        XCTAssertEqual(overlay.elements.count, 1)
+    }
+
+    func testUnknownElementStillDecodesAsUnsupported() throws {
+        // En eldre klient skal aldri kraesje paa et element den ikke kjenner.
+        // Det er nettopp derfor et nytt element kan legges til uten aa bryte
+        // noen som helst som allerede kjorer.
+        let json = """
+        { "SomethingNobodyHasImplementedYet": { "elements": [] } }
+        """
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: Data(json.utf8))
+        guard case .Unsupported(let unsupported) = decoded else {
+            return XCTFail("forventet Unsupported, fikk \(decoded)")
+        }
+        XCTAssertEqual(unsupported.elementType, "SomethingNobodyHasImplementedYet")
+    }
+
 }

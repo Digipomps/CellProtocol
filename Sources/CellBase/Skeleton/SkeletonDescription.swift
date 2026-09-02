@@ -1931,6 +1931,74 @@ public struct SkeletonScrollView: Codable, Identifiable {
     }
 }
 
+public struct SkeletonOverlay: Codable, Identifiable {
+    public var id = UUID()
+    /// Keypath som avgjor visningen. En ikke-tom verdi viser overlayet, null
+    /// eller tom skjuler det. Normalt den samme keypathen en liste skriver til
+    /// gjennom selectionStateKeypath, slik at aa velge en rad viser detaljen og
+    /// aa toemme valget lukker den.
+    public var presentedKeypath: String?
+    /// Handling som fyres naar brukeren lukker, slik at cellen toemmer sitt eget
+    /// valg. Lukking blir da en tilstandsendring i cellen i stedet for noe en
+    /// renderer husker paa egen haand - og det er nettopp derfor web og binding
+    /// kan vaere enige uten en eneste plattformgren.
+    public var dismissActionKeypath: String?
+    public var title: String?
+    /// "drawer" (panel fra siden) eller "sheet" (sentrert). Ukjent verdi faller
+    /// tilbake til drawer.
+    public var presentation: String?
+    public var elements: SkeletonElementList
+    public var modifiers: SkeletonModifiers?
+
+    enum ElementKey: CodingKey { case Overlay }
+
+    enum CodingKeys: CodingKey {
+        case presentedKeypath
+        case dismissActionKeypath
+        case title
+        case presentation
+        case elements
+        case modifiers
+    }
+
+    public init(
+        presentedKeypath: String? = nil,
+        dismissActionKeypath: String? = nil,
+        title: String? = nil,
+        presentation: String? = nil,
+        elements: SkeletonElementList,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.presentedKeypath = presentedKeypath
+        self.dismissActionKeypath = dismissActionKeypath
+        self.title = title
+        self.presentation = presentation
+        self.elements = elements
+        self.modifiers = modifiers
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.presentedKeypath = try container.decodeIfPresent(String.self, forKey: .presentedKeypath)
+        self.dismissActionKeypath = try container.decodeIfPresent(String.self, forKey: .dismissActionKeypath)
+        self.title = try container.decodeIfPresent(String.self, forKey: .title)
+        self.presentation = try container.decodeIfPresent(String.self, forKey: .presentation)
+        self.elements = try container.decode(SkeletonElementList.self, forKey: .elements)
+        self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: ElementKey.self)
+        var elementContainer = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Overlay)
+        try elementContainer.encodeIfPresent(self.presentedKeypath, forKey: .presentedKeypath)
+        try elementContainer.encodeIfPresent(self.dismissActionKeypath, forKey: .dismissActionKeypath)
+        try elementContainer.encodeIfPresent(self.title, forKey: .title)
+        try elementContainer.encodeIfPresent(self.presentation, forKey: .presentation)
+        try elementContainer.encode(self.elements, forKey: .elements)
+        try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
+    }
+}
+
 public struct SkeletonSection: Codable, Identifiable {
     public var id = UUID()
     public var header: SkeletonElement?
@@ -2757,6 +2825,7 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     case Button(SkeletonButton)
     case Divider(SkeletonDivider)
     case ScrollView(SkeletonScrollView)
+    case Overlay(SkeletonOverlay)
     case Section(SkeletonSection)
     case Tabs(SkeletonTabs)
     case NavigationBar(SkeletonNavigationBar)
@@ -2812,6 +2881,9 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return value.id
             
         case .ScrollView(let value):
+            return value.id
+
+        case .Overlay(let value):
             return value.id
             
         case .Section(let value):
@@ -2911,6 +2983,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return decode(SkeletonButton.self, wrap: SkeletonElement.Button)
         case "Divider":
             return decode(SkeletonDivider.self, wrap: SkeletonElement.Divider)
+        case "Overlay":
+            return decode(SkeletonOverlay.self, wrap: SkeletonElement.Overlay)
         case "ScrollView":
             return decode(SkeletonScrollView.self, wrap: SkeletonElement.ScrollView)
         case "Section":
@@ -3047,6 +3121,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case let .Divider(value):
             try container.encode(value)
         case let .ScrollView(value):
+            try container.encode(value)
+        case let .Overlay(value):
             try container.encode(value)
         case let .Section(value):
             try container.encode(value)
