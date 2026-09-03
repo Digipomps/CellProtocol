@@ -235,7 +235,7 @@ public struct ConnectRadarView: View {
     }
 }
 
-private struct RadarGridBackground: View {
+struct RadarGridBackground: View {
     var body: some View {
         ZStack {
             ForEach([0.22, 0.44, 0.66, 0.88], id: \.self) { ring in
@@ -257,7 +257,7 @@ private struct RadarGridBackground: View {
     }
 }
 
-private struct RadarSweepShape: Shape {
+struct RadarSweepShape: Shape {
     var angle: Angle
     var width: Angle = .degrees(32)
 

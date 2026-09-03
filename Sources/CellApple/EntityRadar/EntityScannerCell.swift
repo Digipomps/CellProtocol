@@ -78,6 +78,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private var outgoingDetailRequests = [String: String]()
     private var automaticProbeRemoteUUIDs = Set<String>()
     private var policyExpiryTask: Task<Void, Never>?
+    /// The current picture, kept by the cell itself so a skeleton can draw a
+    /// radar from `radar` without a view model subscribing to the flow.
+    private var radarLedger = RadarEntityLedger()
 
     required init(owner: Identity) async {
         await super.init(owner: owner)
@@ -111,7 +114,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "approveBeacon",
             "probeRequest",
             "probeDetail",
-            "respondToInvitation"
+            "respondToInvitation",
+            "select"
         ]
         self.agreementTemplate.grants.removeAll {
             actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--"
@@ -122,6 +126,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         self.agreementTemplate.ensureGrant("r---", for: "verificationMethods")
         self.agreementTemplate.ensureGrant("r---", for: "capabilities")
         self.agreementTemplate.ensureGrant("r---", for: "encounters")
+        self.agreementTemplate.ensureGrant("r---", for: "radar")
     }
 
     private func setupKeys(owner: Identity) async {
@@ -155,6 +160,43 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 return .object(self.currentCapabilityPayload())
             }
             return .string("denied")
+        })
+
+        await addInterceptForGet(requester: owner, key: "radar", getValueIntercept: { [weak self] _, requester in
+            guard let self = self else { return .null }
+            if await self.validateAccess("r---", at: "radar", for: requester) {
+                self.radarLedger.prune()
+                return .object(self.radarLedger.radarSpec())
+            }
+            return .string("denied")
+        })
+
+        // A tap on a blip. Records the choice so the radar can ring it and
+        // the surrounding surface can show that entity; nothing is sent.
+        await addInterceptForSet(requester: owner, key: "select", setValueIntercept: { [weak self] _, value, requester in
+            guard let self = self else { return .string("failure") }
+            if await self.validateAccess("-w--", at: "select", for: requester) {
+                let remoteUUID: String? = {
+                    switch value {
+                    case let .string(id): return id
+                    case let .object(object):
+                        if case let .string(id)? = object["id"] { return id }
+                        if case let .string(id)? = object["item"] { return id }
+                        return nil
+                    default: return nil
+                    }
+                }()
+                self.radarLedger.select(remoteUUID)
+                var payload: Object = ["event": .string("selected")]
+                payload["remoteUUID"] = remoteUUID.map { .string($0) } ?? .null
+                if let remoteUUID, let entity = self.radarLedger.entitiesById[remoteUUID] {
+                    payload["displayName"] = .string(entity.displayName)
+                    payload["status"] = .string(entity.status)
+                    payload["distanceMeters"] = entity.distanceMeters.map { .float($0) } ?? .null
+                }
+                self.pushScannerEvent(topic: EntityScannerTopics.status, title: "Entity Selected", payload: payload, requesterOverride: requester)
+            }
+            return nil
         })
 
         await addInterceptForGet(requester: owner, key: "encounters", getValueIntercept: { [weak self] _, requester in
@@ -428,6 +470,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         peerBeacons.removeAll()
         peerOverlaps.removeAll()
         peerStates.removeAll()
+        radarLedger.clear()
         probeSession.reset()
         probeResponseTimeoutTasks.values.forEach { $0.cancel() }
         probeResponseTimeoutTasks.removeAll()
@@ -1054,6 +1097,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         )
         flowElement.topic = topic
         flowElement.origin = self.uuid
+        radarLedger.consume(flowElement)
         guard let requester = requesterOverride ?? activeLocalIdentity() else {
             return
         }

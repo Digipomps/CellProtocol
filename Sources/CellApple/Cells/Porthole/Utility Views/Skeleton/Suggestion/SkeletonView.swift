@@ -2563,6 +2563,16 @@ private struct CellVisualizationView: View {
                 } else {
                     visualizationFallback(message: "Kartspesifikasjonen kunne ikke leses.")
                 }
+            case "radar":
+                if let radarSpec = RadarVisualizationSpec.decode(from: currentSpec) {
+                    VisualizationRadarView(
+                        spec: radarSpec,
+                        selection: selectionState,
+                        activateBlip: actionHandler(for: "blip")
+                    )
+                } else {
+                    visualizationFallback(message: "Radaren har ingen data ennå. Start skanneren.")
+                }
             case "calendar":
                 let calendarSpec = visualizationCalendarSpec(from: currentSpec)
                 if calendarSpec.occurrences.isEmpty {
@@ -2581,6 +2591,14 @@ private struct CellVisualizationView: View {
         }
         .task(id: refreshTaskID()) {
             await refresh()
+            // A radar is live or it is a picture. Poll while it is on screen;
+            // every other kind still refreshes on mutation only.
+            guard normalizedKind == "radar" else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await refresh()
+            }
         }
     }
 
