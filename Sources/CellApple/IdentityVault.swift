@@ -54,6 +54,13 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     
     private var initialized = false
     private var initializationTask: Task<Void, Never>?
+
+    /// True only after the owner actually authenticated and the identities
+    /// were loaded. `initialize()` returning is not the same thing: a
+    /// cancelled Face ID sheet also returns. Callers that swap this vault in
+    /// as the default must ask this first, or they hand every cell an
+    /// identity that cannot sign.
+    public var isAuthenticated: Bool { initialized }
        
     enum AuthenticationState {
         case loggedin, loggedout
@@ -346,7 +353,16 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     }
     
     public func identity(for identityContext: String, makeNewIfNotFound: Bool = true) async  -> Identity? {
-        
+        // Before authentication the persisted identities are not loaded, so a
+        // lookup here mints a fresh one. Unit tests rely on that (they run
+        // with no Face ID); the app must not, which is why every caller that
+        // makes this vault the default checks `isAuthenticated` first.
+        if !initialized {
+            CellBase.diagnosticLog(
+                "identity(for: \(identityContext)) requested before the vault was authenticated.",
+                domain: .identity
+            )
+        }
         if let targetUUid = identitiesDictionary[identityContext] {
             if let currentVaultIdentity =  identitiesUUIDDictionary[targetUUid] {
                 let healedVaultIdentity = await healedVaultIdentityIfNeeded(currentVaultIdentity)
@@ -460,9 +476,14 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
             if authenticated {
                 context = fallbackContext
                 try await finishAuthentication()
+                return
             }
+            // Returned false without throwing. Not authenticated is not
+            // authenticated; do not let the caller mark the vault initialized.
+            throw IdentityVaultAuthenticationError.notAuthenticated
         } else {
             CellBase.diagnosticLog(error?.localizedDescription ?? "Can't evaluate policy", domain: .identity)
+            throw IdentityVaultAuthenticationError.cannotEvaluatePolicy(error?.localizedDescription ?? "unknown")
         }
     }
 
@@ -1953,3 +1974,17 @@ private extension SecureKey {
  print("Data: \(sealedData.ciphertext.base64EncodedString())")
  
  */
+
+public enum IdentityVaultAuthenticationError: Error, LocalizedError, Sendable {
+    case notAuthenticated
+    case cannotEvaluatePolicy(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            return "Owner authentication did not succeed."
+        case .cannotEvaluatePolicy(let reason):
+            return "Owner authentication is not available on this device: \(reason)"
+        }
+    }
+}

@@ -127,6 +127,16 @@ public enum AppInitializer {
             // 1) Identity vault
             let identityVault = IdentityVault.shared
             _ = await identityVault.initialize()
+            // A dismissed Face ID sheet also returns here. An unauthenticated
+            // vault must not become the default: its "private" identity would
+            // have no key material and every identity-unique cell would fail
+            // owner validation downstream. Leave whatever vault is active and
+            // let the next surface ask again.
+            guard await identityVault.isAuthenticated else {
+                CellBase.diagnosticLog("Owner authentication not completed; app initialization deferred.", domain: .identity)
+                initializationTask = nil
+                return
+            }
             CellBase.defaultIdentityVault = identityVault
             await prepareLocalRuntime()
             await CellResolver.sharedInstance.refreshNamedResolveOwnersFromCurrentVault()
@@ -348,10 +358,14 @@ public enum AppInitializer {
     /// keeping the concrete scanner implementation inside CellApple.
     @MainActor
     public static func registerEntityScannerResolve(on resolver: CellResolver) async throws {
+        // Identity-unique: the scanner's encounters and radar are the owner's,
+        // and a scaffold-unique instance denied every identity but the one
+        // that happened to create it. Only one identity drives local
+        // surfaces at a time, so the radio is not shared in practice.
         try await registerResolve(
             on: resolver,
             name: "EntityScanner",
-            cellScope: .scaffoldUnique,
+            cellScope: .identityUnique,
             identityDomain: "private",
             type: EntityScannerCell.self
         )
