@@ -900,10 +900,16 @@ public class EntityAnchorCell: GeneralCell {
     }
 
     private func completeIdentityEnrollment(value: ValueType, requester: Identity) async throws -> ValueType {
-        let envelope = try decodeValue(value, as: IdentityLinkCompletionEnvelope.self)
+        var envelope = try decodeValue(value, as: IdentityLinkCompletionEnvelope.self)
+        let policyRequiresEvidence = await IdentityLinkRuntimePolicy.shared.requireFreshAuthEvidence
+        let policyVerifier = await IdentityLinkRuntimePolicy.shared.freshAuthVerifier
+        if policyRequiresEvidence {
+            envelope.requireFreshAuthEvidence = true
+        }
         let result = try await IdentityLinkProtocolService.verifyCompletion(
             envelope,
-            usedApprovalJTIs: usedApprovalJTIs()
+            usedApprovalJTIs: usedApprovalJTIs(),
+            freshAuthVerifier: policyVerifier
         )
         let recordValue = try IdentityLinkProtocolService.value(from: result.record)
         let recordKey = safeIdentityLinkKey(result.record.linkID)
