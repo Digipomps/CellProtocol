@@ -1948,6 +1948,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var ownerReferenceMatches: Bool
         var ownerProofValid: Bool
         var contracts: [Contract]
+        var linkedIdentityLinkID: String? = nil
     }
 
     private func authorizationEvidence(for identity: Identity) async -> AuthorizationEvidence {
@@ -1957,6 +1958,26 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             : false
         if ownerReferenceMatches && !ownerProofValid {
             print("General \(String(reflecting: type(of: self))). Got owner identity but it failed to prove ownership!")
+        }
+        if !ownerReferenceMatches,
+           let link = await IdentityLinkRegistry.shared.sameEntityLink(
+               ownerUUID: owner.uuid,
+               requesterUUID: identity.uuid,
+               requesterSigningKey: identity.publicSecureKey?.compressedKey,
+               domain: identityDomain
+           ) {
+            // En identitet lenket som «samme entitet» må bevise kontroll over *sin egen* nøkkel —
+            // nøyaktig som eieren må for sin. Registeret er bare et oppslag; beviset skjer her.
+            let linkedTrustedIdentity = IdentityLinkProtocolService.identity(from: link.linkedIdentity)
+            if await checkIdentityOrigin(identity, against: linkedTrustedIdentity) {
+                return AuthorizationEvidence(
+                    ownerReferenceMatches: true,
+                    ownerProofValid: true,
+                    contracts: [],
+                    linkedIdentityLinkID: link.linkID
+                )
+            }
+            print("General \(String(reflecting: type(of: self))). Linked identity \(identity.uuid) matched link \(link.linkID) but failed to prove control of the linked key.")
         }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
@@ -1990,6 +2011,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             contracts: evidence.contracts.map(\.agreement),
             cellSpecificAllowed: cellSpecificAllowed
         )
+        if decision.allowed, decision.path == .ownerProof, let linkID = evidence.linkedIdentityLinkID {
+            decision.reasonCode = "linked_identity_proof"
+            decision.reason = "Requester proved control of an identity linked as the same entity as the owner (link \(linkID))."
+            decision.userMessage = "Access granted by linked-identity proof."
+        }
         if decision.path == .signedContract {
             let requestedGrant = Grant(keypath: keypath, permission: requestedAccess)
             if let contract = evidence.contracts.first(where: {

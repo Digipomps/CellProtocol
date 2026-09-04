@@ -672,6 +672,18 @@ public class EntityAnchorCell: GeneralCell {
         await initialLoading()
         await setupPermissions(owner: bindingOwner)
         await setupKeys(owner: bindingOwner)
+        await restoreIdentityLinkRegistry()
+    }
+
+    /// Resolveren spør `IdentityLinkRegistry` ved hvert oppslag; det må speile det som ligger i lageret.
+    private func restoreIdentityLinkRegistry() async {
+        guard let recordsValue = try? storage.get(keypath: "identityLinks.records"),
+              case let .object(recordsObject) = recordsValue else {
+            await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: [])
+            return
+        }
+        let records = recordsObject.values.compactMap { try? decodeValue($0, as: IdentityLinkRecord.self) }
+        await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: records)
     }
     
     public override func encode(to encoder: Encoder) throws {
@@ -912,6 +924,7 @@ public class EntityAnchorCell: GeneralCell {
         try storage.set(keypath: proofKeypath, setValue: proofValue)
         try storage.set(keypath: replayKeypath, setValue: .string(result.approvalJTI))
         try await saveKeypathStorage(entity: storage)
+        await IdentityLinkRegistry.shared.register(ownerUUID: storedOwnerIdentity.uuid, completion: result)
         pushIdentityLinkEvent(keypath: recordKeypath, value: recordValue, requester: requester)
 
         return .object([
@@ -958,6 +971,7 @@ public class EntityAnchorCell: GeneralCell {
         try storage.set(keypath: recordKeypath, setValue: revokedValue)
         try storage.set(keypath: "proofs.identityLinks.\(recordKey).record", setValue: revokedValue)
         try await saveKeypathStorage(entity: storage)
+        await IdentityLinkRegistry.shared.revoke(ownerUUID: storedOwnerIdentity.uuid, linkID: record.linkID, revokedAt: revoked.revokedAt ?? "")
         pushIdentityLinkEvent(keypath: recordKeypath, value: revokedValue, requester: requester)
         return .object([
             "status": .string("revoked"),
