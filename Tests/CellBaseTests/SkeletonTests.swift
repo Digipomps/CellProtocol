@@ -723,6 +723,38 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(content, "Conference Participant Portal")
     }
 
+    func testModifiersEncodeAndDecodeItemBoundKeypaths() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.hAlignmentKeypath = "bubbleAlignment"
+        modifiers.backgroundKeypath = "bubbleBackground"
+        modifiers.foregroundColorKeypath = "bubbleForeground"
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+        XCTAssertEqual(json["hAlignmentKeypath"] as? String, "bubbleAlignment")
+        XCTAssertEqual(json["backgroundKeypath"] as? String, "bubbleBackground")
+        XCTAssertEqual(json["foregroundColorKeypath"] as? String, "bubbleForeground")
+
+        let decoded = try JSONDecoder().decode(SkeletonModifiers.self, from: data)
+        XCTAssertEqual(decoded.hAlignmentKeypath, "bubbleAlignment")
+        XCTAssertEqual(decoded.backgroundKeypath, "bubbleBackground")
+        XCTAssertEqual(decoded.foregroundColorKeypath, "bubbleForeground")
+    }
+
+    func testModifiersDecodeLegacyJSONWithoutItemBoundKeypaths() throws {
+        let legacyJSON = """
+        {
+          "hAlignment": "leading",
+          "background": "#ffffff"
+        }
+        """
+        let legacy = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(legacy.hAlignment, "leading")
+        XCTAssertEqual(legacy.background, "#ffffff")
+        XCTAssertNil(legacy.hAlignmentKeypath)
+        XCTAssertNil(legacy.backgroundKeypath)
+        XCTAssertNil(legacy.foregroundColorKeypath)
+    }
+
     func testModifiersEncodeStyleMetadata() throws {
         var modifiers = SkeletonModifiers()
         modifiers.styleRole = "chatComposer"
