@@ -1415,6 +1415,17 @@ public struct SkeletonList: Codable, Identifiable {
     public var selectionPayloadMode: SkeletonListSelectionPayloadMode?
     public var allowsEmptySelection: Bool?
     
+    /// U2 (admin workbench 2026-09-05): keypath *inside a row* that holds the row's children
+    /// (a list). When set, the renderer shows the list as a tree with a toggle per row that
+    /// has children. Expansion is local to the renderer — no round trip to the cell.
+    public var childrenKeypath: String?
+    /// U2: optional root-state keypath holding the initially expanded row identities
+    /// (a list of `selectionValueKeypath` values, or the single string "*" for all).
+    /// Absent → every row with children starts expanded.
+    public var expandedStateKeypath: String?
+    /// U3: when true the list keeps the newest row in view as rows arrive, unless the
+    /// reader has scrolled away from the bottom. Meant for logs and streams.
+    public var followTail: Bool?
     public var flowElementSkeleton: SkeletonVStack?
     public var modifiers: SkeletonModifiers?
     
@@ -1432,6 +1443,9 @@ public struct SkeletonList: Codable, Identifiable {
         case selectionPayloadMode
         case allowsEmptySelection
         case flowElementSkeleton
+        case childrenKeypath
+        case expandedStateKeypath
+        case followTail
         case elements
         case modifiers
     }
@@ -1472,6 +1486,9 @@ public struct SkeletonList: Codable, Identifiable {
         self.keypath = try container.decodeIfPresent(String.self, forKey: .keypath)
         self.filterTypes = try container.decodeIfPresent([String].self, forKey: .filterTypes)
         self.selectionMode = try container.decodeIfPresent(SkeletonListSelectionMode.self, forKey: .selectionMode)
+        self.childrenKeypath = try container.decodeIfPresent(String.self, forKey: .childrenKeypath)
+        self.expandedStateKeypath = try container.decodeIfPresent(String.self, forKey: .expandedStateKeypath)
+        self.followTail = try container.decodeIfPresent(Bool.self, forKey: .followTail)
         self.selectionValueKeypath = try container.decodeIfPresent(String.self, forKey: .selectionValueKeypath)
         self.selectionStateKeypath = try container.decodeIfPresent(String.self, forKey: .selectionStateKeypath)
         self.selectionActionKeypath = try container.decodeIfPresent(String.self, forKey: .selectionActionKeypath)
@@ -1521,6 +1538,9 @@ public struct SkeletonList: Codable, Identifiable {
         try container.encodeIfPresent(self.activationActionKeypath, forKey: .activationActionKeypath)
         try container.encodeIfPresent(self.selectionPayloadMode, forKey: .selectionPayloadMode)
         try container.encodeIfPresent(self.allowsEmptySelection, forKey: .allowsEmptySelection)
+        try container.encodeIfPresent(self.childrenKeypath, forKey: .childrenKeypath)
+        try container.encodeIfPresent(self.expandedStateKeypath, forKey: .expandedStateKeypath)
+        try container.encodeIfPresent(self.followTail, forKey: .followTail)
         if let rowSkeleton = self.flowElementSkeleton {
             try container.encode(SkeletonElement.VStack(rowSkeleton), forKey: .flowElementSkeleton)
         }

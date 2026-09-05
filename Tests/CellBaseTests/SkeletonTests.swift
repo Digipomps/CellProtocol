@@ -921,6 +921,44 @@ final class SkeletonTests: XCTestCase {
         XCTAssertNotNil(list.flowElementSkeleton)
     }
 
+    // U2/U3 — admin workbench, PDD 2026-09-04 (childrenKeypath, expandedStateKeypath, followTail)
+    func testListEncodesTreeAndFollowTailFields() throws {
+        var list = SkeletonList(topic: "scope", keypath: "workbench.scope", flowElementSkeleton: nil)
+        list.childrenKeypath = "children"
+        list.expandedStateKeypath = "workbench.expanded"
+        list.followTail = true
+        let data = try JSONEncoder().encode(SkeletonElement.List(list))
+        let json = decodeJSONObject(data)
+        let listJSON = json["List"] as? [String: Any]
+        XCTAssertEqual(listJSON?["childrenKeypath"] as? String, "children")
+        XCTAssertEqual(listJSON?["expandedStateKeypath"] as? String, "workbench.expanded")
+        XCTAssertEqual(listJSON?["followTail"] as? Bool, true)
+    }
+
+    func testListDecodesTreeAndFollowTailFieldsAndOmitsThemWhenAbsent() throws {
+        let withFields = """
+        {"List":{"keypath":"workbench.scope","childrenKeypath":"children","expandedStateKeypath":"workbench.expanded","followTail":true}}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: withFields)
+        guard case let .List(list) = decoded else { return XCTFail("Expected List") }
+        XCTAssertEqual(list.childrenKeypath, "children")
+        XCTAssertEqual(list.expandedStateKeypath, "workbench.expanded")
+        XCTAssertEqual(list.followTail, true)
+
+        let without = """
+        {"List":{"keypath":"workbench.scope"}}
+        """.data(using: .utf8)!
+        let plain = try JSONDecoder().decode(SkeletonElement.self, from: without)
+        guard case let .List(plainList) = plain else { return XCTFail("Expected List") }
+        XCTAssertNil(plainList.childrenKeypath)
+        XCTAssertNil(plainList.expandedStateKeypath)
+        XCTAssertNil(plainList.followTail)
+        let reencoded = decodeJSONObject(try JSONEncoder().encode(plain))
+        let plainJSON = reencoded["List"] as? [String: Any]
+        XCTAssertNil(plainJSON?["childrenKeypath"])
+        XCTAssertNil(plainJSON?["followTail"])
+    }
+
     func testListEncodesSelectionFields() throws {
         var list = SkeletonList(
             topic: "agreements",
