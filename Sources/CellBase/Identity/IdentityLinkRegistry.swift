@@ -20,6 +20,28 @@ public enum IdentityLinkScope {
 /// Bare EntityAnchor skriver hit — enten med et `IdentityLinkCompletionResult` (som bare finnes
 /// etter `IdentityLinkProtocolService.verifyCompletion`) eller ved gjenoppretting fra sitt eget
 /// lager. En rå `IdentityLinkRecord` kan ikke registreres utenfra; det er poenget.
+/// Runtime-policy et scaffold installerer ved oppstart. EntityAnchor håndhever den ved
+/// `identityLinks.completeEnrollment`, så en fullføring som går utenom web-ruten (bridge,
+/// direkte set) møter samme krav om passkey-bevis.
+public actor IdentityLinkRuntimePolicy {
+    public static let shared = IdentityLinkRuntimePolicy()
+
+    public private(set) var requireFreshAuthEvidence: Bool = false
+    public private(set) var freshAuthVerifier: IdentityLinkFreshAuthVerifier?
+
+    public init() {}
+
+    public func install(requireFreshAuthEvidence: Bool, freshAuthVerifier: IdentityLinkFreshAuthVerifier?) {
+        self.requireFreshAuthEvidence = requireFreshAuthEvidence
+        self.freshAuthVerifier = freshAuthVerifier
+    }
+
+    public func reset() {
+        requireFreshAuthEvidence = false
+        freshAuthVerifier = nil
+    }
+}
+
 public actor IdentityLinkRegistry {
     public static let shared = IdentityLinkRegistry()
 
