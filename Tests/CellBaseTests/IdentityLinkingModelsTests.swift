@@ -74,6 +74,109 @@ final class IdentityLinkingModelsTests: XCTestCase {
         }
     }
 
+    // test.link.two-distinct-keys — en flyt der begge parter er samme nøkkel er ikke en lenkeflyt.
+    func testIdentityLinkCompletionRejectsSameKeyOnBothSides() async throws {
+        let vault = OrganizerAccessTestIdentityVault()
+        let onlyKey = await vault.makeIdentity(displayName: "web-links-itself")
+        let now = Date()
+        let request = try await makeSignedEnrollmentRequest(holder: onlyKey, now: now, expiresAt: now.addingTimeInterval(600))
+        let approval = try await IdentityLinkProtocolService.approveEnrollmentRequest(
+            request, issuerIdentity: onlyKey, createdAt: now, expiresAt: now.addingTimeInterval(300), jti: "approval-jti-same-key"
+        )
+        let credential = try await IdentityLinkProtocolService.issueSameEntityCredential(
+            request: request, approval: approval, issuerIdentity: onlyKey, validUntil: now.addingTimeInterval(600), revocationReference: nil
+        )
+        let challenge = Data("verifier-challenge-32-bytes-2026".utf8)
+        let presentation = try await IdentityLinkProtocolService.makeVerifierBoundPresentation(
+            credential: credential, holderIdentity: onlyKey, challenge: challenge, domain: "staging.haven.digipomps.org"
+        )
+        let envelope = IdentityLinkCompletionEnvelope(
+            request: request, approval: approval, sameEntityCredential: credential, presentation: presentation,
+            issuerIdentity: try IdentityLinkProtocolService.descriptor(for: onlyKey),
+            expectedAudience: request.audience, expectedOrigin: request.origin,
+            expectedPresentationChallenge: challenge, expectedPresentationDomain: "staging.haven.digipomps.org"
+        )
+        await assertIdentityLinkCompletionThrows(.sameKeyOnBothSides) {
+            _ = try await IdentityLinkProtocolService.verifyCompletion(envelope, now: now)
+        }
+    }
+
+    // test.auth.fresh — et tidsstempel er et løfte; policyen kan kreve bevis.
+    func testFreshAuthEvidenceIsRequiredWhenPolicyDemandsIt() async throws {
+        var fixture = try await makeCompletionFixture(jti: "approval-jti-evidence-missing")
+        fixture.envelope.requireFreshAuthEvidence = true
+        await assertIdentityLinkCompletionThrows(.missingFreshAuth) {
+            _ = try await IdentityLinkProtocolService.verifyCompletion(
+                fixture.envelope, now: fixture.now, freshAuthVerifier: { _ in true }
+            )
+        }
+    }
+
+    func testFreshAuthEvidenceChallengeMustMatchRequestHash() async throws {
+        let wrong = IdentityLinkFreshAuthEvidence(
+            method: "webauthn", challenge: Data("not-the-request-hash".utf8), performedAt: IdentityLinkProtocolService.iso8601(Date())
+        )
+        var fixture = try await makeCompletionFixture(jti: "approval-jti-evidence-challenge", freshAuthEvidence: wrong)
+        fixture.envelope.requireFreshAuthEvidence = true
+        await assertIdentityLinkCompletionThrows(.invalidFreshAuthEvidence("challenge does not match request hash")) {
+            _ = try await IdentityLinkProtocolService.verifyCompletion(
+                fixture.envelope, now: fixture.now, freshAuthVerifier: { _ in true }
+            )
+        }
+    }
+
+    func testFreshAuthEvidenceVerifierDecides() async throws {
+        // Bygg en fixture der evidence.challenge == hashen av dens egen request.
+        let vault = OrganizerAccessTestIdentityVault()
+        let issuer = await vault.makeIdentity(displayName: "existing-binding-device")
+        let holder = await vault.makeIdentity(displayName: "binding-phone")
+        let now = Date()
+        let request = try await makeSignedEnrollmentRequest(holder: holder, now: now, expiresAt: now.addingTimeInterval(600))
+        let hash = try IdentityLinkProtocolService.requestHash(for: request)
+        let evidence = IdentityLinkFreshAuthEvidence(method: "webauthn", challenge: hash, performedAt: IdentityLinkProtocolService.iso8601(now))
+        let approval = try await IdentityLinkProtocolService.approveEnrollmentRequest(
+            request, issuerIdentity: issuer, createdAt: now, expiresAt: now.addingTimeInterval(300),
+            jti: "approval-jti-evidence-ok", freshAuthEvidence: evidence
+        )
+        XCTAssertEqual(approval.freshAuthEvidence?.challenge, hash)
+        let credential = try await IdentityLinkProtocolService.issueSameEntityCredential(
+            request: request, approval: approval, issuerIdentity: issuer, validUntil: now.addingTimeInterval(600), revocationReference: nil
+        )
+        let challenge = Data("verifier-challenge-32-bytes-2026".utf8)
+        let presentation = try await IdentityLinkProtocolService.makeVerifierBoundPresentation(
+            credential: credential, holderIdentity: holder, challenge: challenge, domain: "staging.haven.digipomps.org"
+        )
+        let envelope = IdentityLinkCompletionEnvelope(
+            request: request, approval: approval, sameEntityCredential: credential, presentation: presentation,
+            issuerIdentity: try IdentityLinkProtocolService.descriptor(for: issuer),
+            expectedAudience: request.audience, expectedOrigin: request.origin,
+            expectedPresentationChallenge: challenge, expectedPresentationDomain: "staging.haven.digipomps.org",
+            requireFreshAuthEvidence: true
+        )
+        await assertIdentityLinkCompletionThrows(.invalidFreshAuthEvidence("no verifier available")) {
+            _ = try await IdentityLinkProtocolService.verifyCompletion(envelope, now: now)
+        }
+        await assertIdentityLinkCompletionThrows(.invalidFreshAuthEvidence("verifier rejected evidence")) {
+            _ = try await IdentityLinkProtocolService.verifyCompletion(envelope, now: now, freshAuthVerifier: { _ in false })
+        }
+        let result = try await IdentityLinkProtocolService.verifyCompletion(envelope, now: now, freshAuthVerifier: { _ in true })
+        XCTAssertEqual(result.record.status, .active)
+    }
+
+    func testSASWordsAreDeterministicFourWordsFromWordList() throws {
+        let hash = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 * 37 + 11) })
+        let a = IdentityLinkSAS.words(requestHash: hash)
+        let b = IdentityLinkSAS.words(requestHash: hash)
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(a.count, 4)
+        XCTAssertEqual(IdentityLinkSASWordList.norwegian.count, 256)
+        XCTAssertEqual(Set(IdentityLinkSASWordList.norwegian).count, 256, "ordlista har duplikater")
+        for word in a { XCTAssertTrue(IdentityLinkSASWordList.norwegian.contains(word)) }
+        var other = hash; other[0] ^= 0x80
+        XCTAssertNotEqual(IdentityLinkSAS.words(requestHash: other), a)
+        XCTAssertEqual(IdentityLinkSAS.words(requestHash: hash, wordList: ["a","b","c"]), [], "ikke-toerpotens gir tom liste")
+    }
+
     func testEnrollmentRequestCanonicalPayloadExcludesProof() throws {
         let request = IdentityEnrollmentRequest(
             requestID: "request-1",
@@ -214,7 +317,10 @@ final class IdentityLinkingModelsTests: XCTestCase {
         var presentationDomain: String
     }
 
-    private func makeCompletionFixture(jti: String) async throws -> CompletionFixture {
+    private func makeCompletionFixture(
+        jti: String,
+        freshAuthEvidence: IdentityLinkFreshAuthEvidence? = nil
+    ) async throws -> CompletionFixture {
         let vault = OrganizerAccessTestIdentityVault()
         let issuer = await vault.makeIdentity(displayName: "existing-binding-device")
         let holder = await vault.makeIdentity(displayName: "binding-phone")
@@ -234,7 +340,8 @@ final class IdentityLinkingModelsTests: XCTestCase {
             expiresAt: now.addingTimeInterval(300),
             jti: jti,
             freshAuthRequired: true,
-            freshAuthPerformedAt: now
+            freshAuthPerformedAt: now,
+            freshAuthEvidence: freshAuthEvidence
         )
         let credential = try await IdentityLinkProtocolService.issueSameEntityCredential(
             request: request,

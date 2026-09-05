@@ -34,7 +34,11 @@ public enum IdentityLinkCompletionError: Error, Equatable {
     case invalidCredentialSubject(String)
     case invalidPresentation
     case holderMismatch
+    case sameKeyOnBothSides
+    case invalidFreshAuthEvidence(String)
 }
+
+public typealias IdentityLinkFreshAuthVerifier = @Sendable (IdentityEnrollmentApproval) async throws -> Bool
 
 public struct IdentityLinkCompletionPolicy {
     public var expectedAudience: String
@@ -43,6 +47,7 @@ public struct IdentityLinkCompletionPolicy {
     public var expectedPresentationDomain: String
     public var requireFreshApprovalAuth: Bool
     public var allowedIssuerTypes: [IdentityLinkIssuerType]
+    public var requireFreshAuthEvidence: Bool
 
     public init(
         expectedAudience: String,
@@ -50,7 +55,8 @@ public struct IdentityLinkCompletionPolicy {
         expectedPresentationChallenge: Data,
         expectedPresentationDomain: String,
         requireFreshApprovalAuth: Bool = true,
-        allowedIssuerTypes: [IdentityLinkIssuerType] = [.existingDevice, .custodian, .recoveryAuthority]
+        allowedIssuerTypes: [IdentityLinkIssuerType] = [.existingDevice, .custodian, .recoveryAuthority],
+        requireFreshAuthEvidence: Bool = false
     ) {
         self.expectedAudience = expectedAudience
         self.expectedOrigin = expectedOrigin
@@ -58,6 +64,7 @@ public struct IdentityLinkCompletionPolicy {
         self.expectedPresentationDomain = expectedPresentationDomain
         self.requireFreshApprovalAuth = requireFreshApprovalAuth
         self.allowedIssuerTypes = allowedIssuerTypes
+        self.requireFreshAuthEvidence = requireFreshAuthEvidence
     }
 }
 
@@ -71,6 +78,7 @@ public struct IdentityLinkCompletionEnvelope: Codable {
     public var expectedOrigin: String
     public var expectedPresentationChallenge: Data
     public var expectedPresentationDomain: String
+    public var requireFreshAuthEvidence: Bool?
 
     public init(
         request: IdentityEnrollmentRequest,
@@ -81,7 +89,8 @@ public struct IdentityLinkCompletionEnvelope: Codable {
         expectedAudience: String,
         expectedOrigin: String,
         expectedPresentationChallenge: Data,
-        expectedPresentationDomain: String
+        expectedPresentationDomain: String,
+        requireFreshAuthEvidence: Bool? = nil
     ) {
         self.request = request
         self.approval = approval
@@ -92,6 +101,7 @@ public struct IdentityLinkCompletionEnvelope: Codable {
         self.expectedOrigin = expectedOrigin
         self.expectedPresentationChallenge = expectedPresentationChallenge
         self.expectedPresentationDomain = expectedPresentationDomain
+        self.requireFreshAuthEvidence = requireFreshAuthEvidence
     }
 
     public var policy: IdentityLinkCompletionPolicy {
@@ -99,7 +109,8 @@ public struct IdentityLinkCompletionEnvelope: Codable {
             expectedAudience: expectedAudience,
             expectedOrigin: expectedOrigin,
             expectedPresentationChallenge: expectedPresentationChallenge,
-            expectedPresentationDomain: expectedPresentationDomain
+            expectedPresentationDomain: expectedPresentationDomain,
+            requireFreshAuthEvidence: requireFreshAuthEvidence ?? false
         )
     }
 }
@@ -205,7 +216,8 @@ public enum IdentityLinkProtocolService {
         expiresAt: Date? = nil,
         jti: String = UUID().uuidString,
         freshAuthRequired: Bool = true,
-        freshAuthPerformedAt: Date? = Date()
+        freshAuthPerformedAt: Date? = Date(),
+        freshAuthEvidence: IdentityLinkFreshAuthEvidence? = nil
     ) async throws -> IdentityEnrollmentApproval {
         let requestHash = try await validateEnrollmentRequest(request, now: createdAt)
         guard let secureKey = issuerIdentity.publicSecureKey,
@@ -234,7 +246,8 @@ public enum IdentityLinkProtocolService {
             jti: jti,
             freshAuthRequired: freshAuthRequired,
             freshAuthMethod: freshAuthRequired ? "local-user-presence" : nil,
-            freshAuthPerformedAt: freshAuthPerformedAt.map(iso8601)
+            freshAuthPerformedAt: freshAuthPerformedAt.map(iso8601),
+            freshAuthEvidence: freshAuthEvidence
         )
         let payload = try approval.canonicalPayloadData()
         guard let signature = try await issuerIdentity.sign(data: payload) else {
@@ -355,7 +368,8 @@ public enum IdentityLinkProtocolService {
     public static func verifyCompletion(
         _ envelope: IdentityLinkCompletionEnvelope,
         now: Date = Date(),
-        usedApprovalJTIs: Set<String> = []
+        usedApprovalJTIs: Set<String> = [],
+        freshAuthVerifier: IdentityLinkFreshAuthVerifier? = nil
     ) async throws -> IdentityLinkCompletionResult {
         try await verifyCompletion(
             request: envelope.request,
@@ -365,7 +379,8 @@ public enum IdentityLinkProtocolService {
             issuerIdentity: envelope.issuerIdentity,
             policy: envelope.policy,
             now: now,
-            usedApprovalJTIs: usedApprovalJTIs
+            usedApprovalJTIs: usedApprovalJTIs,
+            freshAuthVerifier: freshAuthVerifier
         )
     }
 
@@ -377,7 +392,8 @@ public enum IdentityLinkProtocolService {
         issuerIdentity: IdentityPublicKeyDescriptor,
         policy: IdentityLinkCompletionPolicy,
         now: Date = Date(),
-        usedApprovalJTIs: Set<String> = []
+        usedApprovalJTIs: Set<String> = [],
+        freshAuthVerifier: IdentityLinkFreshAuthVerifier? = nil
     ) async throws -> IdentityLinkCompletionResult {
         let requestHash = try await validateEnrollmentRequest(request, now: now)
         try await validateApproval(
@@ -387,7 +403,8 @@ public enum IdentityLinkProtocolService {
             issuerIdentity: issuerIdentity,
             policy: policy,
             now: now,
-            usedApprovalJTIs: usedApprovalJTIs
+            usedApprovalJTIs: usedApprovalJTIs,
+            freshAuthVerifier: freshAuthVerifier
         )
         let subject = try await validateSameEntityCredential(
             sameEntityCredential,
@@ -479,7 +496,8 @@ public enum IdentityLinkProtocolService {
         issuerIdentity: IdentityPublicKeyDescriptor,
         policy: IdentityLinkCompletionPolicy,
         now: Date,
-        usedApprovalJTIs: Set<String>
+        usedApprovalJTIs: Set<String>,
+        freshAuthVerifier: IdentityLinkFreshAuthVerifier?
     ) async throws {
         guard approval.purpose == "approve_link_identity" else {
             throw IdentityLinkCompletionError.invalidPurpose(approval.purpose)
@@ -510,10 +528,28 @@ public enum IdentityLinkProtocolService {
         guard policy.allowedIssuerTypes.contains(approval.issuerType) else {
             throw IdentityLinkCompletionError.issuerTypeNotAllowed(approval.issuerType.rawValue)
         }
+        guard approval.issuerIdentityUUID != request.newIdentity.uuid,
+              !descriptor(issuerIdentity, matches: request.newIdentity) else {
+            throw IdentityLinkCompletionError.sameKeyOnBothSides
+        }
         if policy.requireFreshApprovalAuth {
             guard approval.freshAuthRequired,
                   approval.freshAuthPerformedAt != nil else {
                 throw IdentityLinkCompletionError.missingFreshAuth
+            }
+        }
+        if policy.requireFreshAuthEvidence {
+            guard let evidence = approval.freshAuthEvidence else {
+                throw IdentityLinkCompletionError.missingFreshAuth
+            }
+            guard evidence.challenge == requestHash else {
+                throw IdentityLinkCompletionError.invalidFreshAuthEvidence("challenge does not match request hash")
+            }
+            guard let verifier = freshAuthVerifier else {
+                throw IdentityLinkCompletionError.invalidFreshAuthEvidence("no verifier available")
+            }
+            guard try await verifier(approval) else {
+                throw IdentityLinkCompletionError.invalidFreshAuthEvidence("verifier rejected evidence")
             }
         }
         try ensureNotExpired(approval.expiresAt, now: now)
