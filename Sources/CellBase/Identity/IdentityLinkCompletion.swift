@@ -147,6 +147,7 @@ public struct IdentityLinkApprovalEnvelope: Codable {
     public var jti: String?
     public var freshAuthRequired: Bool
     public var freshAuthPerformedAt: String?
+    public var freshAuthEvidence: IdentityLinkFreshAuthEvidence?
     public var revocationReference: String?
 
     public init(
@@ -159,6 +160,7 @@ public struct IdentityLinkApprovalEnvelope: Codable {
         jti: String? = nil,
         freshAuthRequired: Bool = true,
         freshAuthPerformedAt: String? = nil,
+        freshAuthEvidence: IdentityLinkFreshAuthEvidence? = nil,
         revocationReference: String? = nil
     ) {
         self.request = request
@@ -170,6 +172,7 @@ public struct IdentityLinkApprovalEnvelope: Codable {
         self.jti = jti
         self.freshAuthRequired = freshAuthRequired
         self.freshAuthPerformedAt = freshAuthPerformedAt
+        self.freshAuthEvidence = freshAuthEvidence
         self.revocationReference = revocationReference
     }
 }
@@ -297,7 +300,8 @@ public enum IdentityLinkProtocolService {
             expiresAt: expiresAt,
             jti: envelope.jti ?? UUID().uuidString,
             freshAuthRequired: envelope.freshAuthRequired,
-            freshAuthPerformedAt: freshAuthPerformedAt ?? (envelope.freshAuthRequired ? now : nil)
+            freshAuthPerformedAt: freshAuthPerformedAt ?? (envelope.freshAuthRequired ? now : nil),
+            freshAuthEvidence: envelope.freshAuthEvidence
         )
         let credential = try await issueSameEntityCredential(
             request: envelope.request,
