@@ -20,6 +20,9 @@ extension BridgeBase {
         // Pins which local identity resolves an inbound publisher. Command identity
         // is still passed to the publisher for access checks and mutations.
         let inboundPublisherLookupIdentity: Identity?
+        // nil uses the discovered direct Cell scope. An explicit list pins the
+        // allowed scopes, including before discovery; [] disables local proofs.
+        let identityProofScopes: [BridgeIdentityProofScope]?
         
         public init(
             owner: Identity = Identity(),
@@ -28,7 +31,8 @@ extension BridgeBase {
             uuid: String? = nil,
             transport: BridgeTransportProtocol,
             connection: Connection,
-            inboundPublisherLookupIdentity: Identity? = nil
+            inboundPublisherLookupIdentity: Identity? = nil,
+            identityProofScopes: [BridgeIdentityProofScope]? = nil
         ) {
             self.uuid = uuid ?? UUID().uuidString
             self.owner = owner
@@ -37,9 +41,10 @@ extension BridgeBase {
             self.transport = transport
             self.connection = connection
             self.inboundPublisherLookupIdentity = inboundPublisherLookupIdentity
+            self.identityProofScopes = identityProofScopes
         }
         
-        public init(owner: Identity = Identity(), contractTemplate: Agreement? = nil, identityDomain: String = "bridge", uuid: String? = nil, transport: BridgeTransportProtocol) {
+        public init(owner: Identity = Identity(), contractTemplate: Agreement? = nil, identityDomain: String = "bridge", uuid: String? = nil, transport: BridgeTransportProtocol, identityProofScopes: [BridgeIdentityProofScope]? = nil) {
             self.uuid = uuid ?? UUID().uuidString
             self.owner = owner
             self.agreementTemplate = contractTemplate
@@ -47,6 +52,7 @@ extension BridgeBase {
             self.transport = transport
             self.connection = .outbound
             self.inboundPublisherLookupIdentity = nil
+            self.identityProofScopes = identityProofScopes
         }
         
         public func getTransport() -> BridgeTransportProtocol {transport}

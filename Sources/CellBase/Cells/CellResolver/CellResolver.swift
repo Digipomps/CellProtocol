@@ -2153,7 +2153,7 @@ public class CellResolver: CellResolverProtocol {
         
         let transport = try transportForScheme(transportScheme)// Find available transport for protocol
         // TODO: Consider refactoring 
-        let bridgeConfig = BridgeBase.Config(contractTemplate: await Agreement(), transport: transport, connection: .outbound)
+        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), transport: transport, connection: .outbound)
         let cellBridge = try await BridgeBase(bridgeConfig)
         try await cellBridge.setTransport(transport, connection: .outbound)
         
@@ -2223,6 +2223,7 @@ public class CellResolver: CellResolverProtocol {
             )
         }
         let bridgeConfig = BridgeBase.Config(
+            owner: identity,
             contractTemplate: await Agreement(),
             uuid: cellBridgeUUID,
             transport: transport,

@@ -132,12 +132,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var inboundEmitCellCache = [String: Emit]()
     private var inboundPublisherLookupIdentity: Identity?
     private let callbackStateLock = NSLock()
+    private let identityProofAuthorization: BridgeIdentityProofAuthorization
     
     
     private var descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
     private var descriptionFetchedDate: Date?
     
     public init(_ config: Config) async throws {
+        identityProofAuthorization = BridgeIdentityProofAuthorization(owner: config.owner, scopes: config.identityProofScopes)
         bridgeLog("Bridge base init. identity.uuid: \(config.owner.uuid) identityDomain: \(config.identityDomain)")
         self.owner = config.owner
         
@@ -167,6 +169,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public required init(owner: Identity) {
+        identityProofAuthorization = BridgeIdentityProofAuthorization(owner: owner)
         self.owner = owner
         agreementTemplate = Agreement(owner: owner)
         identityDomain = "bridge" // Must be changed to reflect remote side 
@@ -396,6 +399,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         ready = true
     }
     public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
+        identityProofAuthorization.reset()
         let previousFeedStartTask = withCallbackStateLock { () -> Task<Void, Error>? in
             let task = outboundFeedStartTask
             outboundFeedStartTask = nil
@@ -522,6 +526,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func markOutboundFeedInactive(commandID: Int) {
+        identityProofAuthorization.complete(commandID)
         withCallbackStateLock {
             guard outboundFeedCommandID == commandID else { return }
             outboundFeedStartTask = nil
@@ -556,6 +561,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return (commandID, requester)
         }
         guard let feedToStop else { return }
+        identityProofAuthorization.complete(feedToStop.0)
 
         flowElementCallbackCancellable?.cancel()
         flowElementCallbackCancellable = nil
@@ -670,6 +676,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public func close(requester: Identity) {
+        identityProofAuthorization.reset()
         bridgeLog("Closing bridge base")
         transport = nil
     }
@@ -919,6 +926,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     
     private func configure(from description: AnyCell) {
+        identityProofAuthorization.discovered(domain: description.identityDomain, resource: description.uuid)
             self.agreementTemplate = description.agreementTemplate
             self.name = description.name
             self.uuid = description.uuid
@@ -1189,9 +1197,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             throw BridgeError.transportUnavailable
         }
 
+        identityProofAuthorization.begin(bridgeCommand)
         do {
             try await transport.sendData(bridgeCommandJson)
         } catch {
+            identityProofAuthorization.complete(resolvedCommandId)
             await pushError(errorMessage: "Bridge transport send failed", error: error)
             throw error
         }
@@ -1208,6 +1218,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     //Consume command is processing commands relayed over the websocket
     public func consumeCommand(command: BridgeCommand) async throws {
+        var command = command
+        if command.command != .sign, let presented = command.identity {
+            // A transport may hydrate an identity for routing, but a public wire
+            // descriptor never grants access to this process's signing vault.
+            // Origin proofs for remote requesters must travel back to the peer.
+            let requester = presented.publicIdentitySnapshot()
+            requester.identityVault = BridgeIdentityVault(cloudBridge: self)
+            command.identity = requester
+        }
         bridgeLog("Consume command cmd: \(command.cmd)")
             switch command.command {
             case .ready:
@@ -1387,13 +1406,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         )
                         return
                     }
-                    guard let signingVault = identity.identityVault ?? CellBase.defaultIdentityVault,
-                          await signingVault.identityExistInVault(identity) else {
+                    guard let permit = identityProofAuthorization.permit(for: challenge, identity: identity),
+                          await permit.vault.identityExistInVault(permit.identity) else {
                         await sendSigningDenied(
-                            "identity is not available in the local signing vault",
+                            "no active local operation authorizes this identity and challenge scope",
                             cid: command.cid,
                             identity: identity,
-                            reasonCode: "identity_not_available_in_local_vault"
+                            reasonCode: "unexpected_identity_signing_challenge"
                         )
                         return
                     }
@@ -1412,9 +1431,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         }
                     }
                     
-                    Task {
+                    guard identityProofAuthorization.isCurrent(permit) else { return }
                         do {
-                            let signatureData = try await signingVault.signMessageForIdentity(messageData: value, identity: identity)
+                            let signatureData = try await permit.vault.signMessageForIdentity(messageData: value, identity: permit.identity)
+                            guard identityProofAuthorization.isCurrent(permit) else { return }
                             await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid)
                         } catch {
                             bridgeLog("Consume command signing data failed with error: \(error)")
@@ -1425,7 +1445,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                 reasonCode: CellSecurityReasonCode.bridgeSigningDenied
                             )
                         }
-                    }
                     
                 }
                 
@@ -1615,6 +1634,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
         if let commandRequest = await auditor.loadBridgeCommandForCommandId(command.cid) {
             let retainCommandForStream = commandRequest.command == .feed
+            if !retainCommandForStream { identityProofAuthorization.complete(command.cid) }
             switch commandRequest.command {
             case .description:
                 if let sentPayload = command.payload {
