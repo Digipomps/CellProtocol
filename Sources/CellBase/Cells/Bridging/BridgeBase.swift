@@ -1224,6 +1224,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             // descriptor never grants access to this process's signing vault.
             // Origin proofs for remote requesters must travel back to the peer.
             let requester = presented.publicIdentitySnapshot()
+            // Preserve the intrinsic public-metadata grant installed by Identity's
+            // constructor/decoder. Do not import caller-supplied runtime grants.
+            requester.grants = [Grant(keypath: "displayName", permission: "r---")]
             requester.identityVault = BridgeIdentityVault(cloudBridge: self)
             command.identity = requester
         }

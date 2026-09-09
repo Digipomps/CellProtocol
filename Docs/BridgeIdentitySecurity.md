@@ -5,6 +5,10 @@ Incoming identity descriptors do not confer authority to use a local vault.
 origin proofs through `BridgeIdentityVault` back to the peer. This applies even
 when a transport previously attached a local vault to a decoded descriptor.
 The local owner object is not mutated by this boundary.
+The requester keeps only the intrinsic `displayName: r---` public-metadata grant
+that Identity's constructor and wire decoder install. Arbitrary runtime grants
+from an incoming object are discarded. This preserves the default Agreement's
+public-display-name condition without granting access to a local signer.
 
 A received `sign` command is accepted only when all of these checks pass:
 
