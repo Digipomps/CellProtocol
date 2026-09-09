@@ -28,6 +28,33 @@ final class GeneralCellInterfaceTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEmptyMeddleKeypathsFailWithoutBreakingValidReads() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "empty-keypath", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        await cell.addInterceptForGet(requester: owner, key: "valid") { _, _ in .string("ok") }
+        for keypath in ["", ".", "..", "..."] {
+            do {
+                _ = try await cell.get(keypath: keypath, requester: owner)
+                XCTFail("Empty keypath must not be read")
+            } catch {}
+            do {
+                _ = try await cell.set(keypath: keypath, value: .string("invalid"), requester: owner)
+                XCTFail("Empty keypath must not be written")
+            } catch {}
+        }
+        let valid = try await cell.get(keypath: "valid", requester: owner)
+        XCTAssertEqual(valid, .string("ok"))
+        let agreement = Agreement(owner: owner)
+        let before = try JSONEncoder().encode(agreement)
+        for keypath in ["", ".", "..."] { agreement.set(keypath: keypath, value: .string("invalid")) }
+        let after = try JSONEncoder().encode(agreement)
+        let beforeJSON = try JSONSerialization.jsonObject(with: before) as? NSDictionary
+        let afterJSON = try JSONSerialization.jsonObject(with: after) as? NSDictionary
+        XCTAssertEqual(beforeJSON, afterJSON)
+    }
+
     func testGetInterceptReturnsValue() async throws {
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault

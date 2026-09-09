@@ -1596,8 +1596,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         
         let keypathArray = resolvedKeyPath.split(separator: ".")
-        let contextKey = String(keypathArray[0])
-        let childKeypath = String(resolvedKeyPath.dropFirst("\(keypathArray[0]).".count))
+        guard let firstComponent = keypathArray.first else { throw KeyValueErrors.notFound }
+        let contextKey = String(firstComponent)
+        let childKeypath = String(resolvedKeyPath.dropFirst("\(firstComponent).".count))
         
         switch contextKey {
         case "isMember":
@@ -1736,8 +1737,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
             
             let keypathArray = resolvedKeyPath.split(separator: ".")
-            let contextKey = String(keypathArray[0]) // TODO:Errors here must be handeled
-            let childKeypath = String(resolvedKeyPath.dropFirst("\(keypathArray[0]).".count))
+            guard let firstComponent = keypathArray.first else { throw KeyValueErrors.notFound }
+            let contextKey = String(firstComponent)
+            let childKeypath = String(resolvedKeyPath.dropFirst("\(firstComponent).".count))
             
             var foundKey = false
             switch contextKey {

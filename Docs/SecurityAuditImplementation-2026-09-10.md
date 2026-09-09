@@ -27,9 +27,9 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–004 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 005 is the
-next FIFO item. 005–024 have not passed implementation acceptance.
+001–005 have passed their local acceptance checks, including serialized bridge
+tests. They remain subject to the final consumer/CI integration gate. 006 is the
+next FIFO item. 006–024 have not passed implementation acceptance.
 
 Positive operations, rejected operations, persisted data compatibility and
 relevant consumer behavior must pass before publication to main. Evidence
@@ -167,6 +167,17 @@ That run completed successfully: 99 tests, zero failures, 1.742 seconds. This
 includes 5 active-feed tests, 4 serialized bridge boundary tests, 4 signing-scope
 tests, 3 queue/lifecycle tests, 48 GeneralCell interface tests and 35 Integration
 tests. See `ActiveFeedAuthorization.md` for the precise guarantees and limits.
+
+Local commit for feed/metadata compatibility: `95d85e3` (not pushed or merged).
+
+### 005: empty keypaths
+
+GeneralCell get/set now reject an empty component list instead of indexing it.
+Agreement.set safely ignores the equivalent empty path without changing state.
+The regression exercises empty and dot-only strings and a subsequent valid read.
+64 GeneralCell/IdentityAgreement/serialized bridge tests pass with zero failures:
+`/private/tmp/cp-security-empty-keypaths.log`. Existing state and wire formats are
+unchanged. This fix has not been deployed.
 
 No changes have been made in the original dirty CellProtocol, CellProtocolDocuments
 or HavenAgentD source working copies. Do not use those for builds or overwrite

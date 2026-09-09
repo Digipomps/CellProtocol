@@ -292,7 +292,7 @@ public extension Agreement {
     func set(keypath: String, value: ValueType) {
         CellBase.diagnosticLog("Agreement.set keypath=\(keypath)", domain: .agreement)
         let keypathComponemnts = keypath.split(separator: ".")
-        let key = keypathComponemnts[0]
+        guard let key = keypathComponemnts.first else { return }
         let hasMoreComponents = keypathComponemnts.count > 1
         if key.contains("[]") {
                 CellBase.diagnosticLog("Agreement.set key contains list marker", domain: .agreement)
