@@ -1,5 +1,15 @@
 # CellProtocol security and asynchronous MCP integration
 
+> Integration update, 2026-09-10: the user has now authorized main integration.
+> EntityRelation feature commits have been selectively integrated and hardened
+> at `c85754c121cec65e47d906fd9a98792df6794f89`. The event storage bug is explicitly corrected with v2 events and
+> legacy v1 reading. The macOS path-alias fault is fixed. Full local regression:
+> 1082 tests, zero failures. Final CI and consumer pin adoption follow this
+> candidate. The tables below remain the earlier publication snapshot; their
+> no-merge and feature-absent statements are superseded by this update and the
+> final integration receipt. See `EntityRelationSecurityParity-2026-09-10.md`
+> and `CellStoragePathAliases-2026-09-10.md` for migration and security boundaries.
+
 Verified 2026-09-10. State: source CI and local consumer gates verified; final
 consumer CI tracked on the linked PRs. No main merge, deployment, live queue
 import or daemon activation. Binding has an explicit unresolved acceptance gate.
