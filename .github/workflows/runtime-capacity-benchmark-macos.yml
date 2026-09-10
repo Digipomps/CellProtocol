@@ -57,6 +57,10 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Verify benchmark failure gate
+        shell: zsh
+        run: Scripts/test-runtime-capacity-benchmark-gate.sh
+
       - name: Run bounded release matrix
         shell: bash
         env:

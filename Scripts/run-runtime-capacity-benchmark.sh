@@ -53,27 +53,119 @@ branch="$(git -C "$repo_root" branch --show-current)"
   swift --version
 } > "$output_root/system.txt"
 
-echo "Building CellRuntimeBenchmarks with --jobs $build_jobs in $scratch_root"
-swift build \
-  --jobs "$build_jobs" \
-  -c release \
-  --product CellRuntimeBenchmarks \
-  --scratch-path "$scratch_root" \
-  --package-path "$repo_root" \
-  > "$output_root/build.stdout.txt" \
-  2> "$output_root/build.stderr.txt"
+benchmark_binary="${CELL_PROTOCOL_BENCHMARK_BINARY_FOR_TESTS:-}"
+if [[ -z "$benchmark_binary" ]]; then
+  echo "Building CellRuntimeBenchmarks with --jobs $build_jobs in $scratch_root"
+  swift build \
+    --jobs "$build_jobs" \
+    -c release \
+    --product CellRuntimeBenchmarks \
+    --scratch-path "$scratch_root" \
+    --package-path "$repo_root" \
+    > "$output_root/build.stdout.txt" \
+    2> "$output_root/build.stderr.txt"
 
-benchmark_binary="$(swift build \
-  -c release \
-  --scratch-path "$scratch_root" \
-  --package-path "$repo_root" \
-  --show-bin-path)/CellRuntimeBenchmarks"
+  benchmark_binary="$(swift build \
+    -c release \
+    --scratch-path "$scratch_root" \
+    --package-path "$repo_root" \
+    --show-bin-path)/CellRuntimeBenchmarks"
+else
+  # This private hook exists solely for the wrapper's failure-gate test.  It is
+  # intentionally not a normal benchmark configuration option.
+  echo "Using an explicitly injected test benchmark binary."
+fi
 if [[ ! -x "$benchmark_binary" ]]; then
   echo "Expected benchmark binary is missing: $benchmark_binary" >&2
   exit 1
 fi
 
 typeset -i stopped_runs=0
+typeset -i failed_runs=0
+typeset -i invalid_result_runs=0
+
+record_validation_error() {
+  local validation_file="$1"
+  local message="$2"
+  print -r -- "$message" >> "$validation_file"
+}
+
+expect_json_value() {
+  local result_file="$1"
+  local key_path="$2"
+  local expected_value="$3"
+  local validation_file="$4"
+  local actual_value
+
+  if ! actual_value="$(/usr/bin/plutil -extract "$key_path" raw "$result_file" 2>/dev/null)"; then
+    record_validation_error "$validation_file" "Missing or invalid JSON value: $key_path"
+    return 1
+  fi
+  if [[ "$actual_value" != "$expected_value" ]]; then
+    record_validation_error "$validation_file" "Unexpected $key_path: expected $expected_value, got $actual_value"
+    return 1
+  fi
+}
+
+json_value() {
+  /usr/bin/plutil -extract "$2" raw "$1" 2>/dev/null
+}
+
+validate_result() {
+  local result_file="$1"
+  local workload="$2"
+  local concurrency="$3"
+  local operation_count="$4"
+  local validation_file="$5"
+  local expected_successes=0
+  local actual_successes delivered
+  local validation_failed=0
+
+  if [[ ! -s "$result_file" ]]; then
+    record_validation_error "$validation_file" "Missing or empty result.json"
+    return 1
+  fi
+
+  if ! expect_json_value "$result_file" "formatVersion" "1" "$validation_file"; then validation_failed=1; fi
+  if ! expect_json_value "$result_file" "revision" "$runtime_revision" "$validation_file"; then validation_failed=1; fi
+  if ! expect_json_value "$result_file" "configuration.workload" "$workload" "$validation_file"; then validation_failed=1; fi
+  if ! expect_json_value "$result_file" "configuration.concurrency" "$concurrency" "$validation_file"; then validation_failed=1; fi
+  if ! expect_json_value "$result_file" "configuration.operations" "$operation_count" "$validation_file"; then validation_failed=1; fi
+
+  case "$workload" in
+    idle)
+      expected_successes=0
+      ;;
+    flow-overflow)
+      if ! expect_json_value "$result_file" "summary.queueObservation.configuredCapacity" "256" "$validation_file"; then validation_failed=1; fi
+      if ! expect_json_value "$result_file" "summary.queueObservation.submittedElements" "$operation_count" "$validation_file"; then validation_failed=1; fi
+      if ! actual_successes="$(json_value "$result_file" "summary.successfulOperations")" || [[ "$actual_successes" != <-> ]]; then
+        record_validation_error "$validation_file" "Missing or invalid overflow successfulOperations"
+        validation_failed=1
+      fi
+      if ! delivered="$(json_value "$result_file" "summary.queueObservation.deliveredElementsAfterSettle")" || [[ "$delivered" != <-> ]]; then
+        record_validation_error "$validation_file" "Missing or invalid overflow deliveredElementsAfterSettle"
+        validation_failed=1
+      elif [[ "$actual_successes" == <-> ]] && [[ "$actual_successes" != "$delivered" ]]; then
+        record_validation_error "$validation_file" "Overflow acknowledgement mismatch: successfulOperations $actual_successes, delivered $delivered"
+        validation_failed=1
+      elif (( delivered >= operation_count )); then
+        record_validation_error "$validation_file" "Overflow acknowledgement did not observe a bounded drop: delivered $delivered of $operation_count"
+        validation_failed=1
+      fi
+      ;;
+    *)
+      expected_successes="$operation_count"
+      if ! expect_json_value "$result_file" "summary.latencyNanoseconds.samples" "$operation_count" "$validation_file"; then validation_failed=1; fi
+      ;;
+  esac
+
+  if [[ "$workload" != "flow-overflow" ]] && ! expect_json_value "$result_file" "summary.successfulOperations" "$expected_successes" "$validation_file"; then
+    validation_failed=1
+  fi
+
+  return "$validation_failed"
+}
 
 run_one() {
   local workload="$1"
@@ -137,6 +229,12 @@ run_one() {
   wait "$top_pid" 2>/dev/null || true
   wait "$iostat_pid" 2>/dev/null || true
   wait "$vmstat_pid" 2>/dev/null || true
+  if (( run_exit_status != 0 )); then
+    failed_runs=$((failed_runs + 1))
+    print -r -- "Benchmark child exited with status $run_exit_status" > "$run_dir/failure.txt"
+  elif ! validate_result "$run_dir/result.json" "$workload" "$concurrency" "$operation_count" "$run_dir/validation-errors.txt"; then
+    invalid_result_runs=$((invalid_result_runs + 1))
+  fi
   echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$run_dir/metadata.txt"
 }
 
@@ -154,8 +252,14 @@ run_one flow-overflow 1 "$overflow_operations"
 
 echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$output_root/run-configuration.txt"
 echo "stopped_runs=$stopped_runs" >> "$output_root/run-configuration.txt"
+echo "failed_runs=$failed_runs" >> "$output_root/run-configuration.txt"
+echo "invalid_result_runs=$invalid_result_runs" >> "$output_root/run-configuration.txt"
 echo "Raw results: $output_root"
 if (( stopped_runs > 0 )); then
   echo "One or more runs reached their safety timeout; inspect stopped.txt before using results." >&2
   exit 2
+fi
+if (( failed_runs > 0 || invalid_result_runs > 0 )); then
+  echo "One or more benchmark children failed or produced an invalid result; inspect failure.txt and validation-errors.txt before using results." >&2
+  exit 1
 fi
