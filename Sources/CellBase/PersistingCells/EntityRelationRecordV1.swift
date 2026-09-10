@@ -567,6 +567,9 @@ public enum EntityRelationRecordV1 {
 
     public static func isRelationChronicleKeypath(_ keypath: String) -> Bool {
         let keypath = String(keypath.drop(while: { $0 == "." }))
+        // Appending cannot replace an existing event. The value-aware admission
+        // check below still prevents appending a forged reserved event ID.
+        if keypath == "chronicle[+]" { return false }
         if keypath == "chronicle" || keypath.hasPrefix("chronicle.") { return true }
         guard keypath.hasPrefix("chronicle[") else { return false }
         // Only an exact, non-reserved id selector can address an unrelated
@@ -580,9 +583,43 @@ public enum EntityRelationRecordV1 {
 
     /// Generic writes may not touch the namespace; the batch path validates.
     public static func rejectDirectMutation(to keypath: String) throws {
-        if isProtectedKeypath(keypath) || isRelationChronicleKeypath(keypath) {
+        let canonical = String(keypath.drop(while: { $0 == "." }))
+        if isProtectedKeypath(keypath) || canonical.hasPrefix("chronicle[") || isRelationChronicleKeypath(keypath) {
             throw EntityRelationRecordErrorV1.protectedKeypathRequiresRelationSchema
         }
+    }
+
+    /// Generic chronicle writes require both their address and value to be
+    /// checked: an ordinary selector must not smuggle in a reserved wire ID.
+    public static func rejectDirectMutation(to keypath: String, value: ValueType) throws {
+        if try validateOrdinaryChronicleMutation(to: keypath, value: value) { return }
+        try rejectDirectMutation(to: keypath)
+    }
+
+    private static func validateOrdinaryChronicleMutation(to keypath: String, value: ValueType) throws -> Bool {
+        let canonical = String(keypath.drop(while: { $0 == "." }))
+        let isAppend = canonical == "chronicle[+]"
+        let isOrdinarySelector = canonical.hasPrefix("chronicle[id=") && !isRelationChronicleKeypath(canonical)
+        guard isAppend || isOrdinarySelector else { return false }
+
+        // Null can remove an ordinary selected entry, but cannot be appended.
+        if !isAppend, case .null = value { return true }
+        guard case let .object(object) = value else {
+            throw EntityRelationRecordErrorV1.invalidEventShape
+        }
+        if let storedID = object["id"] {
+            guard case let .string(id) = storedID, !id.hasPrefix(chronicleIDPrefix) else {
+                throw EntityRelationRecordErrorV1.relationBindingMismatch
+            }
+            if isOrdinarySelector {
+                let selectedID = String(canonical.dropFirst("chronicle[id=".count).dropLast())
+                guard id == selectedID else { throw EntityRelationRecordErrorV1.relationBindingMismatch }
+            }
+        }
+        if case let .string(schema)? = object["schema"], schema.hasPrefix("haven.relation-interaction-event.") {
+            throw EntityRelationRecordErrorV1.protectedKeypathRequiresRelationSchema
+        }
+        return true
     }
 
     /// Every mutation into `relations.records` must decode as a record whose
@@ -594,6 +631,9 @@ public enum EntityRelationRecordV1 {
         _ envelope: EntityBatchPersistEnvelope,
         interactionPolicy: EntityRelationInteractionPolicyMode = defaultInteractionPolicy
     ) throws {
+        for mutation in envelope.mutations {
+            _ = try validateOrdinaryChronicleMutation(to: mutation.keypath, value: mutation.value)
+        }
         let recordMutations = envelope.mutations.filter { isProtectedKeypath($0.keypath) }
         let eventMutations = envelope.mutations.filter { isRelationChronicleKeypath($0.keypath) }
         guard !recordMutations.isEmpty || !eventMutations.isEmpty else { return }

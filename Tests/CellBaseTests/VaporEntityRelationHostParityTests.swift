@@ -6,6 +6,11 @@ import XCTest
 @testable import CellVapor
 
 extension EntityRelationHostParityTests {
+    func testVaporOrdinaryChronicleBatchPreservesProtectedEvents() async throws {
+        let owner = try await owner()
+        try await verifyOrdinaryChronicleBatch(await EntityAnchorCell(owner: owner), owner: owner)
+    }
+
     func testVaporRelationAdmissionMatrix() async throws {
         let owner = try await owner()
         try await verify(await EntityAnchorCell(owner: owner), owner: owner)

@@ -264,7 +264,7 @@ public class EntityAnchorCell: GeneralCell {
                 throw KeypathStorageErrors.denied
             }
             try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
-            try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
+            try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
                 do {
 //                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
                     // If keypath points to identities
@@ -808,7 +808,7 @@ public class EntityAnchorCell: GeneralCell {
         // Validate
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
-        try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
+        try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
 
         // write to storage
         try self.storage.set(keypath: keypath, setValue: value)
