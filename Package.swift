@@ -23,6 +23,7 @@ let package = Package(
         .library(name: "TaxonomyResolver", targets: ["TaxonomyResolver"]),
         .library(name: "KeyPathResolver", targets: ["KeyPathResolver"]),
         .executable(name: "haven-commons", targets: ["HavenCommonsCLI"]),
+        .executable(name: "CellRuntimeBenchmarks", targets: ["CellRuntimeBenchmarks"]),
     ],
     dependencies: [
         .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", from: "1.4.1"),
@@ -124,6 +125,14 @@ let package = Package(
                 .target(name: "PurposeInterestBenchmarkSupport"),
             ],
             path: "commons/cli/haven-commons/Sources/haven-commons"
+        ),
+        .executableTarget(
+            name: "CellRuntimeBenchmarks",
+            dependencies: [
+                .target(name: "CellBase"),
+                .target(name: "CellVapor"),
+            ],
+            path: "Benchmarks/CellRuntimeBenchmarks"
         ),
 //        .target(name: "CellVaporV2",
 //                dependencies: [
