@@ -92,7 +92,7 @@ final class FeedAuthorizationRegistry {
                 if let error { throw error }
                 return nil
             }
-            let authorized = upstream
+            let checked = upstream
                 .map { AuthorizedFeedElement(element: $0, ticket: FlowDeliveryFlight.current?.reserve()) }
                 // byRequest requests unlimited upstream in Combine/OpenCombine,
                 // so bursts hit this explicit bound instead of dropping at source.
@@ -119,7 +119,12 @@ final class FeedAuthorizationRegistry {
                     }.eraseToAnyPublisher()
                 }
                 .handleEvents(receiveCompletion: { _ in lease.failure.send(completion: .finished) })
-                .merge(with: denied)
+                .eraseToAnyPublisher()
+            // OpenCombine 0.14 has no Merge publisher. Two bounded inner
+            // subscriptions provide the same value/failure fan-in on both hosts.
+            let authorized = [checked, denied.eraseToAnyPublisher()].publisher
+                .setFailureType(to: Error.self)
+                .flatMap(maxPublishers: .max(2)) { $0 }
                 .handleEvents(
                     receiveCompletion: { [weak self] _ in self?.remove(lease.id) },
                     receiveCancel: { [weak self] in self?.remove(lease.id) }
