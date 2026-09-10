@@ -8,8 +8,11 @@ import Combine
 import OpenCombine
 #endif
 
-// helper Cell used in resolver when calling pushFlowElement()
+/// Ephemeral process-local producer used by trusted resolver/runtime code.
+/// Its capability is the exact owner object passed at construction, not a
+/// serializable Identity claim. Use GeneralCell for remotely accessible feeds.
 public class FlowElementPusherCell: Emit {
+    public enum AccessError: Error { case localOwnerRequired }
     public func getOwner(requester: Identity) async throws -> Identity {
         _ = requester
         return owner.publicIdentitySnapshot()
@@ -22,7 +25,8 @@ public class FlowElementPusherCell: Emit {
     
     
     public func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, any Error> {
-        feedPublisher.eraseToAnyPublisher()
+        guard requester === owner else { throw AccessError.localOwnerRequired }
+        return feedPublisher.eraseToAnyPublisher()
     }
     public func state(requester: Identity) async throws -> ValueType {
         return .string("not implemented")
@@ -56,39 +60,32 @@ public class FlowElementPusherCell: Emit {
     public func startFeed(requester: Identity) {
     }
     
+    /// Unchecked producer access for trusted host composition only.
     public func getFeedPublisher() -> AnyPublisher<FlowElement, Error> {
         feedPublisher.eraseToAnyPublisher()
     }
     
+    /// Legacy unchecked producer access for trusted host composition only.
     public func flow() async throws -> AnyPublisher<FlowElement, any Error> {
         feedPublisher.eraseToAnyPublisher()
     }
     
     public func admit(context: ConnectContext) async -> ConnectState {
-        return .connected
+        return context.identity === owner ? .connected : .denied
     }
     
     func connect(context: ConnectContext) -> AnyPublisher<ConnectState, Error> {
-        let connectPublisher = PassthroughSubject<ConnectState, Error>()
-        Task {
-            if self.owner == context.identity {
-                connectPublisher.send(.connected)
-                connectPublisher.send(completion: .finished)
-            }
-        }
-        
-        return connectPublisher.eraseToAnyPublisher()
+        Just(context.identity === owner ? ConnectState.connected : .denied)
+            .setFailureType(to: Error.self).eraseToAnyPublisher()
     }
     
     public func addAgreement(_ contract: Agreement, for identity: Identity) async -> AgreementState {
-        return .signed
+        // This local helper neither negotiates nor signs Contracts.
+        return .rejected
     }
     
     func addContract(_ contract: Agreement, for identity: Identity) -> AnyPublisher<AgreementState, Error> {
-        let addContractPublisher = PassthroughSubject<AgreementState, Error>()
-        
-        
-        return addContractPublisher.eraseToAnyPublisher()
+        Just(AgreementState.rejected).setFailureType(to: Error.self).eraseToAnyPublisher()
     }
     
     public func advertise(for identity: Identity) async -> AnyCell {
@@ -96,10 +93,12 @@ public class FlowElementPusherCell: Emit {
     }
 
     public func pushFlowElement(_ flowElement: FlowElement, requester: Identity) {
+        guard requester === owner else { return }
         self.feedPublisher.send(flowElement)
     }
     
     public func pushCompletion(error: Error?, requester: Identity) {
+        guard requester === owner else { return }
         if error == nil {
             self.feedPublisher.send(completion: .finished)
         } else {

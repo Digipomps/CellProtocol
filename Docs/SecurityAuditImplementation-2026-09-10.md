@@ -27,9 +27,27 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–014 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 015 is the
-next FIFO item. 015–024 have not passed implementation acceptance.
+001–019 have passed their local acceptance checks or received the documented
+architecture disposition below. They remain subject to the final consumer/CI
+integration gate. 020 is in progress. 020–024 have not passed acceptance.
+
+### 015–019
+
+015: separate feature-only commit `50b1490`, 19 tests passed in
+`/private/tmp/cp-security-relation-parity-verified.log`. Same synthetic admission
+matrix on Apple and Vapor, including persistence/restart. This does not add the
+unreleased EntityRelation feature to main.
+
+016: documented the trusted-process Swift boundary without removing existing
+raw publisher or mutable policy APIs. These APIs are not plugin isolation.
+017: the ephemeral producer requires its local owner object on requester-bearing
+operations and rejects Agreement signing instead of fabricating `.signed`.
+018: Commons decisions are explicitly advisory supplied-context metadata, not
+verified data-access authority. No protected-data bypass was demonstrated.
+019: README now bounds replay/determinism claims to implemented verified paths.
+
+`/private/tmp/cp-security-runtime-boundaries-v2.log`: 58 tests passed, zero failures,
+including existing Integration, lifecycle, Commons and Entity encryption paths.
 
 ### 013–014 accepted locally
 

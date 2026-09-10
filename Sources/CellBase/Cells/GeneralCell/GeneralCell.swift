@@ -1205,6 +1205,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return nil
     }
     
+    /// Raw process-local producer access for trusted runtime composition only.
+    /// It bypasses requester authorization and revocation. External adapters and
+    /// user sessions must use flow(requester:) and retain that publisher's errors.
     public func getFeedPublisher() -> AnyPublisher<FlowElement, Error> {
         feedPublisher.eraseToAnyPublisher()
     }

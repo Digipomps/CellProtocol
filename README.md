@@ -1,10 +1,12 @@
 
 # HAVEN — Humanely Attuned Virtual Ecosystem Nexus
 
-HAVEN is a deterministic, privacy-first ecosystem for user-owned distributed
+HAVEN is an ecosystem for user-owned distributed
 applications. It provides a minimal and explicit protocol for computation,
 identity, authorization, trust, and event flows. All components are designed
-to be transparent, replayable, and transport-independent.
+to support transparent execution, privacy, replay, and transport independence.
+These guarantees depend on the selected Cell, storage and transport path; the
+generic protocol does not provide them automatically.
 
 Documentation is maintained in the companion repository `CellProtocolDocuments`
 (intended as a submodule). The book chapters listed below live under
@@ -66,14 +68,23 @@ HAVEN Documentation (CellProtocolDocuments/Book)
 
 ## 🏗 Core Concepts
 
-**CellProtocol** — deterministic state + event model  
+**CellProtocol** — explicit state and event contracts, with determinism on verified paths  
 **Identity Model** — domain-scoped cryptographic identity  
 **Contracts** — explicit, auditable capability authorizations  
-**Flows** — ordered, replayable event streams  
+**Flows** — live event streams; ordering and durable replay depend on the implementation  
 **Resolver** — enforces correctness, identity, and capabilities  
 **Scaffold** — runtime for Cells, storage, vault, transport  
 **Bridges** — transport-agnostic envelope carriers  
 **Purpose Framework** — semantic trust and intent alignment  
+
+The ordinary GeneralCell feed is an in-memory publisher. Durable replay requires
+an implemented journal/envelope contract, retained inputs, ordering and tested
+reconstruction. An active subscriber is reauthorized before each new delivery;
+already delivered or transported data cannot be recalled. Swift code running
+inside the host process is trusted composition code, and public mutable policy
+properties do not isolate arbitrary plugins from each other. See
+[the runtime trust boundary](Docs/RuntimeTrustBoundary.md) for the distinction
+between requester authorization and direct host APIs.
 
 ---
 
