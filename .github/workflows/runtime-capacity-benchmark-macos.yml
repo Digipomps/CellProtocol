@@ -36,10 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Fetch the branch ref, rather than a bare commit SHA, so the bounded
-          # history includes the measured runtime base and can be verified.
+          # Fetch the branch ref with history so the intentionally older
+          # measured runtime base remains resolvable as the harness evolves.
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          fetch-depth: 10
+          fetch-depth: 0
 
       - name: Verify the measured runtime base
         shell: bash
