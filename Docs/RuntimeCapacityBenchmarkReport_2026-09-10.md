@@ -2,9 +2,75 @@
 
 ## Konklusjon
 
-Dette er en **før-integrasjons, enkeltrepetisjonsmåling**, ikke en universell kapasitetsgrense. Den er en reproduserbar lokal baseline for CellProtocol-kjernen på én maskin. De syntetiske CPU-arbeidslastene slutter å gi bedre throughput etter 2--4 samtidige worker-tasker, mens p99-latenstiden fortsetter opp. Målingen kan ikke brukes til å oppgi antall brukere, celler eller meldinger et generelt system "tåler".
+Denne rapporten inneholder to **enkeltrepetisjoner på to ulike maskiner**. Den første er en lokal før-integrasjonsbaseline. Den andre er en isolert GitHub Actions-måling av den integrerte runtime-revisjonen `ced03d4`, utført i release-modus og fullført med 14 resultater. Ingen av dem er en universell kapasitetsgrense eller et grunnlag for å oppgi antall brukere, celler eller meldinger et generelt system «tåler».
 
-Persistensdelen er **ikke godkjent som resultat**: alle fire kjøringer stoppet før en operasjon ble målt på grunn av et macOS `/private/tmp`--`/tmp`-aliasproblem i benchmarkens midlertidige rot. I/O-grensen er dermed ikke funnet. Swift Concurrency/Instruments-tracen er heller ikke tatt, fordi volumet nå har bare 2,86 GiB ledig plass. Ingen videre last, bygg eller profilering skal startes før disktrykket er avklart.
+CI-resultatet viser konkrete knekkpunkter på en tildelt macOS-runner med tre aktive prosessorer: cell- og resolverarbeidslastene får ikke en meningsfull throughput-gevinst ved fire workere, mens p99 øker. Persistensveien, som den lokale prøven ikke rakk å validere, lykkes i CI for 100 operasjoner per punkt. Swift Concurrency/Instruments-trace er fortsatt ikke tatt; den lokale maskinen har bare 2,86 GiB ledig plass, og ingen videre lokal last, bygg eller profilering skal startes før disktrykket er avklart.
+
+## Isolert CI-måling av integrert runtime
+
+Den vellykkede [GitHub Actions-kjøringen](https://github.com/Digipomps/CellProtocol/actions/runs/34453379470) (`bounded synthetic runtime matrix`, 12 m 36 s totalt; selve release-matrisen 12 m 20 s) målte runtime-revisjon `ced03d403704f206dcdf83567989959812e49164`. Harnessen var commit `69f048f917a07680c544b026f166b9a1d9db4c07` i [PR 36](https://github.com/Digipomps/CellProtocol/pull/36), som står åpen og umerget.
+
+Workflowen verifiserte før måling at runtime-revisjonen er ancestor av harness-committen, og at `Sources`, `Tests` og `Package.resolved` er uendret mellom dem. Dermed er dette en måling av den eksakte integrerte runtime-kilden, med bare benchmark-/CI-infrastruktur lagt oppå. Jobbens ene annotasjon er en GitHub-advarsel om at `actions/checkout@v4` flyttes fra Node 20 til Node 24; den er ikke et benchmark- eller testavvik.
+
+| Felt | Faktisk CI-miljø |
+| --- | --- |
+| OS | macOS 26.6.2 (build 25G83) |
+| Tildelte ressurser | 3 aktive prosessorer, 7 516 192 768 byte RAM (7 GiB) |
+| Build | SwiftPM release, separat runner-temp-scratch, `--jobs 2` |
+| Matrise | cell/resolver: 5 000 operasjoner; flow: 1 024; persistens: 100; concurrency 1, 2, 4; 60 s prosessgrense |
+| Rådata | 14 `result.json`-filer, exit-status og systemkorrelasjon i Actions-jobbloggen |
+
+`workerTasksCreated` under er harnessens konfigurerte arbeidsoppgaver, ikke det totale antallet Swift tasks eller OS-tråder. Latens er millisekunder. RSS er `getrusage` high-water. CPU-kapasitet er prosessens CPU-tid dividert med veggklokketid og kan derfor overstige 100 %.
+
+### CI: autorisert cell set + get
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 009,31 | 0,896 | 1,672 | 2,298 | 103,16 % | 14,34 MiB |
+| 2 | 987,95 | 1,921 | 2,605 | 3,654 | 150,77 % | 14,45 MiB |
+| 4 | 991,89 | 3,857 | 4,890 | 6,161 | 160,90 % | 14,58 MiB |
+
+På akkurat denne tre-prosessor-runneren økte arbeidstallet CPU-forbruk og hale-latens, men ikke throughput. Dette er et målt knekkpunkt for denne syntetiske lokale veien, ikke en global concurrency-anbefaling.
+
+### CI: resolver-URL + autorisert set + get
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 718,98 | 1,307 | 2,003 | 2,939 | 101,99 % | 14,72 MiB |
+| 2 | 617,94 | 3,033 | 4,265 | 5,977 | 155,52 % | 14,88 MiB |
+| 4 | 710,72 | 5,652 | 8,093 | 11,891 | 163,44 % | 14,95 MiB |
+
+Resolverveien viser samme retning. Workloaden måler URL-splitting, endpointoppslag, autorisering og lokal `GeneralCell` set/get med en syntetisk eier. Den måler ikke signaturverifisering eller fjerntransport.
+
+### CI: lokal flow med ende-til-ende-kvittering
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 20 795,38 | 0,047 | 0,076 | 0,110 | 152,80 % | 14,88 MiB |
+| 2 | 39 897,79 | 0,031 | 0,123 | 0,388 | 185,90 % | 14,89 MiB |
+| 4 | 55 851,88 | 0,053 | 0,158 | 0,204 | 176,97 % | 14,98 MiB |
+
+Flowserien har bare 1 024 observasjoner og varer bare titalls millisekunder, så den er for kort til å kalles en stabil kapasitetstest. Den viser en observerbar throughput-økning mot fire workere på denne runneren, men også høyere median- og p95-latens enn ved én worker. `PassthroughSubject.send` er fortsatt serialisert ved produsentinngangen; resultatet hevder ikke en multiwriter-Combine-kontrakt.
+
+### CI: persistens og I/O
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 326,25 | 2,524 | 5,828 | 10,309 | 82,38 % | 15,45 MiB |
+| 2 | 466,64 | 3,969 | 8,492 | 9,264 | 88,39 % | 15,50 MiB |
+| 4 | 579,43 | 6,191 | 10,527 | 14,457 | 90,84 % | 15,45 MiB |
+
+Alle 300 persistensoperasjonene lyktes. Hver operasjon oppretter en syntetisk persistent `GeneralCell`, krypterer og atomisk skriver den, laster den gjennom `TypedCellUtility`, og kontrollerer runtime-overflaten. Driveren er actor-serialisert fordi det ikke finnes en publisert kontrakt for samtidig bruk av `TypedCellUtility`; høyere caller-concurrency viser derfor køtid, ikke godkjent multiwriter-sikkerhet. `getrusage` rapporterte 0 blokkinn- og blokkut-operasjoner i disse korte løpene, noe som er forenlig med cachet I/O og ikke beviser fravær av diskarbeid. `Data.write(.atomic)` er heller ikke en `fsync`- eller strømtapsdurabilitetsmåling.
+
+### CI: idle og bevisst flow-overflow
+
+Idle holdt én konfigurert `GeneralCell` og resolverregistrering i 5,332 s: 0,042 % CPU-kapasitet og 12,83 MiB RSS-high-water. Ingen applikasjonsoperasjoner ble utført.
+
+I overflow-prøven ble 512 elementer sendt mot en consumer med 5 ms forsinkelse per element. Etter 3,124 s var ett element levert. Det bekrefter det forventede, avgrensede utfallet for `AsyncStream.bufferingOldest(256)`: abonnementet lukkes når en dropp oppstår. Dette er en fail-closed minnegrense, ikke produsent-propagert backpressure og ikke en throughput-score.
+
+### CI-begrensninger
+
+Dette er én kjøring per punkt på en delt, liten macOS-host. Den er ikke direkte sammenlignbar med den lokale M5-baselinen nedenfor, og inneholder verken nettverk, ekstern bridge, database, reell identitet/signaturverifisering, større runtime-state eller stabilitets-/soak-last. Systemdata (`top`, `iostat`, `vm_stat`) er samlet som korrelasjon i jobbloggen, men er ikke prosessattribuert. En GitHub CLI-rate-limit under observasjon av jobben påvirket kun lokal polling; den ferdige jobben ble deretter verifisert via GitHub-grensesnittet og ingen testfeil er knyttet til den hendelsen.
 
 ## Identitet og repeterbarhet
 
@@ -18,9 +84,9 @@ Persistensdelen er **ikke godkjent som resultat**: alle fire kjøringer stoppet 
 | Matrise | idle 5 s; cell/resolver 3 000 operasjoner; flow 512; concurrency 1, 2, 4, 8; prosessgrense 60 s |
 | Rådata | `/private/tmp/CellProtocol-runtime-capacity-cde2e0a-20260910T0729Z` |
 
-PR 35-sikkerhetsendringene (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `cde2e0a` da matrisen startet. Den integrerte `main`-revisjonen er senere bekreftet som `ced03d403704f206dcdf83567989959812e49164` (`ced03d4`), men er ikke benchmarket. Resultatene er derfor ikke bevis på den integrerte revisjonen.
+PR 35-sikkerhetsendringene (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `cde2e0a` da den lokale matrisen startet. Den integrerte `main`-revisjonen `ced03d403704f206dcdf83567989959812e49164` (`ced03d4`) er nå målt isolert i CI, som beskrevet over. De lokale tallene under er fortsatt ikke bevis på den integrerte revisjonen.
 
-`ced03d4` oppgraderer Swift Crypto, SwiftNIO, NIO SSL og NIO HTTP/2 samt `Package.resolved`. Den eksisterende benchmark-scratchen er bygd mot de gamle avhengighetene. Med 2,85 GiB ledig plass kan en "inkrementell" sluttbygging dermed hente og kompilere nye avhengigheter; den kan ikke holdes innenfor en dokumenterbar liten plassgrense. Sluttmålingen er eksplisitt plassblokkert, ikke hoppet over.
+`ced03d4` oppgraderer Swift Crypto, SwiftNIO, NIO SSL og NIO HTTP/2 samt `Package.resolved`. Den eksisterende lokale benchmark-scratchen er bygd mot de gamle avhengighetene. Med 2,85 GiB ledig plass kan en lokal "inkrementell" sluttbygging dermed hente og kompilere nye avhengigheter; den kan ikke holdes innenfor en dokumenterbar liten plassgrense. Den lokale sluttmålingen er eksplisitt plassblokkert, ikke hoppet over; CI-resultatet erstatter den ikke som lokal maskinbaseline.
 
 ## Validerte kjøringer
 
@@ -75,9 +141,9 @@ Flow-arbeidslasten bruker bare 512 elementer og er derfor for kort til å bli to
 
 ### Persistens og I/O
 
-Alle fire persistensløp (`c1`, `c2`, `c4`, `c8`, 100 operasjoner) returnerte exit-status 1 før måling. `CellStoragePathPolicy` vurderte benchmarkroten som `/tmp/...` etter symlink-resolusjon, mens et ikke-eksisterende barn fortsatt var skrevet som `/private/tmp/...`; da ble barnet korrekt avvist som utenfor rot. Dette er et konkret funksjonsfunn for harnessen/rotvalget, ikke en ytelsesverdi.
+Alle fire lokale persistensløp (`c1`, `c2`, `c4`, `c8`, 100 operasjoner) returnerte exit-status 1 før måling. `CellStoragePathPolicy` vurderte benchmarkroten som `/tmp/...` etter symlink-resolusjon, mens et ikke-eksisterende barn fortsatt var skrevet som `/private/tmp/...`; da ble barnet korrekt avvist som utenfor rot. Dette er et konkret funksjonsfunn for harnessen/rotvalget, ikke en ytelsesverdi.
 
-Harnessen oppretter nå den forespurte lagringsroten før den kanonikaliserer den, slik at rot og barn blir i samme navnerom. Endringen er **ikke bygget eller kjørt** på grunn av disktrykket. Ingen I/O-kapasitet, `fsync`-durabilitet eller persistenskonkurranse kan derfor rapporteres nå. `getrusage` viste null prosessattribuerte blokk-I/O-operasjoner for de validerte CPU/flow-kjøringene; det sier ikke noe om cachet persistens-I/O.
+Harnessen oppretter nå den forespurte lagringsroten før den kanonikaliserer den, slik at rot og barn blir i samme navnerom. Den korrigerte veien er bygget og funksjonelt validert i CI-resultatet over, men ikke på den plasspressede lokale maskinen. Ingen lokal I/O-kapasitet, `fsync`-durabilitet eller persistenskonkurranse kan derfor rapporteres. `getrusage` viste null prosessattribuerte blokk-I/O-operasjoner også i de korte CI-persistensløpene; det sier ikke noe om cachet persistens-I/O.
 
 ### Swift tasks kontra OS-tråder
 

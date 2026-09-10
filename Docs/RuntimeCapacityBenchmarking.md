@@ -144,7 +144,9 @@ september 2026 var arbeidskopiens `main` `cde2e0a`; den ventende
 CellProtocol PR 35 (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde
 `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `main`.
 Den senere integrerte revisjonen `ced03d403704f206dcdf83567989959812e49164`
-skal måles separat når maskinens diskbuffer tillater dens oppgraderte SwiftPM-
-avhengigheter. Behold resultatkatalogene som separate sammenligninger. Den faktiske kjøringen på
-`cde2e0a` og dens kvalifiserte begrensninger er dokumentert i
+er målt separat i isolert macOS CI etter denne verifikasjonen. Den lokale
+maskinen har fortsatt ikke nok diskbuffer til å gjenta den med oppgraderte
+SwiftPM-avhengigheter, så resultatkatalogene beholdes som separate
+sammenligninger. Den faktiske kjøringen på `cde2e0a`, CI-kjøringen på `ced03d4`
+og deres kvalifiserte begrensninger er dokumentert i
 [RuntimeCapacityBenchmarkReport_2026-09-10.md](RuntimeCapacityBenchmarkReport_2026-09-10.md).
