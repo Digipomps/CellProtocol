@@ -80,6 +80,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
+        self.agreementTemplate.ensureGrant("r---", for: "entityRelationSchema")
         
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         
@@ -199,6 +200,12 @@ public class EntityAnchorCell: GeneralCell {
             }
             return EntityValidatedContactRecordV1.schemaValue()
         })
+        await addInterceptForGet(requester: owner, key: "entityRelationSchema") { _, requester in
+            guard await self.validateAccess("r---", at: "entityRelationSchema", for: requester) else {
+                throw KeypathStorageErrors.denied
+            }
+            return EntityRelationRecordV1.schemaValue()
+        }
     
     await addInterceptForSet(requester: owner, key: "person", setValueIntercept:  { keypath, value, requester in
         if await self.validateAccess("-w--", at: "person", for: requester) {
@@ -247,6 +254,7 @@ public class EntityAnchorCell: GeneralCell {
                 throw KeypathStorageErrors.denied
             }
             try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
+            try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
             do {
                 let keypathArray = keypath.split(separator: ".")
                 if keypathArray.count > 1 {
@@ -434,6 +442,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
         await registerExploreContract(requester: requester, key: "entityContactSchema", method: .get, input: .null, returns: EntityValidatedContactRecordV1.schemaExploreReturn(), permissions: ["r---"], required: true, description: .string("Reads the value-free, fail-closed schema for owner-signed validated contact persistence."))
+        await registerExploreContract(requester: requester, key: "entityRelationSchema", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the value-free schema for relation records (relations.records.<id>) and their chronicle events. No raw contact values are admitted there."))
         await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
         await registerExploreContract(
             requester: requester,
@@ -771,6 +780,7 @@ public class EntityAnchorCell: GeneralCell {
         // Validate
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
+        try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
 
         // write to storage
         try await self.storage.set(keypath: keypath, setValue: value)
@@ -798,6 +808,7 @@ public class EntityAnchorCell: GeneralCell {
                 throw EntityAuthorityCommitError.requesterMismatch
             }
             try EntityValidatedContactRecordV1.validatePersistenceEnvelope(envelope)
+            try EntityRelationRecordV1.validatePersistenceEnvelope(envelope)
             // The stored descriptor is intentionally public-only. After an explicit
             // ownership proof, the active requester supplies the vault-backed signer.
             let authority = requester
