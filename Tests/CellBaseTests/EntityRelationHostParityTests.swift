@@ -44,6 +44,58 @@ final class EntityRelationHostParityTests: XCTestCase {
         try await verify(await EntityAnchorCell(owner: owner), owner: owner)
     }
 
+    func testAppleOrdinaryChronicleBatchPreservesProtectedEvents() async throws {
+        let owner = try await owner()
+        try await verifyOrdinaryChronicleBatch(await EntityAnchorCell(owner: owner), owner: owner)
+    }
+
+    func verifyOrdinaryChronicleBatch<T: GeneralCell>(_ cell: T, owner: Identity) async throws {
+        let event = EntityRelationInteractionEvent(id: "one", relationID: "synthetic", kind: .messageSent,
+            at: Date(timeIntervalSince1970: 1), sourceCell: "security-test")
+        let eventValue = EntityRelationCodec.value(event)
+        let eventPath = EntityRelationRecordV1.chronicleKeypath(relationID: event.relationID, eventID: event.id)
+        let first: ValueType = .object(["id": .string("ordinary"), "kind": .string("conference_registration")])
+        let second: ValueType = .object(["type": .string("contact.endpoint.published")])
+        let source = FlowElementPusherCell(owner: owner)
+        _ = try await cell.attach(emitter: source, label: "chronicle-compatibility", requester: owner)
+        try await cell.absorbFlow(label: "chronicle-compatibility", requester: owner)
+        defer { cell.detach(label: "chronicle-compatibility", requester: owner) }
+        let stream = try await cell.flow(requester: owner)
+        let cases: [(EntityBatchPersistEnvelope, Bool)] = [
+            (.init(schema: EntityRelationRecordV1.envelopeSchema, mutations: [.init(keypath: eventPath, value: eventValue)]), true),
+            (.init(schema: "conference.registration.v1", mutations: [
+                .init(keypath: "chronicle[+]", value: first), .init(keypath: "chronicle[+]", value: second)
+            ]), true),
+            (.init(schema: "legacy", mutations: [
+                .init(keypath: "chronicle[+]", value: .object(["id": .string("must-not-commit")])),
+                .init(keypath: "chronicle[id=ordinary]", value: eventValue)
+            ]), false),
+            (.init(schema: "legacy", mutations: [.init(keypath: "chronicle[+]", value: eventValue)]), false)
+        ]
+        for (index, entry) in cases.enumerated() {
+            let finished = expectation(description: "chronicle compatibility \(index)")
+            let correlation = "chronicle-case-\(index)"
+            let subscription = stream.sink(receiveCompletion: { _ in }, receiveValue: { element in
+                guard case let .object(response) = element.content,
+                      response["correlationId"] == .string(correlation) else { return }
+                XCTAssertEqual(response["status"], .string(entry.1 ? "persisted" : "failed"), "case \(index)")
+                finished.fulfill()
+            })
+            source.pushFlowElement(FlowElement(title: "chronicle compatibility", content: .object([
+                "operation": .string(EntityBatchPersistEnvelope.operation), "correlationId": .string(correlation),
+                "envelope": .object(entry.0.objectValue())
+            ]), properties: nil), requester: owner)
+            await fulfillment(of: [finished], timeout: 3)
+            subscription.cancel()
+        }
+        let expected: ValueType = .list([eventValue, first, second])
+        let chronicle = try await cell.get(keypath: "chronicle", requester: owner)
+        XCTAssertTrue(ExploreContractValidator.deepEqual(chronicle, expected), "Rejected batches must not partially append or alter protected events")
+        let restarted = try JSONDecoder().decode(T.self, from: JSONEncoder().encode(cell))
+        let restored = try await restarted.get(keypath: "chronicle", requester: owner)
+        XCTAssertTrue(ExploreContractValidator.deepEqual(restored, expected))
+    }
+
     func verify<T: GeneralCell>(_ cell: T, owner: Identity) async throws {
         let valid = EntityRelationRecord(relationID: "synthetic", subject: .init(displayName: "Synthetic person"),
             origin: .init(kind: .manual, at: Date(timeIntervalSince1970: 1), sourceLabel: "security-test"),
