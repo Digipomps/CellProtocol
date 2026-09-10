@@ -84,20 +84,20 @@ assert_wrapper_fails() {
   fi
   case "$mode" in
     child-failure)
-      rg -q '^failed_runs=[1-9]' "$output_root/run-configuration.txt"
-      rg -q 'Benchmark child exited with status 17' "$output_root"/*/failure.txt
+      /usr/bin/grep -Eq '^failed_runs=[1-9]' "$output_root/run-configuration.txt"
+      /usr/bin/grep -q 'Benchmark child exited with status 17' "$output_root"/*/failure.txt
       ;;
     missing-json)
-      rg -q '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      rg -q 'Missing or empty result.json' "$output_root"/*/validation-errors.txt
+      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      /usr/bin/grep -q 'Missing or empty result.json' "$output_root"/*/validation-errors.txt
       ;;
     malformed-json)
-      rg -q '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      rg -q 'Missing or invalid JSON value' "$output_root"/*/validation-errors.txt
+      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      /usr/bin/grep -q 'Missing or invalid JSON value' "$output_root"/*/validation-errors.txt
       ;;
     wrong-ack)
-      rg -q '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      rg -q 'Unexpected summary.successfulOperations|Overflow acknowledgement mismatch' "$output_root"/*/validation-errors.txt
+      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      /usr/bin/grep -Eq 'Unexpected summary.successfulOperations|Overflow acknowledgement mismatch' "$output_root"/*/validation-errors.txt
       ;;
   esac
 }
