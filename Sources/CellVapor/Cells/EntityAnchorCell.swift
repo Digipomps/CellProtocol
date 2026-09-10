@@ -808,7 +808,21 @@ public class EntityAnchorCell: GeneralCell {
                 throw EntityAuthorityCommitError.requesterMismatch
             }
             try EntityValidatedContactRecordV1.validatePersistenceEnvelope(envelope)
-            try EntityRelationRecordV1.validatePersistenceEnvelope(envelope)
+            let relationPolicy = EntityRelationRecordV1.interactionPolicy(
+                from: try? await storage.get(keypath: EntityRelationRecordV1.interactionPolicyKeypath)
+            )
+            try EntityRelationRecordV1.validatePersistenceEnvelope(envelope, interactionPolicy: relationPolicy)
+            var relationEvents: [String: ValueType] = [:]
+            for mutation in envelope.mutations where EntityRelationRecordV1.isRelationChronicleKeypath(mutation.keypath) {
+                let stored: ValueType?
+                if let pending = relationEvents[mutation.keypath] {
+                    stored = pending
+                } else {
+                    stored = try? await storage.get(keypath: mutation.keypath)
+                }
+                try EntityRelationRecordV1.validateExistingEvent(stored, proposed: mutation.value)
+                relationEvents[mutation.keypath] = mutation.value
+            }
             // The stored descriptor is intentionally public-only. After an explicit
             // ownership proof, the active requester supplies the vault-backed signer.
             let authority = requester

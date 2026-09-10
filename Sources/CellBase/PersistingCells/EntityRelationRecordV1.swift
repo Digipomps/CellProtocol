@@ -393,7 +393,9 @@ public struct EntityRelationRecord: Codable, Equatable, Sendable {
             next.standing.lastInviteAt = event.at
             if next.standing.trust == .none { next.standing.trust = .invited }
         case .inviteJoined:
-            next.standing.trust = next.standing.trust == .verified ? .verified : .joined
+            if next.standing.trust != .blocked && next.standing.trust != .verified {
+                next.standing.trust = .joined
+            }
             next.standing.joinedAt = next.standing.joinedAt ?? event.at
         case .vcPresented:
             if next.standing.trust != .blocked { next.standing.trust = .verified }
@@ -478,6 +480,58 @@ public struct EntityRelationInteractionEvent: Codable, Equatable, Sendable {
         self.purposeRef = purposeRef
         self.sourceCell = sourceCell
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, eventID, schema, relationID, kind, at, channel, direction
+        case contentMode, summary, evidenceID, purposeRef, sourceCell
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try c.decode(String.self, forKey: .schema)
+        relationID = try c.decode(String.self, forKey: .relationID)
+        let storedID = try c.decode(String.self, forKey: .id)
+        if schema == EntityRelationRecordV1.eventSchema {
+            id = try c.decode(String.self, forKey: .eventID)
+            guard storedID == EntityRelationRecordV1.chronicleID(relationID: relationID, eventID: id) else {
+                throw EntityRelationRecordErrorV1.relationBindingMismatch
+            }
+        } else {
+            // Legacy feature-branch v1 values remain readable. New admission
+            // requires v2 so the list selector and stored id actually agree.
+            id = storedID
+        }
+        kind = try c.decode(EntityRelationInteractionKind.self, forKey: .kind)
+        at = try c.decode(Date.self, forKey: .at)
+        channel = try c.decodeIfPresent(EntityRelationChannelKind.self, forKey: .channel)
+        direction = try c.decodeIfPresent(EntityRelationDirection.self, forKey: .direction)
+        contentMode = try c.decode(EntityRelationInteractionPolicyMode.self, forKey: .contentMode)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary)
+        evidenceID = try c.decodeIfPresent(String.self, forKey: .evidenceID)
+        purposeRef = try c.decode(String.self, forKey: .purposeRef)
+        sourceCell = try c.decode(String.self, forKey: .sourceCell)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schema, forKey: .schema)
+        try c.encode(relationID, forKey: .relationID)
+        if schema == EntityRelationRecordV1.eventSchema {
+            try c.encode(EntityRelationRecordV1.chronicleID(relationID: relationID, eventID: id), forKey: .id)
+            try c.encode(id, forKey: .eventID)
+        } else {
+            try c.encode(id, forKey: .id)
+        }
+        try c.encode(kind, forKey: .kind)
+        try c.encode(at, forKey: .at)
+        try c.encodeIfPresent(channel, forKey: .channel)
+        try c.encodeIfPresent(direction, forKey: .direction)
+        try c.encode(contentMode, forKey: .contentMode)
+        try c.encodeIfPresent(summary, forKey: .summary)
+        try c.encodeIfPresent(evidenceID, forKey: .evidenceID)
+        try c.encode(purposeRef, forKey: .purposeRef)
+        try c.encode(sourceCell, forKey: .sourceCell)
+    }
 }
 
 // MARK: - Keypaths, validation, codec
@@ -487,7 +541,7 @@ public struct EntityRelationInteractionEvent: Codable, Equatable, Sendable {
 /// that namespace keeps its own, stricter rules.
 public enum EntityRelationRecordV1 {
     public static let recordSchema = "haven.entity-relation-record.v1"
-    public static let eventSchema = "haven.relation-interaction-event.v1"
+    public static let eventSchema = "haven.relation-interaction-event.v2"
     public static let envelopeSchema = "haven.entity-relation-batch.v1"
     public static let protectedRoot = "relations.records"
     public static let chronicleIDPrefix = "relation-event-"
@@ -507,16 +561,26 @@ public enum EntityRelationRecordV1 {
     }
 
     public static func isProtectedKeypath(_ keypath: String) -> Bool {
-        keypath == protectedRoot || keypath.hasPrefix(protectedRoot + ".")
+        let keypath = String(keypath.drop(while: { $0 == "." }))
+        return keypath == "relations" || keypath.hasPrefix("relations[") || keypath == protectedRoot || keypath.hasPrefix(protectedRoot + ".") || keypath.hasPrefix(protectedRoot + "[")
     }
 
     public static func isRelationChronicleKeypath(_ keypath: String) -> Bool {
-        keypath.hasPrefix("chronicle[id=\(chronicleIDPrefix)")
+        let keypath = String(keypath.drop(while: { $0 == "." }))
+        if keypath == "chronicle" || keypath.hasPrefix("chronicle.") { return true }
+        guard keypath.hasPrefix("chronicle[") else { return false }
+        // Only an exact, non-reserved id selector can address an unrelated
+        // chronicle entry. Indexes, alternate selectors, and descendants can
+        // otherwise replace or modify a protected relation event.
+        let ordinaryPrefix = "chronicle[id="
+        guard keypath.hasPrefix(ordinaryPrefix), keypath.hasSuffix("]") else { return true }
+        let id = String(keypath.dropFirst(ordinaryPrefix.count).dropLast())
+        return id.hasPrefix(chronicleIDPrefix) || (try? validateIdentifier(id)) == nil
     }
 
     /// Generic writes may not touch the namespace; the batch path validates.
     public static func rejectDirectMutation(to keypath: String) throws {
-        if isProtectedKeypath(keypath) {
+        if isProtectedKeypath(keypath) || isRelationChronicleKeypath(keypath) {
             throw EntityRelationRecordErrorV1.protectedKeypathRequiresRelationSchema
         }
     }
@@ -526,7 +590,10 @@ public enum EntityRelationRecordV1 {
     /// relation chronicle mutation must decode as an event and must not carry
     /// content unless it says it does. Batches that touch neither pass
     /// through untouched.
-    public static func validatePersistenceEnvelope(_ envelope: EntityBatchPersistEnvelope) throws {
+    public static func validatePersistenceEnvelope(
+        _ envelope: EntityBatchPersistEnvelope,
+        interactionPolicy: EntityRelationInteractionPolicyMode = defaultInteractionPolicy
+    ) throws {
         let recordMutations = envelope.mutations.filter { isProtectedKeypath($0.keypath) }
         let eventMutations = envelope.mutations.filter { isRelationChronicleKeypath($0.keypath) }
         guard !recordMutations.isEmpty || !eventMutations.isEmpty else { return }
@@ -538,15 +605,19 @@ public enum EntityRelationRecordV1 {
         for mutation in recordMutations {
             // Forgetting a relation is a null write to its own keypath.
             if case .null = mutation.value {
-                guard mutation.keypath != protectedRoot else {
+                guard mutation.keypath.hasPrefix(protectedRoot + ".") else {
                     throw EntityRelationRecordErrorV1.relationBindingMismatch
                 }
+                try validateIdentifier(String(mutation.keypath.dropFirst(protectedRoot.count + 1)))
                 continue
             }
             guard let record = EntityRelationCodec.decode(EntityRelationRecord.self, from: mutation.value) else {
                 throw EntityRelationRecordErrorV1.invalidRecordShape
             }
             try validate(record)
+            guard ExploreContractValidator.deepEqual(mutation.value, EntityRelationCodec.value(record)) else {
+                throw EntityRelationRecordErrorV1.invalidRecordShape
+            }
             guard mutation.keypath == keypath(relationID: record.relationID) else {
                 throw EntityRelationRecordErrorV1.relationBindingMismatch
             }
@@ -557,6 +628,13 @@ public enum EntityRelationRecordV1 {
                 throw EntityRelationRecordErrorV1.invalidEventShape
             }
             try validate(event)
+            guard interactionPolicy != .off,
+                  event.contentMode != .full || interactionPolicy == .full else {
+                throw EntityRelationRecordErrorV1.contentNotAllowedUnderPolicy
+            }
+            guard ExploreContractValidator.deepEqual(mutation.value, EntityRelationCodec.value(event)) else {
+                throw EntityRelationRecordErrorV1.invalidEventShape
+            }
             guard mutation.keypath == chronicleKeypath(relationID: event.relationID, eventID: event.id) else {
                 throw EntityRelationRecordErrorV1.relationBindingMismatch
             }
@@ -595,11 +673,30 @@ public enum EntityRelationRecordV1 {
         try validateIdentifier(event.id)
         try validateIdentifier(event.relationID)
         try requireString(event.sourceCell, field: "sourceCell", maxUTF8Bytes: 256)
-        if event.contentMode != .full, event.summary != nil {
+        if event.contentMode == .off || (event.contentMode != .full && event.summary != nil) {
             throw EntityRelationRecordErrorV1.contentNotAllowedUnderPolicy
         }
         if let summary = event.summary, summary.utf8.count > 2_000 {
             throw EntityRelationRecordErrorV1.invalidStringField("summary")
+        }
+    }
+
+    /// A missing setting means metadata only; malformed persisted settings
+    /// disable capture. A submitted event cannot grant itself content consent.
+    public static func interactionPolicy(from stored: ValueType?) -> EntityRelationInteractionPolicyMode {
+        guard let stored else { return defaultInteractionPolicy }
+        guard case let .string(raw) = stored,
+              let mode = EntityRelationInteractionPolicyMode(rawValue: raw) else { return .off }
+        return mode
+    }
+
+    /// v1's hyphen-separated chronicle address can collide for different
+    /// relation/event ID pairs. Keep its wire shape, but never overwrite an
+    /// existing event with different content or a different binding.
+    public static func validateExistingEvent(_ stored: ValueType?, proposed: ValueType) throws {
+        guard let stored, stored != .null else { return }
+        guard ExploreContractValidator.deepEqual(stored, proposed) else {
+            throw EntityRelationRecordErrorV1.relationBindingMismatch
         }
     }
 

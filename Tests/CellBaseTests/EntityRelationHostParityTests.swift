@@ -13,11 +13,14 @@ import OpenCombine
 final class EntityRelationHostParityTests: XCTestCase {
     private var previousRoot: String?
     private var previousVault: IdentityVaultProtocol?
+    private var previousKey: Data?
     private var root: URL!
 
     override func setUpWithError() throws {
         previousRoot = CellBase.documentRootPath
         previousVault = CellBase.defaultIdentityVault
+        previousKey = CellBase.persistedCellMasterKey
+        CellBase.persistedCellMasterKey = Data(repeating: 0x71, count: 32)
         root = FileManager.default.temporaryDirectory.appendingPathComponent("relation-parity-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         CellBase.documentRootPath = root.path
@@ -27,6 +30,7 @@ final class EntityRelationHostParityTests: XCTestCase {
     override func tearDownWithError() throws {
         CellBase.documentRootPath = previousRoot
         CellBase.defaultIdentityVault = previousVault
+        CellBase.persistedCellMasterKey = previousKey
         try FileManager.default.removeItem(at: root)
     }
 
@@ -57,25 +61,41 @@ final class EntityRelationHostParityTests: XCTestCase {
         var event = EntityRelationInteractionEvent(id: "one", relationID: "synthetic", kind: .inviteSent,
             at: Date(timeIntervalSince1970: 1), sourceCell: "security-test")
         event.summary = "Not allowed under metadata policy"
-        let matrix: [(String, String, ValueType, Bool)] = [
+        let fullEvent = EntityRelationInteractionEvent(id: "full", relationID: "synthetic", kind: .messageSent,
+            at: valid.createdAt, contentMode: .full, summary: "Synthetic content", sourceCell: "security-test")
+        let fullPath = EntityRelationRecordV1.chronicleKeypath(relationID: "synthetic", eventID: "full")
+        var matrix: [(String, String, ValueType, Bool)] = [
             ("wrong-schema", path, EntityRelationCodec.value(valid), false),
             (EntityRelationRecordV1.envelopeSchema, path + "-other", EntityRelationCodec.value(valid), false),
             (EntityRelationRecordV1.envelopeSchema, path, EntityRelationCodec.value(rawAddress), false),
             (EntityRelationRecordV1.envelopeSchema, path, .string("invalid-record"), false),
             (EntityRelationRecordV1.envelopeSchema, EntityRelationRecordV1.chronicleKeypath(relationID: "synthetic", eventID: "one"), EntityRelationCodec.value(event), false),
+            (EntityRelationRecordV1.envelopeSchema, fullPath, EntityRelationCodec.value(fullEvent), false),
+            (EntityRelationRecordV1.envelopeSchema, "relations", .object(["records": .object([:])]), false),
+            (EntityRelationRecordV1.envelopeSchema, path + ".subject", .null, false),
             (EntityRelationRecordV1.envelopeSchema, path, EntityRelationCodec.value(valid), true)
         ]
+        let firstEvent = EntityRelationInteractionEvent(id: "c", relationID: "a-b", kind: .messageSent, at: valid.createdAt, sourceCell: "security-test")
+        let collidingEvent = EntityRelationInteractionEvent(id: "b-c", relationID: "a", kind: .messageSent, at: valid.createdAt, sourceCell: "security-test")
+        let collisionPath = EntityRelationRecordV1.chronicleKeypath(relationID: "a-b", eventID: "c")
+        matrix.append((EntityRelationRecordV1.envelopeSchema, collisionPath, EntityRelationCodec.value(firstEvent), true))
+        matrix.append((EntityRelationRecordV1.envelopeSchema, collisionPath, EntityRelationCodec.value(firstEvent), true))
+        matrix.append((EntityRelationRecordV1.envelopeSchema, collisionPath, EntityRelationCodec.value(collidingEvent), false))
+        matrix.append((EntityRelationRecordV1.envelopeSchema, fullPath, EntityRelationCodec.value(fullEvent), true))
         let source = FlowElementPusherCell(owner: owner)
         _ = try await cell.attach(emitter: source, label: "parity", requester: owner)
         try await cell.absorbFlow(label: "parity", requester: owner)
         let stream = try await cell.flow(requester: owner)
         for (index, entry) in matrix.enumerated() {
+            if index == matrix.count - 1 {
+                _ = try await cell.set(keypath: EntityRelationRecordV1.interactionPolicyKeypath, value: .string("full"), requester: owner)
+            }
             let finished = expectation(description: "matrix \(index)")
             let correlation = "case-\(index)"
             let subscription = stream.sink(receiveCompletion: { _ in }, receiveValue: { element in
                 guard case let .object(response) = element.content,
                       response["correlationId"] == .string(correlation) else { return }
-                XCTAssertEqual(response["status"], .string(entry.3 ? "persisted" : "failed"))
+                XCTAssertEqual(response["status"], .string(entry.3 ? "persisted" : "failed"), "case \(index), \(entry.1)")
                 finished.fulfill()
             })
             let envelope = EntityBatchPersistEnvelope(schema: entry.0, mutations: [.init(keypath: entry.1, value: entry.2)])
