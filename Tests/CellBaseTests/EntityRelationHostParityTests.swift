@@ -90,10 +90,10 @@ final class EntityRelationHostParityTests: XCTestCase {
         }
         let expected: ValueType = .list([eventValue, first, second])
         let chronicle = try await cell.get(keypath: "chronicle", requester: owner)
-        XCTAssertEqual(chronicle, expected, "Rejected batches must not partially append or alter protected events")
+        XCTAssertTrue(ExploreContractValidator.deepEqual(chronicle, expected), "Rejected batches must not partially append or alter protected events")
         let restarted = try JSONDecoder().decode(T.self, from: JSONEncoder().encode(cell))
         let restored = try await restarted.get(keypath: "chronicle", requester: owner)
-        XCTAssertEqual(restored, expected)
+        XCTAssertTrue(ExploreContractValidator.deepEqual(restored, expected))
     }
 
     func verify<T: GeneralCell>(_ cell: T, owner: Identity) async throws {

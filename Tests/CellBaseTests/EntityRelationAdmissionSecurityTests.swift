@@ -20,8 +20,8 @@ final class EntityRelationAdmissionSecurityTests: XCTestCase {
             try EntityRelationRecordV1.rejectDirectMutation(to: mutation.keypath, value: mutation.value)
             try storage.set(keypath: mutation.keypath, setValue: mutation.value)
         }
-        XCTAssertEqual(try storage.get(keypath: path), EntityRelationCodec.value(event))
-        XCTAssertEqual(try storage.get(keypath: "chronicle"), .list([EntityRelationCodec.value(event), first, second]))
+        XCTAssertTrue(ExploreContractValidator.deepEqual(try storage.get(keypath: path), EntityRelationCodec.value(event)))
+        XCTAssertTrue(ExploreContractValidator.deepEqual(try storage.get(keypath: "chronicle"), .list([EntityRelationCodec.value(event), first, second])))
         XCTAssertNoThrow(try EntityRelationRecordV1.rejectDirectMutation(to: ".chronicle[+]", value: first))
     }
 
