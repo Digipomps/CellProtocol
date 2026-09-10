@@ -25,7 +25,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     env:
-      RUNTIME_REVISION: ced03d403704f206dcdf83567989959812e49164
+      RUNTIME_REVISION: e03923cb2f1d5a339eaf62585ddc9dddf7750cec
       BENCHMARK_BUILD_JOBS: '2'
       BENCHMARK_LOAD_LEVELS: '1 2 4'
       BENCHMARK_OPERATIONS: '5000'
