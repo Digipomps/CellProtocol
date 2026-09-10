@@ -134,8 +134,13 @@ spor sammen med `top.txt`; ikke erstatt task-tall med OS-trådtall.
 
 ## Integrasjonsrevisjon og registrert baseline
 
-Denne benchmarktargeten registrerer SHA-en som wrapperen faktisk bygger. Ved
-målingen 10. september 2026 var arbeidskopiens `main` `cde2e0a`; den ventende
+Denne benchmarktargeten registrerer både harnessens faktiske git-SHA i
+`run-configuration.txt` og runtime-SHA-en i hvert `result.json`. De er like
+som standard. `BENCHMARK_RUNTIME_REVISION` kan bare brukes når en CI-jobb
+verifiserer at runtime-SHA-en er ancestor av harness-SHA-en og at `Sources`,
+`Tests` og `Package.resolved` er uendret mellom dem; dette skiller en liten
+benchmark-harnesscommit fra runtimekilden den måler. Ved målingen 10.
+september 2026 var arbeidskopiens `main` `cde2e0a`; den ventende
 CellProtocol PR 35 (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde
 `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `main`.
 Den senere integrerte revisjonen `ced03d403704f206dcdf83567989959812e49164`

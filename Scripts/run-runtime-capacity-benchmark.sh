@@ -25,10 +25,12 @@ max_wall_seconds="${BENCHMARK_MAX_WALL_SECONDS:-60}"
 mkdir -p "$output_root"
 mkdir -p "$scratch_root"
 
-revision="$(git -C "$repo_root" rev-parse HEAD)"
+git_revision="$(git -C "$repo_root" rev-parse HEAD)"
+runtime_revision="${BENCHMARK_RUNTIME_REVISION:-$git_revision}"
 branch="$(git -C "$repo_root" branch --show-current)"
 {
-  echo "revision=$revision"
+  echo "git_revision=$git_revision"
+  echo "runtime_revision=$runtime_revision"
   echo "branch=$branch"
   echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "build_jobs=$build_jobs"
@@ -61,7 +63,11 @@ swift build \
   > "$output_root/build.stdout.txt" \
   2> "$output_root/build.stderr.txt"
 
-benchmark_binary="$scratch_root/arm64-apple-macosx/release/CellRuntimeBenchmarks"
+benchmark_binary="$(swift build \
+  -c release \
+  --scratch-path "$scratch_root" \
+  --package-path "$repo_root" \
+  --show-bin-path)/CellRuntimeBenchmarks"
 if [[ ! -x "$benchmark_binary" ]]; then
   echo "Expected benchmark binary is missing: $benchmark_binary" >&2
   exit 1
@@ -84,7 +90,7 @@ run_one() {
     --workload "$workload"
     --concurrency "$concurrency"
     --operations "$operation_count"
-    --revision "$revision"
+    --revision "$runtime_revision"
   )
   if [[ "$workload" == "idle" ]]; then
     arguments+=(--idle-seconds "$idle_seconds")

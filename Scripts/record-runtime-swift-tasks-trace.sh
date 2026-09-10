@@ -18,7 +18,11 @@ shift
 script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 scratch_root="${BENCHMARK_SCRATCH_DIR:-/private/tmp/CellProtocol-runtime-capacity-build}"
-benchmark_binary="$scratch_root/arm64-apple-macosx/release/CellRuntimeBenchmarks"
+benchmark_binary="$(swift build \
+  -c release \
+  --scratch-path "$scratch_root" \
+  --package-path "$repo_root" \
+  --show-bin-path)/CellRuntimeBenchmarks"
 time_limit="${BENCHMARK_TRACE_TIME_LIMIT:-20s}"
 
 if [[ ! -x "$benchmark_binary" ]]; then
