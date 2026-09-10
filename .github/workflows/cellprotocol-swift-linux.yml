@@ -88,6 +88,17 @@ jobs:
             "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/TestSupport/MockCellResolver.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          # Exercise security authorization under OpenCombine, independently of
+          # the Apple Combine test run. These tests use only CellBase and fixtures.
+          for suite in AgreementSecurityTests FileCryptoSecurityTests \
+            FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
+            BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
+            FlowElementPusherSecurityTests; do
+            cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          done
+          cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
+            Tests/CellBaseTests/TestSupport/TestFixtures.swift \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"
           cp Tests/Linux/DeviceIngressCompositionRootPositive.swift \

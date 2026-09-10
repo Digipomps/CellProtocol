@@ -49,6 +49,35 @@ verified data-access authority. No protected-data bypass was demonstrated.
 `/private/tmp/cp-security-runtime-boundaries-v2.log`: 58 tests passed, zero failures,
 including existing Integration, lifecycle, Commons and Entity encryption paths.
 
+### 020 integrated gate (running)
+
+First full macOS run on source commit `0157db7`:
+`/private/tmp/cp-security-full-macos.log`, 1058 tests, 2 failed assertions in
+one RelationalLearning concurrent-flow test. The test inspected the recorder
+before the final asynchronously authorized event arrived. It now waits on an
+explicit 32-event expectation and still requires exact count and journal order.
+`/private/tmp/cp-security-relational-delivery.log`: 45 relevant tests passed.
+A fresh full run is required after that test correction.
+
+Linux/OpenCombine uses the actual modified CI step, extracted into
+`/private/tmp/cp-security-linux-gate/run-ci-step.sh`, in the existing
+`swift:6.2.4-noble` Linux amd64 image (host is arm64). Read-only source bind,
+private writable gate directory, 4 CPU/6 GiB limit, 2 build jobs. Log:
+`/private/tmp/cp-security-linux.log`. Gate package lives under
+`/private/tmp/cp-security-linux-gate/device-ingress-linux`.
+
+CellScaffold consumer checkout: `/private/tmp/cp-security-consumer/CellScaffold`,
+clean origin/main `5e64c296c469e3232de2d475aa7865b60655627d`. Local CellProtocol
+override points to this security worktree through sibling `CellProtocol` symlink.
+DiMyMint `dc4e8620f80ddb3691b9d401a3d8b7902518d093` and DiMyMicropayments
+`943fc903413b7c2c1defa8728a36f1f96690381f` are clean detached sibling checkouts
+matching the consumer's pins. Original dirty repositories were not edited.
+Private SwiftPM key `scaffold-security-20260910`; log:
+`/private/tmp/cp-security-scaffold-consumer.log`. Bridge, identity provisioning,
+identity manifest and Entity proof persistence suites are being built/tested.
+
+No commits have been pushed or merged. Fresh origin/main still equals `cde2e0a`.
+
 ### 013–014 accepted locally
 
 `/private/tmp/cp-security-diagnostics-verified.log`: 68 tests passed, zero failures,

@@ -1,0 +1,30 @@
+name: CellProtocol macOS regression
+
+on:
+  pull_request:
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', '.github/workflows/security-regression-macos.yml']
+  push:
+    branches: [main]
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', '.github/workflows/security-regression-macos.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-regression-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Test exact sources and pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          swift test --disable-automatic-resolution --jobs 4
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
