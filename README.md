@@ -200,6 +200,8 @@ If `CellBaseTests` shows as “missing”, verify these two entries match your l
 The security-patched dependency set requires Swift 6.1 or later. See
 [dependency security and coordinated upgrades](Docs/DependencySecurity-2026-09-10.md)
 before updating hosts pinned to Swift Crypto 3.
+Building the complete Apple target and its tests also requires Xcode 26 or later
+because the existing intelligence tools import the FoundationModels SDK.
 
 For local or agent-driven SwiftPM commands, use the bounded build runner so
 scratch, dependency, and module caches are serialized and retained within a
