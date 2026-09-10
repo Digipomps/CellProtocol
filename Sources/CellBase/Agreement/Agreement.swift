@@ -40,12 +40,7 @@ public class Agreement: Codable, Grantable {
             signatories = try values.decode([Identity].self, forKey: .signatories)
         }
         if values.contains(.conditions) {
-            if let typedCondtions = try? values.decode([TypedCondition].self, forKey: .conditions) {
-                conditions = []
-                for currentTypeCondition in typedCondtions {
-                    conditions.append(currentTypeCondition.condition)
-                }
-            }
+            conditions = try values.decode([TypedCondition].self, forKey: .conditions).map(\.condition)
         }
         if values.contains(.grants) {
             grants = try values.decode([Grant].self, forKey: .grants)

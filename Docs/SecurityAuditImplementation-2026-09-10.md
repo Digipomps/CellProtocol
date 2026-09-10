@@ -27,9 +27,19 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–009 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 010 is the
-next FIFO item. 010–024 have not passed implementation acceptance.
+001–012 have passed their local acceptance checks, including serialized bridge
+tests. They remain subject to the final consumer/CI integration gate. 013 is the
+next FIFO item. 013–024 have not passed implementation acceptance.
+
+### 010–012 accepted locally
+
+`/private/tmp/cp-security-agreement.log`: 147 tests passed, zero failures.
+Target keypath names no longer establish membership. Unsupported target/source
+grant attestations remain unresolved; use a supported verified condition instead.
+Identity.granted now compares permission bits through Grant.granted, preserving
+Grant equality's existing keypath-based collection semantics. Malformed, null,
+missing-type and unknown-type condition payloads fail decoding; a genuinely
+absent or empty conditions list remains compatible with existing writers.
 
 ### 006–009 accepted locally
 
