@@ -254,7 +254,7 @@ public class EntityAnchorCell: GeneralCell {
                 throw KeypathStorageErrors.denied
             }
             try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
-            try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
+            try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
             do {
                 let keypathArray = keypath.split(separator: ".")
                 if keypathArray.count > 1 {
@@ -780,7 +780,7 @@ public class EntityAnchorCell: GeneralCell {
         // Validate
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
-        try EntityRelationRecordV1.rejectDirectMutation(to: keypath)
+        try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
 
         // write to storage
         try await self.storage.set(keypath: keypath, setValue: value)

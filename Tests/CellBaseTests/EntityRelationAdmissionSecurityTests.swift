@@ -2,6 +2,52 @@ import XCTest
 @testable import CellBase
 
 final class EntityRelationAdmissionSecurityTests: XCTestCase {
+    func testOrdinaryChronicleAppendsPreserveLegacyPayloadsAndReservedEvents() throws {
+        let event = EntityRelationInteractionEvent(id: "one", relationID: "synthetic", kind: .messageSent,
+            at: Date(timeIntervalSince1970: 1), sourceCell: "test")
+        let path = EntityRelationRecordV1.chronicleKeypath(relationID: event.relationID, eventID: event.id)
+        var storage: Object = [:]
+        try storage.set(keypath: path, setValue: EntityRelationCodec.value(event))
+        let first: ValueType = .object(["id": .string("conference-registration-one"), "kind": .string("participant_registration_bound")])
+        let second: ValueType = .object(["type": .string("contact.endpoint.published")])
+        let envelope = EntityBatchPersistEnvelope(schema: "conference.participant.registration.updated.v1", mutations: [
+            .init(keypath: "person.conference.registration", value: .object(["participantId": .string("synthetic")])),
+            .init(keypath: "chronicle[+]", value: first),
+            .init(keypath: "chronicle[+]", value: second)
+        ])
+        try EntityRelationRecordV1.validatePersistenceEnvelope(envelope)
+        for mutation in envelope.mutations {
+            try EntityRelationRecordV1.rejectDirectMutation(to: mutation.keypath, value: mutation.value)
+            try storage.set(keypath: mutation.keypath, setValue: mutation.value)
+        }
+        XCTAssertEqual(try storage.get(keypath: path), EntityRelationCodec.value(event))
+        XCTAssertEqual(try storage.get(keypath: "chronicle"), .list([EntityRelationCodec.value(event), first, second]))
+        XCTAssertNoThrow(try EntityRelationRecordV1.rejectDirectMutation(to: ".chronicle[+]", value: first))
+    }
+
+    func testOrdinaryChronicleAddressesCannotSmuggleReservedOrMismatchedIDs() throws {
+        let event = EntityRelationInteractionEvent(id: "one", relationID: "synthetic", kind: .messageSent,
+            at: Date(timeIntervalSince1970: 1), sourceCell: "test")
+        for path in ["chronicle[+]", ".chronicle[+]", "chronicle[id=ordinary]", ".chronicle[id=ordinary]"] {
+            for value in [EntityRelationCodec.value(event),
+                          .object(["id": .string("relation-event-synthetic-one")]),
+                          .object(["id": .string("ordinary"), "schema": .string("haven.relation-interaction-event.v1")]),
+                          .object(["schema": .string("haven.relation-interaction-event.v2")]),
+                          .object(["id": .integer(1)]), .list([])] as [ValueType] {
+                XCTAssertThrowsError(try EntityRelationRecordV1.rejectDirectMutation(to: path, value: value), path)
+                for schema in ["legacy", EntityRelationRecordV1.envelopeSchema] {
+                    XCTAssertThrowsError(try EntityRelationRecordV1.validatePersistenceEnvelope(.init(schema: schema, mutations: [.init(keypath: path, value: value)])), path)
+                }
+            }
+        }
+        let mismatched: ValueType = .object(["id": .string("someone-else")])
+        XCTAssertThrowsError(try EntityRelationRecordV1.rejectDirectMutation(to: "chronicle[id=ordinary]", value: mismatched))
+        let matching: ValueType = .object(["id": .string("ordinary"), "kind": .string("owner-note")])
+        XCTAssertNoThrow(try EntityRelationRecordV1.rejectDirectMutation(to: "chronicle[id=ordinary]", value: matching))
+        XCTAssertNoThrow(try EntityRelationRecordV1.rejectDirectMutation(to: "chronicle[id=ordinary]", value: .null))
+        XCTAssertThrowsError(try EntityRelationRecordV1.rejectDirectMutation(to: "chronicle[+]", value: .null))
+    }
+
     func testV2GoldenWireAndLegacyV1ReadCompatibility() throws {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/EntityRelationEventV2.json")
