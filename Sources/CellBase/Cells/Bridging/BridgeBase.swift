@@ -1308,8 +1308,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                        let keypathLookupPublisher = try await resolvedEmitCell(for: identity) as? Meddle,
                        let setValue = payload.value
                     {
-                        var setValueState = SetValueState.ok
-                        var setValueResponse = SetValueResponse(state: setValueState)
+                        var setValueResponse = SetValueResponse(state: .ok)
                         do {
                             if let result = try await keypathLookupPublisher.set(keypath: payload.key, value: setValue, requester: identity) {
                                 setValueResponse.value = result
@@ -1317,7 +1316,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             
                             
                         } catch {
-                            setValueState = .error
+                            setValueResponse.state = .error
                         }
                         
                         let response = BridgeCommand(cmd: "response", payload: .setValueResponse(setValueResponse), cid: command.cid)

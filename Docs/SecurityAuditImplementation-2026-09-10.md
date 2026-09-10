@@ -27,9 +27,23 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–012 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 013 is the
-next FIFO item. 013–024 have not passed implementation acceptance.
+001–014 have passed their local acceptance checks, including serialized bridge
+tests. They remain subject to the final consumer/CI integration gate. 015 is the
+next FIFO item. 015–024 have not passed implementation acceptance.
+
+### 013–014 accepted locally
+
+`/private/tmp/cp-security-diagnostics-verified.log`: 68 tests passed, zero failures,
+including bridge success/error responses and resolver input/output/denied-value
+log exclusion. The 50 existing BridgeTests also passed in
+`/private/tmp/cp-security-set-response-verified.log`; that run's new test failed
+because its fixture omitted the ready handshake. With the handshake restored,
+all 5 boundary tests passed in `/private/tmp/cp-security-set-response-v3.log`.
+
+015 is present on audit HEAD `4096760` but absent from main. Its isolated fix
+lives in `/private/tmp/cellprotocol-entity-relation-parity-20260910`, branch
+`codex/entity-relation-security-parity-20260910`. Do not merge that entire
+unreleased feature branch into main as part of the security release.
 
 ### 010–012 accepted locally
 

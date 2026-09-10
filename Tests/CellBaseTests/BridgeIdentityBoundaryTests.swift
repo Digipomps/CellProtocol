@@ -90,6 +90,32 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         XCTAssertGreaterThan(result.proofRequests, 0, "The peer must prove control; the server must not prove it for the peer")
     }
 
+    func testSetResponseReflectsActualWriteSuccessAndFailure() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "set-owner", makeNewIfNotFound: true)!
+        let cell = await GeneralCell(owner: owner)
+        await cell.addInterceptForSet(requester: owner, key: "writable") { _, value, _ in value }
+        let resolver = MockCellResolver()
+        CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "SetTarget", emitCell: cell, scope: .template, identity: owner)
+        let transport = PeerTransport(peerVault: vault)
+        let server = try await BridgeBase(BridgeBase.Config(owner: owner, transport: transport,
+            connection: .inbound(publisherUuid: "SetTarget"), inboundPublisherLookupIdentity: owner))
+        try await server.setTransport(transport, connection: .inbound(publisherUuid: "SetTarget"))
+        transport.setDelegate(server)
+        try await server.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+        for (index, key) in ["writable", "unknownKey", ""].enumerated() {
+            let cid = 800 + index
+            try await server.consumeCommand(command: BridgeCommand(cmd: "set", identity: owner,
+                payload: .keyValue(.init(key: key, value: .string("synthetic-write"))), cid: cid))
+            let response = try XCTUnwrap(transport.snapshot().last { $0.command == .response && $0.cid == cid })
+            guard case let .setValueResponse(result) = response.payload else { return XCTFail("Missing typed set response") }
+            XCTAssertEqual(result.state, index == 0 ? .ok : .error)
+            XCTAssertEqual(result.value, index == 0 ? .string("synthetic-write") : nil)
+        }
+    }
+
     func testPeerThatControlsOwnerKeyCanStillReadThroughBridge() async throws {
         let result = try await readThroughBridge(peerControlsOwnerKey: true)
         XCTAssertEqual(result.response.payload, .string("protected-value"))
