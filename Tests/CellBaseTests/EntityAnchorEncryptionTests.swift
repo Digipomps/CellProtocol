@@ -108,6 +108,22 @@ final class EntityAnchorEncryptionTests: XCTestCase {
             let stored = try Data(contentsOf: directory.appendingPathComponent(cell.name).appendingPathComponent(file))
             XCTAssertTrue(CellPersistenceCrypto.isEncryptedEnvelope(stored), "Legacy \(file) was not migrated")
         }
+        // Restore an independent encrypted backup, including the authority journal.
+        // Moving the original aside proves this read does not reuse its files.
+        let cellDirectory = directory.appendingPathComponent(cell.name)
+        let backupDirectory = directory.appendingPathComponent("security-backup-\(UUID().uuidString)")
+        let heldDirectory = directory.appendingPathComponent("security-held-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: cellDirectory, to: backupDirectory)
+        try FileManager.default.moveItem(at: cellDirectory, to: heldDirectory)
+        try FileManager.default.copyItem(at: backupDirectory, to: cellDirectory)
+        let restored = try JSONDecoder().decode(T.self, from: snapshot)
+        let restoredValue = try await restored.get(keypath: "person.headline", requester: owner)
+        XCTAssertEqual(restoredValue, .string("synthetic-private-data"))
+        for file in files {
+            let backup = try Data(contentsOf: backupDirectory.appendingPathComponent(file))
+            XCTAssertTrue(CellPersistenceCrypto.isEncryptedEnvelope(backup))
+            XCTAssertEqual(try Data(contentsOf: cellDirectory.appendingPathComponent(file)), backup)
+        }
         // Failed encrypted reads must not overwrite the original files.
         CellBase.persistedCellMasterKey = Data(repeating: 0x69, count: 32)
         let failedRestart = try JSONDecoder().decode(T.self, from: snapshot)
