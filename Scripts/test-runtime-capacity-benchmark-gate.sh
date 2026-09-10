@@ -21,11 +21,11 @@ fake_binary="$temporary_root/fake-benchmark"
 mkdir -p "$mock_bin"
 
 for monitor in top iostat vm_stat; do
-  print -r -- '#!/bin/sh' 'while :; do sleep 1; done' > "$mock_bin/$monitor"
+  print -rl -- '#!/bin/sh' 'while :; do sleep 1; done' > "$mock_bin/$monitor"
   chmod +x "$mock_bin/$monitor"
 done
 
-print -r -- '#!/bin/sh' \
+print -rl -- '#!/bin/sh' \
   'set -eu' \
   'workload=""' \
   'concurrency=""' \
@@ -56,6 +56,22 @@ print -r -- '#!/bin/sh' \
   > "$fake_binary"
 chmod +x "$fake_binary"
 
+assert_gate_evidence() {
+  local output_root="$1"
+  local expression="$2"
+  shift 2
+
+  if /usr/bin/grep -Eq "$expression" "$@"; then
+    return 0
+  fi
+  echo "Missing expected failure-gate evidence: $expression" >&2
+  cat "$output_root/run-configuration.txt" >&2 || true
+  find "$output_root" -maxdepth 2 -type f \
+    \( -name 'exit-status.txt' -o -name 'failure.txt' -o -name 'validation-errors.txt' -o -name 'stderr.txt' \) \
+    -print -exec cat {} \; >&2 || true
+  return 1
+}
+
 assert_wrapper_fails() {
   local mode="$1"
   local output_root="$temporary_root/$mode-results"
@@ -82,22 +98,23 @@ assert_wrapper_fails() {
     echo "Expected wrapper failure for $mode" >&2
     exit 1
   fi
+  echo "Verified expected wrapper failure: $mode"
   case "$mode" in
     child-failure)
-      /usr/bin/grep -Eq '^failed_runs=[1-9]' "$output_root/run-configuration.txt"
-      /usr/bin/grep -q 'Benchmark child exited with status 17' "$output_root"/*/failure.txt
+      assert_gate_evidence "$output_root" '^failed_runs=[1-9]' "$output_root/run-configuration.txt"
+      assert_gate_evidence "$output_root" 'Benchmark child exited with status 17' "$output_root"/*/failure.txt
       ;;
     missing-json)
-      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      /usr/bin/grep -q 'Missing or empty result.json' "$output_root"/*/validation-errors.txt
+      assert_gate_evidence "$output_root" '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      assert_gate_evidence "$output_root" 'Missing or empty result.json' "$output_root"/*/validation-errors.txt
       ;;
     malformed-json)
-      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      /usr/bin/grep -q 'Missing or invalid JSON value' "$output_root"/*/validation-errors.txt
+      assert_gate_evidence "$output_root" '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      assert_gate_evidence "$output_root" 'Missing or invalid JSON value' "$output_root"/*/validation-errors.txt
       ;;
     wrong-ack)
-      /usr/bin/grep -Eq '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
-      /usr/bin/grep -Eq 'Unexpected summary.successfulOperations|Overflow acknowledgement mismatch' "$output_root"/*/validation-errors.txt
+      assert_gate_evidence "$output_root" '^invalid_result_runs=[1-9]' "$output_root/run-configuration.txt"
+      assert_gate_evidence "$output_root" 'Unexpected summary.successfulOperations|Overflow acknowledgement mismatch' "$output_root"/*/validation-errors.txt
       ;;
   esac
 }
