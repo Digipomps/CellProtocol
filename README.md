@@ -197,6 +197,10 @@ If `CellBaseTests` shows as “missing”, verify these two entries match your l
 - `../Binding/Binding.xcworkspace/contents.xcworkspacedata` includes `group:../CellProtocol`
 - `../Binding/Binding.xcodeproj/xcshareddata/xctestplans/Binding.xctestplan` uses `container:../CellProtocol`
 
+The security-patched dependency set requires Swift 6.1 or later. See
+[dependency security and coordinated upgrades](Docs/DependencySecurity-2026-09-10.md)
+before updating hosts pinned to Swift Crypto 3.
+
 For local or agent-driven SwiftPM commands, use the bounded build runner so
 scratch, dependency, and module caches are serialized and retained within a
 managed size/age policy. See `Docs/SwiftPM_Bounded_Build_Runner_NO.md`.

@@ -32,6 +32,14 @@ CellResolver does this for both direct WebSocket and routed `cell://` bridges.
 Use a separate bridge per principal; the remote connection pool already keys
 its entries by proven principal.
 
+Inbound hosts must also mark their local BridgeBase ready when accepting the
+connection, as well as sending the peer's ready frame. The existing multiplex
+default factory does this by delivering a local ready command to the delegate.
+The server must be ready before it can send an ownership challenge. Merely
+writing a ready frame to the socket leaves the local state unready. CellScaffold's
+dedicated AdminScaffold and Sprout hosts required this compatibility correction;
+its custom multiplex factory must make the same transition.
+
 The default permits proofs for the direct Cell described by that bridge, after
 discovery and only while a local operation is pending. Hosts can pin an explicit
 `identityProofScopes` list in `BridgeBase.Config`. This is necessary for a Cell

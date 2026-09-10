@@ -2,6 +2,42 @@
 
 Status: IN_PROGRESS. Owner/integrator: current Codex security audit task.
 
+## Current integration checkpoint (supersedes earlier running notes)
+
+2026-09-10: full macOS rerun passed 1058/1058, including the portable feed
+fan-in and upgraded dependencies (`cp-security-full-macos-dependencies.log`).
+The earlier clean full rerun also passed 1058/1058 (`cp-security-full-macos-v2.log`).
+OpenCombine 0.14 does not implement Merge; commit `b7b8ae3` uses a two-inner
+bounded flatMap fan-in. 55 relevant macOS regressions passed afterward. Linux
+compiles after including MockIdentityVault in the CI fixture copy, but repeated
+emulated amd64 runs have hung at different tests. One isolated serialized bridge
+test passed in 0.084 seconds. This is NOT a passing Linux gate; investigate native
+execution before acceptance. Diagnostic prints exist only in the disposable
+Linux test copy and must not be included in the release.
+
+Dependency scan 021 found four CVEs in the initial pins; see
+`DependencySecurity-2026-09-10.md`. Crypto 4.5.2, NIO 2.102.0, NIOSSL 2.37.4 and
+HTTP2 1.46.0 are now resolved. A fresh OSV commit query returned zero matches for
+all 34 pins (`/private/tmp/cp-security-osv-upgraded-result.json`). This is a
+point-in-time check, not a claim of absence of unknown vulnerabilities.
+
+CellScaffold source gate: 71/71 passed with the new dependency graph and inbound
+ready transitions (`cp-security-scaffold-consumer-v3.log`). The original 73-test
+run found one actual AdminEntry bridge regression plus two existing manifest
+writer failures. Both manifest failures reproduce against unmodified main
+`cde2e0a`, including with a separate TMPDIR; they are explicitly excluded from
+the 71-test result. The AdminEntry loopback passes on baseline and after fixing
+the host's local ready transition. The original dirty consumer tree is untouched.
+DiMyMicropayments: 36/36 tests pass with local security CellProtocol and Crypto 4.
+Coordinated consumer branches must publish compatible dependency pins before
+the new CellProtocol dependency is adopted.
+
+HavenAgentD PR 11 is pushed and CI-green at `c7b0a03`, with 179 tests/37 suites,
+a real Codex app-server job and native 24-item FIFO projection verified against
+CellProtocol `0157db7`. That projection uses a disposable daemon root, not the
+user's live daemon. No daemon activation, live import or automatic job execution
+has been performed. Final CellProtocol dependency verification remains required.
+
 The user authorized implementation, testing and publication on 2026-09-10, after
 the read-only audit and passive FIFO intake. This is new authority; the original
 intake remains immutable evidence of its original read-only scope.
