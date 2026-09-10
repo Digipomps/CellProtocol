@@ -6,8 +6,9 @@ import or daemon activation. Binding has an explicit unresolved acceptance gate.
 This document supersedes the intermediate states in the implementation journal.
 
 `SecurityAuditWorkEvidence-2026-09-10.json` is the ordered machine-readable
-assessment for all 24 original work IDs. It is documentation, not a new wire
-contract, native import format or mutation of scheduler state.
+assessment for all 24 original work IDs at its publication revision `94d785f`.
+It is documentation, not a new wire contract, native import format or mutation
+of scheduler state. The consumer table below records later verification.
 
 ## Source and published changes
 
@@ -24,7 +25,7 @@ Runtime files and resolved dependency versions are identical to the earlier
 selection and explicit CellVapor transport-product requirements: these prevent
 SwiftPM from pruning security floors in downstream consumers. A real resolver
 probe accepts vulnerable NIOSSL 2.36.1 before that fix and rejects it afterward.
-All published consumers below pin the final `f1036dc` chain; local uncommitted
+All published CellProtocol consumers below pin the final `f1036dc` chain; local uncommitted
 overrides are not release dependencies.
 
 | FIFO ID suffix | Implemented disposition | Evidence |
@@ -56,6 +57,11 @@ All three source gates passed at
 | Native Linux/OpenCombine | 51 tests, zero failures; separate file-bounds executable and negative/positive public authority API compilation checks pass | [34428821695](https://github.com/Digipomps/CellProtocol/actions/runs/34428821695) |
 | Native Linux, actual Vapor vault source | 25 tests, zero failures | [34428821686](https://github.com/Digipomps/CellProtocol/actions/runs/34428821686) |
 
+All three gates also passed at documentation revision `94d785f`:
+[macOS 34430616691](https://github.com/Digipomps/CellProtocol/actions/runs/34430616691),
+[Linux 34430616727](https://github.com/Digipomps/CellProtocol/actions/runs/34430616727),
+and [Vapor 34430616810](https://github.com/Digipomps/CellProtocol/actions/runs/34430616810).
+
 The full local macOS dependency rerun also passed 1058 tests. OpenCombine 0.14
 lacks Merge; the portable two-inner bounded flatMap fan-in is covered by the
 native Linux gate. Earlier emulated amd64 Docker runs on arm64 hung at varying
@@ -69,10 +75,10 @@ Swift 6.1 or newer. These platform requirements are adoption constraints.
 | Consumer | Published change | Verification |
 | --- | --- | --- |
 | DiMyMicropayments | [PR 11](https://github.com/DiMy-io/DiMyMicropayments/pull/11), `99da4ba38a1a6a4d2e5f7dfe3a66a2329a476a41` | 36/36 tests pass with the exact published graph. |
-| DiMyMint | [PR 11](https://github.com/DiMy-io/DiMyMint/pull/11), `41c5005c9b12021f18d491af85f0516b9aa04a19` | Source gate: 32 tests, one skipped because no disposable PostgreSQL database was configured. Final CI is required on this exact head. |
+| DiMyMint | [PR 11](https://github.com/DiMy-io/DiMyMint/pull/11), `41c5005c9b12021f18d491af85f0516b9aa04a19` | Source gate: 32 tests, one skipped because no disposable PostgreSQL database was configured. [CI 34429533655](https://github.com/DiMy-io/DiMyMint/actions/runs/34429533655) passes on this exact head. |
 | Sprout | [PR 1](https://github.com/Digipomps/Sprout/pull/1), `9d9f89a1bcdbc29b622487428a0f8d112bc5008e` | 107 tests pass separately with Crypto 4.5.2 and 3.15.1; native macOS/Linux CI and release-bundle verification pass. |
-| HavenAgentD | [PR 11](https://github.com/Digipomps/HavenAgentD/pull/11), `2d44b7098f6cb655c7e488dd9b188d78ed27bc72` | 179 tests/37 suites, product build, daemon smoke and [CI](https://github.com/Digipomps/HavenAgentD/actions/runs/34429066766) pass. The real Codex app-server job passed in 30.303 seconds at the preceding pin with identical runtime sources/versions. |
-| CellScaffold | [PR 237](https://github.com/Digipomps/CellScaffold/pull/237), `e29e5c13f2f25a9e48e287d40dd37f40e3735be6` | 24 shards pass: 2067 cases, 10 existing skips, zero failures at `cc09dc5d`; 30 relevant tests pass at the final pins, with all dependency versions unchanged. 59 historical-controller tests pass. Final native Linux/browser CI remains required on this exact head. |
+| HavenAgentD | [PR 11](https://github.com/Digipomps/HavenAgentD/pull/11), `602656e7889ac98beb0ef98085e2162178e1916b` | 179 tests/37 suites, product build and daemon smoke pass; [final CI 34431850574](https://github.com/Digipomps/HavenAgentD/actions/runs/34431850574) passes after the documentation handoff. The real Codex app-server job passed in 30.303 seconds at the preceding pin with identical runtime sources/versions. |
+| CellScaffold | [PR 237](https://github.com/Digipomps/CellScaffold/pull/237), `7f6dc4b823f2cca803489404481495cba995d2ae` | 24 local shards pass: 2067 cases, 10 existing skips, zero failures at `cc09dc5d`; 30 relevant tests pass at the final pins, with all dependency versions unchanged. 59 historical-controller tests pass. Native CI at `e29e5c13` passed 23/24 groups and reproduced a main replay-flag test defect, now corrected with 18 local callback tests passing. [Final native Linux/browser CI](https://github.com/Digipomps/CellScaffold/actions/runs/34432685661) remains required on this exact head. |
 | Binding | Local candidate only; clean base `3c712731` | Final-pin macOS app/test build passes. Runtime verification: 376 Swift Testing tests pass; 94 XCTest cases include 20 existing skips and one failed protected-storage case. See the boundary below. |
 
 CellScaffold needed its inbound bridge to enter local ready state before
@@ -90,6 +96,17 @@ checkout and the unchanged `ci/run-tests.sh` selection. The final pin update
 changes only the three first-party revisions; all third-party versions remain
 identical. The subsequent 30-test selection covers actual AdminEntry networking,
 encrypted AgreementWorkbench persistence, public policy and skeleton provenance.
+
+The native Linux run at `e29e5c13` reproduced the same callback test assertion
+already failing on unmodified main `5e64c296`: both concurrent requests reported
+`isReplay`. Admission and mutation have independent atomic winners, and the API
+combines both replay flags. Each call can therefore replay a different stage.
+The corrected test retains identical signed responses and exactly one mutation,
+and adds a subsequent identical replay plus direct counts of one admission,
+one ticket transition and one mutation. All 18 callback runtime tests pass
+locally. No runtime behavior or skip list changed for this correction. The full
+explanation and both failure runs are linked in CellScaffold's
+`docs/CallbackAdmissionReplayVerification-2026-09-10.md`.
 
 The public-configuration crash reproduced on clean main: recursive skeleton
 validation constructed the entire catalogue under nested stack frames. The
@@ -111,6 +128,12 @@ which reports three assertions after Foundation rejects
 `.atomic + .completeFileProtection` with Cocoa 513 / POSIX EPERM. A standalone
 Foundation probe reproduces that rejection while `.atomic` succeeds. The exact
 host cause is unproven; the protection requirement and test remain intact.
+A later unsandboxed synthetic matrix confirms class A writes fail with and
+without atomic writing; class B writes succeed but reopening fails; class C
+writes and reads succeed. CoreGraphics reports a completed on-console login.
+This is consistent with unavailable protection keys, but the specific session
+or keybag cause is unproven. It is not evidence that the application should
+weaken protection. [Apple documents the class-dependent availability boundary](https://support.apple.com/guide/security/data-protection-classes-secb010e978a/web).
 No Binding source implementation was changed or pushed. Its final-pin build
 passes, and its unit run uses the preceding pin's identical runtime sources and
 dependency versions, with isolated user storage and remote parity disabled.
@@ -135,6 +158,14 @@ Original import SHA-256 is
 `899757c6023e1b5a0a94b70ae1275acab7bad5e89f4b617421612521beab0e07`;
 80/80 source hashes remain valid. That original read-only intake is immutable.
 The user's later implementation/test/push authorization is separate provenance.
+
+HavenAgentD commit `602656e` also retains the byte-identical 24-item assessment
+from CellProtocol `94d785f` under
+`Evidence/HAVEN.CellProtocol.securityAudit/2026-09-10/`.
+Its 9,949 bytes have SHA-256
+`8c0962f99c7b64e2d0e4746606aee503ed933a88ee6daa043c73e6b2480b5784`.
+The import runbook records this provenance. This separate evidence snapshot
+does not change the original import, its 80 checksums or native FIFO status.
 
 The actual installed daemon currently lacks enabled AgentJobs, its route, the
 MCP binary and Jobs root. Production import and activation have not occurred.
