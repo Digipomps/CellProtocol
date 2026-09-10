@@ -1,0 +1,250 @@
+{
+  "schema": "haven.security.dependency-evidence.v1",
+  "checkedOn": "2026-09-10",
+  "queryMethod": "OSV v1/querybatch, one query per immutable Git commit",
+  "endpoint": "https://api.osv.dev/v1/querybatch",
+  "packageResolvedSHA256": "d9a19f40d334859d66f86d83786c1e48edae48841857ef09e866c43ee33ff0ef",
+  "sourceCommit": "b605c5e3aead0efb5c35c2a31e44f89f65455890",
+  "limitation": "No current advisory matches does not prove absence of unknown vulnerabilities. Reachability and maintainer advisory analysis are in DependencySecurity-2026-09-10.md.",
+  "pins": [
+    {
+      "name": "async-http-client",
+      "source": "https://github.com/swift-server/async-http-client.git",
+      "version": "1.31.0",
+      "revision": "52ed9d172018e31f2dbb46f0d4f58d66e13c281e",
+      "advisoryIDs": []
+    },
+    {
+      "name": "async-kit",
+      "source": "https://github.com/vapor/async-kit.git",
+      "version": "1.21.0",
+      "revision": "6f3615ccf2ac3c2ae0c8087d527546e9544a43dd",
+      "advisoryIDs": []
+    },
+    {
+      "name": "bigint",
+      "source": "https://github.com/attaswift/BigInt.git",
+      "version": "5.7.0",
+      "revision": "e07e00fa1fd435143a2dcf8b7eec9a7710b2fdfe",
+      "advisoryIDs": []
+    },
+    {
+      "name": "console-kit",
+      "source": "https://github.com/vapor/console-kit.git",
+      "version": "4.15.2",
+      "revision": "742f624a998cba2a9e653d9b1e91ad3f3a5dff6b",
+      "advisoryIDs": []
+    },
+    {
+      "name": "cryptoswift",
+      "source": "https://github.com/krzyzanowskim/CryptoSwift.git",
+      "version": "1.9.0",
+      "revision": "e45a26384239e028ec87fbcc788f513b67e10d8f",
+      "advisoryIDs": []
+    },
+    {
+      "name": "fileutils-c",
+      "source": "https://github.com/Digipomps/FileUtils-c.git",
+      "version": null,
+      "revision": "26f365ca39955ee693e138ef028560df3bdf218c",
+      "advisoryIDs": []
+    },
+    {
+      "name": "multipart-kit",
+      "source": "https://github.com/vapor/multipart-kit.git",
+      "version": "4.7.1",
+      "revision": "3498e60218e6003894ff95192d756e238c01f44e",
+      "advisoryIDs": []
+    },
+    {
+      "name": "opencombine",
+      "source": "https://github.com/OpenCombine/OpenCombine.git",
+      "version": "0.14.0",
+      "revision": "8576f0d579b27020beccbccc3ea6844f3ddfc2c2",
+      "advisoryIDs": []
+    },
+    {
+      "name": "random-swift",
+      "source": "https://github.com/GiacomoLeopizzi/random-swift",
+      "version": "1.0.0",
+      "revision": "a716c4b221d862d16730680560e62f749ca689ea",
+      "advisoryIDs": []
+    },
+    {
+      "name": "routing-kit",
+      "source": "https://github.com/vapor/routing-kit.git",
+      "version": "4.9.3",
+      "revision": "1a10ccea61e4248effd23b6e814999ce7bdf0ee0",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-algorithms",
+      "source": "https://github.com/apple/swift-algorithms.git",
+      "version": "1.2.1",
+      "revision": "87e50f483c54e6efd60e885f7f5aa946cee68023",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-asn1",
+      "source": "https://github.com/apple/swift-asn1.git",
+      "version": "1.5.1",
+      "revision": "810496cf121e525d660cd0ea89a758740476b85f",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-async-algorithms",
+      "source": "https://github.com/apple/swift-async-algorithms.git",
+      "version": "1.1.1",
+      "revision": "6c050d5ef8e1aa6342528460db614e9770d7f804",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-atomics",
+      "source": "https://github.com/apple/swift-atomics.git",
+      "version": "1.3.0",
+      "revision": "b601256eab081c0f92f059e12818ac1d4f178ff7",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-certificates",
+      "source": "https://github.com/apple/swift-certificates.git",
+      "version": "1.18.0",
+      "revision": "24ccdeeeed4dfaae7955fcac9dbf5489ed4f1a25",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-collections",
+      "source": "https://github.com/apple/swift-collections.git",
+      "version": "1.3.0",
+      "revision": "7b847a3b7008b2dc2f47ca3110d8c782fb2e5c7e",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-configuration",
+      "source": "https://github.com/apple/swift-configuration.git",
+      "version": "1.0.2",
+      "revision": "b4768bd68d8a6fb356bd372cb41905046244fcae",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-crypto",
+      "source": "https://github.com/apple/swift-crypto.git",
+      "version": "4.5.2",
+      "revision": "da9d28d69ebe3894b18376c8f2395c2f37b8448f",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-distributed-tracing",
+      "source": "https://github.com/apple/swift-distributed-tracing.git",
+      "version": "1.3.1",
+      "revision": "baa932c1336f7894145cbaafcd34ce2dd0b77c97",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-http-structured-headers",
+      "source": "https://github.com/apple/swift-http-structured-headers.git",
+      "version": "1.6.0",
+      "revision": "76d7627bd88b47bf5a0f8497dd244885960dde0b",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-http-types",
+      "source": "https://github.com/apple/swift-http-types.git",
+      "version": "1.5.1",
+      "revision": "45eb0224913ea070ec4fba17291b9e7ecf4749ca",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-log",
+      "source": "https://github.com/apple/swift-log.git",
+      "version": "1.9.1",
+      "revision": "2778fd4e5a12a8aaa30a3ee8285f4ce54c5f3181",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-metrics",
+      "source": "https://github.com/apple/swift-metrics.git",
+      "version": "2.7.1",
+      "revision": "0743a9364382629da3bf5677b46a2c4b1ce5d2a6",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-nio",
+      "source": "https://github.com/apple/swift-nio",
+      "version": "2.102.0",
+      "revision": "a931f2c1de8dd49381ce3bf2e279d033f68d8865",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-nio-extras",
+      "source": "https://github.com/apple/swift-nio-extras.git",
+      "version": "1.32.1",
+      "revision": "3df009d563dc9f21a5c85b33d8c2e34d2e4f8c3b",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-nio-http2",
+      "source": "https://github.com/apple/swift-nio-http2.git",
+      "version": "1.46.0",
+      "revision": "0f3e54e29c944c2e835ad52159da7d9e1c94ac69",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-nio-ssl",
+      "source": "https://github.com/apple/swift-nio-ssl",
+      "version": "2.37.4",
+      "revision": "03827c1a9fdb2b6b00a4e93ede8861520263af8c",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-nio-transport-services",
+      "source": "https://github.com/apple/swift-nio-transport-services.git",
+      "version": "1.26.0",
+      "revision": "60c3e187154421171721c1a38e800b390680fb5d",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-numerics",
+      "source": "https://github.com/apple/swift-numerics.git",
+      "version": "1.1.1",
+      "revision": "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-service-context",
+      "source": "https://github.com/apple/swift-service-context.git",
+      "version": "1.2.1",
+      "revision": "1983448fefc717a2bc2ebde5490fe99873c5b8a6",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-service-lifecycle",
+      "source": "https://github.com/swift-server/swift-service-lifecycle.git",
+      "version": "2.9.1",
+      "revision": "1de37290c0ab3c5a96028e0f02911b672fd42348",
+      "advisoryIDs": []
+    },
+    {
+      "name": "swift-system",
+      "source": "https://github.com/apple/swift-system.git",
+      "version": "1.6.4",
+      "revision": "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
+      "advisoryIDs": []
+    },
+    {
+      "name": "vapor",
+      "source": "https://github.com/vapor/vapor.git",
+      "version": "4.121.2",
+      "revision": "6d06e13021c299aa3300986f4eb5bb143d17ac9b",
+      "advisoryIDs": []
+    },
+    {
+      "name": "websocket-kit",
+      "source": "https://github.com/vapor/websocket-kit.git",
+      "version": "2.16.1",
+      "revision": "8666c92dbbb3c8eefc8008c9c8dcf50bfd302167",
+      "advisoryIDs": []
+    }
+  ],
+  "identicalPinsAlsoVerifiedAtCommit": "f1036dcf422f7834cd896d7231407d269b422b3f"
+}

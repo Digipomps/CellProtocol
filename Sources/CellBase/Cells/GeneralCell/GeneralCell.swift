@@ -307,6 +307,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 
     // Publishers and Cancellables
     private var feedPublisher = PassthroughSubject<FlowElement, Error>()
+    private let feedAuthorizations = FeedAuthorizationRegistry()
+    // Instance-local clock permits deterministic contract-expiry verification.
+    // It is not encoded or exposed through Meddle/Explore.
+    var authorizationClock: () -> Date = Date.init
     public var identityDomain: String = "private"
     
 //    internal let dispatchQueue = DispatchQueue.init(label: "General Cell dispatch queue")
@@ -1083,7 +1087,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                                 return
                             }
                             if forwardReservation.shouldDeliver() {
-                                subscriptionFeedPublisher.send(transformedFlowElement)
+                                let delivery = FlowDeliveryFlight(valid: { forwardReservation.shouldDeliver() })
+                                FlowDeliveryFlight.$current.withValue(delivery) {
+                                    subscriptionFeedPublisher.send(transformedFlowElement)
+                                }
+                                delivery.finishScheduling()
+                                await delivery.wait()
                             }
                             forwardReservation.finish()
                         case .completion:
@@ -1196,6 +1205,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return nil
     }
     
+    /// Raw process-local producer access for trusted runtime composition only.
+    /// It bypasses requester authorization and revocation. External adapters and
+    /// user sessions must use flow(requester:) and retain that publisher's errors.
     public func getFeedPublisher() -> AnyPublisher<FlowElement, Error> {
         feedPublisher.eraseToAnyPublisher()
     }
@@ -1205,7 +1217,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         try await ensureRuntimeReady()
         if await validateAccess("r---", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
-            return feedPublisher.eraseToAnyPublisher()
+            return feedAuthorizations.publisher(
+                upstream: feedPublisher.eraseToAnyPublisher(),
+                subjectUUID: requester.uuid,
+                authorize: { [weak self] in
+                    guard let self else { return false }
+                    return await self.validateAccess("r---", at: "feed", for: requester)
+                }
+            )
         }
         throw StreamState.denied
     }
@@ -1322,7 +1341,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     agreement: contractAgreement,
                     issuer: signingOwner,
                     subject: identity,
-                    domain: identityDomain
+                    domain: identityDomain,
+                    issuedAt: authorizationClock()
                 )
                 let persisted = persistedAuthorizationSnapshot()
                 let authorization = await self.auditor.installAuthorization(
@@ -1579,8 +1599,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         
         let keypathArray = resolvedKeyPath.split(separator: ".")
-        let contextKey = String(keypathArray[0])
-        let childKeypath = String(resolvedKeyPath.dropFirst("\(keypathArray[0]).".count))
+        guard let firstComponent = keypathArray.first else { throw KeyValueErrors.notFound }
+        let contextKey = String(firstComponent)
+        let childKeypath = String(resolvedKeyPath.dropFirst("\(firstComponent).".count))
         
         switch contextKey {
         case "isMember":
@@ -1719,8 +1740,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
             
             let keypathArray = resolvedKeyPath.split(separator: ".")
-            let contextKey = String(keypathArray[0]) // TODO:Errors here must be handeled
-            let childKeypath = String(resolvedKeyPath.dropFirst("\(keypathArray[0]).".count))
+            guard let firstComponent = keypathArray.first else { throw KeyValueErrors.notFound }
+            let contextKey = String(firstComponent)
+            let childKeypath = String(resolvedKeyPath.dropFirst("\(firstComponent).".count))
             
             var foundKey = false
             switch contextKey {
@@ -1861,6 +1883,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await feedAuthorizations.revalidate(subjectUUID: member.uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
         }
@@ -1874,6 +1897,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await feedAuthorizations.revalidate(subjectUUID: uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
         }
@@ -2003,12 +2027,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             ? false
             : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
 
+        // Origin proofs and conditions may suspend. Do not use a contract that
+        // expired while those checks were in flight to issue a new decision.
+        let evaluatedAt = authorizationClock()
+        let activeContracts = evidence.contracts.filter { $0.temporalStatus(now: evaluatedAt) == .active }
         var decision = CellAuthorizationPolicy.decide(
             request: request,
             ownerReferenceMatches: evidence.ownerReferenceMatches,
             ownerUUIDMatches: owner.uuid == identity.uuid,
             ownerProofValid: evidence.ownerProofValid,
-            contracts: evidence.contracts.map(\.agreement),
+            contracts: activeContracts.map(\.agreement),
             cellSpecificAllowed: cellSpecificAllowed
         )
         if decision.allowed, decision.path == .ownerProof, let linkID = evidence.linkedIdentityLinkID {
@@ -2018,7 +2046,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         if decision.path == .signedContract {
             let requestedGrant = Grant(keypath: keypath, permission: requestedAccess)
-            if let contract = evidence.contracts.first(where: {
+            if let contract = activeContracts.first(where: {
                 $0.agreement.checkGrant(requestedGrant: requestedGrant)
             }), let grant = contract.agreement.grants.first(where: {
                 $0.granted(requestedGrant)
@@ -2092,7 +2120,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             guard await currentContract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
                 expectedSubject: identity,
-                expectedDomain: identityDomain
+                expectedDomain: identityDomain,
+                now: authorizationClock()
             ) else {
                 continue
             }

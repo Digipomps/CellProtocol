@@ -35,7 +35,17 @@ public enum FileCryptoUtility {
 
         let keyData = try normalizedSymmetricKeyData(resolution.credential.keyMaterial)
         let symmetricKey = SymmetricKey(data: keyData)
-        let authenticatedData = request.associatedData ?? Data()
+        var envelope = FileCryptoEnvelope(
+            version: 2,
+            algorithm: request.algorithm,
+            compression: request.compression,
+            credentialID: resolution.credential.id,
+            originalByteCount: request.data.count,
+            compressedByteCount: compressedData.count,
+            associatedData: request.associatedData,
+            combinedCiphertext: Data()
+        )
+        let authenticatedData = try authenticatedHeader(envelope)
 
         let sealedBox: ChaChaPoly.SealedBox
         do {
@@ -51,15 +61,7 @@ public enum FileCryptoUtility {
             throw FileCryptoUtilityError.encryptionFailed
         }
 
-        let envelope = FileCryptoEnvelope(
-            algorithm: request.algorithm,
-            compression: request.compression,
-            credentialID: resolution.credential.id,
-            originalByteCount: request.data.count,
-            compressedByteCount: compressedData.count,
-            associatedData: request.associatedData,
-            combinedCiphertext: sealedBox.combined
-        )
+        envelope.combinedCiphertext = sealedBox.combined
 
         let encryptedData = try encodeEnvelopeData(envelope)
         return FileCryptoSealResponse(
@@ -75,33 +77,49 @@ public enum FileCryptoUtility {
 
     public static func open(
         encryptedData: Data,
-        credentials: [FileCryptoCredential]
+        credentials: [FileCryptoCredential],
+        limits: FileCryptoReadLimits = .standard
     ) throws -> Data {
         try openResponse(
             encryptedData: encryptedData,
-            credentials: credentials
+            credentials: credentials,
+            limits: limits
         ).decryptedData
     }
 
-    public static func open(request: FileCryptoOpenRequest) throws -> FileCryptoOpenResponse {
+    public static func open(request: FileCryptoOpenRequest, limits: FileCryptoReadLimits = .standard) throws -> FileCryptoOpenResponse {
         try openResponse(
             encryptedData: request.encryptedData,
-            credentials: request.incomingCredentials
+            credentials: request.incomingCredentials,
+            limits: limits
         )
     }
 
     private static func openResponse(
         encryptedData: Data,
-        credentials: [FileCryptoCredential]
+        credentials: [FileCryptoCredential],
+        limits: FileCryptoReadLimits
     ) throws -> FileCryptoOpenResponse {
+        guard limits.maximumEncryptedByteCount >= 0, limits.maximumPlaintextByteCount >= 0,
+              encryptedData.count <= limits.maximumEncryptedByteCount else {
+            throw FileCryptoUtilityError.invalidEnvelope
+        }
         let envelope = try decodeEnvelopeData(encryptedData)
+        guard envelope.version != 1 || limits.allowLegacyEnvelope else {
+            throw FileCryptoUtilityError.invalidEnvelope
+        }
+        guard envelope.originalByteCount <= limits.maximumPlaintextByteCount else {
+            throw FileCryptoUtilityError.decompressionFailed
+        }
         guard let credential = credentials.first(where: { $0.id == envelope.credentialID }) else {
             throw FileCryptoUtilityError.credentialMissing
         }
 
         let keyData = try normalizedSymmetricKeyData(credential.keyMaterial)
         let symmetricKey = SymmetricKey(data: keyData)
-        let authenticatedData = envelope.associatedData ?? Data()
+        let authenticatedData = envelope.version == 1
+            ? (envelope.associatedData ?? Data())
+            : try authenticatedHeader(envelope)
 
         let compressedPlaintext: Data
         do {
@@ -120,10 +138,14 @@ public enum FileCryptoUtility {
 
         let decryptedData: Data
         do {
+            guard compressedPlaintext.count == envelope.compressedByteCount else {
+                throw FileCryptoUtilityError.invalidEnvelope
+            }
             decryptedData = try FileCryptoCompression.decompress(
                 compressedPlaintext,
                 algorithm: envelope.compression,
-                expectedByteCount: envelope.originalByteCount
+                expectedByteCount: envelope.originalByteCount,
+                maximumByteCount: limits.maximumPlaintextByteCount
             )
         } catch {
             throw FileCryptoUtilityError.decompressionFailed
@@ -145,13 +167,16 @@ public enum FileCryptoUtility {
 
         var cursor = envelopeMagic.count
         let version = try readUInt8(from: encryptedData, cursor: &cursor)
+        guard version == 1 || version == 2 else { throw FileCryptoUtilityError.invalidEnvelope }
         let algorithm = try FileCryptoAlgorithm.fromWireValue(readUInt8(from: encryptedData, cursor: &cursor))
         let compression = try FileCryptoCompressionAlgorithm.fromWireValue(readUInt8(from: encryptedData, cursor: &cursor))
         let credentialIDLength = Int(try readUInt16(from: encryptedData, cursor: &cursor))
-        let originalByteCount = Int(try readUInt64(from: encryptedData, cursor: &cursor))
-        let compressedByteCount = Int(try readUInt64(from: encryptedData, cursor: &cursor))
-        let associatedDataLength = Int(try readUInt32(from: encryptedData, cursor: &cursor))
-        let combinedCiphertextLength = Int(try readUInt64(from: encryptedData, cursor: &cursor))
+        guard let originalByteCount = Int(exactly: try readUInt64(from: encryptedData, cursor: &cursor)),
+              let compressedByteCount = Int(exactly: try readUInt64(from: encryptedData, cursor: &cursor)),
+              let associatedDataLength = Int(exactly: try readUInt32(from: encryptedData, cursor: &cursor)),
+              let combinedCiphertextLength = Int(exactly: try readUInt64(from: encryptedData, cursor: &cursor)) else {
+            throw FileCryptoUtilityError.invalidEnvelope
+        }
 
         let credentialIDData = try readData(from: encryptedData, cursor: &cursor, length: credentialIDLength)
         guard let credentialID = String(data: credentialIDData, encoding: .utf8), !credentialID.isEmpty else {
@@ -177,7 +202,17 @@ public enum FileCryptoUtility {
         )
     }
 
+    /// V2 authenticates the canonical binary envelope with its ciphertext field
+    /// empty (and therefore its ciphertext length zero). Actual ciphertext bytes
+    /// and length are verified by AEAD and the exact envelope parser respectively.
+    private static func authenticatedHeader(_ envelope: FileCryptoEnvelope) throws -> Data {
+        var header = envelope
+        header.combinedCiphertext = Data()
+        return try encodeEnvelopeData(header)
+    }
+
     static func encodeEnvelopeData(_ envelope: FileCryptoEnvelope) throws -> Data {
+        guard envelope.version == 1 || envelope.version == 2 else { throw FileCryptoUtilityError.invalidEnvelope }
         let credentialIDData = Data(envelope.credentialID.utf8)
         guard !credentialIDData.isEmpty else {
             throw FileCryptoUtilityError.invalidEnvelope
@@ -328,10 +363,13 @@ public enum FileCryptoUtility {
     }
 
     private static func readData(from data: Data, cursor: inout Int, length: Int) throws -> Data {
-        guard length >= 0, cursor + length <= data.count else {
+        guard cursor >= 0, cursor <= data.count,
+              length >= 0, length <= data.count - cursor else {
             throw FileCryptoUtilityError.invalidEnvelope
         }
-        let slice = data.subdata(in: cursor..<(cursor + length))
+        let start = data.index(data.startIndex, offsetBy: cursor)
+        let end = data.index(start, offsetBy: length)
+        let slice = data.subdata(in: start..<end)
         cursor += length
         return slice
     }

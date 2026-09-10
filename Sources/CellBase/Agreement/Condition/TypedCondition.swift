@@ -19,11 +19,7 @@ struct TypedCondition: Codable {
     
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        if let tmpType = try? values.decode(ConditionType.self, forKey: .type) {
-        type = tmpType
-        } else {
-            type = .grant
-        }
+        type = try values.decode(ConditionType.self, forKey: .type)
         switch type {
         case .httpRequest:
             condition = try values.decode(DummyCondition.self, forKey: .condition)

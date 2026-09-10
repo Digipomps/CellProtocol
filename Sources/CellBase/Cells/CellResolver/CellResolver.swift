@@ -1041,9 +1041,8 @@ public class CellResolver: CellResolverProtocol {
         )
         let resultValue = try await target.get(keypath: keypath, requester: requester)
         
-        let resultDescription = (try? resultValue.jsonString()) ?? "No result"
         CellBase.diagnosticLog(
-            "Resolver get \(url.absoluteString) -> \(resultDescription)",
+            "Resolver get completed",
             domain: .resolver
         )
         
@@ -1052,9 +1051,8 @@ public class CellResolver: CellResolverProtocol {
     
     public func set(value: ValueType, into url: URL, requester: Identity) async throws -> ValueType? {
         // cell:///Purposes/state
-        let encodedValue = try value.jsonString()
         CellBase.diagnosticLog(
-            "Resolver set \(url.absoluteString) value=\(encodedValue)",
+            "Resolver set requested",
             domain: .resolver
         )
         let (cellURL, keypath) = splitCellURL(cellURL: url)
@@ -1072,14 +1070,8 @@ public class CellResolver: CellResolverProtocol {
             requester: requester
         )
         let resultValue = try await target.set(keypath: keypath, value: value, requester: requester)
-        let resultDescription: String
-        if let resultValue {
-            resultDescription = (try? resultValue.jsonString()) ?? "Unencodable result"
-        } else {
-            resultDescription = "No result"
-        }
         CellBase.diagnosticLog(
-            "Resolver set \(url.absoluteString) result=\(resultDescription)",
+            "Resolver set completed hasResult=\(resultValue != nil)",
             domain: .resolver
         )
         return resultValue
@@ -1126,7 +1118,7 @@ public class CellResolver: CellResolverProtocol {
             keypath = pathArray.last
             responseURL = cellURL.deletingLastPathComponent()
         }
-        CellBase.diagnosticLog("splitCellURL responseURL=\(responseURL) keypath=\(keypath ?? "-")", domain: .resolver)
+        CellBase.diagnosticLog("Cell URL split hasKeypath=\(keypath != nil)", domain: .resolver)
         return (responseURL, keypath)
     }
     
@@ -1957,6 +1949,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(reference) at create cell")
             throw CellResolverError.cellNotFound
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new(requester: requester)
         
         guard let emitCell = instance as? Emit else {
@@ -1973,6 +1966,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(reference) at create and register cell")
             throw CellResolverError.cellNotFound
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new()
         guard let cell = instance as? Emit else {
             print("Error cell not found for: \(reference) at create and register cell(2)")
@@ -2029,6 +2023,7 @@ public class CellResolver: CellResolverProtocol {
         guard await requesterProvesSigningControl(identity) else {
             throw CellSetupError.ownerAuthorityUnavailable
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new(requester: identity)
         guard let cell = instance as? Emit else {
             print("Error cell not found for: \(endpoint) at create and register personal cell (2)")
@@ -2153,7 +2148,7 @@ public class CellResolver: CellResolverProtocol {
         
         let transport = try transportForScheme(transportScheme)// Find available transport for protocol
         // TODO: Consider refactoring 
-        let bridgeConfig = BridgeBase.Config(contractTemplate: await Agreement(), transport: transport, connection: .outbound)
+        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), transport: transport, connection: .outbound)
         let cellBridge = try await BridgeBase(bridgeConfig)
         try await cellBridge.setTransport(transport, connection: .outbound)
         
@@ -2223,6 +2218,7 @@ public class CellResolver: CellResolverProtocol {
             )
         }
         let bridgeConfig = BridgeBase.Config(
+            owner: identity,
             contractTemplate: await Agreement(),
             uuid: cellBridgeUUID,
             transport: transport,
@@ -2914,20 +2910,7 @@ public class CellResolver: CellResolverProtocol {
         //INTeRaction:action:connectState:source:target:requester:connectState:timestamp
     }
     public func logReference(emitter: Emit) {
-        Task {
-            if let requester = await CellBase.defaultIdentityVault?.identity(for: "private", makeNewIfNotFound: true) {
-                do {
-                    let anyCell = try await emitter.advertise(for: requester)
-                    let anyCSJsonData = try JSONEncoder().encode(anyCell)
-                    CellBase.diagnosticLog(
-                        "REF:\(String(data: anyCSJsonData, encoding: .utf8) ?? "nil")",
-                        domain: .resolver
-                    )
-                } catch {
-                    CellBase.diagnosticLog("REF:FAILED:\(error)", domain: .resolver)
-                }
-            }
-        }
+        CellBase.diagnosticLog("Cell reference type=\(String(describing: type(of: emitter)))", domain: .resolver)
     }
     
     public func namedCells(requester: Identity) async -> [String: String] {

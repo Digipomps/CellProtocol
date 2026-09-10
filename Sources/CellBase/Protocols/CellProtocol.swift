@@ -21,6 +21,8 @@ public protocol Absorb {
     func attachedStatuses(requester: Identity) async throws -> [ConnectionStatus]
 }
 
+/// A protocol boundary for requesters, not a sandbox for arbitrary Swift modules.
+/// Direct mutation of runtime policy belongs to trusted host composition code.
 public protocol Emit: AnyObject {
     
     func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error>

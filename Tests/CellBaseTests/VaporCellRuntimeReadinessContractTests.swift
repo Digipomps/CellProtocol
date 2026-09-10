@@ -6,6 +6,19 @@ import XCTest
 @testable import CellVapor
 
 final class VaporCellRuntimeReadinessContractTests: XCTestCase {
+    private var previousMasterKey: Data?
+
+    override func setUp() {
+        super.setUp()
+        previousMasterKey = CellBase.persistedCellMasterKey
+        CellBase.persistedCellMasterKey = Data(repeating: 0x72, count: 32)
+    }
+
+    override func tearDown() {
+        CellBase.persistedCellMasterKey = previousMasterKey
+        super.tearDown()
+    }
+
     func testVaporEntityAnchorPersistsVerifiedContractAndRejectsImmutableConflict() async throws {
         let previousVault = CellBase.defaultIdentityVault
         let previousDocumentRoot = CellBase.documentRootPath

@@ -472,7 +472,7 @@ public final class CommonsResolverCell: GeneralCell {
                 "reason": ExploreContract.schema(type: "string")
             ],
             requiredKeys: ["is_allowed", "permission_class", "reason"],
-            description: "Permission resolution for a keypath."
+            description: "Advisory keypath metadata policy from supplied requester context. Does not prove identity, consent or authorization to read protected Cell data."
         )
     }
 

@@ -1,0 +1,220 @@
+{
+  "format": "security-audit-work-evidence-2026-09-10",
+  "formatStatus": "documentation snapshot only; not a native AgentJobs status mutation or import contract",
+  "project": "HAVEN.CellProtocol.securityAudit",
+  "sourceImportSHA256": "899757c6023e1b5a0a94b70ae1275acab7bad5e89f4b617421612521beab0e07",
+  "originalIntakeUnchanged": true,
+  "implementationAuthorization": "User explicitly authorized implementation, testing and publication on 2026-09-10 after the original passive intake.",
+  "runtimeSourceCommit": "f1036dcf422f7834cd896d7231407d269b422b3f",
+  "sourceCIVerifiedCommit": "f1036dcf422f7834cd896d7231407d269b422b3f",
+  "queueEvidence": {
+    "nativeTestRoot": "24 registered; FIFO 1..24; idempotent import and native Cell/MCP readback verified",
+    "liveInstallation": "not imported or activated; AgentJobs route/config/binary/Jobs-root prerequisites absent",
+    "ordering": "original strict FIFO preserved; this assessment does not advance or reorder the scheduler",
+    "maxConcurrentExecution": 1,
+    "blockedHeadPolicy": "halt and report"
+  },
+  "entries": [
+    {
+      "jobId": "cp-sec-20260909-001",
+      "fifoSequence": 1,
+      "title": "Stopp oppgradering av innkommende offentlig identitet til lokal signer",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-002",
+      "fifoSequence": 2,
+      "title": "Bind bridge-signering til sesjon, lokal identitet og forventet utfordring",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-003",
+      "fifoSequence": 3,
+      "title": "Avslutt aktiv feed når autorisasjonen tilbakekalles",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-004",
+      "fifoSequence": 4,
+      "title": "La kontraktutløp og endrede vilkår stoppe aktive feeds",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-005",
+      "fifoSequence": 5,
+      "title": "Avvis tomme og ugyldige keypaths uten runtime-krasj",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-006",
+      "fifoSequence": 6,
+      "title": "Gjør FileCrypto-lengdeparsing overflytsikker og begrenset",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-007",
+      "fifoSequence": 7,
+      "title": "Begrens minneforbruk under FileCrypto-dekomprimering",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-008",
+      "fifoSequence": 8,
+      "title": "Autentiser FileCrypto-header og avvis ukjente formatversjoner",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-009",
+      "fifoSequence": 9,
+      "title": "La EntityAnchor-krypteringspolicy dekke sidefiler og journal",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-010",
+      "fifoSequence": 10,
+      "title": "Erstatt demogodkjenning av isMember med faktisk medlemskapsbevis",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-011",
+      "fifoSequence": 11,
+      "title": "Kontroller tillatelsesbitene i Identity.granted",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-012",
+      "fifoSequence": 12,
+      "title": "Avvis avtaler med ukjente eller feilformaterte conditions",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-013",
+      "fifoSequence": 13,
+      "title": "Returner faktisk feilstatus fra bridge-setter",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-014",
+      "fifoSequence": 14,
+      "title": "Fjern hemmeligheter og komplette private verdier fra resolverdiagnostikk",
+      "implementationAssessment": "source-verified-pending-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-015",
+      "fifoSequence": 15,
+      "title": "Samordne relasjonsvalidering i Apple- og Vapor-EntityAnchor",
+      "implementationAssessment": "feature-fix-verified-pending-feature-integration",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-016",
+      "fifoSequence": 16,
+      "title": "Avklar og håndhev grensen mellom betrodd Swift-API og beskyttet celle-API",
+      "implementationAssessment": "bounded-contract-disposition-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-017",
+      "fifoSequence": 17,
+      "title": "Gi FlowElementPusherCell en sannferdig og avgrenset kontrakt",
+      "implementationAssessment": "bounded-contract-disposition-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-018",
+      "fifoSequence": 18,
+      "title": "Skil Commons-permissionmetadata fra verifisert autorisasjon",
+      "implementationAssessment": "bounded-contract-disposition-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-019",
+      "fifoSequence": 19,
+      "title": "Avgrens og dokumenter replay- og determinismeløfter per støttet løp",
+      "implementationAssessment": "bounded-contract-disposition-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-020",
+      "fifoSequence": 20,
+      "title": "Etabler samlet regresjonskontroll for sikkerhetsrevisjonen i CI",
+      "implementationAssessment": "source-ci-and-local-consumer-gates-verified-final-consumer-ci-required",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-021",
+      "fifoSequence": 21,
+      "title": "Kontroller alle låste avhengigheter mot aktuelle sikkerhetsvarsler",
+      "implementationAssessment": "dependency-review-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-022",
+      "fifoSequence": 22,
+      "title": "Kartlegg faktisk eksponering av bridge-identitet og sikkerhetskritiske ruter",
+      "implementationAssessment": "local-evidence-complete-production-evidence-missing",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-023",
+      "fifoSequence": 23,
+      "title": "Verifiser lagringsbeskyttelse og sikkerhetskopidekning for Entity-filer",
+      "implementationAssessment": "local-evidence-complete-production-evidence-missing",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    },
+    {
+      "jobId": "cp-sec-20260909-024",
+      "fifoSequence": 24,
+      "title": "Test samtidighet og nettverksfeil i de integrerte sikkerhetskjedene",
+      "implementationAssessment": "bounded-fault-matrix-verified",
+      "evidence": "SecurityIntegrationVerification-2026-09-10.md",
+      "productionDeploymentVerified": false
+    }
+  ],
+  "sourceManifestSHA256": "f5173d76475fe8eec343ddec13c9b216b5d47a71754f73973d1ef1cc2bd41a7b",
+  "consumerCommits": {
+    "DiMyMicropayments": "99da4ba38a1a6a4d2e5f7dfe3a66a2329a476a41",
+    "DiMyMint": "41c5005c9b12021f18d491af85f0516b9aa04a19",
+    "CellScaffold": "e29e5c13f2f25a9e48e287d40dd37f40e3735be6",
+    "HavenAgentD": "2d44b7098f6cb655c7e488dd9b188d78ed27bc72",
+    "Sprout": "9d9f89a1bcdbc29b622487428a0f8d112bc5008e"
+  },
+  "bindingAcceptance": "Local final-pin build passes; one protected-storage test is blocked by reproducible host Foundation EPERM. Candidate not published."
+}

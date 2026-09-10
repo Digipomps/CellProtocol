@@ -1,0 +1,312 @@
+# Security audit implementation ledger
+
+This is a historical implementation journal. Statements below such as "not
+pushed", "Linux gate pending", and earlier dependency pins describe intermediate
+states, not current release readiness. The authoritative current checkpoint is
+[SecurityIntegrationVerification-2026-09-10.md](SecurityIntegrationVerification-2026-09-10.md).
+
+Owner/integrator: current Codex security audit task.
+
+## Historical integration checkpoint
+
+2026-09-10: full macOS rerun passed 1058/1058, including the portable feed
+fan-in and upgraded dependencies (`cp-security-full-macos-dependencies.log`).
+The earlier clean full rerun also passed 1058/1058 (`cp-security-full-macos-v2.log`).
+OpenCombine 0.14 does not implement Merge; commit `b7b8ae3` uses a two-inner
+bounded flatMap fan-in. 55 relevant macOS regressions passed afterward. Linux
+compiles after including MockIdentityVault in the CI fixture copy, but repeated
+emulated amd64 runs have hung at different tests. One isolated serialized bridge
+test passed in 0.084 seconds. This is NOT a passing Linux gate; investigate native
+execution before acceptance. Diagnostic prints exist only in the disposable
+Linux test copy and must not be included in the release.
+
+Dependency scan 021 found four CVEs in the initial pins; see
+`DependencySecurity-2026-09-10.md`. Crypto 4.5.2, NIO 2.102.0, NIOSSL 2.37.4 and
+HTTP2 1.46.0 are now resolved. A fresh OSV commit query returned zero matches for
+all 34 pins (`/private/tmp/cp-security-osv-upgraded-result.json`). This is a
+point-in-time check, not a claim of absence of unknown vulnerabilities.
+
+CellScaffold source gate: 71/71 passed with the new dependency graph and inbound
+ready transitions (`cp-security-scaffold-consumer-v3.log`). The original 73-test
+run found one actual AdminEntry bridge regression plus two existing manifest
+writer failures. Both manifest failures reproduce against unmodified main
+`cde2e0a`, including with a separate TMPDIR; they are explicitly excluded from
+the 71-test result. The AdminEntry loopback passes on baseline and after fixing
+the host's local ready transition. The original dirty consumer tree is untouched.
+DiMyMicropayments: 36/36 tests pass with local security CellProtocol and Crypto 4.
+Coordinated consumer branches must publish compatible dependency pins before
+the new CellProtocol dependency is adopted.
+
+HavenAgentD PR 11 is pushed and CI-green at `c7b0a03`, with 179 tests/37 suites,
+a real Codex app-server job and native 24-item FIFO projection verified against
+CellProtocol `0157db7`. That projection uses a disposable daemon root, not the
+user's live daemon. No daemon activation, live import or automatic job execution
+has been performed. Final CellProtocol dependency verification remains required.
+
+The user authorized implementation, testing and publication on 2026-09-10, after
+the read-only audit and passive FIFO intake. This is new authority; the original
+intake remains immutable evidence of its original read-only scope.
+
+## Source and ownership
+
+- Repository: CellProtocol; branch `codex/security-audit-20260910`.
+- Clean base: `cde2e0aa759704d46f15e5312262e34db4c9ad8c` from `origin/main`.
+- Worktree: `/private/tmp/cellprotocol-security-audit-20260910`.
+- Audit source: `4096760fe2b47d93d65d143320acfb51b4d50ff7` on
+  `pdd/tillitspakke-agentflaate`; this includes unmerged features. Findings must
+  be revalidated against main. Do not merge the audit branch's unrelated work.
+- Passive intake: `HavenAgentD/Imports/HAVEN.CellProtocol.securityAudit/2026-09-09`.
+  The import.json SHA-256 is
+  `899757c6023e1b5a0a94b70ae1275acab7bad5e89f4b617421612521beab0e07`.
+- The existing task “Implementer asynkron MCP-jobbflyt” owns the separate
+  HavenAgentD AgentJobs implementation and native import/readback. Its task ID
+  is `01a0611b-306f-7f81-9716-78d36cff03e3`. Do not edit its files or live Jobs/State.
+
+## FIFO and acceptance
+
+Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
+intake. Execution is sequential. A blocked head must be reported explicitly,
+not skipped by an optimizer. Native registration is not yet verified here.
+
+001–019 have passed their local acceptance checks or received the documented
+architecture disposition below. They remain subject to the final consumer/CI
+integration gate. 020 is in progress. 020–024 have not passed acceptance.
+
+### 015–019
+
+015: separate feature-only commit `50b1490`, 19 tests passed in
+`/private/tmp/cp-security-relation-parity-verified.log`. Same synthetic admission
+matrix on Apple and Vapor, including persistence/restart. This does not add the
+unreleased EntityRelation feature to main.
+
+016: documented the trusted-process Swift boundary without removing existing
+raw publisher or mutable policy APIs. These APIs are not plugin isolation.
+017: the ephemeral producer requires its local owner object on requester-bearing
+operations and rejects Agreement signing instead of fabricating `.signed`.
+018: Commons decisions are explicitly advisory supplied-context metadata, not
+verified data-access authority. No protected-data bypass was demonstrated.
+019: README now bounds replay/determinism claims to implemented verified paths.
+
+`/private/tmp/cp-security-runtime-boundaries-v2.log`: 58 tests passed, zero failures,
+including existing Integration, lifecycle, Commons and Entity encryption paths.
+
+### 020 integrated gate (running)
+
+First full macOS run on source commit `0157db7`:
+`/private/tmp/cp-security-full-macos.log`, 1058 tests, 2 failed assertions in
+one RelationalLearning concurrent-flow test. The test inspected the recorder
+before the final asynchronously authorized event arrived. It now waits on an
+explicit 32-event expectation and still requires exact count and journal order.
+`/private/tmp/cp-security-relational-delivery.log`: 45 relevant tests passed.
+A fresh full run is required after that test correction.
+
+Linux/OpenCombine uses the actual modified CI step, extracted into
+`/private/tmp/cp-security-linux-gate/run-ci-step.sh`, in the existing
+`swift:6.2.4-noble` Linux amd64 image (host is arm64). Read-only source bind,
+private writable gate directory, 4 CPU/6 GiB limit, 2 build jobs. Log:
+`/private/tmp/cp-security-linux.log`. Gate package lives under
+`/private/tmp/cp-security-linux-gate/device-ingress-linux`.
+
+CellScaffold consumer checkout: `/private/tmp/cp-security-consumer/CellScaffold`,
+clean origin/main `5e64c296c469e3232de2d475aa7865b60655627d`. Local CellProtocol
+override points to this security worktree through sibling `CellProtocol` symlink.
+DiMyMint `dc4e8620f80ddb3691b9d401a3d8b7902518d093` and DiMyMicropayments
+`943fc903413b7c2c1defa8728a36f1f96690381f` are clean detached sibling checkouts
+matching the consumer's pins. Original dirty repositories were not edited.
+Private SwiftPM key `scaffold-security-20260910`; log:
+`/private/tmp/cp-security-scaffold-consumer.log`. Bridge, identity provisioning,
+identity manifest and Entity proof persistence suites are being built/tested.
+
+No commits have been pushed or merged. Fresh origin/main still equals `cde2e0a`.
+
+### 013–014 accepted locally
+
+`/private/tmp/cp-security-diagnostics-verified.log`: 68 tests passed, zero failures,
+including bridge success/error responses and resolver input/output/denied-value
+log exclusion. The 50 existing BridgeTests also passed in
+`/private/tmp/cp-security-set-response-verified.log`; that run's new test failed
+because its fixture omitted the ready handshake. With the handshake restored,
+all 5 boundary tests passed in `/private/tmp/cp-security-set-response-v3.log`.
+
+015 is present on audit HEAD `4096760` but absent from main. Its isolated fix
+lives in `/private/tmp/cellprotocol-entity-relation-parity-20260910`, branch
+`codex/entity-relation-security-parity-20260910`. Do not merge that entire
+unreleased feature branch into main as part of the security release.
+
+### 010–012 accepted locally
+
+`/private/tmp/cp-security-agreement.log`: 147 tests passed, zero failures.
+Target keypath names no longer establish membership. Unsupported target/source
+grant attestations remain unresolved; use a supported verified condition instead.
+Identity.granted now compares permission bits through Grant.granted, preserving
+Grant equality's existing keypath-based collection semantics. Malformed, null,
+missing-type and unknown-type condition payloads fail decoding; a genuinely
+absent or empty conditions list remains compatible with existing writers.
+
+### 006–009 accepted locally
+
+FileCrypto commit `07ca3c3`: `/private/tmp/cp-security-file-v2.log`, 13 tests,
+zero failures. Bounds, v2 metadata authentication and v1 compatibility are
+described in `FileCryptoSecurity.md`. A trial assertion that Apple Compression
+always rejects trailing compressed bytes was disproved and removed; AEAD still
+authenticates these bytes. Truncation and expansion bounds remain tested.
+
+EntityAnchor: `/private/tmp/cp-security-entity-resolver-verified.log`, 96 tests,
+zero failures. Apple/Vapor snapshot and journal encryption, legacy migration,
+restart, wrong-key non-overwrite, cross-file binding and resolver key loading
+before construction were verified. Existing readiness test hosts now supply
+synthetic master keys. Source details and migration limits are in
+`EntityAnchorStorageSecurity.md`. Earlier logs preserve compilation corrections
+and the expected missing-key failures in previously keyless fixtures.
+
+Positive operations, rejected operations, persisted data compatibility and
+relevant consumer behavior must pass before publication to main. Evidence
+must name the actual commit and command. No test result is a universal promise
+that no deployment can fail.
+
+## Verification log
+
+- Clean-base bridge baseline is building with a private SwiftPM cache:
+  `Scripts/haven-swiftpm.sh --cache-root /private/tmp/cp-security-swiftpm
+  --cache-key cp-security-20260910 --max-age-seconds 0 --max-cache-kib 0 --
+  test --disable-automatic-resolution --jobs 4 --filter
+  'AppleBridgeTransportTests|VaporBridgeTransportTests|BridgeBaseTests'`.
+- Log: `/private/tmp/cp-security-baseline.log`. `BridgeBaseTests` is not the
+  actual suite name; run `BridgeTests` separately before claiming that coverage.
+- Build/test results and remaining risks will be appended as work completes.
+
+### 001–002: bridge identity boundary and local signing scope
+
+- Clean-base Apple/Vapor transport tests: 19 passed, zero failures.
+- Corrected clean-base `BridgeTests` baseline: 48 passed, zero failures;
+  `/private/tmp/cp-security-bridge-baseline.log`.
+- Red test evidence: `/private/tmp/cp-security-f1-red.log` showed the copied
+  public owner reading `protected-value` without a peer proof. After the
+  requester-boundary fix, `/private/tmp/cp-security-f1-f2-red.log` showed both
+  unsolicited signing and signing another local identity still succeeding.
+- The initial positive proof-count assertion assumed one authorization check;
+  GeneralCell performs multiple checks. The test now requires at least one peer
+  proof and checks the protected-read result, without prescribing internal count.
+- Complete targeted matrix: 15 tests passed, zero failures;
+  `/private/tmp/cp-security-f1-f2-verified.log`.
+- Broad bridge matrix: 105 tests passed, zero failures in 107.654 seconds;
+  `/private/tmp/cp-security-bridge-regression.log`. Filter:
+  `BridgeTests|BridgeIdentity|AppleBridgeTransportTests|VaporBridgeTransportTests|LightweightBridgeTransportTests|BridgeMultiplexingTests|CellResolverProtocolLightweightBridgeTransportTests`.
+- Host compatibility requirements are recorded in `BridgeIdentitySecurity.md`.
+  Protected discovery and nested proof scopes require explicit host pins. This
+  host-level verification remains part of the integration gate; passing unit
+  tests does not establish every application deployment's compatibility.
+
+Local commit for 001–002: `effbb2e` (not pushed or merged).
+
+### 003–004: active-feed authorization (in progress)
+
+- Added `ActiveFeedAuthorizationTests`. On the preceding implementation both
+  member removal overloads leaked `after` values and a publisher obtained before
+  revocation could be subscribed afterward. Red log:
+  `/private/tmp/cp-security-feeds-red.log` (2 tests, 6 failed assertions).
+- Uncommitted `FeedAuthorizationRegistry.swift` now gives each subscription a
+  revocation signal, serial asynchronous reauthorization and a 256-element
+  bounded buffer. Both removeMember paths revalidate live subscriptions before
+  returning, preserving readers whose authority still holds.
+- The two revocation regressions pass: `/private/tmp/cp-security-feeds-green.log`.
+- Still required: contract expiry and condition-change tests, burst ordering,
+  overflow/cancellation/completion checks, then GeneralCell/Integration/bridge
+  regressions. Review normal upstream completion: merging an endless revocation
+  signal must not hide completion. No feed change has been committed yet.
+- Implementation uses Combine/OpenCombine buffer `.byRequest`: the checked
+  pinned OpenCombine source requests unlimited upstream for this setting,
+  allowing explicit overflow failure instead of silently losing producer demand.
+
+The first broad feed run (`/private/tmp/cp-security-feeds-regression.log`) ran
+91 tests and found 3 failed assertions: the new overflow test and existing
+waitable-detach / cross-thread overflow integration invariants. Do not weaken
+those tests. The asynchronous authorization hop had released the existing
+forwarding reservation before downstream completion. The uncommitted fix now
+captures a `FlowDeliveryFlight` ticket synchronously before buffering and releases
+it only after downstream delivery returns or the element is discarded. The
+forwarding loop waits for those tickets; invalidated generations cannot deliver.
+The buffer's terminal error can itself wait for demand, so overflow additionally
+signals failure asynchronously outside Buffer's internal lock.
+
+Condition change, template grant removal and real contract expiry are now tested.
+Normal completion closes the auxiliary revocation publisher so Merge cannot hide
+upstream completion. Late contract expiry is rechecked after suspending proof and
+condition evaluation, before a new GeneralCell authorization decision is emitted.
+
+The v2 run stopped on a compile error (Subscriber's combineIdentifier); fixed
+explicitly in the forwarding subscriber. Current verification command is in
+`/private/tmp/cp-security-feeds-regression-v3.log`, running the same 91-test filter.
+All feed source changes remain uncommitted until this verification passes.
+
+The corrected v3 run passed all 91 tests in 6.933 seconds. Additional acceptance
+coverage is now running in `/private/tmp/cp-security-feeds-final.log` (session
+78597): instance-local controlled contract clock, expired-grant reopen denial,
+valid renewal, and two serialized bridge clients where revoking one preserves
+the other. GeneralCell's clock is internal and is neither persisted nor exposed
+through Meddle. The earlier real-time sleep was replaced by this controlled clock.
+
+The current BridgeBase protocol does not acknowledge remote feed termination.
+The bridge test checks server-side feed termination and absence of new events
+for the revoked client; already-authorized/in-flight transport messages cannot
+be retracted. Do not claim a remote teardown acknowledgement or replay guarantee.
+Broader transport/lifecycle fault verification remains in work item 024.
+
+Next FIFO items after feed acceptance: 005 empty GeneralCell get/set keypaths
+(also inspect Agreement.set's equivalent array access), 006 safe FileCrypto
+integer decoding, 007 bounded decompression, 008 authenticated envelope header
+with explicit legacy compatibility, then 009 EntityAnchor side-file encryption.
+Do not skip the remaining 010–024 items or the final consumer/CI integration gate.
+
+The 95-test feed acceptance run has NOT passed yet. The controlled clock and
+renewal tests pass, as do all 91 GeneralCell/feed/integration checks, but the new
+two-client bridge test currently gets `denied` at initial client.flow. Direct
+local authorization with the same newly issued member contract passes. Neither
+peer transport records a signing challenge/denial, so investigate the exact
+pre-sign authorization boundary. An initial fixture UUID collision was removed
+by assigning explicit unique UUIDs through EphemeralIdentityVault.addIdentity;
+the denial remains. Do not call the feed slice complete or bypass its test.
+
+Latest targeted diagnostic: `/private/tmp/cp-security-bridge-feed-events.log`
+(exec session 24970), using existing InMemoryCellSecurityEventSink reason codes.
+Earlier targeted logs: `cp-security-bridge-feed-diagnostic.log`,
+`cp-security-bridge-feed-local-proof.log`; the assertions record safe response
+types/reasons only. Sources are still uncommitted after `effbb2e`.
+
+Read-only coordination freshness: the other task's worktree is
+`/private/tmp/haven-agentd-app-server-bridge-20260909`, branch
+`codex/app-server-mcp-bridge-20260909`, base `cccc97c`. It now contains staged/new
+AgentJobsCell, CodexAppServerBridge, registration store, MCP process E2E tests,
+real app-server integration tests and a copy of the 81-file passive import.
+Native execution/import success has not been returned; do not infer completion
+from these source files. Preserve its exclusive ownership.
+
+Root cause of the member bridge denial: the default Agreement includes an
+`identity.displayName` GrantCondition. Identity's constructor/decoder installs
+that intrinsic public read grant, but the new publicIdentitySnapshot-based
+requester boundary had removed it. The boundary now installs ONLY that known
+local `displayName: r---` grant; it still discards caller-supplied grants, private
+properties and vault authority. This preserves the existing wire decoder's
+public-metadata behavior without trusting arbitrary remote policy. Verification
+is running in `/private/tmp/cp-security-feeds-and-identity-verified.log` (exec
+session 19668).
+
+That run completed successfully: 99 tests, zero failures, 1.742 seconds. This
+includes 5 active-feed tests, 4 serialized bridge boundary tests, 4 signing-scope
+tests, 3 queue/lifecycle tests, 48 GeneralCell interface tests and 35 Integration
+tests. See `ActiveFeedAuthorization.md` for the precise guarantees and limits.
+
+Local commit for feed/metadata compatibility: `95d85e3` (not pushed or merged).
+
+### 005: empty keypaths
+
+GeneralCell get/set now reject an empty component list instead of indexing it.
+Agreement.set safely ignores the equivalent empty path without changing state.
+The regression exercises empty and dot-only strings and a subsequent valid read.
+64 GeneralCell/IdentityAgreement/serialized bridge tests pass with zero failures:
+`/private/tmp/cp-security-empty-keypaths.log`. Existing state and wire formats are
+unchanged. This fix has not been deployed.
+
+No changes have been made in the original dirty CellProtocol, CellProtocolDocuments
+or HavenAgentD source working copies. Do not use those for builds or overwrite
+their existing WIP. The other task continues to own AgentJobs and native import.

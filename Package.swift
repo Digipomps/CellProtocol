@@ -27,9 +27,14 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", from: "1.4.1"),
         .package(url: "https://github.com/OpenCombine/OpenCombine.git", from: "0.13.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "4.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.5.2"),
         .package(url: "https://github.com/GiacomoLeopizzi/random-swift", from: "1.0.0"),
         .package(url: "https://github.com/vapor/vapor.git", from: "4.0.1"),
+        // CellVapor explicitly retains these products so SwiftPM cannot prune
+        // their security floors when this package is consumed downstream.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.101.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.2"),
+        .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.45.0"),
         .package(
             url: "https://github.com/Digipomps/FileUtils-c.git",
             revision: "26f365ca39955ee693e138ef028560df3bdf218c"
@@ -73,6 +78,9 @@ let package = Package(
                     .target(name: "CellBase"),
                     .product(name: "Crypto", package: "swift-crypto"),
                     .product(name: "Vapor", package: "vapor"),
+                    .product(name: "NIOCore", package: "swift-nio"),
+                    .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                    .product(name: "NIOHTTP2", package: "swift-nio-http2"),
                     .product(name: "CFileUtils", package: "fileutils-c"),
                 ]),
         .target(
