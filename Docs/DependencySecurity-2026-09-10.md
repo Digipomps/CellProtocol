@@ -24,15 +24,27 @@ CellProtocol RSA call was therefore insufficient grounds to retain the old pin.
 
 Package.swift now constrains these minimum safe transport versions, rather than
 relying only on a root lockfile that downstream SwiftPM consumers ignore.
+CellVapor explicitly lists NIOCore, NIOSSL and NIOHTTP2 product dependencies:
+merely declaring otherwise-unused package requirements is insufficient because
+SwiftPM can prune them. A real consumer pinned to NIOSSL 2.36.1 resolves against
+the earlier `b605c5e` manifest and is rejected by `f1036dc`. The permanent
+`Scripts/verify-transport-security-floor.sh` gate requires that exact dependency
+conflict, so a network or compiler failure cannot count as successful rejection.
+Pure CellBase/CellApple consumers still own unrelated transport dependencies;
+their application lockfiles must also select patched versions.
 Crypto requires 4.5.2, including the follow-up RSA modulus-size corrections.
 The Linux test manifests use the same Crypto version. These dependencies require
 Swift 6.1 or later; verification uses Swift 6.2.4. Older compilers need an
 explicit upgrade and cannot consume this dependency set unchanged.
 
 DiMyMint and DiMyMicropayments previously constrained Crypto to major version 3.
-Their compatible version ranges must admit version 4 before a CellScaffold
-dependency update can resolve this CellProtocol release. Publication must be
-coordinated and tested across those consumer packages.
+Their published compatibility PRs now admit version 4 and pin the tested
+CellProtocol graph. Sprout also needed a compatible Crypto range for HavenAgentD;
+its Crypto 3 and 4 builds were independently verified. Exact commits, consumer
+tests and integration order are in `SecurityIntegrationVerification-2026-09-10.md`.
+
+`DependencySecurityEvidence-2026-09-10.json` records the exact 34 dependency
+versions, immutable commits, Package.resolved hash and zero-match OSV rescan.
 
 The OSV record for Crypto initially labelled 4.5.1 as affected, contradicting the
 maintainer advisory and its fix commit. The maintainer identifies 4.5.1 as fixed;

@@ -1,8 +1,13 @@
 # Security audit implementation ledger
 
-Status: IN_PROGRESS. Owner/integrator: current Codex security audit task.
+This is a historical implementation journal. Statements below such as "not
+pushed", "Linux gate pending", and earlier dependency pins describe intermediate
+states, not current release readiness. The authoritative current checkpoint is
+[SecurityIntegrationVerification-2026-09-10.md](SecurityIntegrationVerification-2026-09-10.md).
 
-## Current integration checkpoint (supersedes earlier running notes)
+Owner/integrator: current Codex security audit task.
+
+## Historical integration checkpoint
 
 2026-09-10: full macOS rerun passed 1058/1058, including the portable feed
 fan-in and upgraded dependencies (`cp-security-full-macos-dependencies.log`).

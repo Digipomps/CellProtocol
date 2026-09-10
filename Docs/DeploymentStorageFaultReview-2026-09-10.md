@@ -18,6 +18,16 @@ Item 022 has a concrete local/source exposure matrix. Production exposure remain
 open; missing live deployment evidence must not be marked done or interpreted as
 absence of exposure.
 
+CellScaffold's existing atomic-v3 controller is a one-shot historical deployment
+contract tied to an `f76de5a` image tuple. Its declared dependency inputs match
+the later pre-audit main snapshot `5e64c296`, while the Package.resolved stored
+at `f76de5a` has different pins. Build-time overrides or actual image provenance
+must be checked before using that controller. This audit did not inspect or run
+the live image. Its dependency test now compares the frozen pre-audit inputs,
+with their exact checksum, instead of silently forcing that historical contract
+to follow each current package update. The controller and release guards are
+unchanged. This is not deployment acceptance for the security candidate.
+
 ## Storage and backup
 
 Both Apple and Vapor EntityAnchor snapshot and journal files are encrypted by
@@ -53,6 +63,8 @@ has no general durable operation deduplication contract. Already authorized
 network data cannot be recalled after revocation, and there is no remote
 teardown acknowledgement. Application retries must account for that ambiguity.
 
-The intermittent emulated Linux hangs remain recorded separately from these
-passing macOS results. Native CI must decide Linux acceptance; a timeout is not
-a passing test.
+The intermittent emulated Linux hangs remain recorded separately from passing
+results; their cause is unproven. Native Linux CI subsequently passed at
+`7d3598a`: 51 OpenCombine/security tests plus file-bounds/public-API compilation
+checks, and 25 actual Vapor vault tests. See `SecurityIntegrationVerification-2026-09-10.md`
+for exact runs. The emulated timeouts are not counted as passing tests.
