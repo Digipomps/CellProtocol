@@ -2,10 +2,10 @@ name: CellProtocol macOS regression
 
 on:
   pull_request:
-    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', '.github/workflows/security-regression-macos.yml']
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', 'Scripts/verify-transport-security-floor.sh', '.github/workflows/security-regression-macos.yml']
   push:
     branches: [main]
-    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', '.github/workflows/security-regression-macos.yml']
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', 'Scripts/verify-transport-security-floor.sh', '.github/workflows/security-regression-macos.yml']
   workflow_dispatch:
 
 permissions:
@@ -30,3 +30,6 @@ jobs:
           swift --version
           swift test --disable-automatic-resolution --jobs 4
           git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
+      - name: Reject a vulnerable downstream transport pin
+        shell: bash
+        run: bash Scripts/verify-transport-security-floor.sh
