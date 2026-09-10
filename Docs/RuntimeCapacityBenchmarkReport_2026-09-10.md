@@ -70,7 +70,7 @@ I overflow-prøven ble 512 elementer sendt mot en consumer med 5 ms forsinkelse 
 
 ### CI-begrensninger
 
-Dette er én kjøring per punkt på en delt, liten macOS-host. Den er ikke direkte sammenlignbar med den lokale M5-baselinen nedenfor, og inneholder verken nettverk, ekstern bridge, database, reell identitet/signaturverifisering, større runtime-state eller stabilitets-/soak-last. Systemdata (`top`, `iostat`, `vm_stat`) er samlet som korrelasjon i jobbloggen, men er ikke prosessattribuert. En GitHub CLI-rate-limit under observasjon av jobben påvirket kun lokal polling; den ferdige jobben ble deretter verifisert via GitHub-grensesnittet og ingen testfeil er knyttet til den hendelsen.
+Dette er én kjøring per punkt på en delt, liten macOS-host. Den er ikke direkte sammenlignbar med den lokale M5-baselinen nedenfor, og inneholder verken nettverk, ekstern bridge, database, reell identitet/signaturverifisering, større runtime-state eller stabilitets-/soak-last. De systemomfattende overskriftene i `top`, samt `iostat` og `vm_stat`, er kun korrelasjonsdata. Den enkelte `top`-raden er derimot samlet med benchmarkprosessens PID og er prosessattribuert; de observerte OS-trådene for cell og resolver er spesifisert nedenfor. En GitHub CLI-rate-limit under observasjon av jobben påvirket kun lokal polling; den ferdige jobben ble deretter verifisert via GitHub-grensesnittet og ingen testfeil er knyttet til den hendelsen.
 
 ## Identitet og repeterbarhet
 
@@ -147,7 +147,20 @@ Harnessen oppretter nå den forespurte lagringsroten før den kanonikaliserer de
 
 ### Swift tasks kontra OS-tråder
 
-`workerTasksCreated` og `peakConfiguredInFlightTasks` i JSON beskriver bare harnessens 1/2/4/8 worker-tasker. De er ikke runtimeens samlede Swift-tasker. `top` rakk bare å sample idle-tilfellet robust (4 OS-tråder); de korte CPU/flow-prosessene mangler ofte et helt intervallsample. Det finnes dermed ikke forsvarlig observerte OS-tråd- eller Swift-task-skaleringsverdier i denne rapporten.
+`workerTasksCreated` og `peakConfiguredInFlightTasks` i JSON beskriver bare harnessens 1/2/4/8 worker-tasker. De er ikke runtimeens samlede Swift-tasker. I den eldre lokale M5-baselinen rakk `top` bare å sample idle-tilfellet robust (4 OS-tråder); de korte CPU/flow-prosessene der mangler ofte et helt intervallsample.
+
+Den integrerte CI-kjøringen har lengre cell- og resolver-serier. Harnessen kjørte `top -l 0 -s 1 -pid <benchmark-PID>` for hver separat benchmarkprosess, så hver `#TH`-rad nedenfor er tilskrevet prosessen for den angitte arbeidslasten. Formatet er `totalt/kjørende` OS-tråder. Verdiene er minimum--maksimum blant de innsamlede radene, ikke harnessens worker-tasks og ikke et løfte om at en kortvarig tråd mellom énsekundsprøvene ikke fantes.
+
+| CI-arbeidslast | Workere | `top`-prøver | `#TH` totalt, observert min--maks | `#TH` kjørende, observert min--maks |
+| --- | ---: | ---: | ---: | ---: |
+| cell | 1 | 5 | 4--4 | 1--2 |
+| cell | 2 | 5 | 4--4 | 1--3 |
+| cell | 4 | 5 | 4--5 | 1--3 |
+| resolver | 1 | 7 | 4--4 | 1--2 |
+| resolver | 2 | 8 | 4--5 | 2--3 |
+| resolver | 4 | 7 | 4--5 | 1--3 |
+
+`top` startet etter at prosessen var opprettet og dekker hele prosesslevetiden, mens `wallSeconds` i `result.json` dekker harnessens målte execute-del. Prøvetallet og `top`-tid er derfor ikke identisk med den rapporterte målte veggklokketiden. Dette er prosessens OS-tråder, ikke hele vertens trådtall og fortsatt ikke runtimeens samlede Swift-tasker.
 
 Den medfølgende `Scripts/record-runtime-swift-tasks-trace.sh` skal kjøres etter en normal baseline med Instruments' *Swift Concurrency*-template. Da leses `Running Tasks`, `Alive Tasks`, `Total Tasks` og Task Forest separat fra `top`-trådtallet. Tracen ble utsatt før den startet, fordi Instruments kan skrive vesentlig profilmateriale når disken er kritisk full.
 
