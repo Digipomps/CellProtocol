@@ -9,6 +9,7 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousDocumentRoot: String?
+    private var previousMasterKey: Data?
     private var previousExploreMode: CellBase.ExploreContractEnforcementMode = .permissive
 
     override func setUp() {
@@ -16,6 +17,8 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         previousVault = CellBase.defaultIdentityVault
         previousResolver = CellBase.defaultCellResolver
         previousDocumentRoot = CellBase.documentRootPath
+        previousMasterKey = CellBase.persistedCellMasterKey
+        CellBase.persistedCellMasterKey = Data(repeating: 0x71, count: 32)
         previousExploreMode = CellBase.exploreContractEnforcementMode
     }
 
@@ -23,6 +26,7 @@ final class CellRuntimeReadinessContractTests: XCTestCase {
         CellBase.defaultIdentityVault = previousVault
         CellBase.defaultCellResolver = previousResolver
         CellBase.documentRootPath = previousDocumentRoot
+        CellBase.persistedCellMasterKey = previousMasterKey
         CellBase.exploreContractEnforcementMode = previousExploreMode
         super.tearDown()
     }

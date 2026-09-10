@@ -16,6 +16,14 @@ import Crypto
 #endif
 
 final class ResolverTests: XCTestCase {
+    private final class PersistenceInitializationProbe: GeneralCell {
+        var hadKeyAtInitialization = false
+        required init(owner: Identity) async {
+            hadKeyAtInitialization = CellBase.persistedCellMasterKey != nil
+            await super.init(owner: owner)
+        }
+        required init(from decoder: Decoder) throws { try super.init(from: decoder) }
+    }
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousScopedSecretProvider: ScopedSecretProviderProtocol?
@@ -1464,14 +1472,15 @@ final class ResolverTests: XCTestCase {
             cellScope: .scaffoldUnique,
             persistency: .persistant,
             identityDomain: "private",
-            type: GeneralCell.self
+            type: PersistenceInitializationProbe.self
         )
 
         guard let identity = await countingVault.identity(for: "private", makeNewIfNotFound: true) else {
             XCTFail("Expected test vault identity")
             return
         }
-        _ = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity)
+        let initialized = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity)
+        XCTAssertTrue(try XCTUnwrap(initialized as? PersistenceInitializationProbe).hadKeyAtInitialization)
 
         let expected = Data(SHA256.hash(data: secretSeed))
         XCTAssertEqual(CellBase.persistedCellMasterKey, expected)

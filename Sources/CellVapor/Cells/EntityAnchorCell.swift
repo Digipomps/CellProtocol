@@ -44,6 +44,7 @@ public class EntityAnchorCell: GeneralCell {
     private let signedAgreementCommitGate = SignedAgreementCommitGate()
     private var authorityJournal = EntityAuthorityJournalDocument()
     private var persistenceFailureReason: String?
+    private var legacySideFiles = Set<String>()
     private let authorityCommitGate = EntityAuthorityCommitGate()
    
     // Should  support set/get keypath and persistance of json
@@ -622,8 +623,12 @@ public class EntityAnchorCell: GeneralCell {
             self.authorityJournal = loadedJournal
             self.storage = recoveredStorage
             self.persistenceFailureReason = nil
-            if try Self.canonicalEntityData(recoveredStorage) != Self.canonicalEntityData(loadedStorage) {
+            if try legacySideFiles.contains(Self.storageFilename) ||
+                (Self.canonicalEntityData(recoveredStorage) != Self.canonicalEntityData(loadedStorage)) {
                 try await self.writeKeypathStorage(entity: recoveredStorage)
+            }
+            if legacySideFiles.contains(Self.authorityJournalFilename) {
+                try await self.writeAuthorityJournal(loadedJournal)
             }
         } catch {
             if Self.isMissingFile(error) {
@@ -636,6 +641,9 @@ public class EntityAnchorCell: GeneralCell {
                     }
                     let recoveredStorage = try existingJournal.replay(on: stubsEntity)
                     try await self.writeKeypathStorage(entity: recoveredStorage)
+                    if legacySideFiles.contains(Self.authorityJournalFilename) {
+                        try await self.writeAuthorityJournal(existingJournal)
+                    }
                     self.authorityJournal = existingJournal
                     self.storage = recoveredStorage
                     self.persistenceFailureReason = nil
@@ -692,15 +700,32 @@ public class EntityAnchorCell: GeneralCell {
       try super.encode(to: encoder)
     }
 
+    private func readSideFile(filename: String) async throws -> Data {
+        let stored = try await getFileDataInCellDirectory(filename: filename)
+        let plaintext = try EntityAnchorPersistence.decode(stored, cellUUID: uuid, filename: filename)
+        if !CellPersistenceCrypto.isEncryptedEnvelope(stored),
+           EntityAnchorPersistence.requiresEncryption(agreement: agreementTemplate) {
+            legacySideFiles.insert(filename)
+        }
+        return plaintext
+    }
+
+    private func writeSideFile(_ plaintext: Data, filename: String) async throws {
+        let stored = try EntityAnchorPersistence.encode(plaintext, cellUUID: uuid, filename: filename,
+            owner: storedOwnerIdentity, agreement: agreementTemplate)
+        try await writeFileDataInCellDirectory(fileData: stored, filename: filename)
+        legacySideFiles.remove(filename)
+    }
+
     func loadKeypathStorage() async throws -> Entity {
-        let entityJsonData = try await self.getFileDataInCellDirectory(filename: EntityAnchorCell.storageFilename)
+        let entityJsonData = try await readSideFile(filename: EntityAnchorCell.storageFilename)
         let loadedEntity = try JSONDecoder().decode(Entity.self, from: entityJsonData)
         return loadedEntity
     }
 
     private func loadAuthorityJournalIfPresent() async throws -> EntityAuthorityJournalDocument {
         do {
-            let data = try await self.getFileDataInCellDirectory(filename: EntityAnchorCell.authorityJournalFilename)
+            let data = try await readSideFile(filename: EntityAnchorCell.authorityJournalFilename)
             return try JSONDecoder().decode(EntityAuthorityJournalDocument.self, from: data)
         } catch {
             if Self.isMissingFile(error) {
@@ -732,14 +757,14 @@ public class EntityAnchorCell: GeneralCell {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let entityData = try encoder.encode(entity)
-        try await self.writeFileDataInCellDirectory(fileData: entityData, filename: EntityAnchorCell.storageFilename)
+        try await writeSideFile(entityData, filename: EntityAnchorCell.storageFilename)
     }
 
     private func writeAuthorityJournal(_ journal: EntityAuthorityJournalDocument) async throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(journal)
-        try await self.writeFileDataInCellDirectory(fileData: data, filename: EntityAnchorCell.authorityJournalFilename)
+        try await writeSideFile(data, filename: EntityAnchorCell.authorityJournalFilename)
     }
 
     func set(keypath: String, value: ValueType) async throws {

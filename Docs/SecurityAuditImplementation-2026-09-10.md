@@ -27,9 +27,25 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–008 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 009 is the
-next FIFO item. 009–024 have not passed implementation acceptance.
+001–009 have passed their local acceptance checks, including serialized bridge
+tests. They remain subject to the final consumer/CI integration gate. 010 is the
+next FIFO item. 010–024 have not passed implementation acceptance.
+
+### 006–009 accepted locally
+
+FileCrypto commit `07ca3c3`: `/private/tmp/cp-security-file-v2.log`, 13 tests,
+zero failures. Bounds, v2 metadata authentication and v1 compatibility are
+described in `FileCryptoSecurity.md`. A trial assertion that Apple Compression
+always rejects trailing compressed bytes was disproved and removed; AEAD still
+authenticates these bytes. Truncation and expansion bounds remain tested.
+
+EntityAnchor: `/private/tmp/cp-security-entity-resolver-verified.log`, 96 tests,
+zero failures. Apple/Vapor snapshot and journal encryption, legacy migration,
+restart, wrong-key non-overwrite, cross-file binding and resolver key loading
+before construction were verified. Existing readiness test hosts now supply
+synthetic master keys. Source details and migration limits are in
+`EntityAnchorStorageSecurity.md`. Earlier logs preserve compilation corrections
+and the expected missing-key failures in previously keyless fixtures.
 
 Positive operations, rejected operations, persisted data compatibility and
 relevant consumer behavior must pass before publication to main. Evidence

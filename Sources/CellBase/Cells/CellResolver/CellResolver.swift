@@ -1957,6 +1957,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(reference) at create cell")
             throw CellResolverError.cellNotFound
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new(requester: requester)
         
         guard let emitCell = instance as? Emit else {
@@ -1973,6 +1974,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(reference) at create and register cell")
             throw CellResolverError.cellNotFound
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new()
         guard let cell = instance as? Emit else {
             print("Error cell not found for: \(reference) at create and register cell(2)")
@@ -2029,6 +2031,7 @@ public class CellResolver: CellResolverProtocol {
         guard await requesterProvesSigningControl(identity) else {
             throw CellSetupError.ownerAuthorityUnavailable
         }
+        await ensurePersistedCellMasterKeyLoaded()
         let instance = try await resolve.new(requester: identity)
         guard let cell = instance as? Emit else {
             print("Error cell not found for: \(endpoint) at create and register personal cell (2)")
