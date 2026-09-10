@@ -57,6 +57,15 @@ Persistensdriveren er en actor fordi `TypedCellUtility` ikke dokumenterer
 samtidig bruk. Økt caller-concurrency synliggjør derfor køtid og I/O-latenstid,
 uten at benchmarken påstår at samtidige writes er en støttet API-egenskap.
 
+Hvert punkt i wrappermatrisen kjøres som en ny prosess. En persistens-RSS er
+derfor bare high-water for akkurat den korte prosessen; gjentatte korte punkt
+kan vise variasjon, men kan ikke avgjøre om en langlevende runtime holder på
+minne etter last. Det krever en egen, avgrenset last--idle--snapshot-protokoll
+i én prosess, med eksplisitt tids- og RSS-stoppgrense. Tilsvarende kan en
+større syntetisk persistensserie lete etter funksjonelle feil, p99-knekk og
+cache-sensitive blokk-I/O, men ikke alene angi filsystemets kapasitet eller
+`fsync`-/strømtapsdurabilitet.
+
 ## Rådata og målepunkter
 
 Hver kjøring oppretter en egen katalog med:
@@ -143,10 +152,11 @@ benchmark-harnesscommit fra runtimekilden den måler. Ved målingen 10.
 september 2026 var arbeidskopiens `main` `cde2e0a`; den ventende
 CellProtocol PR 35 (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde
 `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `main`.
-Den senere integrerte revisjonen `ced03d403704f206dcdf83567989959812e49164`
-er målt separat i isolert macOS CI etter denne verifikasjonen. Den lokale
-maskinen har fortsatt ikke nok diskbuffer til å gjenta den med oppgraderte
-SwiftPM-avhengigheter, så resultatkatalogene beholdes som separate
-sammenligninger. Den faktiske kjøringen på `cde2e0a`, CI-kjøringen på `ced03d4`
-og deres kvalifiserte begrensninger er dokumentert i
+De senere integrerte revisjonene `ced03d403704f206dcdf83567989959812e49164`
+og `e03923cb2f1d5a339eaf62585ddc9dddf7750cec` er målt separat i isolert macOS
+CI etter denne verifikasjonen. Den lokale maskinen har fortsatt ikke nok
+diskbuffer til å gjenta dem med oppgraderte SwiftPM-avhengigheter, så
+resultatkatalogene beholdes som separate sammenligninger. Den faktiske
+kjøringen på `cde2e0a`, CI-kjøringene på `ced03d4` og `e03923c` og deres
+kvalifiserte begrensninger er dokumentert i
 [RuntimeCapacityBenchmarkReport_2026-09-10.md](RuntimeCapacityBenchmarkReport_2026-09-10.md).

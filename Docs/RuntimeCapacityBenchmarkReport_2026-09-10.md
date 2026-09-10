@@ -2,9 +2,9 @@
 
 ## Konklusjon
 
-Denne rapporten inneholder to **enkeltrepetisjoner på to ulike maskiner**. Den første er en lokal før-integrasjonsbaseline. Den andre er en isolert GitHub Actions-måling av den integrerte runtime-revisjonen `ced03d4`, utført i release-modus og fullført med 14 resultater. Ingen av dem er en universell kapasitetsgrense eller et grunnlag for å oppgi antall brukere, celler eller meldinger et generelt system «tåler».
+Denne rapporten inneholder tre **enkeltrepetisjoner på to maskinkategorier**. Den første er en lokal før-integrasjonsbaseline. De to andre er isolerte GitHub Actions-målinger av de integrerte runtime-revisjonene `ced03d4` og `e03923c`, begge i release-modus og hver med 14 verifiserte resultater. Ingen av dem er en universell kapasitetsgrense eller et grunnlag for å oppgi antall brukere, celler eller meldinger et generelt system «tåler».
 
-CI-resultatet viser konkrete knekkpunkter på en tildelt macOS-runner med tre aktive prosessorer: cell- og resolverarbeidslastene får ikke en meningsfull throughput-gevinst ved fire workere, mens p99 øker. Persistensveien, som den lokale prøven ikke rakk å validere, lykkes i CI for 100 operasjoner per punkt. Swift Concurrency/Instruments-trace er fortsatt ikke tatt; den lokale maskinen har bare 2,86 GiB ledig plass, og ingen videre lokal last, bygg eller profilering skal startes før disktrykket er avklart.
+De korte CI-seriene viser flere konkrete knekkpunkter på en tildelt macOS-runner med tre aktive prosessorer: cell- og resolverarbeidslastene har ikke en stabil throughput-gevinst ved fire workere, mens hale-latensen øker. Persistensveien, som den lokale prøven ikke rakk å validere, lykkes i CI for 100 operasjoner per punkt. Den kan ennå ikke fastslå noen I/O-kapasitet eller strømtapsdurabilitet. Swift Concurrency/Instruments-trace er fortsatt ikke tatt; den lokale maskinen har bare 2,86 GiB ledig plass, og ingen videre lokal last, bygg eller profilering skal startes før disktrykket er avklart.
 
 ## Isolert CI-måling av integrert runtime
 
@@ -72,6 +72,60 @@ I overflow-prøven ble 512 elementer sendt mot en consumer med 5 ms forsinkelse 
 
 Dette er én kjøring per punkt på en delt, liten macOS-host. Den er ikke direkte sammenlignbar med den lokale M5-baselinen nedenfor, og inneholder verken nettverk, ekstern bridge, database, reell identitet/signaturverifisering, større runtime-state eller stabilitets-/soak-last. De systemomfattende overskriftene i `top`, samt `iostat` og `vm_stat`, er kun korrelasjonsdata. Den enkelte `top`-raden er derimot samlet med benchmarkprosessens PID og er prosessattribuert; de observerte OS-trådene for cell og resolver er spesifisert nedenfor. En GitHub CLI-rate-limit under observasjon av jobben påvirket kun lokal polling; den ferdige jobben ble deretter verifisert via GitHub-grensesnittet og ingen testfeil er knyttet til den hendelsen.
 
+## Isolert CI-måling av integrert `main`
+
+Den andre vellykkede [GitHub Actions-kjøringen](https://github.com/Digipomps/CellProtocol/actions/runs/34461797114) (`bounded synthetic runtime matrix`, 13 m 40 s totalt; selve release-matrisen 12 m 57 s) målte den nå integrerte runtime-revisjonen `e03923cb2f1d5a339eaf62585ddc9dddf7750cec`. Harnessen var commit `15ce0d9b419daa0cc13157692fc17f03023e0a31` i [PR 36](https://github.com/Digipomps/CellProtocol/pull/36), som fortsatt står åpen og umerget.
+
+Før målingen passerte workflowen både den uforanderlige runtime-baseverifikasjonen (`e03923c` er ancestor; `Sources`, `Tests` og `Package.resolved` er uendret mellom runtime- og harness-revisjon) og en negativ test av wrapperens feilsperre. Alle 14 normalresultater hadde exit-status 0, korrekt revisjon, konfigurert arbeidslast og fullt forventet funksjonelt resultat. Runneren var igjen macOS 26.6.2 (build 25G83), med tre aktive prosessorer og 7 GiB RAM; dette er likevel en ny, flyktig hosted kjøring. Forskjeller mot `ced03d4` nedenfor/ovenfor skal ikke leses som regresjon eller forbedring uten gjentakelser på en kontrollert vert.
+
+Latens er millisekunder. RSS er `getrusage` high-water, og CPU-kapasitet er prosessens CPU-tid dividert med målt veggklokketid.
+
+### CI `e03923c`: autorisert cell set + get
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 126,35 | 0,834 | 1,142 | 2,099 | 102,24 % | 14,31 MiB |
+| 2 | 986,20 | 1,922 | 2,634 | 3,573 | 151,46 % | 14,41 MiB |
+| 4 | 854,05 | 4,321 | 7,015 | 9,920 | 155,35 % | 14,48 MiB |
+
+### CI `e03923c`: resolver-URL + autorisert set + get
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 655,40 | 1,397 | 2,423 | 3,253 | 102,24 % | 14,72 MiB |
+| 2 | 585,04 | 3,153 | 5,040 | 7,001 | 153,16 % | 14,73 MiB |
+| 4 | 668,11 | 5,795 | 7,211 | 9,588 | 165,75 % | 14,75 MiB |
+
+### CI `e03923c`: lokal flow med ende-til-ende-kvittering
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 25 156,87 | 0,034 | 0,070 | 0,107 | 146,14 % | 14,84 MiB |
+| 2 | 48 950,91 | 0,024 | 0,088 | 0,187 | 173,57 % | 14,81 MiB |
+| 4 | 34 180,62 | 0,074 | 0,159 | 0,980 | 91,98 % | 14,94 MiB |
+
+Flowserien har fortsatt bare 1 024 observasjoner og varer titalls millisekunder. Den observerte throughput-toppen ved to workere er derfor ikke en kapasitet eller en støttet multiwriter-Combine-kontrakt.
+
+### CI `e03923c`: persistens og I/O
+
+| Workere | Gjennomstrømning ops/s | p50 | p95 | p99 | CPU-kapasitet | RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 481,18 | 1,743 | 3,784 | 5,261 | 83,42 % | 15,59 MiB |
+| 2 | 330,32 | 5,178 | 12,479 | 16,321 | 74,29 % | 15,73 MiB |
+| 4 | 498,55 | 6,454 | 15,117 | 15,801 | 73,54 % | 15,62 MiB |
+
+Alle 300 operasjoner opprettet, krypterte, atomisk skrev og lastet en syntetisk `GeneralCell` med kontroll av runtime-overflaten. Hver delkjøring er en ny, kortvarig prosess: RSS-tallet er derfor bare high-water innen den prosessen og kan ikke vise om minne beholdes etter last i én langlevende runtime. På samme måte er 100 operasjoner per punkt altfor kort til å angi I/O-grense. `Data.write(.atomic)` er ikke en `fsync`- eller strømtapsdurabilitetsmåling; eventuelle blokktellere og `iostat` må fortsatt tolkes som henholdsvis cache-sensitive prosessdata og systemomfattende korrelasjon.
+
+### CI `e03923c`: idle og bevisst flow-overflow
+
+Idle holdt én konfigurert `GeneralCell` og resolverregistrering i 5,173 s: 0,046 % CPU-kapasitet og 12,80 MiB RSS-high-water. Ingen applikasjonsoperasjoner ble utført.
+
+I overflow-prøven ble 512 elementer sendt mot en consumer med 5 ms forsinkelse per element. Etter 3,166 s var ett element levert. Dette er igjen det forventede avgrensede utfallet for `AsyncStream.bufferingOldest(256)`: abonnementet lukkes når en dropp oppstår. Det er en fail-closed minnegrense, ikke produsent-propagert backpressure.
+
+### Hva denne serien fortsatt ikke måler
+
+Verken de tre korte prosessene per persistensnivå eller deres RSS-high-water svarer på om en langlevende runtime holder på minne etter en arbeidsperiode. Det krever én bevisst langvarig prosess med last, definert idle-fase og flere snapshots, med en på forhånd definert stoppgrense. En større, fortsatt syntetisk persistensserie kan teste for synlig p99-/feil-/I/O-knekk innen 60 sekunder per prosess, men kan heller ikke alene etablere filsystemets kapasitet, sikker multiwriter-adferd eller holdbarhet ved strømbrudd.
+
 ## Identitet og repeterbarhet
 
 | Felt | Verdi |
@@ -84,7 +138,7 @@ Dette er én kjøring per punkt på en delt, liten macOS-host. Den er ikke direk
 | Matrise | idle 5 s; cell/resolver 3 000 operasjoner; flow 512; concurrency 1, 2, 4, 8; prosessgrense 60 s |
 | Rådata | `/private/tmp/CellProtocol-runtime-capacity-cde2e0a-20260910T0729Z` |
 
-PR 35-sikkerhetsendringene (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `cde2e0a` da den lokale matrisen startet. Den integrerte `main`-revisjonen `ced03d403704f206dcdf83567989959812e49164` (`ced03d4`) er nå målt isolert i CI, som beskrevet over. De lokale tallene under er fortsatt ikke bevis på den integrerte revisjonen.
+PR 35-sikkerhetsendringene (`fbc856ff00e210848ca48276633ffbdb31763a6a`, kilde `f1036dcf422f7834cd896d7231407d269b422b3f`) var ikke ancestor av `cde2e0a` da den lokale matrisen startet. De senere integrerte `main`-revisjonene `ced03d403704f206dcdf83567989959812e49164` (`ced03d4`) og `e03923cb2f1d5a339eaf62585ddc9dddf7750cec` (`e03923c`) er nå målt isolert i CI, som beskrevet over. De lokale tallene under er fortsatt ikke bevis på de integrerte revisjonene.
 
 `ced03d4` oppgraderer Swift Crypto, SwiftNIO, NIO SSL og NIO HTTP/2 samt `Package.resolved`. Den eksisterende lokale benchmark-scratchen er bygd mot de gamle avhengighetene. Med 2,85 GiB ledig plass kan en lokal "inkrementell" sluttbygging dermed hente og kompilere nye avhengigheter; den kan ikke holdes innenfor en dokumenterbar liten plassgrense. Den lokale sluttmålingen er eksplisitt plassblokkert, ikke hoppet over; CI-resultatet erstatter den ikke som lokal maskinbaseline.
 
@@ -182,7 +236,7 @@ Det er ikke utført opprydding. Eventuell frigjøring krever en separat allowlis
 
 ## Neste avgrensede måling, først når maskinen er klar
 
-1. Bruk `ced03d403704f206dcdf83567989959812e49164` (eller en senere eksplisitt valgt `main`-SHA) og minst 40 GiB ledig plass.
+1. Bruk `e03923cb2f1d5a339eaf62585ddc9dddf7750cec` (eller en senere eksplisitt valgt `main`-SHA) og minst 40 GiB ledig plass.
 2. Bygg harnessen med den korrigerte persistensroten, release/`--jobs 2`.
 3. Kjør idle og de korte cell/resolver/flow-seriene minst tre ganger i tilfeldig rekkefølge; behold alle rådata.
 4. Valider persistens først med liten mengde. Øk bare mot en forhåndsdefinert I/O-stoppgrense og korreler prosessens `getrusage` med systemdata fra `iostat`/`vm_stat`; ikke kall systemtall prosess-I/O.

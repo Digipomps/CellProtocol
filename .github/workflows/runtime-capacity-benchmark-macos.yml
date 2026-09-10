@@ -30,7 +30,10 @@ jobs:
       BENCHMARK_LOAD_LEVELS: '1 2 4'
       BENCHMARK_OPERATIONS: '5000'
       BENCHMARK_FLOW_OPERATIONS: '1024'
-      BENCHMARK_PERSISTENCE_OPERATIONS: '100'
+      # 5,000 synthetic write/reload operations per caller-concurrency point
+      # remain bounded by the wrapper's 60 s per-process stop rule. This is
+      # deliberately not a filesystem-capacity or fsync durability claim.
+      BENCHMARK_PERSISTENCE_OPERATIONS: '5000'
       BENCHMARK_IDLE_SECONDS: '5'
       BENCHMARK_MAX_WALL_SECONDS: '60'
     steps:
