@@ -27,9 +27,9 @@ Work IDs are `cp-sec-20260909-001` through `cp-sec-20260909-024` in the original
 intake. Execution is sequential. A blocked head must be reported explicitly,
 not skipped by an optimizer. Native registration is not yet verified here.
 
-001–005 have passed their local acceptance checks, including serialized bridge
-tests. They remain subject to the final consumer/CI integration gate. 006 is the
-next FIFO item. 006–024 have not passed implementation acceptance.
+001–008 have passed their local acceptance checks, including serialized bridge
+tests. They remain subject to the final consumer/CI integration gate. 009 is the
+next FIFO item. 009–024 have not passed implementation acceptance.
 
 Positive operations, rejected operations, persisted data compatibility and
 relevant consumer behavior must pass before publication to main. Evidence

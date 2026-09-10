@@ -107,6 +107,23 @@ public struct FileCryptoSealRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Process-local resource policy. It is deliberately not part of the untrusted
+/// FileCryptoOpenRequest wire payload; callers cannot raise a host's budget.
+public struct FileCryptoReadLimits: Equatable, Sendable {
+    public static let standard = FileCryptoReadLimits()
+    public let maximumEncryptedByteCount: Int
+    public let maximumPlaintextByteCount: Int
+    public let allowLegacyEnvelope: Bool
+
+    public init(maximumEncryptedByteCount: Int = 512 * 1024 * 1024,
+                maximumPlaintextByteCount: Int = 256 * 1024 * 1024,
+                allowLegacyEnvelope: Bool = true) {
+        self.maximumEncryptedByteCount = maximumEncryptedByteCount
+        self.maximumPlaintextByteCount = maximumPlaintextByteCount
+        self.allowLegacyEnvelope = allowLegacyEnvelope
+    }
+}
+
 public struct FileCryptoOpenRequest: Codable, Equatable, Sendable {
     public var encryptedData: Data
     public var incomingCredentials: [FileCryptoCredential]
