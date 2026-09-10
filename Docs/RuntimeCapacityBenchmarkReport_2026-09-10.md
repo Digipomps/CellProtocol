@@ -2,9 +2,9 @@
 
 ## Konklusjon
 
-Denne rapporten inneholder tre **enkeltrepetisjoner på to maskinkategorier**. Den første er en lokal før-integrasjonsbaseline. De to andre er isolerte GitHub Actions-målinger av de integrerte runtime-revisjonene `ced03d4` og `e03923c`, begge i release-modus og hver med 14 verifiserte resultater. Ingen av dem er en universell kapasitetsgrense eller et grunnlag for å oppgi antall brukere, celler eller meldinger et generelt system «tåler».
+Rapportens tre grunnserier er **enkeltrepetisjoner på to maskinkategorier**: en lokal før-integrasjonsbaseline og isolerte GitHub Actions-målinger av de integrerte runtime-revisjonene `ced03d4` og `e03923c`. Begge CI-grunnseriene kjørte i release-modus med 14 verifiserte resultater; den siste er også fulgt av en separat, større persistenskontroll. Ingen av dem er en universell kapasitetsgrense eller et grunnlag for å oppgi antall brukere, celler eller meldinger et generelt system «tåler».
 
-De korte CI-seriene viser flere konkrete knekkpunkter på en tildelt macOS-runner med tre aktive prosessorer: cell- og resolverarbeidslastene har ikke en stabil throughput-gevinst ved fire workere, mens hale-latensen øker. Persistensveien, som den lokale prøven ikke rakk å validere, lykkes i CI for 100 operasjoner per punkt. Den kan ennå ikke fastslå noen I/O-kapasitet eller strømtapsdurabilitet. Swift Concurrency/Instruments-trace er fortsatt ikke tatt; den lokale maskinen har bare 2,86 GiB ledig plass, og ingen videre lokal last, bygg eller profilering skal startes før disktrykket er avklart.
+De korte CI-seriene viser flere konkrete knekkpunkter på en tildelt macOS-runner med tre aktive prosessorer: cell- og resolverarbeidslastene har ikke en stabil throughput-gevinst ved fire workere, mens hale-latensen øker. Persistensveien, som den lokale prøven ikke rakk å validere, lykkes i CI både for 100 og for 5 000 operasjoner per punkt. Den kan ennå ikke fastslå noen I/O-kapasitet eller strømtapsdurabilitet. Swift Concurrency/Instruments-trace er fortsatt ikke tatt; den lokale maskinen har bare 2,86 GiB ledig plass, og ingen videre lokal last, bygg eller profilering skal startes før disktrykket er avklart.
 
 ## Isolert CI-måling av integrert runtime
 
@@ -121,6 +121,12 @@ Alle 300 operasjoner opprettet, krypterte, atomisk skrev og lastet en syntetisk 
 Idle holdt én konfigurert `GeneralCell` og resolverregistrering i 5,173 s: 0,046 % CPU-kapasitet og 12,80 MiB RSS-high-water. Ingen applikasjonsoperasjoner ble utført.
 
 I overflow-prøven ble 512 elementer sendt mot en consumer med 5 ms forsinkelse per element. Etter 3,166 s var ett element levert. Dette er igjen det forventede avgrensede utfallet for `AsyncStream.bufferingOldest(256)`: abonnementet lukkes når en dropp oppstår. Det er en fail-closed minnegrense, ikke produsent-propagert backpressure.
+
+### Utvidet, avgrenset persistenskontroll
+
+En etterfølgende [CI-kjøring](https://github.com/Digipomps/CellProtocol/actions/runs/34463667558) på samme runtime-revisjon `e03923c` og harness `8fc364afd99890a3923b32d811ca4950ef2aa539` økte bare `BENCHMARK_PERSISTENCE_OPERATIONS` fra 100 til 5 000. Den passerte runtime-baseverifikasjonen og den negative feilsperretesten før release-matrisen. Alle tre persistenspunkter (`c1`, `c2`, `c4`) fullførte nøyaktig 5 000 write/reload/overflatekontroller hver, altså 15 000 funksjonelt verifiserte syntetiske persistensoperasjoner uten prosess-timeout. Selve release-matrisen brukte 13 m 32 s; hele jobben brukte 14 m 21 s, under jobbens 20-minuttersgrense.
+
+Dette avgrenser funnet til at den testede adapterveien fungerte gjennom den større serien på denne flyktige CI-verten. Den gir ikke en maksimal I/O-rate, en filsystemkapasitet eller multiwriter-garanti: `PersistenceDriver` er fortsatt actor-serialisert, hver caller-concurrency kjører i separat prosess, og atomisk `Data.write` er ikke `fsync`. De konkrete latency-/ressursfordelingene for denne kontrollen er bevart i [Actions-jobbloggen](https://github.com/Digipomps/CellProtocol/actions/runs/34463667558/job/102827122614), ikke blandet inn i 100-operasjonsserien ovenfor.
 
 ### Hva denne serien fortsatt ikke måler
 
