@@ -410,6 +410,9 @@ final class RelationalLearningCellContractTests: XCTestCase {
         CellBase.defaultIdentityVault = vault
         let cell = await RelationalLearningCell(owner: owner)
         let recorder = RelationalFlowIDRecorder()
+        let count = 32
+        let delivered = expectation(description: "All source events pass asynchronous feed authorization")
+        delivered.expectedFulfillmentCount = count
         let feed = try await cell.flow(requester: owner)
         let cancellable = feed.sink(
             receiveCompletion: { _ in },
@@ -427,11 +430,11 @@ final class RelationalLearningCellContractTests: XCTestCase {
                     return
                 }
                 recorder.append(eventID)
+                delivered.fulfill()
             }
         )
         defer { cancellable.cancel() }
 
-        let count = 32
         await withTaskGroup(of: Void.self) { group in
             for index in 0 ..< count {
                 group.addTask {
@@ -468,6 +471,7 @@ final class RelationalLearningCellContractTests: XCTestCase {
             }
         }
 
+        await fulfillment(of: [delivered], timeout: 5)
         let observedIDs = recorder.snapshot()
         XCTAssertEqual(observedIDs.count, count)
         XCTAssertEqual(observedIDs, try persistedJournalEventIDs(cell))

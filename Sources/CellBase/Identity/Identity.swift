@@ -181,7 +181,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     
     public func granted(_ grant: Grant) -> Bool {
         // auto grant displaynames should be governed by policies (local)
-        return grants.contains(grant)
+        return grants.contains { $0.granted(grant) }
     }
     
     public func addGrant(_ grant: Grant) {

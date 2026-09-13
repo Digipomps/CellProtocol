@@ -814,15 +814,56 @@ final class BridgeTests: XCTestCase {
         }
     }
 
+    func testInboundBridgeSignCommandRejectsUnsolicitedLocalIdentityChallenge() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let bridge = try await BridgeBase(BridgeBase.Config(owner: owner, transport: transport, connection: .outbound))
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: owner, nonce: "unsolicited")
+        try await bridge.consumeCommand(command: BridgeCommand(
+            cmd: Command.sign.rawValue, identity: owner.publicIdentitySnapshot(), payload: .signData(challenge), cid: 310
+        ))
+        let commands = try await waitUntilTransportHasSent(1, transport: transport)
+        guard case let .string(reason) = commands.last?.payload else {
+            return XCTFail("An unsolicited challenge must not produce a signature")
+        }
+        XCTAssertTrue(reason.contains("signing denied"))
+    }
+
+    func testInboundBridgeSignCommandRejectsAnotherIdentityInLocalVault() async throws {
+        let transport = MockBridgeTransport()
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
+        let other = await vault.identity(for: "another-local-principal", makeNewIfNotFound: true)!
+        let bridge = try await BridgeBase(BridgeBase.Config(owner: owner, transport: transport, connection: .outbound))
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let challenge = try identityChallengeData(for: other, nonce: "wrong-principal")
+        try await bridge.consumeCommand(command: BridgeCommand(
+            cmd: Command.sign.rawValue, identity: other.publicIdentitySnapshot(), payload: .signData(challenge), cid: 311
+        ))
+        let commands = try await waitUntilTransportHasSent(1, transport: transport)
+        guard case let .string(reason) = commands.last?.payload else {
+            return XCTFail("Finding a different principal in a local vault must not authorize signing")
+        }
+        XCTAssertTrue(reason.contains("signing denied"))
+    }
+
     func testInboundBridgeSignCommandSignsKnownLocalIdentity() async throws {
         let transport = MockBridgeTransport()
         let vault = MockIdentityVault()
         CellBase.defaultIdentityVault = vault
         let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
-        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound,
+                                       identityProofScopes: [.init(domain: "bridge-test", resource: "bridge")])
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: owner)
+        await bridge.sendCommand(command: .get, identity: owner, payload: .string("name"))
         let challenge = try identityChallengeData(for: owner, nonce: "inbound-local")
 
         let wireCommand = BridgeCommand(
@@ -837,8 +878,8 @@ final class BridgeTests: XCTestCase {
         )
         try await bridge.consumeCommand(command: decodedCommand)
 
-        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
-        let response = try XCTUnwrap(sentCommands.first)
+        let sentCommands = try await waitUntilTransportHasSent(2, transport: transport)
+        let response = try XCTUnwrap(sentCommands.last)
         XCTAssertEqual(response.command, .response)
         XCTAssertEqual(response.cid, 101)
         if case let .signature(signature) = response.payload {
@@ -861,10 +902,12 @@ final class BridgeTests: XCTestCase {
         CellBase.securityEventSink = sink
         CellBase.signingChallengeReplayStore = CellSecuritySigningChallengeReplayStore()
         let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
-        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
+        let config = BridgeBase.Config(owner: owner, transport: transport, connection: .outbound,
+                                       identityProofScopes: [.init(domain: "bridge-test", resource: "bridge")])
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: owner)
+        await bridge.sendCommand(command: .get, identity: owner, payload: .string("name"))
         let challenge = try identityChallengeData(for: owner, nonce: "inbound-replay")
 
         try await bridge.consumeCommand(command: BridgeCommand(
@@ -873,7 +916,7 @@ final class BridgeTests: XCTestCase {
             payload: .signData(challenge),
             cid: 201
         ))
-        _ = try await waitUntilTransportHasSent(1, transport: transport)
+        _ = try await waitUntilTransportHasSent(2, transport: transport)
 
         try await bridge.consumeCommand(command: BridgeCommand(
             cmd: Command.sign.rawValue,
@@ -882,7 +925,7 @@ final class BridgeTests: XCTestCase {
             cid: 202
         ))
 
-        let sentCommands = try await waitUntilTransportHasSent(2, transport: transport)
+        let sentCommands = try await waitUntilTransportHasSent(3, transport: transport)
         let replayResponse = try XCTUnwrap(sentCommands.last)
         XCTAssertEqual(replayResponse.cid, 202)
         if case let .string(message) = replayResponse.payload {
@@ -977,7 +1020,7 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(response.command, .response)
         XCTAssertEqual(response.cid, 102)
         if case let .string(message) = response.payload {
-            XCTAssertTrue(message.contains("identity is not available in the local signing vault"))
+            XCTAssertTrue(message.contains("no active local operation"))
         } else {
             XCTFail("Expected signing denied string response")
         }
@@ -1979,8 +2022,8 @@ final class BridgeTests: XCTestCase {
             trustedIdentity: identity,
             domain: "bridge-test",
             resource: "bridge",
-            action: "sign",
-            audience: "BridgeTests",
+            action: "checkIdentityOrigin",
+            audience: "GeneralCell",
             nonce: nonceData
         )
     }

@@ -17,8 +17,7 @@ public struct GrantCondition: Codable, Condition {
         var state = ConditionState.unresolved
         // check if grant is valid.
         // How to lookup identity, source and target cell?
-        if let keypath = grant.keypathComponents {
-            let contextKey = keypath[0]
+        if let keypath = grant.keypathComponents, let contextKey = keypath.first {
             switch contextKey {
             case "identity":
                 // check grants in identity
@@ -45,10 +44,8 @@ public struct GrantCondition: Codable, Condition {
                 if (try? await context.target) != nil {
                     if let childGrant = grant.childGrant() {
                         CellBase.diagnosticLog("GrantCondition target childGrant=\(childGrant.keypath)", domain: .agreement)
-                        // For demo purpose
-                        if childGrant.keypath.contains("isMember") {
-                            state = .met
-                        }
+                        // Target/source grant attestation is not implemented.
+                        // A keypath name cannot establish membership or authority.
 //                        if target.granted(childGrant)
 //                        {
 //                            state = .met

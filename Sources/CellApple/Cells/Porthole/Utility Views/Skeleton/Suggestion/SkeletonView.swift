@@ -699,7 +699,24 @@ private func chunkBase64String(_ value: String, chunkSize: Int) -> [String] {
 }
 
 private extension View {
-    func applySkeletonModifiers(_ modifiers: SkeletonModifiers?) -> AnyView {
+    /// Resolves a `SkeletonModifiers` `*Keypath` field against the current row's
+    /// own item data - e.g. a chat message list where each row's alignment
+    /// depends on whether that message's `authorUUID` is the viewer's own.
+    /// `userInfoValue` is the same per-row value already threaded through list
+    /// rendering (see `CellListView.rowContent`); only `.object` values resolve,
+    /// and only `.string` results are used. Returns `nil` on any mismatch so
+    /// callers fall back to the static modifier value.
+    func resolvedItemString(_ keypath: String?, userInfoValue: ValueType?) -> String? {
+        guard let keypath, keypath.isEmpty == false,
+              case let .object(object)? = userInfoValue,
+              let resolved = try? object.get(keypath: keypath),
+              case let .string(value) = resolved else {
+            return nil
+        }
+        return value
+    }
+
+    func applySkeletonModifiers(_ modifiers: SkeletonModifiers?, userInfoValue: ValueType? = nil) -> AnyView {
         var view: AnyView = AnyView(self)
         // padding
         if let padding = modifiers?.padding {
@@ -713,13 +730,15 @@ private extension View {
         // alignment mapping
         func mapH(_ s: String?) -> Alignment { switch (s ?? "") { case "leading": return .leading; case "trailing": return .trailing; default: return .center } }
         func mapV(_ s: String?) -> Alignment { switch (s ?? "") { case "top": return .top; case "bottom": return .bottom; default: return .center } }
-        let alignment = Alignment(horizontal: mapH(modifiers?.hAlignment).horizontal, vertical: mapV(modifiers?.vAlignment).vertical)
+        let resolvedHAlignment = resolvedItemString(modifiers?.hAlignmentKeypath, userInfoValue: userInfoValue) ?? modifiers?.hAlignment
+        let alignment = Alignment(horizontal: mapH(resolvedHAlignment).horizontal, vertical: mapV(modifiers?.vAlignment).vertical)
         view = AnyView(view.frame(width: frameWidth, height: frameHeight, alignment: alignment))
         if maxW != nil || maxH != nil {
             view = AnyView(view.frame(maxWidth: maxW ?? .infinity, maxHeight: maxH ?? .infinity, alignment: alignment))
         }
         // background color
-        if let bg = modifiers?.background, let color = Color(hex: bg) {
+        let resolvedBackground = resolvedItemString(modifiers?.backgroundKeypath, userInfoValue: userInfoValue) ?? modifiers?.background
+        if let bg = resolvedBackground, let color = Color(hex: bg) {
             view = AnyView(view.background(color))
         }
         // corner radius
@@ -812,19 +831,19 @@ public struct SkeletonView: View {
         case .Text(let text):
             return AnyView(
                 CellTextView(skeletonText: text, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(text.modifiers)
+                    .applySkeletonModifiers(text.modifiers, userInfoValue: userInfoValue)
             )
         case .AttachmentField(let attachmentField):
             return AnyView(
                 CellAttachmentFieldView(skeletonAttachmentField: attachmentField)
-                    .applySkeletonModifiers(attachmentField.modifiers)
+                    .applySkeletonModifiers(attachmentField.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .FileUpload(let fileUpload):
             let attachmentField = fileUpload.attachmentField
             return AnyView(
                 CellAttachmentFieldView(skeletonAttachmentField: attachmentField)
-                    .applySkeletonModifiers(fileUpload.modifiers)
+                    .applySkeletonModifiers(fileUpload.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .Image(let image):
@@ -833,7 +852,7 @@ public struct SkeletonView: View {
             return AnyView(
                 Spacer()
                     .frame(width: spacer.width.map { CGFloat($0) })
-                    .applySkeletonModifiers(spacer.modifiers)
+                    .applySkeletonModifiers(spacer.modifiers, userInfoValue: userInfoValue)
             )
         case .HStack(let h):
             if h.modifiers?.wrap == true {
@@ -853,7 +872,7 @@ public struct SkeletonView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
-                .applySkeletonModifiers(h.modifiers)
+                .applySkeletonModifiers(h.modifiers, userInfoValue: userInfoValue)
             )
         case .VStack(let v):
             let (navigationBar, restElements) = extractNavigationBar(from: v.elements)
@@ -864,7 +883,7 @@ public struct SkeletonView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
-                .applySkeletonModifiers(v.modifiers)
+                .applySkeletonModifiers(v.modifiers, userInfoValue: userInfoValue)
             )
             guard let navigationBar else { return stack }
             return AnyView(
@@ -875,7 +894,7 @@ public struct SkeletonView: View {
         case .List(let skeletonList):
             return AnyView(
                 CellListView(skeletonList: skeletonList, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(skeletonList.modifiers)
+                    .applySkeletonModifiers(skeletonList.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .Reference(let skeletonCellReference):
@@ -885,7 +904,7 @@ public struct SkeletonView: View {
                     .applyIf(skeletonCellReference.scaledToFit) { view in
                         view.scaledToFit()
                     }
-                    .applySkeletonModifiers(skeletonCellReference.modifiers)
+                    .applySkeletonModifiers(skeletonCellReference.modifiers, userInfoValue: userInfoValue)
             )
         case .Object(let o):
             return AnyView(
@@ -903,7 +922,7 @@ public struct SkeletonView: View {
                         }
                     }
                 }
-                    .applySkeletonModifiers(o.modifiers)
+                    .applySkeletonModifiers(o.modifiers, userInfoValue: userInfoValue)
             )
         case .Button(let btn):
             let resolvedButton = SkeletonButtonResolutionSupport.resolve(
@@ -913,13 +932,13 @@ public struct SkeletonView: View {
             )
             return AnyView(
                 CellActionButtonView(skeletonButton: resolvedButton)
-                    .applySkeletonModifiers(resolvedButton.modifiers)
+                    .applySkeletonModifiers(resolvedButton.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .Divider(let div):
             return AnyView(
                 SwiftUI.Divider()
-                    .applySkeletonModifiers(div.modifiers)
+                    .applySkeletonModifiers(div.modifiers, userInfoValue: userInfoValue)
             )
         case .ScrollView(let sc):
             let (navigationBar, restElements) = extractNavigationBar(from: sc.elements)
@@ -934,7 +953,7 @@ public struct SkeletonView: View {
                         }
                     }
                     .applySkeletonKeyboardDismissBehavior()
-                    .applySkeletonModifiers(sc.modifiers)
+                    .applySkeletonModifiers(sc.modifiers, userInfoValue: userInfoValue)
                 )
             } else {
                 scrollContent = AnyView(
@@ -946,7 +965,7 @@ public struct SkeletonView: View {
                         }
                     }
                     .applySkeletonKeyboardDismissBehavior()
-                    .applySkeletonModifiers(sc.modifiers)
+                    .applySkeletonModifiers(sc.modifiers, userInfoValue: userInfoValue)
                 )
             }
             guard let navigationBar else { return scrollContent }
@@ -964,36 +983,36 @@ public struct SkeletonView: View {
                     }
                     if let footer = sec.footer { render(footer) }
                 }
-                .applySkeletonModifiers(sec.modifiers)
+                .applySkeletonModifiers(sec.modifiers, userInfoValue: userInfoValue)
             )
         case .ZStack(let zs):
             return AnyView(
                 ZStack {
                     ForEach(zs.elements, id: \.id) { render($0) }
                 }
-                .applySkeletonModifiers(zs.modifiers)
+                .applySkeletonModifiers(zs.modifiers, userInfoValue: userInfoValue)
             )
         case .Grid(let grid):
             return AnyView(
                 CellGridView(skeletonGrid: grid, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
-                .applySkeletonModifiers(grid.modifiers)
+                .applySkeletonModifiers(grid.modifiers, userInfoValue: userInfoValue)
             )
         case .Toggle(let tog):
             return AnyView(
                 Toggle(tog.label, isOn: toggleBinding(for: tog.keypath, requester: viewModel.currentRequesterIdentity))
-                    .applySkeletonModifiers(tog.modifiers)
+                    .applySkeletonModifiers(tog.modifiers, userInfoValue: userInfoValue)
             )
         case .Picker(let picker):
             return AnyView(
                 CellPickerView(skeletonPicker: picker, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(picker.modifiers)
+                    .applySkeletonModifiers(picker.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .Tabs(let tabs):
             return AnyView(
                 CellTabsView(skeletonTabs: tabs, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(tabs.modifiers)
+                    .applySkeletonModifiers(tabs.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .NavigationBar(let navigationBar):
@@ -1001,19 +1020,19 @@ public struct SkeletonView: View {
         case .Visualization(let visualization):
             return AnyView(
                 CellVisualizationView(skeletonVisualization: visualization, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(visualization.modifiers)
+                    .applySkeletonModifiers(visualization.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .TextField(let tf):
             return AnyView(
                 CellTextFieldView(skeletonTextField: tf, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(tf.modifiers)
+                    .applySkeletonModifiers(tf.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .TextArea(let ta):
             return AnyView(
                 CellTextAreaView(skeletonTextArea: ta, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(ta.modifiers)
+                    .applySkeletonModifiers(ta.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
         case .Unsupported(let unsupported):
@@ -1028,7 +1047,7 @@ public struct SkeletonView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .applySkeletonModifiers(unsupported.modifiers)
+                .applySkeletonModifiers(unsupported.modifiers, userInfoValue: userInfoValue)
             )
         @unknown default:
             return AnyView(EmptyView())
@@ -1679,10 +1698,17 @@ private struct CellTextView: View {
         skeletonText.keypath?.isEmpty == false || skeletonText.url != nil
     }
 
+    private var resolvedForegroundColor: Color? {
+        let hex = resolvedItemString(skeletonText.modifiers?.foregroundColorKeypath, userInfoValue: userInfoValue)
+            ?? skeletonText.modifiers?.foregroundColor
+        guard let hex else { return nil }
+        return Color(hex: hex)
+    }
+
     var body: some View {
         renderText(resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""))
-            .applyIf(skeletonText.modifiers?.foregroundColor != nil && Color(hex: skeletonText.modifiers?.foregroundColor ?? "") != nil) { v in
-                v.foregroundColor(Color(hex: skeletonText.modifiers?.foregroundColor ?? "")!)
+            .applyIf(resolvedForegroundColor != nil) { v in
+                v.foregroundColor(resolvedForegroundColor!)
             }
             .applyIf(skeletonText.modifiers?.fontStyle != nil) { v in
                 v.font(fontFromStyle(skeletonText.modifiers?.fontStyle ?? ""))
@@ -3037,7 +3063,7 @@ private struct CellTabsView: View {
                             .environmentObject(viewModel)
                     }
                 }
-                .applySkeletonModifiers(panel.modifiers)
+                .applySkeletonModifiers(panel.modifiers, userInfoValue: userInfoValue)
             }
         }
         .task(id: refreshTaskID()) {

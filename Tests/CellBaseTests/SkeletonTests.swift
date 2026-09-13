@@ -723,6 +723,38 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(content, "Conference Participant Portal")
     }
 
+    func testModifiersEncodeAndDecodeItemBoundKeypaths() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.hAlignmentKeypath = "bubbleAlignment"
+        modifiers.backgroundKeypath = "bubbleBackground"
+        modifiers.foregroundColorKeypath = "bubbleForeground"
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+        XCTAssertEqual(json["hAlignmentKeypath"] as? String, "bubbleAlignment")
+        XCTAssertEqual(json["backgroundKeypath"] as? String, "bubbleBackground")
+        XCTAssertEqual(json["foregroundColorKeypath"] as? String, "bubbleForeground")
+
+        let decoded = try JSONDecoder().decode(SkeletonModifiers.self, from: data)
+        XCTAssertEqual(decoded.hAlignmentKeypath, "bubbleAlignment")
+        XCTAssertEqual(decoded.backgroundKeypath, "bubbleBackground")
+        XCTAssertEqual(decoded.foregroundColorKeypath, "bubbleForeground")
+    }
+
+    func testModifiersDecodeLegacyJSONWithoutItemBoundKeypaths() throws {
+        let legacyJSON = """
+        {
+          "hAlignment": "leading",
+          "background": "#ffffff"
+        }
+        """
+        let legacy = try JSONDecoder().decode(SkeletonModifiers.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(legacy.hAlignment, "leading")
+        XCTAssertEqual(legacy.background, "#ffffff")
+        XCTAssertNil(legacy.hAlignmentKeypath)
+        XCTAssertNil(legacy.backgroundKeypath)
+        XCTAssertNil(legacy.foregroundColorKeypath)
+    }
+
     func testModifiersEncodeStyleMetadata() throws {
         var modifiers = SkeletonModifiers()
         modifiers.styleRole = "chatComposer"
@@ -919,6 +951,44 @@ final class SkeletonTests: XCTestCase {
             return
         }
         XCTAssertNotNil(list.flowElementSkeleton)
+    }
+
+    // U2/U3 — admin workbench, PDD 2026-09-04 (childrenKeypath, expandedStateKeypath, followTail)
+    func testListEncodesTreeAndFollowTailFields() throws {
+        var list = SkeletonList(topic: "scope", keypath: "workbench.scope", flowElementSkeleton: nil)
+        list.childrenKeypath = "children"
+        list.expandedStateKeypath = "workbench.expanded"
+        list.followTail = true
+        let data = try JSONEncoder().encode(SkeletonElement.List(list))
+        let json = decodeJSONObject(data)
+        let listJSON = json["List"] as? [String: Any]
+        XCTAssertEqual(listJSON?["childrenKeypath"] as? String, "children")
+        XCTAssertEqual(listJSON?["expandedStateKeypath"] as? String, "workbench.expanded")
+        XCTAssertEqual(listJSON?["followTail"] as? Bool, true)
+    }
+
+    func testListDecodesTreeAndFollowTailFieldsAndOmitsThemWhenAbsent() throws {
+        let withFields = """
+        {"List":{"keypath":"workbench.scope","childrenKeypath":"children","expandedStateKeypath":"workbench.expanded","followTail":true}}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: withFields)
+        guard case let .List(list) = decoded else { return XCTFail("Expected List") }
+        XCTAssertEqual(list.childrenKeypath, "children")
+        XCTAssertEqual(list.expandedStateKeypath, "workbench.expanded")
+        XCTAssertEqual(list.followTail, true)
+
+        let without = """
+        {"List":{"keypath":"workbench.scope"}}
+        """.data(using: .utf8)!
+        let plain = try JSONDecoder().decode(SkeletonElement.self, from: without)
+        guard case let .List(plainList) = plain else { return XCTFail("Expected List") }
+        XCTAssertNil(plainList.childrenKeypath)
+        XCTAssertNil(plainList.expandedStateKeypath)
+        XCTAssertNil(plainList.followTail)
+        let reencoded = decodeJSONObject(try JSONEncoder().encode(plain))
+        let plainJSON = reencoded["List"] as? [String: Any]
+        XCTAssertNil(plainJSON?["childrenKeypath"])
+        XCTAssertNil(plainJSON?["followTail"])
     }
 
     func testListEncodesSelectionFields() throws {

@@ -4,6 +4,10 @@
 import Foundation
 import HavenCoreSchemas
 
+/// Advisory schema/metadata policy evaluated against caller-supplied context.
+/// Roles and consent tokens here are assertions, not verified capabilities.
+/// An allowed result never authorizes protected Cell data access; the runtime
+/// resolver must independently verify Identity, Agreement, Grant and conditions.
 public struct PermissionEvaluator: Sendable {
     public init() {}
 

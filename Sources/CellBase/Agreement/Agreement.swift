@@ -40,12 +40,7 @@ public class Agreement: Codable, Grantable {
             signatories = try values.decode([Identity].self, forKey: .signatories)
         }
         if values.contains(.conditions) {
-            if let typedCondtions = try? values.decode([TypedCondition].self, forKey: .conditions) {
-                conditions = []
-                for currentTypeCondition in typedCondtions {
-                    conditions.append(currentTypeCondition.condition)
-                }
-            }
+            conditions = try values.decode([TypedCondition].self, forKey: .conditions).map(\.condition)
         }
         if values.contains(.grants) {
             grants = try values.decode([Grant].self, forKey: .grants)
@@ -292,7 +287,7 @@ public extension Agreement {
     func set(keypath: String, value: ValueType) {
         CellBase.diagnosticLog("Agreement.set keypath=\(keypath)", domain: .agreement)
         let keypathComponemnts = keypath.split(separator: ".")
-        let key = keypathComponemnts[0]
+        guard let key = keypathComponemnts.first else { return }
         let hasMoreComponents = keypathComponemnts.count > 1
         if key.contains("[]") {
                 CellBase.diagnosticLog("Agreement.set key contains list marker", domain: .agreement)

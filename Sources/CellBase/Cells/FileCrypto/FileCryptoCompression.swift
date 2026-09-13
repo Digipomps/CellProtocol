@@ -35,15 +35,22 @@ enum FileCryptoCompression {
     static func decompress(
         _ data: Data,
         algorithm: FileCryptoCompressionAlgorithm,
-        expectedByteCount: Int? = nil
+        expectedByteCount: Int? = nil,
+        maximumByteCount: Int = FileCryptoReadLimits.standard.maximumPlaintextByteCount
     ) throws -> Data {
+        guard maximumByteCount >= 0,
+              expectedByteCount.map({ $0 >= 0 && $0 <= maximumByteCount }) ?? true else {
+            throw FileCryptoCompressionError.decompressionFailed
+        }
+        let limit = expectedByteCount ?? maximumByteCount
 #if canImport(Compression)
         let output: Data
         switch algorithm {
         case .none:
+            guard data.count <= limit else { throw FileCryptoCompressionError.decompressionFailed }
             output = data
         case .zlib:
-            output = try process(data, operation: COMPRESSION_STREAM_DECODE, algorithm: COMPRESSION_ZLIB)
+            output = try process(data, operation: COMPRESSION_STREAM_DECODE, algorithm: COMPRESSION_ZLIB, maximumOutputByteCount: limit)
         }
 
         if let expectedByteCount, output.count != expectedByteCount {
@@ -54,6 +61,7 @@ enum FileCryptoCompression {
         let output: Data
         switch algorithm {
         case .none:
+            guard data.count <= limit else { throw FileCryptoCompressionError.decompressionFailed }
             output = data
         case .zlib:
             throw FileCryptoCompressionError.compressionUnavailable
@@ -70,7 +78,8 @@ enum FileCryptoCompression {
     private static func process(
         _ data: Data,
         operation: compression_stream_operation,
-        algorithm: compression_algorithm
+        algorithm: compression_algorithm,
+        maximumOutputByteCount: Int? = nil
     ) throws -> Data {
         guard !data.isEmpty else {
             return Data()
@@ -107,24 +116,36 @@ enum FileCryptoCompression {
             stream.src_size = data.count
 
             var output = Data()
-            let flags = operation == COMPRESSION_STREAM_ENCODE
-                ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
-                : 0
+            // This call supplies the complete input, for encoding and decoding.
+            let flags = Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
 
             while true {
                 stream.dst_ptr = destinationBuffer
                 stream.dst_size = destinationBufferSize
 
+                let remainingInput = stream.src_size
                 let status = compression_stream_process(&stream, flags)
                 let producedCount = destinationBufferSize - stream.dst_size
                 if producedCount > 0 {
+                    if let maximumOutputByteCount,
+                       producedCount > maximumOutputByteCount - output.count {
+                        throw FileCryptoCompressionError.decompressionFailed
+                    }
                     output.append(destinationBuffer, count: producedCount)
                 }
 
                 switch status {
                 case COMPRESSION_STATUS_OK:
+                    guard remainingInput != stream.src_size || producedCount > 0 else {
+                        throw operation == COMPRESSION_STREAM_ENCODE
+                            ? FileCryptoCompressionError.compressionFailed
+                            : FileCryptoCompressionError.decompressionFailed
+                    }
                     continue
                 case COMPRESSION_STATUS_END:
+                    if operation == COMPRESSION_STREAM_DECODE, stream.src_size != 0 {
+                        throw FileCryptoCompressionError.decompressionFailed
+                    }
                     return output
                 default:
                     throw operation == COMPRESSION_STREAM_ENCODE

@@ -45,6 +45,7 @@ public class EntityAnchorCell: GeneralCell {
     private let signedAgreementCommitGate = SignedAgreementCommitGate()
     private var authorityJournal = EntityAuthorityJournalDocument()
     private var persistenceFailureReason: String?
+    private var legacySideFiles = Set<String>()
     private let authorityCommitGate = EntityAuthorityCommitGate()
    
     // Should  support set/get keypath and persistance of json
@@ -79,6 +80,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
+        self.agreementTemplate.ensureGrant("r---", for: "entityRelationSchema")
         
         // This cell will only be accessed from it's owner so adding ggrants will not be necessary
         
@@ -152,6 +154,14 @@ public class EntityAnchorCell: GeneralCell {
                 throw KeypathStorageErrors.denied
             }
             return EntityValidatedContactRecordV1.schemaValue()
+        })
+
+        await addInterceptForGet(requester: owner, key: "entityRelationSchema", getValueIntercept: {
+            _, requester in
+            guard await self.validateAccess("r---", at: "entityRelationSchema", for: requester) else {
+                throw KeypathStorageErrors.denied
+            }
+            return EntityRelationRecordV1.schemaValue()
         })
 
         await addInterceptForGet(requester: owner, key: "signedAgreementEntity", getValueIntercept: {
@@ -254,6 +264,7 @@ public class EntityAnchorCell: GeneralCell {
                 throw KeypathStorageErrors.denied
             }
             try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
+            try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
                 do {
 //                    print("Entity data set. Keypath: \(keypath) value: \(try value.jsonString())")
                     // If keypath points to identities
@@ -459,6 +470,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
         await registerExploreContract(requester: requester, key: "entityContactSchema", method: .get, input: .null, returns: EntityValidatedContactRecordV1.schemaExploreReturn(), permissions: ["r---"], required: true, description: .string("Reads the value-free, fail-closed schema for owner-signed validated contact persistence."))
+        await registerExploreContract(requester: requester, key: "entityRelationSchema", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the value-free schema for relation records (relations.records.<id>) and their chronicle events. No raw contact values are admitted there."))
         await registerExploreContract(requester: requester, key: "signedAgreementEntity", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads signed Agreement entity data."))
         await registerExploreContract(
             requester: requester,
@@ -648,8 +660,12 @@ public class EntityAnchorCell: GeneralCell {
             self.authorityJournal = loadedJournal
             self.storage = recoveredStorage
             self.persistenceFailureReason = nil
-            if try Self.canonicalEntityData(recoveredStorage) != Self.canonicalEntityData(loadedStorage) {
+            if try legacySideFiles.contains(Self.storageFilename) ||
+                (Self.canonicalEntityData(recoveredStorage) != Self.canonicalEntityData(loadedStorage)) {
                 try await self.writeKeypathStorage(entity: recoveredStorage)
+            }
+            if legacySideFiles.contains(Self.authorityJournalFilename) {
+                try await self.writeAuthorityJournal(loadedJournal)
             }
         } catch {
             if Self.isMissingFile(error) {
@@ -662,6 +678,9 @@ public class EntityAnchorCell: GeneralCell {
                     }
                     let recoveredStorage = try existingJournal.replay(on: stubsEntity)
                     try await self.writeKeypathStorage(entity: recoveredStorage)
+                    if legacySideFiles.contains(Self.authorityJournalFilename) {
+                        try await self.writeAuthorityJournal(existingJournal)
+                    }
                     self.authorityJournal = existingJournal
                     self.storage = recoveredStorage
                     self.persistenceFailureReason = nil
@@ -698,6 +717,18 @@ public class EntityAnchorCell: GeneralCell {
         await initialLoading()
         await setupPermissions(owner: bindingOwner)
         await setupKeys(owner: bindingOwner)
+        await restoreIdentityLinkRegistry()
+    }
+
+    /// Resolveren spør `IdentityLinkRegistry` ved hvert oppslag; det må speile det som ligger i lageret.
+    private func restoreIdentityLinkRegistry() async {
+        guard let recordsValue = try? storage.get(keypath: "identityLinks.records"),
+              case let .object(recordsObject) = recordsValue else {
+            await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: [])
+            return
+        }
+        let records = recordsObject.values.compactMap { try? decodeValue($0, as: IdentityLinkRecord.self) }
+        await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: records)
     }
     
     public override func encode(to encoder: Encoder) throws {
@@ -706,15 +737,32 @@ public class EntityAnchorCell: GeneralCell {
       try super.encode(to: encoder)
     }
 
+    private func readSideFile(filename: String) async throws -> Data {
+        let stored = try await getFileDataInCellDirectory(filename: filename)
+        let plaintext = try EntityAnchorPersistence.decode(stored, cellUUID: uuid, filename: filename)
+        if !CellPersistenceCrypto.isEncryptedEnvelope(stored),
+           EntityAnchorPersistence.requiresEncryption(agreement: agreementTemplate) {
+            legacySideFiles.insert(filename)
+        }
+        return plaintext
+    }
+
+    private func writeSideFile(_ plaintext: Data, filename: String) async throws {
+        let stored = try EntityAnchorPersistence.encode(plaintext, cellUUID: uuid, filename: filename,
+            owner: storedOwnerIdentity, agreement: agreementTemplate)
+        try await writeFileDataInCellDirectory(fileData: stored, filename: filename)
+        legacySideFiles.remove(filename)
+    }
+
     func loadKeypathStorage() async throws -> Entity {
-        let entityJsonData = try await self.getFileDataInCellDirectory(filename: EntityAnchorCell.storageFilename)
+        let entityJsonData = try await readSideFile(filename: EntityAnchorCell.storageFilename)
         let loadedEntity = try JSONDecoder().decode(Entity.self, from: entityJsonData)
         return loadedEntity
     }
 
     private func loadAuthorityJournalIfPresent() async throws -> EntityAuthorityJournalDocument {
         do {
-            let data = try await self.getFileDataInCellDirectory(filename: EntityAnchorCell.authorityJournalFilename)
+            let data = try await readSideFile(filename: EntityAnchorCell.authorityJournalFilename)
             return try JSONDecoder().decode(EntityAuthorityJournalDocument.self, from: data)
         } catch {
             if Self.isMissingFile(error) {
@@ -746,20 +794,21 @@ public class EntityAnchorCell: GeneralCell {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let entityData = try encoder.encode(entity)
-        try await self.writeFileDataInCellDirectory(fileData: entityData, filename: EntityAnchorCell.storageFilename)
+        try await writeSideFile(entityData, filename: EntityAnchorCell.storageFilename)
     }
 
     private func writeAuthorityJournal(_ journal: EntityAuthorityJournalDocument) async throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(journal)
-        try await self.writeFileDataInCellDirectory(fileData: data, filename: EntityAnchorCell.authorityJournalFilename)
+        try await writeSideFile(data, filename: EntityAnchorCell.authorityJournalFilename)
     }
 
     func set(keypath: String, value: ValueType) async throws {
         // Validate
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
+        try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
 
         // write to storage
         try self.storage.set(keypath: keypath, setValue: value)
@@ -785,6 +834,21 @@ public class EntityAnchorCell: GeneralCell {
                 throw EntityAuthorityCommitError.requesterMismatch
             }
             try EntityValidatedContactRecordV1.validatePersistenceEnvelope(envelope)
+            let relationPolicy = EntityRelationRecordV1.interactionPolicy(
+                from: try? storage.get(keypath: EntityRelationRecordV1.interactionPolicyKeypath)
+            )
+            try EntityRelationRecordV1.validatePersistenceEnvelope(envelope, interactionPolicy: relationPolicy)
+            var relationEvents: [String: ValueType] = [:]
+            for mutation in envelope.mutations where EntityRelationRecordV1.isRelationChronicleKeypath(mutation.keypath) {
+                let stored: ValueType?
+                if let pending = relationEvents[mutation.keypath] {
+                    stored = pending
+                } else {
+                    stored = try? storage.get(keypath: mutation.keypath)
+                }
+                try EntityRelationRecordV1.validateExistingEvent(stored, proposed: mutation.value)
+                relationEvents[mutation.keypath] = mutation.value
+            }
             // The stored descriptor is intentionally public-only. After an explicit
             // ownership proof, the active requester supplies the vault-backed signer.
             let authority = requester
@@ -919,10 +983,16 @@ public class EntityAnchorCell: GeneralCell {
     }
 
     private func completeIdentityEnrollment(value: ValueType, requester: Identity) async throws -> ValueType {
-        let envelope = try decodeValue(value, as: IdentityLinkCompletionEnvelope.self)
+        var envelope = try decodeValue(value, as: IdentityLinkCompletionEnvelope.self)
+        let policyRequiresEvidence = await IdentityLinkRuntimePolicy.shared.requireFreshAuthEvidence
+        let policyVerifier = await IdentityLinkRuntimePolicy.shared.freshAuthVerifier
+        if policyRequiresEvidence {
+            envelope.requireFreshAuthEvidence = true
+        }
         let result = try await IdentityLinkProtocolService.verifyCompletion(
             envelope,
-            usedApprovalJTIs: usedApprovalJTIs()
+            usedApprovalJTIs: usedApprovalJTIs(),
+            freshAuthVerifier: policyVerifier
         )
         let recordValue = try IdentityLinkProtocolService.value(from: result.record)
         let recordKey = safeIdentityLinkKey(result.record.linkID)
@@ -943,6 +1013,7 @@ public class EntityAnchorCell: GeneralCell {
         try storage.set(keypath: proofKeypath, setValue: proofValue)
         try storage.set(keypath: replayKeypath, setValue: .string(result.approvalJTI))
         try await saveKeypathStorage(entity: storage)
+        await IdentityLinkRegistry.shared.register(ownerUUID: storedOwnerIdentity.uuid, completion: result)
         pushIdentityLinkEvent(keypath: recordKeypath, value: recordValue, requester: requester)
 
         return .object([
@@ -989,6 +1060,7 @@ public class EntityAnchorCell: GeneralCell {
         try storage.set(keypath: recordKeypath, setValue: revokedValue)
         try storage.set(keypath: "proofs.identityLinks.\(recordKey).record", setValue: revokedValue)
         try await saveKeypathStorage(entity: storage)
+        await IdentityLinkRegistry.shared.revoke(ownerUUID: storedOwnerIdentity.uuid, linkID: record.linkID, revokedAt: revoked.revokedAt ?? "")
         pushIdentityLinkEvent(keypath: recordKeypath, value: revokedValue, requester: requester)
         return .object([
             "status": .string("revoked"),

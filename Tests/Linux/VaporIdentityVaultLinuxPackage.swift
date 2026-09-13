@@ -20,7 +20,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", exact: "1.9.0"),
         .package(url: "https://github.com/OpenCombine/OpenCombine.git", exact: "0.14.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", exact: "3.15.1"),
+        .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.2"),
         .package(url: "https://github.com/GiacomoLeopizzi/random-swift", exact: "1.0.0"),
         .package(url: "https://github.com/apple/swift-collections.git", exact: "1.3.0"),
         .package(url: "https://github.com/attaswift/BigInt.git", exact: "5.7.0"),

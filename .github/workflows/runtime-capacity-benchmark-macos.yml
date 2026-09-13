@@ -1,0 +1,104 @@
+name: Runtime capacity benchmark (macOS)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Benchmarks/CellRuntimeBenchmarks/**'
+      - 'Scripts/run-runtime-capacity-benchmark.sh'
+      - 'Scripts/record-runtime-swift-tasks-trace.sh'
+      - '.github/workflows/runtime-capacity-benchmark-macos.yml'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'Sources/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-capacity-benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: bounded synthetic runtime matrix
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      RUNTIME_REVISION: e03923cb2f1d5a339eaf62585ddc9dddf7750cec
+      BENCHMARK_BUILD_JOBS: '2'
+      BENCHMARK_LOAD_LEVELS: '1 2 4'
+      BENCHMARK_OPERATIONS: '5000'
+      BENCHMARK_FLOW_OPERATIONS: '1024'
+      # 5,000 synthetic write/reload operations per caller-concurrency point
+      # remain bounded by the wrapper's 60 s per-process stop rule. This is
+      # deliberately not a filesystem-capacity or fsync durability claim.
+      BENCHMARK_PERSISTENCE_OPERATIONS: '5000'
+      BENCHMARK_IDLE_SECONDS: '5'
+      BENCHMARK_MAX_WALL_SECONDS: '60'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Fetch the branch ref with history so the intentionally older
+          # measured runtime base remains resolvable as the harness evolves.
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify the measured runtime base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$RUNTIME_REVISION" HEAD
+          git diff --quiet "$RUNTIME_REVISION" HEAD -- Sources Tests Package.resolved
+          echo "runtime_revision=$RUNTIME_REVISION"
+          echo "harness_revision=$(git rev-parse HEAD)"
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl -n hw.ncpu || true
+          sysctl -n hw.memsize || true
+          xcodebuild -version
+          swift --version
+
+      - name: Verify benchmark failure gate
+        shell: bash
+        run: zsh Scripts/test-runtime-capacity-benchmark-gate.sh
+
+      - name: Run bounded release matrix
+        shell: bash
+        env:
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/cellprotocol-runtime-capacity
+          BENCHMARK_SCRATCH_DIR: ${{ runner.temp }}/cellprotocol-runtime-capacity-build
+          BENCHMARK_RUNTIME_REVISION: ${{ env.RUNTIME_REVISION }}
+        run: Scripts/run-runtime-capacity-benchmark.sh
+
+      - name: Print raw measurement results
+        if: always()
+        shell: bash
+        env:
+          BENCHMARK_OUTPUT_DIR: ${{ runner.temp }}/cellprotocol-runtime-capacity
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$BENCHMARK_OUTPUT_DIR" ]]; then
+            echo "No benchmark output directory was created."
+            exit 0
+          fi
+          echo '::group::run configuration and runner system'
+          cat "$BENCHMARK_OUTPUT_DIR/run-configuration.txt" || true
+          cat "$BENCHMARK_OUTPUT_DIR/system.txt" || true
+          echo '::endgroup::'
+          while IFS= read -r result; do
+            echo "::group::${result#$BENCHMARK_OUTPUT_DIR/}"
+            cat "$result"
+            echo '::endgroup::'
+          done < <(find "$BENCHMARK_OUTPUT_DIR" -name result.json -type f | sort)
+          while IFS= read -r status; do
+            echo "::group::${status#$BENCHMARK_OUTPUT_DIR/}"
+            cat "$status"
+            echo '::endgroup::'
+          done < <(find "$BENCHMARK_OUTPUT_DIR" \( -name exit-status.txt -o -name stopped.txt -o -name stderr.txt \) -type f -size +0c | sort)
+          while IFS= read -r monitor; do
+            echo "::group::${monitor#$BENCHMARK_OUTPUT_DIR/}"
+            cat "$monitor"
+            echo '::endgroup::'
+          done < <(find "$BENCHMARK_OUTPUT_DIR" \( -name top.txt -o -name iostat.txt -o -name vm_stat.txt \) -type f -size +0c | sort)

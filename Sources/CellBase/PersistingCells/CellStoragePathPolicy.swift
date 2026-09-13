@@ -2,6 +2,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 /// Constrains persisted-cell paths to a caller-owned storage root.
 public enum CellStoragePathPolicy {
@@ -77,23 +82,59 @@ public enum CellStoragePathPolicy {
             throw Violation.outsideStorageRoot
         }
 
-        let standardizedRoot = root.standardizedFileURL
-        let standardizedCandidate = candidate.standardizedFileURL
+        // Foundation's standardization may rewrite /private/tmp to /tmp only
+        // when a path exists. Use a purely lexical first check, then resolve
+        // the existing prefix of both paths with the same filesystem rule.
+        let rootPath = lexicalPath(root.path)
+        let candidatePath = lexicalPath(candidate.path)
         try requireContained(
-            candidatePath: standardizedCandidate.path,
-            rootPath: standardizedRoot.path,
+            candidatePath: candidatePath,
+            rootPath: rootPath,
             allowRoot: allowRoot
         )
 
         // Resolve existing symlink components as a second boundary check.
-        let resolvedRoot = standardizedRoot.resolvingSymlinksInPath()
-        let resolvedCandidate = standardizedCandidate.resolvingSymlinksInPath()
         try requireContained(
-            candidatePath: resolvedCandidate.path,
-            rootPath: resolvedRoot.path,
+            candidatePath: try physicalPath(candidatePath),
+            rootPath: try physicalPath(rootPath),
             allowRoot: allowRoot
         )
-        return standardizedCandidate
+        return URL(fileURLWithPath: candidatePath, isDirectory: candidate.hasDirectoryPath)
+    }
+
+    private static func lexicalPath(_ path: String) -> String {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "." { continue }
+            if part == ".." {
+                if !parts.isEmpty { parts.removeLast() }
+            } else {
+                parts.append(part)
+            }
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    private static func physicalPath(_ path: String) throws -> String {
+        var prefix = path
+        var missing: [String] = []
+        while true {
+            if let resolved = realpath(prefix, nil) {
+                defer { free(resolved) }
+                let base = String(cString: resolved)
+                let suffix = missing.reversed().joined(separator: "/")
+                return suffix.isEmpty ? base : (base == "/" ? base : base + "/") + suffix
+            }
+            // Do not treat permission errors, loops, or a dangling symlink as
+            // an ordinary not-yet-created directory and erase its boundary.
+            guard errno == ENOENT, prefix != "/",
+                  (try? FileManager.default.destinationOfSymbolicLink(atPath: prefix)) == nil else {
+                throw Violation.outsideStorageRoot
+            }
+            let split = prefix.lastIndex(of: "/")!
+            missing.append(String(prefix[prefix.index(after: split)...]))
+            prefix = split == prefix.startIndex ? "/" : String(prefix[..<split])
+        }
     }
 
     private static func requireContained(
