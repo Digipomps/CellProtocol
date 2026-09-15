@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
+import CombineHelpers
 #if canImport(Combine)
 import Combine
 #else
@@ -135,6 +136,8 @@ final class VaporBridgeTransportTests: XCTestCase {
                 XCTFail("A copied descriptor must not borrow the server's signing key.")
             } catch ProvenancePeerError.noPrivateKey {
                 // A valid challenge reached the peer, which cannot sign it.
+            } catch AsyncError.other(let inner) where (inner as? ProvenancePeerError) == .noPrivateKey {
+                // getOneWithTimeout wraps the same peer denial in AsyncError.other.
             } catch {
                 XCTFail("Expected peer denial, got \(error)")
             }
