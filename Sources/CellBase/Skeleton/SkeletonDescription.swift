@@ -517,6 +517,7 @@ public struct SkeletonConditionExpression: Codable, Equatable {
 }
 
 public struct SkeletonModifiers: Codable {
+    public var localization: [String: SkeletonLocalizedText]?
     public var padding: Double?
     public var maxWidthInfinity: Bool?
     public var maxHeightInfinity: Bool?
@@ -569,6 +570,7 @@ public struct SkeletonModifiers: Codable {
     public init() {}
 
     enum CodingKeys: String, CodingKey {
+        case localization
         case padding
         case maxWidthInfinity
         case maxHeightInfinity
@@ -617,6 +619,7 @@ public struct SkeletonModifiers: Codable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
+        self.localization = try container.decodeIfPresent([String: SkeletonLocalizedText].self, forKey: .localization)
         self.padding = Self.decodeLossy(Double.self, from: container, forKey: .padding)
         self.maxWidthInfinity = Self.decodeLossy(Bool.self, from: container, forKey: .maxWidthInfinity)
         self.maxHeightInfinity = Self.decodeLossy(Bool.self, from: container, forKey: .maxHeightInfinity)

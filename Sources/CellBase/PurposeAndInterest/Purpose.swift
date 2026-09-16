@@ -39,6 +39,7 @@ public class Purpose: PerspectiveNodeImpl {
         
         enum CodingKeys: CodingKey {
             case name
+            case nodeIdentifier
             case description
             case types
             case subTypes
@@ -62,6 +63,7 @@ public class Purpose: PerspectiveNodeImpl {
             super.init()
             
             self.name = try container.decode(String.self, forKey: .name)
+            self.nodeIdentifier = try container.decodeIfPresent(String.self, forKey: .nodeIdentifier)
             self.description = try container.decodeIfPresent(String.self, forKey: .description)
             self.types = try container.decode([Weight<Purpose>].self, forKey: .types)
             self.subTypes = try container.decode([Weight<Purpose>].self, forKey: .subTypes)
@@ -80,8 +82,13 @@ public class Purpose: PerspectiveNodeImpl {
 //            throw ReferenceLookupError.noEncodingFacilitator
 //        }
 //        print("facilitator: \(facilitator)")
+        // Seed the register before any child is encoded, including standalone roots.
+        if let facilitator = encoder.userInfo[CodingUserInfoKey(rawValue: "purposeFacilitator")!] as? Facilitator<Purpose> {
+            facilitator.referenceablesDict[reference] = self
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)
+        try container.encodeIfPresent(self.nodeIdentifier, forKey: .nodeIdentifier)
         try container.encodeIfPresent(self.description, forKey: .description)
         
         // Check whether objects is these relationships is already serialises (and thus eglible for reference)

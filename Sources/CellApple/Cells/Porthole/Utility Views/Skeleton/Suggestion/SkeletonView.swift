@@ -912,7 +912,7 @@ public struct SkeletonView: View {
                 transform: buttonResolutionTransform
             )
             return AnyView(
-                CellActionButtonView(skeletonButton: resolvedButton)
+                CellActionButtonView(skeletonButton: resolvedButton, userInfoValue: userInfoValue)
                     .applySkeletonModifiers(resolvedButton.modifiers)
                     .environmentObject(viewModel)
             )
@@ -1680,7 +1680,9 @@ private struct CellTextView: View {
     }
 
     var body: some View {
-        renderText(resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""))
+        renderText(viewModel.localization.text(skeletonText.modifiers?.localization?["text"],
+            fallback: resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""),
+            item: userInfoValue, contextValue: userInfoValue))
             .applyIf(skeletonText.modifiers?.foregroundColor != nil && Color(hex: skeletonText.modifiers?.foregroundColor ?? "") != nil) { v in
                 v.foregroundColor(Color(hex: skeletonText.modifiers?.foregroundColor ?? "")!)
             }
@@ -1718,7 +1720,7 @@ private struct CellTextView: View {
     }
 
     private func renderText(_ content: String) -> Text {
-        guard shouldRenderMarkdown,
+        guard skeletonText.modifiers?.localization?["text"] == nil, shouldRenderMarkdown,
               let rendered = try? AttributedString(
                 markdown: content,
                 options: AttributedString.MarkdownParsingOptions(
@@ -1768,6 +1770,7 @@ private struct CellTextView: View {
 
 private struct CellActionButtonView: View {
     let skeletonButton: SkeletonButton
+    var userInfoValue: ValueType? = nil
     @State private var actionInstanceID = UUID().uuidString
     @EnvironmentObject var viewModel: PortholeViewModel
     @Environment(\.openURL) private var openURL
@@ -1809,7 +1812,7 @@ private struct CellActionButtonView: View {
         .buttonStyle(.plain)
         .disabled(executionState == .working)
         .opacity(executionState == .working ? 0.86 : 1.0)
-        .accessibilityLabel(Text(skeletonButton.label))
+        .accessibilityLabel(Text(localizedLabel))
         .accessibilityIdentifier("skeleton.button.\(skeletonButton.id.uuidString)")
         .accessibilityValue(accessibilityValue)
     }
@@ -1838,9 +1841,14 @@ private struct CellActionButtonView: View {
 
     private var labelText: String {
         if isChatPrimaryAction {
-            return skeletonButton.label
+            return localizedLabel
         }
-        return executionState == .working ? "\(skeletonButton.label) …" : skeletonButton.label
+        return executionState == .working ? "\(localizedLabel) …" : localizedLabel
+    }
+
+    private var localizedLabel: String {
+        viewModel.localization.text(skeletonButton.modifiers?.localization?["label"],
+            fallback: skeletonButton.label, item: userInfoValue, contextValue: userInfoValue)
     }
 
     private var isChatPrimaryAction: Bool {
@@ -3319,7 +3327,8 @@ private struct CellTextFieldView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SwiftUI.TextField(skeletonTextField.placeholder ?? "", text: binding())
+            SwiftUI.TextField(viewModel.localization.text(skeletonTextField.modifiers?.localization?["placeholder"],
+                fallback: skeletonTextField.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue), text: binding())
                 .focused($isFocused)
                 .applyIf(skeletonTextField.modifiers?.foregroundColor != nil && Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "")!)
@@ -3726,6 +3735,11 @@ private struct CellTextAreaView: View {
     @StateObject private var richMarkdownController = RichMarkdownEditorController()
     @EnvironmentObject var viewModel: PortholeViewModel
 
+    private var localizedPlaceholder: String {
+        viewModel.localization.text(skeletonTextArea.modifiers?.localization?["placeholder"],
+            fallback: skeletonTextArea.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue)
+    }
+
     var body: some View {
         editorBody
         .frame(maxWidth: .infinity, alignment: .center)
@@ -3746,8 +3760,8 @@ private struct CellTextAreaView: View {
                 }
 
                 ZStack(alignment: .topLeading) {
-                    if text.isEmpty, let placeholder = skeletonTextArea.placeholder, !placeholder.isEmpty {
-                        Text(placeholder)
+                    if text.isEmpty, !localizedPlaceholder.isEmpty {
+                        Text(localizedPlaceholder)
                             .foregroundColor(.secondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 12)
@@ -3773,8 +3787,8 @@ private struct CellTextAreaView: View {
 
     private var plainEditorBody: some View {
         ZStack(alignment: .topLeading) {
-            if text.isEmpty, let placeholder = skeletonTextArea.placeholder, !placeholder.isEmpty {
-                Text(placeholder)
+            if text.isEmpty, !localizedPlaceholder.isEmpty {
+                Text(localizedPlaceholder)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 8)

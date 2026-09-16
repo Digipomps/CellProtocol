@@ -459,9 +459,9 @@ public struct RadarEntityLedger: Equatable {
 
     /// Drops what has not been heard from. Returns the ids that went.
     @discardableResult
-    public mutating func prune(now: Date = Date()) -> [String] {
+    public mutating func prune(now: Date = Date(), visibleRemoteUUIDs: Set<String> = []) -> [String] {
         let cutoff = now.addingTimeInterval(-staleAfter)
-        let stale = entitiesById.filter { $0.value.lastSeenAt < cutoff && !$0.value.connected }.map(\.key)
+        let stale = entitiesById.filter { $0.value.lastSeenAt < cutoff && !$0.value.connected && !visibleRemoteUUIDs.contains($0.key) }.map(\.key)
         for id in stale { entitiesById.removeValue(forKey: id) }
         if let selected = selectedRemoteUUID, stale.contains(selected) { selectedRemoteUUID = nil }
         return stale
@@ -492,26 +492,32 @@ public struct RadarEntityLedger: Equatable {
     /// and recency travel alongside so the view can size and fade blips
     /// without knowing the scanner.
     public func radarSpec(now: Date = Date()) -> Object {
-        let blips: [ValueType] = entities.map { entity in
+        let currentEntities = entities
+        let validDistances = currentEntities.compactMap(\.distanceMeters).filter { $0.isFinite && $0 >= 0 && $0 <= 100_000 }
+        let largest = validDistances.max() ?? 0
+        let scale = max(rangeMeters.isFinite && rangeMeters > 0 ? rangeMeters : 8, ceil(largest / 5) * 5)
+        let blips: [ValueType] = currentEntities.map { entity in
             let age = max(0, now.timeIntervalSince(entity.lastSeenAt))
-            let radius = normalizedRadius(for: entity.distanceMeters)
+            let validDistance = entity.distanceMeters.flatMap { $0.isFinite && $0 >= 0 && $0 <= 100_000 ? $0 : nil }
+            let radius = min((validDistance ?? 0) / scale, 0.97)
+            let measured = entity.direction != nil && validDistance != nil && entity.status != "lost" && age <= staleAfter && entity.radarAngleRadians.isFinite
             let angle = entity.radarAngleRadians
             var blip: Object = [
                 "id": .string(entity.remoteUUID),
                 "label": .string(entity.displayName),
                 "status": .string(entity.status),
                 "connected": .bool(entity.connected),
-                "x": .float(sin(angle) * radius),
-                "y": .float(-cos(angle) * radius),
-                "bearingDegrees": .float((angle * 180.0 / .pi).truncatingRemainder(dividingBy: 360)),
-                "hasDirection": .bool(entity.direction != nil),
+                "x": measured ? .float(sin(angle) * radius) : .null,
+                "y": measured ? .float(-cos(angle) * radius) : .null,
+                "bearingDegrees": measured ? .float((angle * 180.0 / .pi).truncatingRemainder(dividingBy: 360)) : .null,
+                "hasDirection": .bool(measured),
                 "ageSeconds": .float(age),
                 "strength": .float(max(0.15, 1.0 - min(age, staleAfter) / staleAfter)),
                 "matchScore": .float(entity.matchScore ?? 0),
                 "beaconOverlapCount": .integer(entity.beaconOverlapCount),
                 "kind": .string(entity.kind?.rawValue ?? "")
             ]
-            if let distance = entity.distanceMeters {
+            if let distance = validDistance {
                 blip["distanceMeters"] = .float(distance)
                 blip["distanceText"] = .string(String(format: distance < 10 ? "%.1f m" : "%.0f m", distance))
             } else {
@@ -519,15 +525,15 @@ public struct RadarEntityLedger: Equatable {
             }
             return .object(blip)
         }
-        let nearest = entities.compactMap(\.distanceMeters).min()
+        let nearest = validDistances.min()
         var spec: Object = [
             "kind": .string("radar"),
             "status": .string(scannerStatus),
-            "rangeMeters": .float(rangeMeters),
+            "rangeMeters": .float(scale),
             "rings": .list([0.25, 0.5, 0.75, 1.0].map { .float($0) }),
-            "ringLabels": .list([0.25, 0.5, 0.75, 1.0].map { .string(String(format: "%.0f m", rangeMeters * $0)) }),
+            "ringLabels": .list([0.25, 0.5, 0.75, 1.0].map { .string(String(format: "%.0f m", scale * $0)) }),
             "sweep": .bool(scannerStatus != "stopped" && scannerStatus != "idle"),
-            "blipCount": .integer(entities.count),
+            "blipCount": .integer(currentEntities.count),
             "connectedCount": .integer(connectedDevices.count),
             "blips": .list(blips),
             "updatedAt": .float(now.timeIntervalSince1970)

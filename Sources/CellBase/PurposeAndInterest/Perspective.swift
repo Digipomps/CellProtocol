@@ -59,7 +59,7 @@ extension InterestsAndPurposesContainer: Codable {
             facilitatorPur.add(currentPurpose)
         }
         
-        self.entities = try container.decode([EntityRepresentation].self, forKey: .entityRepresentation)
+        self.entities = try container.decodeIfPresent([EntityRepresentation].self, forKey: .entityRepresentation) ?? []
         for currentEntityRepresentation in self.entities {
             facilitatorEnt.add(currentEntityRepresentation)
         }
@@ -77,6 +77,7 @@ extension InterestsAndPurposesContainer: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.interests, forKey: .interests)
         try container.encode(self.purposes, forKey: .purposes)
+        try container.encode(self.entities, forKey: .entityRepresentation)
         
     }
     

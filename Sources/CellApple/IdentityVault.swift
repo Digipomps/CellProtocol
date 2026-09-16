@@ -88,7 +88,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
 
     private func makeAuthenticationContext() -> LAContext {
         let context = LAContext()
-        context.localizedCancelTitle = "Use Passcode"
+        context.localizedCancelTitle = "Avbryt"
         context.touchIDAuthenticationAllowableReuseDuration = LATouchIDAuthenticationMaximumAllowableReuseDuration
         return context
     }
@@ -461,12 +461,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                     return
                 }
             } catch let authError as LAError {
-                switch authError.code {
-                case .biometryLockout, .biometryNotAvailable, .biometryNotEnrolled:
-                    break
-                default:
-                    throw authError
-                }
+                guard Self.shouldUsePasswordFallback(after: authError.code) else { throw authError }
             }
         }
 
@@ -484,6 +479,16 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         } else {
             CellBase.diagnosticLog(error?.localizedDescription ?? "Can't evaluate policy", domain: .identity)
             throw IdentityVaultAuthenticationError.cannotEvaluatePolicy(error?.localizedDescription ?? "unknown")
+        }
+    }
+
+    nonisolated static func shouldUsePasswordFallback(after code: LAError.Code) -> Bool {
+        switch code {
+        case .userFallback, .biometryLockout, .biometryNotAvailable, .biometryNotEnrolled:
+            return true
+        default:
+            // Cancellation and failed authentication must stop the attempt.
+            return false
         }
     }
 

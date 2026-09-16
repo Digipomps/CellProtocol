@@ -43,6 +43,7 @@ public class Interest: PerspectiveNodeImpl {
         try super.init(from: decoder)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.name = try container.decode(String.self, forKey: .name)
+        self.nodeIdentifier = try container.decodeIfPresent(String.self, forKey: .nodeIdentifier)
         self.types = try container.decode([Weight<Interest>].self, forKey: .types)
         self.subTypes = try container.decode([Weight<Interest>].self, forKey: .subTypes)
         self.parts = try container.decode([Weight<Interest>].self, forKey: .parts)
@@ -60,6 +61,7 @@ public class Interest: PerspectiveNodeImpl {
     
     enum CodingKeys: CodingKey {
         case name
+        case nodeIdentifier
         case types
         case subTypes
         case parts
@@ -74,8 +76,13 @@ public class Interest: PerspectiveNodeImpl {
     
     public override func encode(to encoder: Encoder) throws {
  
+        // Seed the register before any child is encoded, including standalone roots.
+        if let facilitator = encoder.userInfo[CodingUserInfoKey(rawValue: "interestFacilitator")!] as? Facilitator<Interest> {
+            facilitator.referenceablesDict[reference] = self
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)
+        try container.encodeIfPresent(self.nodeIdentifier, forKey: .nodeIdentifier)
         
         // Check whether objects is these relationships is already serialises (and thus eglible for reference)
         let types = self.types as? [Weight<Interest>]

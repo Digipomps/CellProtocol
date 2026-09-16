@@ -5,16 +5,15 @@
 //  RadarVisualizationView.swift
 //  CellApple
 //
-//  `Visualization(kind: "radar")`: a motion tracker, not a list. Concentric
-//  range rings with metres on them, a sweep while scanning, blips that burn
-//  bright when just heard and fade as they go quiet, and the nearest
-//  distance as one large number — the thing you read from across the room.
+//  `Visualization(kind: "radar")`: measured positions grouped on range rings,
+//  with a searchable list for all detections and owner-selected public details.
 //  Fed by the spec `RadarEntityLedger.radarSpec()` produces, so it knows
 //  nothing about Bluetooth, UWB or the scanner.
 //
 
 import SwiftUI
 import CellBase
+import ImageIO
 
 struct RadarBlip: Identifiable, Equatable {
     var id: String
@@ -39,6 +38,8 @@ struct RadarVisualizationSpec: Equatable {
     var nearestText: String
     var selectedID: String?
     var connectedCount: Int
+    var selectedAdvertisement: NearbyAdvertisement? = nil
+    var advertisementStatus: String = ""
 
     static func decode(from value: ValueType?) -> RadarVisualizationSpec? {
         guard case let .object(object)? = value else { return nil }
@@ -80,15 +81,37 @@ struct RadarVisualizationSpec: Equatable {
         }()
         return RadarVisualizationSpec(
             status: text("status", "idle"),
-            rangeMeters: number("rangeMeters", 8),
+            rangeMeters: number("rangeMeters", 8).isFinite ? min(max(number("rangeMeters", 8), 1), 100_000) : 8,
             rings: rings,
             ringLabels: ringLabels,
             sweep: flag("sweep"),
             blips: blips,
             nearestText: text("nearestText", "--.-"),
             selectedID: { if case let .string(v)? = object["selectedID"] { return v } else { return nil } }(),
-            connectedCount: Int(number("connectedCount"))
+            connectedCount: Int(number("connectedCount").isFinite ? min(max(number("connectedCount"), 0), 100_000) : 0),
+            selectedAdvertisement: {
+                guard let value = object["selectedAdvertisement"],
+                      let data = try? JSONEncoder().encode(value),
+                      let ad = try? JSONDecoder().decode(NearbyAdvertisement.self, from: data),
+                      (try? ad.validate()) != nil else { return nil }
+                return ad
+            }(),
+            advertisementStatus: text("advertisementStatus")
         )
+    }
+}
+
+/// Shared with the skeleton Visualization renderer; the native scanner uses the same surface.
+public struct NearbyRadarSurface: View {
+    private let value: ValueType
+    private let onSelect: (String) -> Void
+    public init(value: ValueType, onSelect: @escaping (String) -> Void) {
+        self.value = value; self.onSelect = onSelect
+    }
+    public var body: some View {
+        if let spec = RadarVisualizationSpec.decode(from: value) {
+            RadarOverview(spec: spec, selectedID: spec.selectedID, onSelect: onSelect)
+        } else { ProgressView("Henter radar …") }
     }
 }
 
@@ -96,199 +119,182 @@ struct VisualizationRadarView: View {
     var spec: RadarVisualizationSpec
     var selection: VisualizationSelectionState
     var activateBlip: ((ValueType, Int, String?, String?) -> Void)?
-
-    private let phosphor = Color(red: 0.55, green: 1.0, blue: 0.62)
-    private let phosphorDim = Color(red: 0.25, green: 0.62, blue: 0.36)
-    private let ground = Color(red: 0.015, green: 0.055, blue: 0.045)
-
-    private var selectedID: String? {
-        selection.selectedID ?? spec.selectedID
+    var body: some View {
+        RadarOverview(spec: spec, selectedID: selection.selectedID ?? spec.selectedID) { id in
+            guard let index = spec.blips.firstIndex(where: { $0.id == id }) else { return }
+            activateBlip?(.string(id), index, id, spec.blips[index].label)
+        }
     }
+}
+
+private struct RadarOverview: View {
+    let spec: RadarVisualizationSpec
+    let selectedID: String?
+    let onSelect: (String) -> Void
+    @State private var query = ""
+    @State private var groupIDs: Set<String>?
+    @State private var showingList = false
+    @State private var onlyUnknown = false
+    @State private var followed = Set<String>()
+    @State private var onlyFollowed = false
+
+    private var filtered: [RadarBlip] {
+        spec.blips.filter {
+            (query.isEmpty || $0.label.localizedCaseInsensitiveContains(query)) &&
+            (!onlyFollowed || followed.contains($0.id))
+        }
+    }
+    private var uncertain: [RadarBlip] { filtered.filter { !$0.hasDirection } }
+    private var selected: RadarBlip? { spec.blips.first { $0.id == selectedID } }
+    private var active: Bool { !["stopped", "idle"].contains(spec.status) }
 
     var body: some View {
-        VStack(spacing: 10) {
-            readout
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label(active ? "Søker i nærheten" : "Scanner stoppet", systemImage: "dot.radiowaves.left.and.right")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(spec.blips.count) enheter").monospacedDigit()
+            }
+            .font(.subheadline)
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Søk blant treff", text: $query).textFieldStyle(.plain)
+                    .accessibilityIdentifier("nearby.search")
+                Toggle("Følger", isOn: $onlyFollowed).toggleStyle(.button)
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
             GeometryReader { geometry in
-                let side = min(geometry.size.width, geometry.size.height)
-                let radius = side * 0.46
-                let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                let size = geometry.size
+                let radius = max(1, min(size.width, size.height) / 2 - 28)
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                let groups = RadarClustering.groups(filtered, radius: radius)
                 ZStack {
-                    Circle()
-                        .fill(RadialGradient(
-                            colors: [Color(red: 0.03, green: 0.16, blue: 0.11), ground],
-                            center: .center, startRadius: 6, endRadius: side * 0.5
-                        ))
-                        .frame(width: radius * 2, height: radius * 2)
-                    rings(center: center, radius: radius)
-                    ticks(center: center, radius: radius)
-                    if spec.sweep {
-                        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
-                            let period = 3.2
-                            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-                            RadarSweepShape(angle: .radians(phase * 2 * .pi - .pi / 2), width: .degrees(28))
-                                .fill(AngularGradient(
-                                    colors: [phosphor.opacity(0.0), phosphor.opacity(0.42)],
-                                    center: .center,
-                                    startAngle: .radians(phase * 2 * .pi - .pi / 2 - 0.5),
-                                    endAngle: .radians(phase * 2 * .pi - .pi / 2 + 0.25)
-                                ))
-                                .frame(width: radius * 2, height: radius * 2)
-                                .blur(radius: 1.2)
-                                .clipShape(Circle())
+                    Canvas { context, canvasSize in
+                        for scale in [0.25, 0.5, 0.75, 1.0] {
+                            let r = radius * scale
+                            context.stroke(Path(ellipseIn: CGRect(x: center.x-r, y: center.y-r, width: r*2, height: r*2)),
+                                           with: .color(.secondary.opacity(0.17)), lineWidth: 1)
+                            context.draw(Text(String(format: "%.0f m", spec.rangeMeters * scale)).font(.caption2).foregroundColor(.secondary),
+                                         at: CGPoint(x: center.x, y: center.y-r-8))
                         }
                     }
-                    ForEach(spec.blips) { blip in
-                        blipView(blip, center: center, radius: radius)
+                    ForEach(groups) { group in
+                        Button {
+                            if group.members.count == 1 { onSelect(group.members[0].id) }
+                            else { groupIDs = Set(group.members.map(\.id)); onlyUnknown = false; showingList = true }
+                        } label: {
+                            if group.members.count > 1 {
+                                Text("\(group.members.count)").font(.caption.weight(.medium)).monospacedDigit()
+                                    .frame(width: 34, height: 34)
+                                    .background(Color.accentColor.opacity(0.15), in: Circle())
+                                    .overlay(Circle().stroke(Color.accentColor.opacity(0.6)))
+                            } else {
+                                let node = group.members[0]
+                                Circle().fill(Color.accentColor.opacity(node.status == "lost" ? 0.3 : 0.9))
+                                    .frame(width: followed.contains(node.id) ? 12 : 8, height: followed.contains(node.id) ? 12 : 8)
+                                    .padding(8)
+                                    .overlay(Circle().stroke(node.id == selectedID ? Color.accentColor : .clear, lineWidth: 2))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                        .position(x: center.x + group.x * radius, y: center.y + group.y * radius)
+                        .accessibilityLabel(group.members.count == 1 ? group.members[0].label : "Åpne gruppe med \(group.members.count) enheter")
                     }
-                    Circle()
-                        .fill(phosphor)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: phosphor.opacity(0.8), radius: 5)
-                    if spec.blips.isEmpty {
-                        Text(spec.sweep ? "SØKER" : "STOPPET")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(phosphorDim)
-                            .offset(y: radius * 0.55)
+                    VStack(spacing: 4) {
+                        Circle().fill(.primary).frame(width: 6, height: 6)
+                        Text("Du").font(.caption2).foregroundStyle(.secondary)
+                    }.position(x: center.x, y: center.y + 8).allowsHitTesting(false)
+                    if groups.isEmpty {
+                        Text(spec.blips.isEmpty ? (active ? "Venter på treff" : "Start scanneren for å finne enheter") : "Ingen målt posisjon i dette utvalget")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: max(80, size.width - 40))
+                            .position(x: center.x, y: center.y + radius * 0.64)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minHeight: 260, maxHeight: 360)
-            .aspectRatio(1, contentMode: .fit)
-            legend
-        }
-        .padding(14)
-        .background(ground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(phosphorDim.opacity(0.45), lineWidth: 1))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Radar, \(spec.blips.count) enheter i nærheten")
-    }
-
-    // The large number. On the film it is the only thing anyone looks at.
-    private var readout: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("NÆRMESTE")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(phosphorDim)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(spec.nearestText)
-                        .font(.system(size: 40, weight: .bold, design: .monospaced))
-                        .foregroundStyle(phosphor)
-                        .contentTransition(.numericText())
-                        .shadow(color: phosphor.opacity(0.55), radius: 6)
-                    Text("m")
-                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(phosphorDim)
+            .frame(height: 320)
+            .accessibilityIdentifier("nearby.radar")
+            HStack {
+                Button("\(uncertain.count) uten posisjon") { groupIDs = nil; onlyUnknown = true; showingList = true }
+                Spacer()
+                Button("Alle treff (\(filtered.count))") { groupIDs = nil; onlyUnknown = false; showingList = true }
+            }.font(.subheadline).buttonStyle(.borderless)
+            Text("Skala \(Int(spec.rangeMeters)) m · Avstand og retning vises bare når de er målt.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let selected {
+                Divider()
+                HStack {
+                    Text(spec.selectedAdvertisement?.displayName ?? selected.label).font(.headline)
+                    Spacer()
+                    Button(followed.contains(selected.id) ? "Slutt å følge" : "Følg") {
+                        if followed.contains(selected.id) { followed.remove(selected.id) } else { followed.insert(selected.id) }
+                    }.buttonStyle(.borderless)
+                }
+                if let ad = spec.selectedAdvertisement {
+                    AdvertisementDetails(advertisement: ad)
+                } else {
+                    Text(spec.advertisementStatus.isEmpty ? "Ingen annonserte detaljer." : spec.advertisementStatus)
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(spec.status.uppercased())
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(spec.sweep ? phosphor : phosphorDim)
-                Text("\(spec.blips.count) SIGNAL · \(spec.connectedCount) KOBLET")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(phosphorDim)
-                Text(String(format: "REKKEVIDDE %.0f m", spec.rangeMeters))
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(phosphorDim)
-            }
         }
-    }
-
-    private func rings(center: CGPoint, radius: CGFloat) -> some View {
-        ZStack {
-            ForEach(Array(spec.rings.enumerated()), id: \.offset) { index, ring in
-                Circle()
-                    .stroke(phosphorDim.opacity(ring >= 0.99 ? 0.8 : 0.4), lineWidth: ring >= 0.99 ? 1.2 : 0.8)
-                    .frame(width: radius * 2 * ring, height: radius * 2 * ring)
-                if index < spec.ringLabels.count {
-                    Text(spec.ringLabels[index])
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(phosphorDim)
-                        .position(x: center.x + 4, y: center.y - radius * ring + 8)
+        .sheet(isPresented: $showingList) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(groupIDs == nil ? (onlyUnknown ? "Uten målt posisjon" : "Alle treff") : "Treff i gruppen").font(.headline)
+                    Spacer()
+                    Button("Ferdig") { showingList = false }
+                }
+                TextField("Søk blant treff", text: $query).textFieldStyle(.roundedBorder)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filtered.filter { (groupIDs?.contains($0.id) ?? true) && (!onlyUnknown || !$0.hasDirection) }) { node in
+                            Button {
+                                onSelect(node.id); showingList = false
+                            } label: {
+                                HStack {
+                                    Text(node.label)
+                                    Spacer()
+                                    Text(node.hasDirection ? node.distanceText : "Posisjon ukjent").foregroundStyle(.secondary)
+                                }.padding(.vertical, 12).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                            Divider()
+                        }
+                    }
                 }
             }
-            Path { path in
-                path.move(to: CGPoint(x: center.x - radius, y: center.y))
-                path.addLine(to: CGPoint(x: center.x + radius, y: center.y))
-                path.move(to: CGPoint(x: center.x, y: center.y - radius))
-                path.addLine(to: CGPoint(x: center.x, y: center.y + radius))
-            }
-            .stroke(phosphorDim.opacity(0.35), style: StrokeStyle(lineWidth: 0.8, dash: [3, 4]))
+            .padding(20)
+            .frame(minWidth: 280, idealWidth: 420, maxWidth: 560, minHeight: 320, idealHeight: 500)
         }
     }
+}
 
-    private func ticks(center: CGPoint, radius: CGFloat) -> some View {
-        Path { path in
-            for degree in stride(from: 0, to: 360, by: 10) {
-                let angle = Double(degree) * .pi / 180 - .pi / 2
-                let long = degree % 30 == 0
-                let inner = radius - (long ? 9 : 5)
-                path.move(to: CGPoint(x: center.x + cos(angle) * inner, y: center.y + sin(angle) * inner))
-                path.addLine(to: CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius))
+private struct AdvertisementDetails: View {
+    let advertisement: NearbyAdvertisement
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let data = advertisement.thumbnail,
+               let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                Image(decorative: image, scale: 1).resizable().scaledToFill()
+                    .frame(width: 80, height: 80).clipShape(RoundedRectangle(cornerRadius: 16))
+                    .accessibilityLabel("Bilde valgt av deltakeren")
             }
-        }
-        .stroke(phosphorDim.opacity(0.7), lineWidth: 1)
+            entries("Formål", advertisement.purposes)
+            entries("Interesser", advertisement.interests)
+            Text(advertisement.scope == .nearby ? "Åpent for alle i nærheten · selvoppgitt" : "Delt etter vilkår: \(advertisement.accessAgreement?.title ?? "Agreement") · selvoppgitt")
+                .font(.caption).foregroundStyle(.secondary)
+        }.accessibilityIdentifier("nearby.advertisedDetails")
     }
-
-    private func blipView(_ blip: RadarBlip, center: CGPoint, radius: CGFloat) -> some View {
-        let isSelected = blip.id == selectedID
-        let point = CGPoint(x: center.x + blip.x * radius, y: center.y + blip.y * radius)
-        let alpha = blip.status == "lost" ? 0.25 : max(0.3, blip.strength)
-        let size: CGFloat = blip.connected ? 13 : 10
-        return ZStack {
-            if isSelected {
-                Circle()
-                    .stroke(phosphor.opacity(0.9), lineWidth: 1.2)
-                    .frame(width: size + 14, height: size + 14)
-            }
-            if !blip.hasDirection {
-                // Bearing unknown: draw the arc the entity could be on, so a
-                // guessed angle is never mistaken for a measured one.
-                Circle()
-                    .trim(from: 0.42, to: 0.58)
-                    .stroke(phosphorDim.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
-                    .frame(width: hypot(blip.x, blip.y) * radius * 2, height: hypot(blip.x, blip.y) * radius * 2)
-                    .rotationEffect(.radians(atan2(blip.y, blip.x) - .pi))
-                    .position(center)
-            }
-            Circle()
-                .fill(phosphor.opacity(alpha))
-                .frame(width: size, height: size)
-                .shadow(color: phosphor.opacity(alpha * 0.9), radius: blip.connected ? 8 : 5)
-                .position(point)
-            Text(isSelected || blip.connected ? "\(blip.label) · \(blip.distanceText)" : blip.distanceText)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(phosphor.opacity(min(1, alpha + 0.3)))
-                .lineLimit(1)
-                .position(x: point.x, y: point.y + size + 4)
-        }
-        .contentShape(Circle().size(width: size + 20, height: size + 20))
-        .onTapGesture {
-            activateBlip?(.string(blip.id), spec.blips.firstIndex(of: blip) ?? 0, blip.id, blip.label)
-        }
-        .accessibilityLabel("\(blip.label), \(blip.distanceText), \(blip.status)")
-        .accessibilityAddTraits(.isButton)
-    }
-
-    private var legend: some View {
-        HStack(spacing: 14) {
-            legendItem(color: phosphor, text: "koblet", filled: true)
-            legendItem(color: phosphor.opacity(0.6), text: "hørt nylig", filled: true)
-            legendItem(color: phosphor.opacity(0.25), text: "mistet", filled: true)
-            Spacer()
-            Text("stiplet bue = retning ukjent")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(phosphorDim)
-        }
-    }
-
-    private func legendItem(color: Color, text: String, filled: Bool) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(text).font(.system(size: 9, design: .monospaced)).foregroundStyle(phosphorDim)
+    @ViewBuilder private func entries(_ title: String, _ values: [String: String]) -> some View {
+        if !values.isEmpty {
+            Text(title).font(.subheadline.weight(.medium))
+            ForEach(values.keys.sorted(), id: \.self) { key in Text(values[key] ?? "").font(.subheadline) }
         }
     }
 }
