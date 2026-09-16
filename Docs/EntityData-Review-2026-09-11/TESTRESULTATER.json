@@ -1,0 +1,31 @@
+{
+  "asOf": "2026-09-11",
+  "swiftSelectedTests": 57,
+  "swiftFailures": 0,
+  "bindingBuildForTesting": "passed",
+  "bindingTestHostExecuted": false,
+  "jsonSchemaCases": 40,
+  "cycleRegression": {
+    "purposeNodes": 30,
+    "maximumEncodedBytesAssertion": 25000,
+    "oneBodyPerNodeIdentifier": true,
+    "selfRoots": [
+      "EntityRepresentation",
+      "Purpose",
+      "Interest"
+    ]
+  },
+  "logs": [
+    {
+      "path": "/private/tmp/entitydata-perspective-tests.log",
+      "sha256": "cc731330a091e96de9908b669a51fc2780be8e3ea5b9b2814d241eedd96b347e"
+    },
+    {
+      "path": "/private/tmp/entitydata-binding-build.log",
+      "sha256": "1f228ca9fcf3496a7a40a16e822a48024268a5205ae40ac4d452eda5c44cb422"
+    }
+  ],
+  "physicalLinkVerification": "not completed",
+  "iPhoneAppsModified": false,
+  "invalidGraphAbortsMutation": true
+}

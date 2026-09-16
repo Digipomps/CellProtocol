@@ -1,0 +1,79 @@
+{
+  "name": "Fiktiv samarbeidspartner",
+  "nodeIdentifier": "entity-collaborator-demo",
+  "types": [],
+  "subTypes": [],
+  "parts": [],
+  "partOf": [],
+  "interests": [
+    {
+      "weight": 0.65,
+      "reference": "interest-data-demo"
+    }
+  ],
+  "purposes": [
+    {
+      "weight": 0.8,
+      "value": {
+        "name": "Gjennomgå EntityData sammen",
+        "nodeIdentifier": "purpose-review-demo",
+        "types": [],
+        "subTypes": [],
+        "parts": [],
+        "partOf": [],
+        "interests": [
+          {
+            "weight": 0.65,
+            "value": {
+              "name": "Datastrukturer",
+              "nodeIdentifier": "interest-data-demo",
+              "types": [],
+              "subTypes": [],
+              "parts": [],
+              "partOf": [],
+              "interests": [],
+              "purposes": [],
+              "entities": [],
+              "states": [],
+              "constraint": {
+                "type": "metadataFreshness",
+                "key": "owner-confirmed",
+                "maxAgeSeconds": 86400
+              }
+            }
+          }
+        ],
+        "purposes": [],
+        "entities": [],
+        "states": [],
+        "description": "Fiktivt formål, samme nodetype for eget formål og et formål man leter etter.",
+        "helperCells": [
+          {
+            "name": "Gjennomgang",
+            "uuid": "helper-review-demo",
+            "cellReferences": [
+              {
+                "endpoint": "cell:///ExampleReview",
+                "subscribeFeed": false,
+                "label": "Fiktiv hjelper"
+              }
+            ]
+          }
+        ],
+        "composition": {
+          "type": "purpose",
+          "purposeRef": "purpose-read-demo"
+        }
+      }
+    }
+  ],
+  "entities": [],
+  "states": [],
+  "person": {
+    "displayName": "Fiktiv samarbeidspartner",
+    "work": {
+      "title": "Fiktiv fagrolle"
+    }
+  },
+  "agreementRefs": []
+}

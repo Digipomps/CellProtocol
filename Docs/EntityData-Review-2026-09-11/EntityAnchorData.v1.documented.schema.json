@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://haven.local/cellscaffold/schemas/EntityAnchorData.v1.schema.json",
+  "title": "EntityAnchorData v1",
+  "description": "Owner-local EntityAnchor storage shape. This schema documents structural roots and stable keypath families only; it must not be used to publish values.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "person": {
+      "type": "object",
+      "description": "Owner-controlled person/profile data and domain slices. Use person.name for structured names, person.displayName for presentation, person.profile for human-facing profile leaves, person.addresses for address values, person.contact for contact values and endpoint descriptors, proofs.* for evidence bodies, and person.attributes[] for provisional namespaced attributes.",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "object",
+          "description": "Structured personal name leaves."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Human-facing display label; not necessarily legal identity."
+        },
+        "legalName": {
+          "type": "string",
+          "description": "Private legal or billing name when a purpose explicitly needs it."
+        },
+        "profile": {
+          "type": "object",
+          "description": "Human-facing profile leaves and references such as headline, bio, avatarRef, websiteURLs and sameAsRefs."
+        },
+        "nicknames": {
+          "type": "array",
+          "description": "Owner-controlled alternate names or nicknames."
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Address records selected by id or label, e.g. person.addresses[label=\"home\"].street.name."
+        },
+        "contact": {
+          "type": "object",
+          "description": "Owner-local contact fields, multi-value email/phone arrays and public-safe contact endpoint descriptors."
+        },
+        "location": {
+          "type": "object",
+          "description": "Coarse location leaves such as city, region, country, countryCode, timezone and optional geoRef."
+        },
+        "languages": {
+          "type": "array",
+          "description": "Known/preferred language records, preferably with BCP 47-style tags."
+        },
+        "demographics": {
+          "type": "object",
+          "description": "Sensitive self-described person attributes such as birthDate, ageBand, pronouns, genderIdentity and nationalities."
+        },
+        "work": {
+          "type": "object",
+          "description": "Current work-facing profile fields and organization refs."
+        },
+        "affiliations": {
+          "type": "array",
+          "description": "Organization/program/community affiliations with optional proof refs."
+        },
+        "skills": {
+          "type": "array",
+          "description": "Claimed skill records with optional taxonomy and evidence refs."
+        },
+        "preferences": {
+          "type": "object",
+          "description": "Owner preferences for locale, communication and default visibility."
+        },
+        "attributes": {
+          "type": "array",
+          "description": "Namespaced provisional attributes for fields that are not stable enough for canonical keypaths yet."
+        }
+      }
+    },
+    "purposes": {
+      "type": "object",
+      "description": "Owner purpose/interest snapshots and preferences."
+    },
+    "relations": {
+      "type": [
+        "object",
+        "array"
+      ],
+      "description": "Local relations, linked identities, issuers, private people records and public-safe contact endpoint descriptors."
+    },
+    "proofs": {
+      "type": "object",
+      "description": "Local proof records such as identity links, inclusion proofs, admission contracts and membership proofs."
+    },
+    "signedAgreementEntity": {
+      "type": "object",
+      "description": "Canonical signed agreement records. May contain sensitive grants and counterparties."
+    },
+    "entityRepresentation": {
+      "type": "object",
+      "description": "Entity-shaped representation one Entity holds about another Entity, using comparable EntityAnchorData keypaths while keeping private values, relation graphs and chronicle history behind grants."
+    },
+    "agreements": {
+      "type": "object",
+      "description": "Derived agreement indexes. Do not edit directly."
+    },
+    "chronicle": {
+      "type": "array",
+      "description": "Owner-local audit/history entries."
+    },
+    "bindings": {
+      "type": "object",
+      "description": "Route/binding metadata for how entity data maps to cells and scaffolds."
+    }
+  },
+  "x-keypath_aliases": {
+    "identity.person": "person",
+    "identity.proofs": "proofs"
+  },
+  "$comment": "JSON fra kildekodens dokumenterte struktur. Swift-strengen mister escaping rundt home i en beskrivelse; denne filen bevarer gyldig JSON. Se runtime-output.txt og LES-MEG.md."
+}

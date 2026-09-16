@@ -1,0 +1,229 @@
+{
+  "validator": "python-jsonschema",
+  "version": "4.26.0",
+  "draft": "2020-12",
+  "formatChecksEnabled": true,
+  "metaSchemasValid": 3,
+  "localReferencesResolved": 68,
+  "caseCount": 40,
+  "cases": [
+    {
+      "case": "full-fictional-example",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "empty-entity-is-allowed",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "partial-profile-is-allowed",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "unknown-extension-is-intentionally-allowed",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "name-must-be-string-when-present",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "address-items-must-be-objects",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "legacy-relations-array",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "legacy-empty-chronicle-object",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "nonempty-object-is-not-the-declared-chronicle-form",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "legacy-agreement-list",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "new-agreement-map-empty",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-unknown-fields",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-requires-nonempty-channels",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-leading-zero-phone",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-space-in-email",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-disclosure-true",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-storage-false",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-requires-audit-purpose",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-duplicate-purpose",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "contact-rejects-bad-observation-time",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "relation-revision-must-be-positive",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "relation-requires-subject",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "metadata-event-without-content",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "metadata-event-rejects-content",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "id-binding-requires-runtime-validation",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "utf8-byte-limit-requires-runtime-validation",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "current-commit-record-structure-only",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "current-commit-record-requires-contract-field",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "graph-requires-all-codable-relation-arrays",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "graph-rejects-flat-purpose-tags",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "weight-requires-numeric-weight",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "weight-requires-inline-value-or-reference",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "external-reference-validity-needs-perspective-context",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "weight-is-not-constrained-to-probability-range",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "purpose-helper-requires-configuration-name",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "purpose-composition-requires-leaf-ref",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "condition-requires-freshness-key",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "interaction-policy-is-object",
+      "expectedValid": true,
+      "passed": true
+    },
+    {
+      "case": "interaction-policy-rejects-old-mistaken-schema-string",
+      "expectedValid": false,
+      "passed": true
+    },
+    {
+      "case": "legacy-relation-needs-no-automatic-migration",
+      "expectedValid": true,
+      "passed": true
+    }
+  ],
+  "originalSchemaStringDefect": {
+    "status": "confirmed-by-JSON-parser",
+    "line": 37,
+    "column": 101,
+    "reason": "Swift consumes escaped quotes around home inside a JSON description."
+  },
+  "notRun": [
+    "Full Swift test suite",
+    "remote deployment check",
+    "full authorization audit",
+    "replication/convergence tests",
+    "storage benchmarks"
+  ],
+  "limits": [
+    "Open roots allow undeclared fields.",
+    "Partial contracts remain open.",
+    "Runtime must enforce signatures, authority, id binding, UTF-8 limits and deletion semantics."
+  ]
+}

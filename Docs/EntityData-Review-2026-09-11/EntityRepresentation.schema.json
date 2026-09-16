@@ -1,0 +1,745 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haven:review:entity-representation:2026-09-11",
+  "title": "EntityRepresentation – den felles vektede nodemodellen",
+  "$ref": "#/$defs/EntityRepresentation",
+  "$defs": {
+    "WeightOfEntityRepresentation": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/EntityRepresentation"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<EntityRepresentation>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "EntityRepresentation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "person": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Eierprivat Entity/Object med eierens kunnskap. Kun eksplisitt eierprivat kodek bevarer feltet. Ingen automatisk delingsrett."
+        },
+        "projectionSource": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agreementRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgreementReference"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/EntityRepresentation.swift"
+      },
+      "description": "Min representasjon av en entitet, inkludert en kontakt. Samme vektede nodetype brukes til lagring og et eksplisitt valgt matchingutsnitt. identities og fulfilled inngår foreløpig ikke i denne Codable-formen."
+    },
+    "WeightOfInterest": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/Interest"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<Interest>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "Interest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "constraint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterestCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/Interest.swift"
+      }
+    },
+    "WeightOfPurpose": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/Purpose"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<Purpose>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "Purpose": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CellConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "helperCells": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CellConfiguration"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "composition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PurposeComposition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/Purpose.swift"
+      }
+    },
+    "AgreementReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "counterparty": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataPointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "savedAtText": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordKeypath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceEntityKeypath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "savedAt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordState": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": true,
+      "description": "Referansemetadata; recordState og selve avtalen må valideres mot avtalekontrakten."
+    },
+    "CellConfiguration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "uuid": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cellReferences": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skeleton": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "status": "partial-contract",
+        "source": "CellProtocol/Sources/CellBase/CellConfiguration/CellConfiguration.swift",
+        "limitation": "Dette skjemaet ekspanderer ikke Skeleton, CellReference, discovery eller localization. Runtime kreves."
+      }
+    },
+    "PurposeComposition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "purpose"
+            },
+            "purposeRef": {
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "purposeRef"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "allOf",
+                "anyOf",
+                "sequence"
+              ]
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PurposeComposition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "children"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atLeast"
+            },
+            "requiredCount": {
+              "type": "integer"
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PurposeComposition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "requiredCount",
+            "children"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "InterestCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "always"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "purposeSolvedWithin"
+            },
+            "purposeRef": {
+              "type": "string"
+            },
+            "maxAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "status": {
+              "enum": [
+                "started",
+                "succeeded",
+                "failed"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "purposeRef",
+            "maxAgeSeconds"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "metadataFreshness"
+            },
+            "key": {
+              "type": "string"
+            },
+            "maxAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "maxAgeSeconds"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "all",
+                "any"
+              ]
+            },
+            "conditions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InterestCondition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "conditions"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "not"
+            },
+            "condition": {
+              "$ref": "#/$defs/InterestCondition"
+            }
+          },
+          "required": [
+            "type",
+            "condition"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    }
+  }
+}
