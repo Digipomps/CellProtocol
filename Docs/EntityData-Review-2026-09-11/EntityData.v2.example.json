@@ -1,0 +1,253 @@
+{
+  "person": {
+    "name": {
+      "first": "Eksempel",
+      "last": "Person"
+    },
+    "displayName": "Eksempelperson",
+    "profile": {
+      "headline": "Fiktiv profil for gjennomgang",
+      "websiteURLs": [
+        "https://example.org"
+      ],
+      "interestTags": [
+        "datastrukturer"
+      ]
+    },
+    "contact": {
+      "endpoints": [
+        {
+          "endpointId": "ep-mail-primary",
+          "kind": "email",
+          "label": "primary",
+          "value": "owner@example.org",
+          "status": "unverified",
+          "purposes": [
+            "purpose://contact.communication"
+          ]
+        },
+        {
+          "endpointId": "ep-phone-mobile",
+          "kind": "phone",
+          "label": "mobile",
+          "value": "+4700000000",
+          "status": "unverified",
+          "purposes": [
+            "purpose://contact.communication"
+          ]
+        },
+        {
+          "endpointId": "ep-some-demo",
+          "kind": "some",
+          "label": "fediverse",
+          "value": "@eksempel@example.social"
+        },
+        {
+          "endpointId": "ep-cell-demo",
+          "kind": "cellReference",
+          "label": "invitasjoner",
+          "endpointCell": "cell:///ExampleContactEndpoint",
+          "purposes": [
+            "purpose://contact.communication",
+            "purpose://digital-work.coordinate"
+          ]
+        }
+      ],
+      "preferredChannel": "endpoint",
+      "timezone": "Europe/Oslo"
+    },
+    "languages": [
+      {
+        "tag": "nb",
+        "label": "Norsk bokmål",
+        "preferredForCommunication": true
+      }
+    ],
+    "preferences": {
+      "locale": "nb-NO",
+      "timezone": "Europe/Oslo",
+      "privacy": {
+        "defaultVisibility": "private"
+      }
+    }
+  },
+  "conference": {
+    "registration": {},
+    "purposeSnapshot": {
+      "takenAt": "2026-09-16T09:00:00Z"
+    },
+    "consentRecords": {}
+  },
+  "relations": {
+    "records": {
+      "relation-demo": {
+        "schema": "haven.entity-relation-record.v2",
+        "relationID": "relation-demo",
+        "entityRepresentation": {
+          "name": "Fiktiv samarbeidspartner",
+          "nodeIdentifier": "entity-collaborator-demo",
+          "types": [],
+          "subTypes": [],
+          "parts": [],
+          "partOf": [],
+          "interests": [
+            {
+              "weight": 0.65,
+              "reference": "interest-data-demo"
+            }
+          ],
+          "purposes": [
+            {
+              "weight": 0.8,
+              "value": {
+                "name": "Gjennomgå EntityData sammen",
+                "nodeIdentifier": "purpose-review-demo",
+                "types": [],
+                "subTypes": [],
+                "parts": [],
+                "partOf": [],
+                "interests": [
+                  {
+                    "weight": 0.65,
+                    "value": {
+                      "name": "Datastrukturer",
+                      "nodeIdentifier": "interest-data-demo",
+                      "types": [],
+                      "subTypes": [],
+                      "parts": [],
+                      "partOf": [],
+                      "interests": [],
+                      "purposes": [],
+                      "entities": [],
+                      "states": [],
+                      "constraint": {
+                        "type": "metadataFreshness",
+                        "key": "owner-confirmed",
+                        "maxAgeSeconds": 86400
+                      }
+                    }
+                  }
+                ],
+                "purposes": [],
+                "entities": [],
+                "states": [],
+                "description": "Samme nodetype for eget formål og for et formål man leter etter. Ingen SearchPurpose.",
+                "goal": {
+                  "name": "Gjennomgang fullført",
+                  "uuid": "goal-review-demo",
+                  "description": "Målbart: alle elementer i skjemaet er vurdert og hvert har en beslutning."
+                },
+                "helperCells": [
+                  {
+                    "name": "Gjennomgang",
+                    "uuid": "helper-review-demo",
+                    "cellReferences": [
+                      {
+                        "endpoint": "cell:///ExampleReview",
+                        "subscribeFeed": false,
+                        "label": "Fiktiv hjelper"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "entities": [],
+          "states": [],
+          "endpoints": [
+            {
+              "endpointId": "ep-collab-mail",
+              "kind": "email",
+              "label": "primary",
+              "value": "collaborator@example.org",
+              "status": "unverified"
+            }
+          ],
+          "person": {
+            "displayName": "Fiktiv samarbeidspartner",
+            "work": {
+              "title": "Fiktiv fagrolle"
+            }
+          },
+          "agreementRefs": []
+        },
+        "subject": {
+          "displayName": "Fiktiv samarbeidspartner",
+          "entityRef": "relations.entities.entity-collaborator-demo"
+        },
+        "origin": {
+          "kind": "manual",
+          "at": "2026-09-16T09:00:00Z",
+          "sourceLabel": "Fiktivt eksempel"
+        },
+        "roles": [
+          {
+            "context": "Gjennomgang av EntityData",
+            "role": "Samarbeidspartner"
+          },
+          {
+            "context": "privat",
+            "role": "venn"
+          }
+        ],
+        "interactions": {
+          "count": 0,
+          "byKind": {}
+        },
+        "tags": [
+          "fiktivt-eksempel"
+        ],
+        "createdAt": "2026-09-16T09:00:00Z",
+        "updatedAt": "2026-09-16T09:00:00Z",
+        "revision": 1
+      }
+    },
+    "entities": {
+      "entity-collaborator-demo": {
+        "identityRefs": [
+          "identity-collaborator-a"
+        ],
+        "relationRefs": [
+          "relations.records.relation-demo"
+        ],
+        "contactEndpointRefs": [
+          "ep-collab-mail"
+        ]
+      }
+    },
+    "identities": {
+      "identity-collaborator-a": {
+        "identityUUID": "00000000-0000-4000-8000-000000000001",
+        "domain": "example.org",
+        "entityRefs": [
+          "relations.entities.entity-collaborator-demo"
+        ],
+        "proofRefs": []
+      }
+    },
+    "venner": [
+      "relation-demo"
+    ]
+  },
+  "proofs": {
+    "credentials": {},
+    "index": {
+      "byKeypath": {
+        "relations.records.relation-demo.entityRepresentation.endpoints[endpointId=\"ep-collab-mail\"].value": []
+      }
+    }
+  },
+  "signedAgreementEntity": {
+    "records": [
+      {
+        "counterparty": "Fiktiv samarbeidspartner",
+        "purpose": "Gjennomgang av EntityData",
+        "dataPointer": "relations.records.relation-demo",
+        "recordState": "template",
+        "signedAt": "2026-09-16T09:00:00Z"
+      }
+    ]
+  },
+  "chronicle": []
+}
