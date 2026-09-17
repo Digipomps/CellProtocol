@@ -1,0 +1,202 @@
+{
+  "person": {
+    "name": {
+      "first": "Eksempel",
+      "last": "Person"
+    },
+    "displayName": "Eksempelperson",
+    "profile": {
+      "headline": "Fiktiv profil for gjennomgang",
+      "websiteURLs": [
+        "https://example.org"
+      ]
+    },
+    "contact": {
+      "emails": [
+        {
+          "id": "email-demo",
+          "label": "work",
+          "value": "owner@example.org"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "tag": "nb",
+        "label": "Norsk bokmål",
+        "preferredForCommunication": true
+      }
+    ],
+    "preferences": {
+      "locale": "nb-NO",
+      "timezone": "Europe/Oslo"
+    },
+    "relations": {
+      "interactionPolicy": {
+        "mode": "metadata",
+        "updatedAt": "2026-09-11T09:00:00Z",
+        "fullContentWarningAccepted": false
+      }
+    }
+  },
+  "relations": {
+    "records": {
+      "relation-demo": {
+        "schema": "haven.entity-relation-record.v1",
+        "relationID": "relation-demo",
+        "entityRepresentation": {
+          "name": "Fiktiv samarbeidspartner",
+          "nodeIdentifier": "entity-collaborator-demo",
+          "types": [],
+          "subTypes": [],
+          "parts": [],
+          "partOf": [],
+          "interests": [
+            {
+              "weight": 0.65,
+              "reference": "interest-data-demo"
+            }
+          ],
+          "purposes": [
+            {
+              "weight": 0.8,
+              "value": {
+                "name": "Gjennomgå EntityData sammen",
+                "nodeIdentifier": "purpose-review-demo",
+                "types": [],
+                "subTypes": [],
+                "parts": [],
+                "partOf": [],
+                "interests": [
+                  {
+                    "weight": 0.65,
+                    "value": {
+                      "name": "Datastrukturer",
+                      "nodeIdentifier": "interest-data-demo",
+                      "types": [],
+                      "subTypes": [],
+                      "parts": [],
+                      "partOf": [],
+                      "interests": [],
+                      "purposes": [],
+                      "entities": [],
+                      "states": [],
+                      "constraint": {
+                        "type": "metadataFreshness",
+                        "key": "owner-confirmed",
+                        "maxAgeSeconds": 86400
+                      }
+                    }
+                  }
+                ],
+                "purposes": [],
+                "entities": [],
+                "states": [],
+                "description": "Fiktivt formål, samme nodetype for eget formål og et formål man leter etter.",
+                "helperCells": [
+                  {
+                    "name": "Gjennomgang",
+                    "uuid": "helper-review-demo",
+                    "cellReferences": [
+                      {
+                        "endpoint": "cell:///ExampleReview",
+                        "subscribeFeed": false,
+                        "label": "Fiktiv hjelper"
+                      }
+                    ]
+                  }
+                ],
+                "composition": {
+                  "type": "purpose",
+                  "purposeRef": "purpose-read-demo"
+                }
+              }
+            }
+          ],
+          "entities": [],
+          "states": [],
+          "person": {
+            "displayName": "Fiktiv samarbeidspartner",
+            "work": {
+              "title": "Fiktiv fagrolle"
+            }
+          },
+          "agreementRefs": []
+        },
+        "subject": {
+          "displayName": "Fiktiv samarbeidspartner",
+          "validatedContactRef": "relations.validatedContacts.relation-demo"
+        },
+        "origin": {
+          "kind": "manual",
+          "at": "2026-09-11T09:00:00Z",
+          "sourceLabel": "Fiktivt eksempel"
+        },
+        "roles": [
+          {
+            "context": "Gjennomgang av EntityData",
+            "role": "Samarbeidspartner"
+          }
+        ],
+        "interests": {
+          "declared": [
+            "Datastrukturer"
+          ],
+          "inferred": []
+        },
+        "purposeRefs": [
+          "purpose://contact.communication"
+        ],
+        "channels": [
+          {
+            "kind": "email",
+            "ref": "contact-endpoint-demo",
+            "confirmed": false,
+            "preferred": true
+          }
+        ],
+        "standing": {
+          "trust": "none"
+        },
+        "evidence": [],
+        "interactions": {
+          "count": 0,
+          "byChannel": {},
+          "byKind": {}
+        },
+        "tags": [
+          "fiktivt-eksempel"
+        ],
+        "createdAt": "2026-09-11T09:00:00Z",
+        "updatedAt": "2026-09-11T09:00:00Z",
+        "revision": 1
+      }
+    },
+    "validatedContacts": {
+      "relation-demo": {
+        "schema": "haven.entity-validated-contact-record.v1",
+        "relationID": "relation-demo",
+        "displayName": "Fiktiv samarbeidspartner",
+        "channels": {
+          "email": "collaborator@example.org"
+        },
+        "provenance": {
+          "sourceKind": "user-supplied",
+          "sourceLabel": "Fiktivt eksempel",
+          "observedAt": "2026-09-11T09:00:00Z"
+        },
+        "purposeRefs": [
+          "purpose://access.audit.privacy",
+          "purpose://contact.communication"
+        ],
+        "retention": {
+          "storageAuthorized": true,
+          "disclosureAuthorized": false
+        },
+        "status": "owner-accepted"
+      }
+    }
+  },
+  "proofs": {},
+  "chronicle": []
+}
