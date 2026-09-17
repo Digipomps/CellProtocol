@@ -55,7 +55,9 @@ final class EntityScannerAgreementSurfaceTests: XCTestCase {
     /// `probeResult` er hele kartet, nøklet på hver eneste remote-UUID.
     private static let forbiddenKeys: Set<String> = [
         "disclosurePolicy",
-        "probeResult"
+        "probeResult",
+        "radar",
+        "select"
     ]
 
     private func agreementTemplateGrants() async -> [Grant] {

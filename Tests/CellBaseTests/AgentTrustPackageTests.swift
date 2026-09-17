@@ -50,7 +50,8 @@ final class AgentTrustPackageTests: XCTestCase {
         expected["packageDigest"] = package.packageDigest
         let actual = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertEqual(NSDictionary(dictionary: actual), NSDictionary(dictionary: expected))
-        let destination = fixtureDirectory.appendingPathComponent("fleet-webfetch.package.generated.json")
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent("fleet-webfetch-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: destination) }
         try encoded.write(to: destination, options: .atomic)
         XCTAssertEqual(try Data(contentsOf: destination), encoded)
     }
@@ -204,8 +205,7 @@ final class AgentTrustPackageTests: XCTestCase {
 
     private var fixtureDirectory: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("CellProtocolDocuments/Deliverables/PDD_tillitspakke-agentflaate_2026-09-08/contract/fixtures")
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/AgentTrustPackage")
     }
 }

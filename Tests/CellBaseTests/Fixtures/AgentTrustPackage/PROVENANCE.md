@@ -1,0 +1,1 @@
+Golden inputs copied without modification from CellProtocolDocuments/Deliverables/PDD_tillitspakke-agentflaate_2026-09-08/contract/fixtures on 2026-09-17. Tests must be self-contained and must not write generated output into source fixtures.

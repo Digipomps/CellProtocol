@@ -120,11 +120,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "approveBeacon",
             "probeRequest",
             "probeDetail",
-            "respondToInvitation",
-            "select"
+            "respondToInvitation"
         ]
         self.agreementTemplate.grants.removeAll {
-            actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--"
+            ["radar", "select"].contains($0.keypath)
+                || (actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--")
         }
         for key in actionKeys {
             self.agreementTemplate.ensureGrant("-w--", for: key)
@@ -132,7 +132,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         self.agreementTemplate.ensureGrant("r---", for: "verificationMethods")
         self.agreementTemplate.ensureGrant("r---", for: "capabilities")
         self.agreementTemplate.ensureGrant("r---", for: "encounters")
-        self.agreementTemplate.ensureGrant("r---", for: "radar")
     }
 
     private func setupKeys(owner: Identity) async {
@@ -170,7 +169,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
         await addInterceptForGet(requester: owner, key: "radar", getValueIntercept: { [weak self] _, requester in
             guard let self = self else { return .null }
-            if await self.validateAccess("r---", at: "radar", for: requester) {
+            if self.isAdvertisementOwner(requester),
+               await self.validateAccess("r---", at: "radar", for: requester) {
                 self.radarLedger.prune(visibleRemoteUUIDs: Set(self.connectService?.foundPeersDict.keys.map { $0 } ?? []))
                 var spec = self.radarLedger.radarSpec()
                 if self.isAdvertisementOwner(requester), let ad = self.selectedAdvertisement, (try? ad.validate()) != nil,
@@ -253,13 +253,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 self.radarLedger.select(remoteUUID)
                 self.selectedAccessChallenge = nil
                 self.beginAdvertisementRead(remoteUUID: remoteUUID)
-                var payload: Object = ["event": .string("selected")]
-                payload["remoteUUID"] = .string(remoteUUID)
-                if let entity = self.radarLedger.entitiesById[remoteUUID] {
-                    payload["displayName"] = .string(entity.displayName)
-                    payload["status"] = .string(entity.status)
-                    payload["distanceMeters"] = entity.distanceMeters.map { .float($0) } ?? .null
-                }
+                // The shared flow announces a refresh; peer details remain in
+                // the owner-only radar snapshot, never in a subscriber event.
+                let payload: Object = ["event": .string("selected")]
                 self.pushScannerEvent(topic: EntityScannerTopics.status, title: "Entity Selected", payload: payload, requesterOverride: requester)
             }
             return nil
