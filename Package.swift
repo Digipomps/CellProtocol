@@ -73,7 +73,8 @@ let package = Package(
                     .target(name: "CombineHelpers"),
                     .target(name: "CodableHelpers"),
                     .product(name: "CFileUtils", package: "fileutils-c"),
-                ]),
+                ],
+                resources: [.copy("Resources/haven-localization.js"), .copy("Resources/haven-localization-NOTICES.txt")]),
         .target(name: "CellVapor",
                 dependencies: [
                     .target(name: "CellBase"),
@@ -117,6 +118,12 @@ let package = Package(
                 .target(name: "HavenPerspectiveSchemas"),
             ],
             path: "commons/benchmarks/purpose-interest/Sources/PurposeInterestBenchmarkSupport"
+        ),
+        .executableTarget(
+            name: "ReferenceLoadBenchmark",
+            dependencies: [
+                .target(name: "CellBase"),
+            ]
         ),
         .executableTarget(
             name: "HavenCommonsCLI",

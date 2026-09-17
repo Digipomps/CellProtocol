@@ -316,6 +316,10 @@ public struct EntityRelationRecord: Codable, Equatable, Sendable {
     public var updatedAt: Date
     public var revision: Int
 
+    /// Canonical owner-held knowledge when present. The legacy subject/tags/
+    /// purposeRefs remain readable for existing clients and import adapters.
+    public var entityRepresentation: EntityRepresentation?
+
     public init(
         relationID: String,
         subject: EntityRelationSubject,
@@ -331,7 +335,8 @@ public struct EntityRelationRecord: Codable, Equatable, Sendable {
         notes: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        revision: Int = 1
+        revision: Int = 1,
+        entityRepresentation: EntityRepresentation? = nil
     ) {
         self.schema = EntityRelationRecordV1.recordSchema
         self.relationID = relationID
@@ -349,6 +354,36 @@ public struct EntityRelationRecord: Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.revision = revision
+        self.entityRepresentation = entityRepresentation
+    }
+
+    /// Base node equality compares names only. Persisted relation equality must
+    /// also notice changes to weights, person knowledge and functionality.
+    public static func == (lhs: EntityRelationRecord, rhs: EntityRelationRecord) -> Bool {
+        guard lhs.schema == rhs.schema,
+              lhs.relationID == rhs.relationID,
+              lhs.subject == rhs.subject,
+              lhs.origin == rhs.origin,
+              lhs.roles == rhs.roles,
+              lhs.interests == rhs.interests,
+              lhs.purposeRefs == rhs.purposeRefs,
+              lhs.channels == rhs.channels,
+              lhs.standing == rhs.standing,
+              lhs.evidence == rhs.evidence,
+              lhs.interactions == rhs.interactions,
+              lhs.tags == rhs.tags,
+              lhs.notes == rhs.notes,
+              lhs.createdAt == rhs.createdAt,
+              lhs.updatedAt == rhs.updatedAt,
+              lhs.revision == rhs.revision else { return false }
+        switch (lhs.entityRepresentation, rhs.entityRepresentation) {
+        case (nil, nil): return true
+        case let (left?, right?):
+            guard let l = try? EntityRepresentationDataCodec.encoder(ownerPrivate: true).encode(left),
+                  let r = try? EntityRepresentationDataCodec.encoder(ownerPrivate: true).encode(right) else { return false }
+            return l == r
+        default: return false
+        }
     }
 
     /// Channels a conversation can actually start on, best first.
@@ -805,16 +840,18 @@ public enum EntityRelationRecordErrorV1: Error, Equatable, Sendable {
 /// can bind them directly. Same shape on every surface.
 public enum EntityRelationCodec {
     public static func encoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
+        EntityRepresentationDataCodec.encoder(ownerPrivate: true)
     }
 
     public static func decoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
+        EntityRepresentationDataCodec.decoder(ownerPrivate: true)
+    }
+
+    /// Use for mutations: an encoding failure must abort, never become the
+    /// `.null` value that the relation namespace interprets as deletion.
+    public static func persistenceValue<T: Encodable>(_ value: T) throws -> ValueType {
+        let data = try encoder().encode(value)
+        return try decoder().decode(ValueType.self, from: data)
     }
 
     public static func value<T: Encodable>(_ value: T) -> ValueType {

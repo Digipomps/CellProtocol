@@ -1,0 +1,2118 @@
+{
+  "schema": "haven.test-suite-audit.v1",
+  "schemaStatus": "Documentation only; not a native WorkItemCell or AgentJobs API schema",
+  "auditId": "haven-test-audit-20260910-baseline",
+  "observedAt": "2026-09-10T14:21:23.479102+00:00",
+  "scope": "Bounded static initial review of test lifecycle and CI selection. Not a full semantic audit of all HAVEN tests.",
+  "assessmentStatus": "partial-baseline-complete",
+  "fullAuditCompleted": false,
+  "project": "HAVEN.CellProtocol.securityAudit",
+  "area": "test-suite-lifecycle",
+  "nativeRegistered": false,
+  "nativeStatus": null,
+  "sourceTestsModified": false,
+  "testsRemoved": 0,
+  "newRuntimeTestRuns": 0,
+  "policy": "../../Testing/HAVEN-test-suite-audit.md",
+  "cadence": {
+    "basis": "Assistant working assumption after optional cadence question; user requested periodic audits without an interval",
+    "monthly": "First Monday at 09:00 local environment time (Europe/Oslo)",
+    "fullReviewMonths": [
+      1,
+      4,
+      7,
+      10
+    ],
+    "automationId": "revider-haven-testsuitene",
+    "automationKind": "heartbeat",
+    "automationStatus": "ACTIVE",
+    "readBackVerified": true,
+    "nativeDaemonSchedule": false
+  },
+  "sources": {
+    "CellScaffold": "e10e93ea92c21d0d13cef600f1b276647617bf30",
+    "CellProtocol": "e03923cb2f1d5a339eaf62585ddc9dddf7750cec",
+    "Binding": "ba195299fd9fbf8621fd23eb907af77586e35c00"
+  },
+  "inventory": {
+    "schema": "haven.test-suite-audit-static-snapshot.v1",
+    "repository": "CellScaffold",
+    "revision": "e10e93ea92c21d0d13cef600f1b276647617bf30",
+    "method": "Tracked Swift sources under Tests/ only; same suite-name regex as ci/test-suite-coverage.sh. Source inventory and selection strings, not executed or semantically reviewed test-case counts.",
+    "suites": {
+      "EntityMergePolicyRegistryV0Tests": [
+        {
+          "path": "Tests/AdminPlaneTests/EntityMergePolicyRegistryV0Tests.swift",
+          "line": 8
+        }
+      ],
+      "EntityOperationEnvelopeV0Tests": [
+        {
+          "path": "Tests/AdminPlaneTests/EntityOperationEnvelopeV0Tests.swift",
+          "line": 8
+        }
+      ],
+      "NodeAdminAgentDeliveryTests": [
+        {
+          "path": "Tests/AdminPlaneTests/NodeAdminAgentDeliveryTests.swift",
+          "line": 11
+        }
+      ],
+      "AIAssistantThreadCellTests": [
+        {
+          "path": "Tests/AppTests/AIAssistantThreadCellTests.swift",
+          "line": 14
+        }
+      ],
+      "AIGatewayCellTests": [
+        {
+          "path": "Tests/AppTests/AIGatewayCellTests.swift",
+          "line": 22
+        }
+      ],
+      "AIGatewayConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/AIGatewayConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "AccessRequirementPromptCellTests": [
+        {
+          "path": "Tests/AppTests/AccessRequirementPromptCellTests.swift",
+          "line": 10
+        }
+      ],
+      "AccessSensitiveRuntimeReadinessTests": [
+        {
+          "path": "Tests/AppTests/AccessSensitiveRuntimeReadinessTests.swift",
+          "line": 8
+        }
+      ],
+      "AdminAccessRequestCellTests": [
+        {
+          "path": "Tests/AppTests/AdminAccessRequestCellTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminAuthenticatedVaporBridgeTransportTests": [
+        {
+          "path": "Tests/AppTests/AdminAuthenticatedVaporBridgeTransportTests.swift",
+          "line": 10
+        }
+      ],
+      "AdminBridgeHandshakeAuthenticationTests": [
+        {
+          "path": "Tests/AppTests/AdminBridgeHandshakeAuthenticationTests.swift",
+          "line": 8
+        }
+      ],
+      "AdminCatalogRoutesTests": [
+        {
+          "path": "Tests/AppTests/AdminCatalogRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "AdminControlPlaneRoutingTests": [
+        {
+          "path": "Tests/AppTests/AdminControlPlaneRoutingTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminCopilotWorkspaceConfigurationTests": [
+        {
+          "path": "Tests/AppTests/AdminCopilotWorkspaceConfigurationTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminCredentialPolicyTests": [
+        {
+          "path": "Tests/AppTests/AdminCredentialPolicyTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminCredentialRevocationTests": [
+        {
+          "path": "Tests/AppTests/AdminCredentialRevocationTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminDeploymentSupervisorCellTests": [
+        {
+          "path": "Tests/AppTests/AdminDeploymentSupervisorCellTests.swift",
+          "line": 11
+        }
+      ],
+      "AdminEntityProofPersistenceSupportTests": [
+        {
+          "path": "Tests/AppTests/AdminEntityProofPersistenceSupportTests.swift",
+          "line": 10
+        }
+      ],
+      "AdminEntryRemoteBridgeLoopbackTests": [
+        {
+          "path": "Tests/AppTests/AdminEntryRemoteBridgeLoopbackTests.swift",
+          "line": 16
+        }
+      ],
+      "AdminFundingCellTests": [
+        {
+          "path": "Tests/AppTests/AdminFundingCellTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminNodeFleetCellTests": [
+        {
+          "path": "Tests/AppTests/AdminNodeFleetCellTests.swift",
+          "line": 10
+        }
+      ],
+      "AdminOperationsMetricsTests": [
+        {
+          "path": "Tests/AppTests/AdminOperationsMetricsTests.swift",
+          "line": 10
+        }
+      ],
+      "AdminPersistedRuntimeReadinessTests": [
+        {
+          "path": "Tests/AppTests/AdminPersistedRuntimeReadinessTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminRoleEnrollmentCellTests": [
+        {
+          "path": "Tests/AppTests/AdminRoleEnrollmentCellTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminScaffoldBootstrapTests": [
+        {
+          "path": "Tests/AppTests/AdminScaffoldBootstrapTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminScaffoldBridgeMultiplexRouteTests": [
+        {
+          "path": "Tests/AppTests/AdminScaffoldBridgeMultiplexRouteTests.swift",
+          "line": 13
+        }
+      ],
+      "AdminScaffoldRuntimeTests": [
+        {
+          "path": "Tests/AppTests/AdminScaffoldRuntimeTests.swift",
+          "line": 11
+        }
+      ],
+      "AdminScaffoldSnapshotIngestTests": [
+        {
+          "path": "Tests/AppTests/AdminScaffoldSnapshotIngestTests.swift",
+          "line": 9
+        }
+      ],
+      "AdminSecurityPolicyCellTests": [
+        {
+          "path": "Tests/AppTests/AdminSecurityPolicyCellTests.swift",
+          "line": 8
+        }
+      ],
+      "AdminSkeletonContractTests": [
+        {
+          "path": "Tests/AppTests/AdminSkeletonContractTests.swift",
+          "line": 15
+        }
+      ],
+      "AdminWorkspaceConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/AdminWorkspaceConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "AgeProofDoorCellTests": [
+        {
+          "path": "Tests/AppTests/AgeProofDoorCellTests.swift",
+          "line": 8
+        }
+      ],
+      "AgentActionCapabilityCatalogV1Tests": [
+        {
+          "path": "Tests/AppTests/AgentActionCapabilityCatalogV1Tests.swift",
+          "line": 8
+        }
+      ],
+      "AgentConversationInboxCellTests": [
+        {
+          "path": "Tests/AppTests/AgentConversationInboxCellTests.swift",
+          "line": 8
+        }
+      ],
+      "AgentRunCellTests": [
+        {
+          "path": "Tests/AppTests/AgentRunCellTests.swift",
+          "line": 13
+        }
+      ],
+      "AgentRunWorkbenchWiringTests": [
+        {
+          "path": "Tests/AppTests/AgentRunWorkbenchWiringTests.swift",
+          "line": 9
+        }
+      ],
+      "AgreementWorkbenchCellTests": [
+        {
+          "path": "Tests/AppTests/AgreementWorkbenchCellTests.swift",
+          "line": 9
+        }
+      ],
+      "AgreementWorkbenchConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/AgreementWorkbenchConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "ArendalsukaConfigurationPublisherAuthorizationRoutesTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaConfigurationPublisherAuthorizationRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "ArendalsukaConfigurationPublisherCellTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaConfigurationPublisherCellTests.swift",
+          "line": 10
+        }
+      ],
+      "ArendalsukaEventAtlasCellTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaEventAtlasCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ArendalsukaFavoritesImportCodeParserTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaFavoritesImportCodeParserTests.swift",
+          "line": 7
+        }
+      ],
+      "ArendalsukaImportAuthorizationRoutesTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaImportAuthorizationRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "ArendalsukaInterestTaxonomyBuilderTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaInterestTaxonomyBuilderTests.swift",
+          "line": 7
+        }
+      ],
+      "ArendalsukaKnowledgeCellTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaKnowledgeCellTests.swift",
+          "line": 10
+        }
+      ],
+      "ArendalsukaKnowledgeDisabledRouteTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaKnowledgeDisabledRouteTests.swift",
+          "line": 17
+        }
+      ],
+      "ArendalsukaKnowledgeSQLiteStoreTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaKnowledgeSQLiteStoreTests.swift",
+          "line": 9
+        }
+      ],
+      "ArendalsukaPersistedAtlasRecoveryTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaPersistedAtlasRecoveryTests.swift",
+          "line": 12
+        }
+      ],
+      "ArendalsukaProfileCellTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaProfileCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ArendalsukaPublicSurfaceRouteTests": [
+        {
+          "path": "Tests/AppTests/ArendalsukaPublicSurfaceRouteTests.swift",
+          "line": 17
+        }
+      ],
+      "ArtistSalesChannelCellTests": [
+        {
+          "path": "Tests/AppTests/ArtistSalesChannelCellTests.swift",
+          "line": 8
+        }
+      ],
+      "AssistantCorrespondenceAdminRoutesTests": [
+        {
+          "path": "Tests/AppTests/AssistantCorrespondenceAdminRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "AssistantCorrespondenceCellTests": [
+        {
+          "path": "Tests/AppTests/AssistantCorrespondenceCellTests.swift",
+          "line": 20
+        }
+      ],
+      "AssistantCorrespondenceOnboardingRoutesTests": [
+        {
+          "path": "Tests/AppTests/AssistantCorrespondenceOnboardingRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "AssociatedDomainsRouteTests": [
+        {
+          "path": "Tests/AppTests/AssociatedDomainsRouteTests.swift",
+          "line": 7
+        }
+      ],
+      "BookReferenceRoutesTests": [
+        {
+          "path": "Tests/AppTests/BookReferenceRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "BrowserClientIdentityOfflineInspectorTests": [
+        {
+          "path": "Tests/AppTests/BrowserClientIdentityOfflineInspectorTests.swift",
+          "line": 15
+        }
+      ],
+      "BrowserClientIdentityReconciliationTests": [
+        {
+          "path": "Tests/AppTests/BrowserClientIdentityReconciliationTests.swift",
+          "line": 7
+        }
+      ],
+      "BrowserClientIdentityRecoveryExecutorTests": [
+        {
+          "path": "Tests/AppTests/BrowserClientIdentityRecoveryExecutorTests.swift",
+          "line": 17
+        }
+      ],
+      "BrowserClientIdentityVaultKeyAgreementTests": [
+        {
+          "path": "Tests/AppTests/BrowserClientIdentityVaultKeyAgreementTests.swift",
+          "line": 9
+        }
+      ],
+      "BrowserClientIdentityVaultTests": [
+        {
+          "path": "Tests/AppTests/BrowserClientIdentityVaultTests.swift",
+          "line": 23
+        }
+      ],
+      "ButlerChatSkeletonDumpTests": [
+        {
+          "path": "Tests/AppTests/ButlerChatSkeletonDumpTests.swift",
+          "line": 19
+        }
+      ],
+      "ButlerLatencyCachingTests": [
+        {
+          "path": "Tests/AppTests/ButlerLatencyCachingTests.swift",
+          "line": 16
+        }
+      ],
+      "ButlerParityArmDumpTests": [
+        {
+          "path": "Tests/AppTests/ButlerParityArmDumpTests.swift",
+          "line": 39
+        }
+      ],
+      "ButlerSignalMatcherTests": [
+        {
+          "path": "Tests/AppTests/ButlerSignalMatcherTests.swift",
+          "line": 11
+        }
+      ],
+      "ButlerUsefulnessDumpTests": [
+        {
+          "path": "Tests/AppTests/ButlerUsefulnessDumpTests.swift",
+          "line": 23
+        }
+      ],
+      "ButterpopPilotReadinessTests": [
+        {
+          "path": "Tests/AppTests/ButterpopPilotReadinessTests.swift",
+          "line": 9
+        }
+      ],
+      "ButterpopStudioProductTests": [
+        {
+          "path": "Tests/AppTests/ButterpopStudioProductTests.swift",
+          "line": 12
+        }
+      ],
+      "CalendarSurfaceConfigurationTests": [
+        {
+          "path": "Tests/AppTests/CalendarSurfaceConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "CellConfigurationStudioImportTests": [
+        {
+          "path": "Tests/AppTests/CellConfigurationStudioImportTests.swift",
+          "line": 8
+        }
+      ],
+      "CellProtocolIdentityProofTests": [
+        {
+          "path": "Tests/AppTests/CellProtocolIdentityProofTests.swift",
+          "line": 8
+        }
+      ],
+      "CellScaffoldRuntimeIdentityManifestTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeIdentityManifestTests.swift",
+          "line": 10
+        }
+      ],
+      "CellScaffoldRuntimeIdentityMigrationCandidateCommandTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeIdentityMigrationCandidateCommandTests.swift",
+          "line": 11
+        }
+      ],
+      "CellScaffoldRuntimeIdentityMigrationPlannerTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeIdentityMigrationPlannerTests.swift",
+          "line": 7
+        }
+      ],
+      "CellScaffoldRuntimeIdentityProvisionerTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeIdentityProvisionerTests.swift",
+          "line": 25
+        }
+      ],
+      "CellScaffoldRuntimeIdentityRegistryTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeIdentityRegistryTests.swift",
+          "line": 8
+        }
+      ],
+      "CellScaffoldRuntimeStorageRootTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldRuntimeStorageRootTests.swift",
+          "line": 9
+        }
+      ],
+      "CellScaffoldServiceIdentityManifestTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldServiceIdentityManifestTests.swift",
+          "line": 8
+        }
+      ],
+      "CellScaffoldServiceIdentityRegistryTests": [
+        {
+          "path": "Tests/AppTests/CellScaffoldServiceIdentityRegistryTests.swift",
+          "line": 9
+        }
+      ],
+      "ChatAssistantDegradationTests": [
+        {
+          "path": "Tests/AppTests/ChatAssistantDegradationTests.swift",
+          "line": 8
+        }
+      ],
+      "ChatAuthTokenManagerTests": [
+        {
+          "path": "Tests/AppTests/ChatAuthTokenManagerTests.swift",
+          "line": 7
+        }
+      ],
+      "ChatCellTests": [
+        {
+          "path": "Tests/AppTests/ChatCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ChatInterpreterEscalationCeilingTests": [
+        {
+          "path": "Tests/AppTests/ChatInterpreterEscalationCeilingTests.swift",
+          "line": 8
+        }
+      ],
+      "ChatMVPLoginScopingTests": [
+        {
+          "path": "Tests/AppTests/ChatMVPLoginScopingTests.swift",
+          "line": 9
+        }
+      ],
+      "ChatMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/ChatMVPRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "ChatPurposeResourceRouterTests": [
+        {
+          "path": "Tests/AppTests/ChatPurposeResourceRouterTests.swift",
+          "line": 9
+        }
+      ],
+      "ChatScopedAIProviderRouterTests": [
+        {
+          "path": "Tests/AppTests/ChatScopedAIProviderRouterTests.swift",
+          "line": 9
+        }
+      ],
+      "CommonsLibrarianCellTests": [
+        {
+          "path": "Tests/AppTests/CommonsLibrarianCellTests.swift",
+          "line": 16
+        }
+      ],
+      "ConciergeKnowledgeCorpusCellTests": [
+        {
+          "path": "Tests/AppTests/ConciergeKnowledgeCorpusCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceAIAssistantConfigurationTests": [
+        {
+          "path": "Tests/AppTests/ConferenceAIAssistantConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferenceAgendaCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceAgendaCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceAudienceDiscoveryCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceAudienceDiscoveryCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceBroadcastStudioCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceBroadcastStudioCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferenceConfigurationCatalogTests": [
+        {
+          "path": "Tests/AppTests/ConferenceConfigurationCatalogTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceConnectionHubCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceConnectionHubCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceDemoStoryCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceDemoStoryCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceEntityDiscoveryCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceEntityDiscoveryCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceInsightAggregateCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceInsightAggregateCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceInterestTaxonomyBuilderTests": [
+        {
+          "path": "Tests/AppTests/ConferenceInterestTaxonomyBuilderTests.swift",
+          "line": 7
+        }
+      ],
+      "ConferenceLiveInteractionShellBridgeTests": [
+        {
+          "path": "Tests/AppTests/ConferenceLiveInteractionShellBridgeTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceMVPSkeletonTests": [
+        {
+          "path": "Tests/AppTests/ConferenceMVPSkeletonTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferenceMessageExchangeAcceptanceTests": [
+        {
+          "path": "Tests/AppTests/ConferenceMessageExchangeAcceptanceTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceOnboardingCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceOnboardingCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceOrganizerProjectionCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceOrganizerProjectionCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferencePlaywrightIdentityVaultTests": [
+        {
+          "path": "Tests/AppTests/ConferencePlaywrightIdentityVaultTests.swift",
+          "line": 10
+        }
+      ],
+      "ConferencePreviewWrapperResolverSupportTests": [
+        {
+          "path": "Tests/AppTests/ConferencePreviewWrapperResolverSupportTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceProofChatLaunchCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceProofChatLaunchCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferencePublicProfileCellTests": [
+        {
+          "path": "Tests/AppTests/ConferencePublicProfileCellTests.swift",
+          "line": 10
+        }
+      ],
+      "ConferencePublicShellReadinessTests": [
+        {
+          "path": "Tests/AppTests/ConferencePublicShellReadinessTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferencePublishedContentCellTests": [
+        {
+          "path": "Tests/AppTests/ConferencePublishedContentCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceRecommendationCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceRecommendationCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceRegistrationCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceRegistrationCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceSchedulingCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSchedulingCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceShellCellsTests": [
+        {
+          "path": "Tests/AppTests/ConferenceShellCellsTests.swift",
+          "line": 14
+        }
+      ],
+      "ConferenceShellConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/ConferenceShellConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferenceSimulationClockCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSimulationClockCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ConferenceSimulationPlaybackCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSimulationPlaybackCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceSimulationPopulationCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSimulationPopulationCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceSimulationStudioCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSimulationStudioCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceSponsorLeadAggregateCellTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSponsorLeadAggregateCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConferenceSurfaceRoutesTests": [
+        {
+          "path": "Tests/AppTests/ConferenceSurfaceRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "ConfigurationArchitectWorkspaceTests": [
+        {
+          "path": "Tests/AppTests/ConfigurationArchitectWorkspaceTests.swift",
+          "line": 8
+        }
+      ],
+      "ConfigurationCatalogCellTests": [
+        {
+          "path": "Tests/AppTests/ConfigurationCatalogCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ConfigurationCatalogClientTests": [
+        {
+          "path": "Tests/AppTests/ConfigurationCatalogClientTests.swift",
+          "line": 8
+        }
+      ],
+      "ConfigurationCatalogSkeletonParityTests": [
+        {
+          "path": "Tests/AppTests/ConfigurationCatalogSkeletonParityTests.swift",
+          "line": 8
+        }
+      ],
+      "ContactEndpointCellTests": [
+        {
+          "path": "Tests/AppTests/ContactEndpointCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ContactRegistryCellTests": [
+        {
+          "path": "Tests/AppTests/ContactRegistryCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ContextTransitionPayloadFactoryTests": [
+        {
+          "path": "Tests/AppTests/ContextTransitionPayloadFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "ContractChallengeMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/ContractChallengeMVPRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "CorrespondenceApprovalConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/CorrespondenceApprovalConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "DevelopmentStatusRoutesTests": [
+        {
+          "path": "Tests/AppTests/DevelopmentStatusRoutesTests.swift",
+          "line": 11
+        }
+      ],
+      "DevelopmentStatusSnapshotProducerTests": [
+        {
+          "path": "Tests/AppTests/DevelopmentStatusSnapshotProducerTests.swift",
+          "line": 8
+        }
+      ],
+      "DevelopmentStatusSnapshotTests": [
+        {
+          "path": "Tests/AppTests/DevelopmentStatusSnapshotTests.swift",
+          "line": 7
+        }
+      ],
+      "DeviceCallbackCapabilityServerTests": [
+        {
+          "path": "Tests/AppTests/DeviceCallbackCapabilityServerTests.swift",
+          "line": 11
+        }
+      ],
+      "DeviceIngressCallbackRuntimeTests": [
+        {
+          "path": "Tests/AppTests/DeviceIngressCallbackRuntimeTests.swift",
+          "line": 11
+        }
+      ],
+      "DeviceIngressIdentityLinkHandshakeContractTests": [
+        {
+          "path": "Tests/AppTests/DeviceIngressIdentityLinkHandshakeContractTests.swift",
+          "line": 9
+        }
+      ],
+      "DeviceRegistrationReadinessTests": [
+        {
+          "path": "Tests/AppTests/DeviceRegistrationReadinessTests.swift",
+          "line": 8
+        }
+      ],
+      "DocumentationWorkbenchRoutesTests": [
+        {
+          "path": "Tests/AppTests/DocumentationWorkbenchRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "EntityAnchorDataV1ContractTests": [
+        {
+          "path": "Tests/AppTests/EntityAnchorDataV1ContractTests.swift",
+          "line": 8
+        }
+      ],
+      "EntityAtlasRoutesTests": [
+        {
+          "path": "Tests/AppTests/EntityAtlasRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "EntityCellGraphCellTests": [
+        {
+          "path": "Tests/AppTests/EntityCellGraphCellTests.swift",
+          "line": 9
+        }
+      ],
+      "EntityGraphStorageTests": [
+        {
+          "path": "Tests/AppTests/EntityGraphStorageTests.swift",
+          "line": 7
+        }
+      ],
+      "EntityScaffoldEnrollmentCellTests": [
+        {
+          "path": "Tests/AppTests/EntityScaffoldEnrollmentCellTests.swift",
+          "line": 9
+        }
+      ],
+      "EntityStudioCellTests": [
+        {
+          "path": "Tests/AppTests/EntityStudioCellTests.swift",
+          "line": 9
+        }
+      ],
+      "EntityStudioConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/EntityStudioConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "EventPlatformRoutesTests": [
+        {
+          "path": "Tests/AppTests/EventPlatformRoutesTests.swift",
+          "line": 11
+        }
+      ],
+      "EventPublisherRegistryCellTests": [
+        {
+          "path": "Tests/AppTests/EventPublisherRegistryCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ExactStagingDeviceIngressPilotTests": [
+        {
+          "path": "Tests/AppTests/ExactStagingDeviceIngressPilotTests.swift",
+          "line": 11
+        }
+      ],
+      "ExecutablePurposeGroundingCellTests": [
+        {
+          "path": "Tests/AppTests/ExecutablePurposeGroundingCellTests.swift",
+          "line": 9
+        }
+      ],
+      "FlowDebugProbeCellTests": [
+        {
+          "path": "Tests/AppTests/FlowDebugProbeCellTests.swift",
+          "line": 8
+        }
+      ],
+      "FundingEntitlementAgreementTests": [
+        {
+          "path": "Tests/AppTests/FundingEntitlementAgreementTests.swift",
+          "line": 9
+        }
+      ],
+      "GitHubWorkSyncCellTests": [
+        {
+          "path": "Tests/AppTests/GitHubWorkSyncCellTests.swift",
+          "line": 8
+        }
+      ],
+      "GraphStoreCellTests": [
+        {
+          "path": "Tests/AppTests/GraphStoreCellTests.swift",
+          "line": 12
+        }
+      ],
+      "GuidedOnboardingCellTests": [
+        {
+          "path": "Tests/AppTests/GuidedOnboardingCellTests.swift",
+          "line": 9
+        }
+      ],
+      "HAVENAgentCapabilityBrokerCellTests": [
+        {
+          "path": "Tests/AppTests/HAVENAgentCapabilityBrokerCellTests.swift",
+          "line": 8
+        }
+      ],
+      "HavenWorkbenchConfigurationTests": [
+        {
+          "path": "Tests/AppTests/HavenWorkbenchConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "HostRoutedBridgeTransportTests": [
+        {
+          "path": "Tests/AppTests/HostRoutedBridgeTransportTests.swift",
+          "line": 15
+        }
+      ],
+      "IdeaTaskWorkspaceTests": [
+        {
+          "path": "Tests/AppTests/IdeaTaskWorkspaceTests.swift",
+          "line": 9
+        }
+      ],
+      "IdentityLinkRendezvousStoreTests": [
+        {
+          "path": "Tests/AppTests/IdentityLinkRendezvousStoreTests.swift",
+          "line": 10
+        }
+      ],
+      "IdentityLinkRoutesTests": [
+        {
+          "path": "Tests/AppTests/IdentityLinkRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "InviteLandingRetentionTests": [
+        {
+          "path": "Tests/AppTests/InviteLandingRetentionTests.swift",
+          "line": 10
+        }
+      ],
+      "JWTAuthRoutesTests": [
+        {
+          "path": "Tests/AppTests/JWTAuthRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "KallimachosAdvisorCellTests": [
+        {
+          "path": "Tests/AppTests/KallimachosAdvisorCellTests.swift",
+          "line": 10
+        }
+      ],
+      "KallimachosArendalsukaDemoCellTests": [
+        {
+          "path": "Tests/AppTests/KallimachosArendalsukaDemoCellTests.swift",
+          "line": 10
+        }
+      ],
+      "LeadVaultCellTests": [
+        {
+          "path": "Tests/AppTests/LeadVaultCellTests.swift",
+          "line": 8
+        }
+      ],
+      "LeadVaultRoutesTests": [
+        {
+          "path": "Tests/AppTests/LeadVaultRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "LiveInteractionCellTests": [
+        {
+          "path": "Tests/AppTests/LiveInteractionCellTests.swift",
+          "line": 14
+        }
+      ],
+      "LocalLLMGatewayCellTests": [
+        {
+          "path": "Tests/AppTests/LocalLLMGatewayCellTests.swift",
+          "line": 9
+        }
+      ],
+      "MVPAdminAccessTests": [
+        {
+          "path": "Tests/AppTests/MVPAdminAccessTests.swift",
+          "line": 8
+        }
+      ],
+      "MarkdownRendererCellTests": [
+        {
+          "path": "Tests/AppTests/MarkdownRendererCellTests.swift",
+          "line": 9
+        }
+      ],
+      "MediaCollectionCellTests": [
+        {
+          "path": "Tests/AppTests/MediaCollectionCellTests.swift",
+          "line": 8
+        }
+      ],
+      "MermaidRendererCellTests": [
+        {
+          "path": "Tests/AppTests/MermaidRendererCellTests.swift",
+          "line": 8
+        }
+      ],
+      "MicropaymentsAuditRoutesTests": [
+        {
+          "path": "Tests/AppTests/MicropaymentsAuditRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "MicropaymentsMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/MicropaymentsMVPRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "MintClientBootstrapTests": [
+        {
+          "path": "Tests/AppTests/MintClientBootstrapTests.swift",
+          "line": 7
+        }
+      ],
+      "MixTidyPolicyTests": [
+        {
+          "path": "Tests/AppTests/MixTidyPolicyTests.swift",
+          "line": 10
+        }
+      ],
+      "CodableTests": [
+        {
+          "path": "Tests/AppTests/MultilevelCodableTests.swift",
+          "line": 10
+        }
+      ],
+      "MultilevelCodableTests": [
+        {
+          "path": "Tests/AppTests/MultilevelCodableTests.swift",
+          "line": 29
+        }
+      ],
+      "MusicPublishingCellsTests": [
+        {
+          "path": "Tests/AppTests/MusicPublishingCellsTests.swift",
+          "line": 9
+        }
+      ],
+      "MusicPublishingConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/MusicPublishingConfigurationFactoryTests.swift",
+          "line": 9
+        }
+      ],
+      "MusicPublishingMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/MusicPublishingMVPRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "NativeLocalModelBridgeTests": [
+        {
+          "path": "Tests/AppTests/NativeLocalModelBridgeTests.swift",
+          "line": 9
+        }
+      ],
+      "NodeAdminAgentSnapshotBuilderTests": [
+        {
+          "path": "Tests/AppTests/NodeAdminAgentSnapshotBuilderTests.swift",
+          "line": 9
+        }
+      ],
+      "NotificationPushProviderTests": [
+        {
+          "path": "Tests/AppTests/NotificationPushProviderTests.swift",
+          "line": 13
+        }
+      ],
+      "NotificationRuntimeReadinessTests": [
+        {
+          "path": "Tests/AppTests/NotificationRuntimeReadinessTests.swift",
+          "line": 8
+        }
+      ],
+      "ObjectStorageAdapterCellTests": [
+        {
+          "path": "Tests/AppTests/ObjectStorageAdapterCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ObsidianAIWorkspaceConfigurationTests": [
+        {
+          "path": "Tests/AppTests/ObsidianAIWorkspaceConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "OrchestratorPersistenceTests": [
+        {
+          "path": "Tests/AppTests/OrchestratorPersistenceTests.swift",
+          "line": 10
+        }
+      ],
+      "PalazzoCommunaleRoutesTests": [
+        {
+          "path": "Tests/AppTests/PalazzoCommunaleRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "PalazzoCommunaleServiceTests": [
+        {
+          "path": "Tests/AppTests/PalazzoCommunaleServiceTests.swift",
+          "line": 8
+        }
+      ],
+      "PalazzoCommunaleUnavailableReasonTests": [
+        {
+          "path": "Tests/AppTests/PalazzoCommunaleUnavailableReasonTests.swift",
+          "line": 14
+        }
+      ],
+      "ParticipationHubCellTests": [
+        {
+          "path": "Tests/AppTests/ParticipationHubCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ParticipationHubConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/ParticipationHubConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "PaymentAccessCredentialStoreLifecycleTests": [
+        {
+          "path": "Tests/AppTests/PaymentAccessCredentialStoreLifecycleTests.swift",
+          "line": 10
+        }
+      ],
+      "PaymentGateCellTests": [
+        {
+          "path": "Tests/AppTests/PaymentGateCellTests.swift",
+          "line": 9
+        }
+      ],
+      "PaymentGateCreditIssuerTests": [
+        {
+          "path": "Tests/AppTests/PaymentGateCreditIssuerTests.swift",
+          "line": 14
+        }
+      ],
+      "PaymentGateOwnerIdentitySupportTests": [
+        {
+          "path": "Tests/AppTests/PaymentGateOwnerIdentitySupportTests.swift",
+          "line": 8
+        }
+      ],
+      "PaymentProofDoorCellTests": [
+        {
+          "path": "Tests/AppTests/PaymentProofDoorCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PersistedRuntimeReadinessTests": [
+        {
+          "path": "Tests/AppTests/PersistedRuntimeReadinessTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonalAIProviderPolicyTests": [
+        {
+          "path": "Tests/AppTests/PersonalAIProviderPolicyTests.swift",
+          "line": 9
+        }
+      ],
+      "PersonalAssistantProfileCellTests": [
+        {
+          "path": "Tests/AppTests/PersonalAssistantProfileCellTests.swift",
+          "line": 13
+        }
+      ],
+      "PersonalChatHubAccountCompatibilityTests": [
+        {
+          "path": "Tests/AppTests/PersonalChatHubAccountCompatibilityTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonalChatPromptEvaluationTests": [
+        {
+          "path": "Tests/AppTests/PersonalChatPromptEvaluationTests.swift",
+          "line": 9
+        }
+      ],
+      "PersonalCopilotCollaborationInviteTests": [
+        {
+          "path": "Tests/AppTests/PersonalCopilotCollaborationInviteTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonalCopilotV1Tests": [
+        {
+          "path": "Tests/AppTests/PersonalCopilotV1Tests.swift",
+          "line": 16
+        }
+      ],
+      "PersonalDataTrustPackageCellTests": [
+        {
+          "path": "Tests/AppTests/PersonalDataTrustPackageCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonalEntityActivityDashboardConfigurationTests": [
+        {
+          "path": "Tests/AppTests/PersonalEntityActivityDashboardConfigurationTests.swift",
+          "line": 9
+        }
+      ],
+      "PersonalPagePublisherCellTests": [
+        {
+          "path": "Tests/AppTests/PersonalPagePublisherCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonalPagePublisherConfigurationTests": [
+        {
+          "path": "Tests/AppTests/PersonalPagePublisherConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "PersonlogProjectionCellTests": [
+        {
+          "path": "Tests/AppTests/PersonlogProjectionCellTests.swift",
+          "line": 13
+        }
+      ],
+      "PerspectiveCellTests": [
+        {
+          "path": "Tests/AppTests/PerspectiveCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PortholeBootstrapProjectionTests": [
+        {
+          "path": "Tests/AppTests/PortholeBootstrapProjectionTests.swift",
+          "line": 9
+        }
+      ],
+      "PortholeConfigurationLoadingTests": [
+        {
+          "path": "Tests/AppTests/PortholeConfigurationLoadingTests.swift",
+          "line": 9
+        }
+      ],
+      "PortholeIdentityContinuityRoutesTests": [
+        {
+          "path": "Tests/AppTests/PortholeIdentityContinuityRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "PortholeMenuFallbackTests": [
+        {
+          "path": "Tests/AppTests/PortholeMenuFallbackTests.swift",
+          "line": 8
+        }
+      ],
+      "PortholeRuntimeBindingEnsuringTests": [
+        {
+          "path": "Tests/AppTests/PortholeRuntimeBindingEnsuringTests.swift",
+          "line": 9
+        }
+      ],
+      "PortholeWebActionStateSourceTests": [
+        {
+          "path": "Tests/AppTests/PortholeWebActionStateSourceTests.swift",
+          "line": 6
+        }
+      ],
+      "PortholeWebEditorSupportTests": [
+        {
+          "path": "Tests/AppTests/PortholeWebEditorSupportTests.swift",
+          "line": 8
+        }
+      ],
+      "PortholeWebPayloadTests": [
+        {
+          "path": "Tests/AppTests/PortholeWebPayloadTests.swift",
+          "line": 9
+        }
+      ],
+      "PortholeWebSessionPersonaTests": [
+        {
+          "path": "Tests/AppTests/PortholeWebSessionPersonaTests.swift",
+          "line": 10
+        }
+      ],
+      "ProductionOwnerIdentityContinuityTests": [
+        {
+          "path": "Tests/AppTests/ProductionOwnerIdentityContinuityTests.swift",
+          "line": 10
+        }
+      ],
+      "ProductionRuntimeAdmissionMiddlewareTests": [
+        {
+          "path": "Tests/AppTests/ProductionRuntimeAdmissionMiddlewareTests.swift",
+          "line": 11
+        }
+      ],
+      "ProductionSkeletonBindingIntegrityTests": [
+        {
+          "path": "Tests/AppTests/ProductionSkeletonBindingIntegrityTests.swift",
+          "line": 9
+        }
+      ],
+      "ProjectOperationsTests": [
+        {
+          "path": "Tests/AppTests/ProjectOperationsTests.swift",
+          "line": 8
+        }
+      ],
+      "ProjectPortfolioCellTests": [
+        {
+          "path": "Tests/AppTests/ProjectPortfolioCellTests.swift",
+          "line": 8
+        }
+      ],
+      "ProofDoorMVPRouteSecurityTests": [
+        {
+          "path": "Tests/AppTests/ProofDoorMVPRouteSecurityTests.swift",
+          "line": 9
+        }
+      ],
+      "PublicationCellTests": [
+        {
+          "path": "Tests/AppTests/PublicationCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PublicationPublicSurfaceTests": [
+        {
+          "path": "Tests/AppTests/PublicationPublicSurfaceTests.swift",
+          "line": 14
+        }
+      ],
+      "PublishedConfigurationCatalogCellTests": [
+        {
+          "path": "Tests/AppTests/PublishedConfigurationCatalogCellTests.swift",
+          "line": 8
+        }
+      ],
+      "PurposeCellTests": [
+        {
+          "path": "Tests/AppTests/PurposeCellTests.swift",
+          "line": 14
+        }
+      ],
+      "PurposeQualityMonitorCellTests": [
+        {
+          "path": "Tests/AppTests/PurposeQualityMonitorCellTests.swift",
+          "line": 9
+        }
+      ],
+      "QuestionnaireCampaignCellTests": [
+        {
+          "path": "Tests/AppTests/QuestionnaireCampaignCellTests.swift",
+          "line": 9
+        }
+      ],
+      "QuestionnaireCampaignRoutesTests": [
+        {
+          "path": "Tests/AppTests/QuestionnaireCampaignRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "QuestionnaireResponseCellTests": [
+        {
+          "path": "Tests/AppTests/QuestionnaireResponseCellTests.swift",
+          "line": 8
+        }
+      ],
+      "RAGCellAccessSecurityTests": [
+        {
+          "path": "Tests/AppTests/RAGCellAccessSecurityTests.swift",
+          "line": 9
+        }
+      ],
+      "RAGGatewayCellTests": [
+        {
+          "path": "Tests/AppTests/RAGGatewayCellTests.swift",
+          "line": 9
+        }
+      ],
+      "RAGGatewayConfigTests": [
+        {
+          "path": "Tests/AppTests/RAGGatewayConfigTests.swift",
+          "line": 7
+        }
+      ],
+      "RAGGatewayConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/RAGGatewayConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "RAGGatewayHTTPClientTests": [
+        {
+          "path": "Tests/AppTests/RAGGatewayHTTPClientTests.swift",
+          "line": 12
+        }
+      ],
+      "RAGIngestionCellTests": [
+        {
+          "path": "Tests/AppTests/RAGIngestionCellTests.swift",
+          "line": 12
+        }
+      ],
+      "RAGMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/RAGMVPRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "RAGPersistedRuntimeReadinessTests": [
+        {
+          "path": "Tests/AppTests/RAGPersistedRuntimeReadinessTests.swift",
+          "line": 9
+        }
+      ],
+      "RAGPromptAdminCellTests": [
+        {
+          "path": "Tests/AppTests/RAGPromptAdminCellTests.swift",
+          "line": 9
+        }
+      ],
+      "RAGPromptAdminConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/RAGPromptAdminConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "RestaurantExperiencePlanCellTests": [
+        {
+          "path": "Tests/AppTests/RestaurantExperiencePlanCellTests.swift",
+          "line": 10
+        }
+      ],
+      "RestaurantOnboardingCellTests": [
+        {
+          "path": "Tests/AppTests/RestaurantOnboardingCellTests.swift",
+          "line": 8
+        }
+      ],
+      "RestaurantPublishedContentCellTests": [
+        {
+          "path": "Tests/AppTests/RestaurantPublishedContentCellTests.swift",
+          "line": 8
+        }
+      ],
+      "RestaurantShellCellsTests": [
+        {
+          "path": "Tests/AppTests/RestaurantShellCellsTests.swift",
+          "line": 9
+        }
+      ],
+      "RestaurantSurfaceRoutesTests": [
+        {
+          "path": "Tests/AppTests/RestaurantSurfaceRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "RestaurantVisitContextCellTests": [
+        {
+          "path": "Tests/AppTests/RestaurantVisitContextCellTests.swift",
+          "line": 9
+        }
+      ],
+      "SMIAgreementSettlementCellTests": [
+        {
+          "path": "Tests/AppTests/SMIAgreementSettlementCellTests.swift",
+          "line": 8
+        }
+      ],
+      "SalesWorkspaceCellTests": [
+        {
+          "path": "Tests/AppTests/SalesWorkspaceCellTests.swift",
+          "line": 9
+        }
+      ],
+      "ScaffoldLaunchRegistryCellTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldLaunchRegistryCellTests.swift",
+          "line": 13
+        }
+      ],
+      "ScaffoldNotificationContractsTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldNotificationContractsTests.swift",
+          "line": 8
+        }
+      ],
+      "ScaffoldOwnerAdminRoutesTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldOwnerAdminRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "ScaffoldSetupCellTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldSetupCellTests.swift",
+          "line": 11
+        }
+      ],
+      "ScaffoldSurfaceGatePolicyTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldSurfaceGatePolicyTests.swift",
+          "line": 9
+        }
+      ],
+      "ScaffoldTruthSourceCatalogTests": [
+        {
+          "path": "Tests/AppTests/ScaffoldTruthSourceCatalogTests.swift",
+          "line": 8
+        }
+      ],
+      "SecureDevelopmentStatusSnapshotFileTests": [
+        {
+          "path": "Tests/AppTests/SecureDevelopmentStatusSnapshotFileTests.swift",
+          "line": 7
+        }
+      ],
+      "SecureRuntimeIdentityManifestFileTests": [
+        {
+          "path": "Tests/AppTests/SecureRuntimeIdentityManifestFileTests.swift",
+          "line": 24
+        }
+      ],
+      "SecurityWorkbenchCellTests": [
+        {
+          "path": "Tests/AppTests/SecurityWorkbenchCellTests.swift",
+          "line": 8
+        }
+      ],
+      "SkeletonElementParityMatrixTests": [
+        {
+          "path": "Tests/AppTests/SkeletonElementParityMatrixTests.swift",
+          "line": 8
+        }
+      ],
+      "SkeletonParityRoutesTests": [
+        {
+          "path": "Tests/AppTests/SkeletonParityRoutesTests.swift",
+          "line": 8
+        }
+      ],
+      "SkeletonParityStrictVaultRequesterTests": [
+        {
+          "path": "Tests/AppTests/SkeletonParityStrictVaultRequesterTests.swift",
+          "line": 107
+        }
+      ],
+      "SkeletonPortableModelTests": [
+        {
+          "path": "Tests/AppTests/SkeletonPortableModelTests.swift",
+          "line": 8
+        }
+      ],
+      "SkeletonRuntimeDecoderTests": [
+        {
+          "path": "Tests/AppTests/SkeletonRuntimeDecoderTests.swift",
+          "line": 8
+        }
+      ],
+      "SkeletonRuntimeSourceTests": [
+        {
+          "path": "Tests/AppTests/SkeletonRuntimeSourceTests.swift",
+          "line": 6
+        }
+      ],
+      "SpatialCellsTests": [
+        {
+          "path": "Tests/AppTests/SpatialCellsTests.swift",
+          "line": 9
+        }
+      ],
+      "SpatialRegistryRemoteIntegrationTests": [
+        {
+          "path": "Tests/AppTests/SpatialRegistryRemoteIntegrationTests.swift",
+          "line": 10
+        }
+      ],
+      "SproutBridgeDiscoveryRoutesTests": [
+        {
+          "path": "Tests/AppTests/SproutBridgeDiscoveryRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "SproutExecutableCatalogRoutesTests": [
+        {
+          "path": "Tests/AppTests/SproutExecutableCatalogRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "SproutResolverRoutesTests": [
+        {
+          "path": "Tests/AppTests/SproutResolverRoutesTests.swift",
+          "line": 9
+        }
+      ],
+      "StrictIdentityVaultReadinessMonitorTests": [
+        {
+          "path": "Tests/AppTests/StrictIdentityVaultReadinessMonitorTests.swift",
+          "line": 8
+        }
+      ],
+      "SwarmIdentityAdmissionCellTests": [
+        {
+          "path": "Tests/AppTests/SwarmIdentityAdmissionCellTests.swift",
+          "line": 9
+        }
+      ],
+      "TodoCellConfigurationTests": [
+        {
+          "path": "Tests/AppTests/TodoCellConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "TodoPlannerCopilotConfigurationTests": [
+        {
+          "path": "Tests/AppTests/TodoPlannerCopilotConfigurationTests.swift",
+          "line": 8
+        }
+      ],
+      "TopUpCheckoutTests": [
+        {
+          "path": "Tests/AppTests/TopUpCheckoutTests.swift",
+          "line": 17
+        }
+      ],
+      "TranscriptStoreCellTests": [
+        {
+          "path": "Tests/AppTests/TranscriptStoreCellTests.swift",
+          "line": 8
+        }
+      ],
+      "TrustPacketConfigurationFactoryTests": [
+        {
+          "path": "Tests/AppTests/TrustPacketConfigurationFactoryTests.swift",
+          "line": 8
+        }
+      ],
+      "UsageMeterRecorderTests": [
+        {
+          "path": "Tests/AppTests/UsageMeterRecorderTests.swift",
+          "line": 23
+        }
+      ],
+      "ValueFlowViewerCellTests": [
+        {
+          "path": "Tests/AppTests/ValueFlowViewerCellTests.swift",
+          "line": 8
+        }
+      ],
+      "VaultMVPRoutesTests": [
+        {
+          "path": "Tests/AppTests/VaultMVPRoutesTests.swift",
+          "line": 10
+        }
+      ],
+      "VaultStudioWorkspaceTests": [
+        {
+          "path": "Tests/AppTests/VaultStudioWorkspaceTests.swift",
+          "line": 8
+        }
+      ],
+      "WebKnowledgeCellsTests": [
+        {
+          "path": "Tests/AppTests/WebKnowledgeCellsTests.swift",
+          "line": 8
+        }
+      ],
+      "WorkItemCellTests": [
+        {
+          "path": "Tests/AppTests/WorkItemCellTests.swift",
+          "line": 8
+        }
+      ],
+      "WorkItemsExploreContractTests": [
+        {
+          "path": "Tests/AppTests/WorkItemsExploreContractTests.swift",
+          "line": 8
+        }
+      ],
+      "WorkbenchAccessGrantConfigurationTests": [
+        {
+          "path": "Tests/AppTests/WorkbenchAccessGrantConfigurationTests.swift",
+          "line": 11
+        }
+      ],
+      "WorkbenchOwnerSetupCellTests": [
+        {
+          "path": "Tests/AppTests/WorkbenchOwnerSetupCellTests.swift",
+          "line": 8
+        }
+      ],
+      "NodeAdminDockerCollectorTests": [
+        {
+          "path": "Tests/NodeAdminDockerCollectorTests/NodeAdminDockerCollectorTests.swift",
+          "line": 8
+        }
+      ],
+      "UserSimulationScaffoldTests": [
+        {
+          "path": "Tests/UserSimulationScaffoldTests/UserSimulationScaffoldTests.swift",
+          "line": 10
+        }
+      ]
+    },
+    "summary": {
+      "regexDetectedSuites": 290,
+      "wholeSuiteFilterNames": 267,
+      "partialOnlySuiteFilterNames": 3,
+      "excludedSuiteNames": 21,
+      "explicitMethodSkips": 5,
+      "unaccountedSuiteNames": []
+    },
+    "partialOnlySuites": [
+      "CellScaffoldRuntimeIdentityProvisionerTests",
+      "CellScaffoldRuntimeIdentityRegistryTests",
+      "PortholeConfigurationLoadingTests"
+    ],
+    "excludedSuites": [
+      {
+        "suite": "AIAssistantThreadCellTests",
+        "line": 10
+      },
+      {
+        "suite": "ArendalsukaImportAuthorizationRoutesTests",
+        "line": 11
+      },
+      {
+        "suite": "BrowserClientIdentityOfflineInspectorTests",
+        "line": 12
+      },
+      {
+        "suite": "BrowserClientIdentityRecoveryExecutorTests",
+        "line": 13
+      },
+      {
+        "suite": "ButterpopStudioProductTests",
+        "line": 14
+      },
+      {
+        "suite": "ConferenceEntityDiscoveryCellTests",
+        "line": 15
+      },
+      {
+        "suite": "ConferenceOrganizerProjectionCellTests",
+        "line": 16
+      },
+      {
+        "suite": "ConferencePublishedContentCellTests",
+        "line": 17
+      },
+      {
+        "suite": "ConferenceSchedulingCellTests",
+        "line": 18
+      },
+      {
+        "suite": "ConferenceSponsorLeadAggregateCellTests",
+        "line": 19
+      },
+      {
+        "suite": "ConferenceSurfaceRoutesTests",
+        "line": 20
+      },
+      {
+        "suite": "ContractChallengeMVPRoutesTests",
+        "line": 21
+      },
+      {
+        "suite": "MicropaymentsMVPRoutesTests",
+        "line": 22
+      },
+      {
+        "suite": "MusicPublishingCellsTests",
+        "line": 23
+      },
+      {
+        "suite": "PortholeConfigurationLoadingTests",
+        "line": 24
+      },
+      {
+        "suite": "SecureRuntimeIdentityManifestFileTests",
+        "line": 25
+      },
+      {
+        "suite": "SkeletonRuntimeSourceTests",
+        "line": 26
+      },
+      {
+        "suite": "ButlerParityArmDumpTests",
+        "line": 31
+      },
+      {
+        "suite": "ButlerUsefulnessDumpTests",
+        "line": 35
+      },
+      {
+        "suite": "ButlerChatSkeletonDumpTests",
+        "line": 39
+      },
+      {
+        "suite": "BookReferenceRoutesTests",
+        "line": 40
+      }
+    ],
+    "explicitMethodSkips": [
+      {
+        "test": "PersonalCopilotV1Tests/testAutomaticExternalModelReplayDoesNotInvokeOrDoubleConsumeQuota",
+        "line": 12
+      },
+      {
+        "test": "PersonalCopilotV1Tests/testChatInterpreterEscalationDecisionAuditsPermitDowngradeAndDenyWithSharedCorrelation",
+        "line": 13
+      },
+      {
+        "test": "PersonalCopilotV1Tests/testChatInterpreterPauseAutomaticEscalationDowngradesAndUnpauseRestoresPermitDecision",
+        "line": 14
+      },
+      {
+        "test": "PersonalCopilotV1Tests/testChatPromptSubmitInvokesExternalProviderBehindVerifiedGrantAndStoresEncryptedAuditVault",
+        "line": 15
+      },
+      {
+        "test": "ConferenceShellCellsTests/testParticipantPreviewShellCanLaunchDiscoveryChatAndShowMessageFeedback",
+        "line": 36
+      }
+    ],
+    "referencedReviewDocument": {
+      "name": "TESTGJENNOMGANG.md",
+      "trackedMatches": [
+        "Deliverables/PDD_butler-verktoyflate_2026-09-09/TESTGJENNOMGANG.md"
+      ]
+    },
+    "staleExcludedNames": [],
+    "partialSelections": [
+      {
+        "selector": "CellScaffoldRuntimeIdentityRegistryTests.testDefaultProductionProfileHasExactBindingSet",
+        "line": 39
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityRegistryTests.testProvisioningAndPhaseSetsAreExactAndPrivateIsNeverProvisionable",
+        "line": 40
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityRegistryTests.testCanonicalEncodingHasStableSHA256GoldenAndNoSecretsOrPaths",
+        "line": 41
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testAdoptionAcceptsPreexistingRegistryDeclaredBinding",
+        "line": 42
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testAdoptionStillRefusesBindingTheRegistryDoesNotDeclare",
+        "line": 43
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testAdoptionRefusesWhenAnOwnerSignedManifestAlreadyExists",
+        "line": 44
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testFirstEnrollmentRejectsPreexistingUnhistoricalBindingBeforeVaultCAS",
+        "line": 45
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testUnknownCentralVaultBindingFailsClosedUsingCompleteInventory",
+        "line": 46
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testProvisionerCreatesOnlyOfflineAllowedBindingsAndWritesOwnerSignedManifest",
+        "line": 47
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testRetiredContextPresenceFailsClosed",
+        "line": 48
+      },
+      {
+        "selector": "CellScaffoldRuntimeIdentityProvisionerTests.testFeatureInactiveContextPresenceFailsClosed",
+        "line": 49
+      },
+      {
+        "selector": "PortholeConfigurationLoadingTests.testBootstrapUsesChatWorkbenchAsDefaultWhenCurrentConfigurationHasNoSkeleton",
+        "line": 99
+      }
+    ]
+  },
+  "observations": {
+    "partialSelectionDeclarationCounts": [
+      {
+        "suite": "CellScaffoldRuntimeIdentityProvisionerTests",
+        "sourceMethodDeclarations": 31,
+        "explicitFilterSelectors": 8
+      },
+      {
+        "suite": "CellScaffoldRuntimeIdentityRegistryTests",
+        "sourceMethodDeclarations": 21,
+        "explicitFilterSelectors": 3
+      },
+      {
+        "suite": "PortholeConfigurationLoadingTests",
+        "sourceMethodDeclarations": 51,
+        "explicitFilterSelectors": 1
+      }
+    ],
+    "countsCaveat": "Source declaration/selector counts only, not test runner discovery or execution counts. Swift filter regex may match by prefix. Exclusions overlap with partial Porthole selection; do not add counts.",
+    "unverifiedMissingOrRedundantTestCount": null,
+    "safeToRemoveTestIds": [],
+    "missingDocumentHypothesis": "Rejected: full tracked inventory located TESTGJENNOMGANG.md under Deliverables; relative reference remains ambiguous."
+  },
+  "priorExecutionEvidence": {
+    "executedDuringThisAudit": false,
+    "CellScaffold": {
+      "run": "https://github.com/Digipomps/CellScaffold/actions/runs/34466967151",
+      "candidate": "56a3bbca407fd6bcd9476a9ffbfa6a53b7c8b1d9",
+      "swiftCases": 2067,
+      "runtimeSkips": 13,
+      "failures": 0,
+      "browserPassed": 22,
+      "scope": "Configured CI gate; does not assert every repository test was selected"
+    },
+    "Binding": {
+      "candidate": "644017526471d0befdc7da8bcb32219c10e01108",
+      "total": 501,
+      "passed": 481,
+      "runtimeSkips": 20,
+      "failures": 0,
+      "scope": "All BindingTests in unsigned macOS host; no BindingUITests or production rollout"
+    }
+  },
+  "workItems": [
+    {
+      "id": "haven-test-audit-20260910-001",
+      "title": "Avstem test-ID-er mot faktisk CI-seleksjon",
+      "kind": "implementation-gap",
+      "status": "triage",
+      "priority": "P1",
+      "confidence": "confirmed",
+      "why": "Suitekontrollen fjerner metodedelen av filteret. Tre suiter er bare delvis valgt; nye metoder i en kjent suite kan derfor falle utenfor uten at suitekontrollen fanger det. Dette beviser ikke hvilke tilfeller som faktisk kjørte i hver plattform.",
+      "evidence": [
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-suite-coverage.sh#L16",
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-filter.txt#L39",
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/run-tests.sh#L60"
+      ],
+      "nextAction": "Bruk testoppdagelse på samme kilde, plattform og flags som CI; avstem fullstendige test-ID-er mot effektiv seleksjon og utfall. Start med de tre navngitte suitene.",
+      "doneWhen": "Hver oppdaget test-ID er valgt eller eksplisitt begrunnet som unntak; en ny uvalgt metode i en delvis filtrert suite avvises av en kontrollert negativ prøve.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    },
+    {
+      "id": "haven-test-audit-20260910-002",
+      "title": "Gjennomgå gjenværende unntak og opt-in-tester",
+      "kind": "chore",
+      "status": "triage",
+      "priority": "P1",
+      "confidence": "confirmed",
+      "why": "21 navn står på suiteunntakslisten og fem metoder på skip-listen. Ett suitenavn overlapper med delvis metodekjøring. Runtime-skips er en annen mengde. Begrunnelser finnes, men kilden har ikke et ensartet maskinlesbart sett med eier, gjeninntak og neste vurdering.",
+      "evidence": [
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-exclusions.txt",
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-skips.txt",
+        "CellProtocol-security-main-integration.md"
+      ],
+      "nextAction": "Klassifiser alle aktuelle unntak som produktfeil, fixture/miljø, legitim opt-in eller generator; knytt berørt krav, kjørevei og gjeninntak/vurdering til hvert punkt. Kontroller Binding-opt-in separat.",
+      "doneWhen": "Alle aktuelle unntak har en etterprøvbar beslutning og oppfølging; ingen sikkerhetstest er fjernet for å få grønn gate, og runtime-skips rapporteres separat.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    },
+    {
+      "id": "haven-test-audit-20260910-003",
+      "title": "Prøv relevans og faktisk feiloppdagelse i kritiske testfamilier",
+      "kind": "research",
+      "status": "triage",
+      "priority": "P1",
+      "confidence": "needs-verification",
+      "why": "Dagens grønne kjøringer og gjennomgangen 2026-09-09 dokumenterer ikke en semantisk kvalitetsvurdering av alle tester.",
+      "evidence": [
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/Deliverables/PDD_butler-verktoyflate_2026-09-09/TESTGJENNOMGANG.md",
+        "CellProtocol-security-main-integration.md"
+      ],
+      "nextAction": "Start med identitet, tillatelser, kryptert lagring, EntityRelation/chronicle, betaling og transport. Knytt hver familie til et fortsatt støttet krav og prøv representative feil med positivt og negativt bevis.",
+      "doneWhen": "Hver vurdert familie har kildebundet invariant, moteksempel, observerbart forventet resultat og en begrunnet behold/forbedre/erstatte-vurdering; uvurderte familier står eksplisitt åpne.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    },
+    {
+      "id": "haven-test-audit-20260910-004",
+      "title": "Etabler sammenlignbare kostnads- og stabilitetsserier for tester",
+      "kind": "research",
+      "status": "triage",
+      "priority": "P2",
+      "confidence": "needs-verification",
+      "why": "Enkeltkjøringer viser kostnad og utfall, men fastslår ikke langvarig stabilitet eller relativ testverdi. Første feil må bevares selv når retry består.",
+      "evidence": [
+        "CellProtocol-security-main-integration.md",
+        "HAVEN-runtime-swarm-nodegraph-assessment.md"
+      ],
+      "nextAction": "Kartlegg tilgjengelige per-test-/per-bolk-resultater. Normaliser kilde, toolchain, plattform, førsteforsøk, retries, byggetid/testtid/køtid og tilgjengelige ressursmålinger.",
+      "doneWhen": "Sammenlignbare serier og manglende målefelt er dokumentert; de dyreste og mest ustabile familiene kan prioriteres uten å likestille høy kostnad med lav nytte.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    },
+    {
+      "id": "haven-test-audit-20260910-005",
+      "title": "Gjør auditreferanser og evidens varig gjenfinnbare",
+      "kind": "docs",
+      "status": "triage",
+      "priority": "P2",
+      "confidence": "confirmed",
+      "why": "ci/test-exclusions.txt refererer TESTGJENNOMGANG.md uten full plassering; dokumentet finnes under Deliverables. Rapportens rålogger er oppgitt som gitignorerte worktree-filer. Dette beviser ingen tapt logg, men krever en tydelig varig evidensstrategi.",
+      "evidence": [
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-exclusions.txt#L11",
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/Deliverables/PDD_butler-verktoyflate_2026-09-09/TESTGJENNOMGANG.md#L23"
+      ],
+      "nextAction": "Knytt unntak til entydig dokumentsti/revisjon og normaliser relevante små bevis. Oppgi råloggenes oppbevaring og hva som eventuelt ikke lenger kan etterprøves.",
+      "doneWhen": "En annen agent finner begrunnelse, kilde, utfall og gjenværende usikkerhet uten kjennskap til det opprinnelige worktreet; historiske kilder er ikke overskrevet.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    },
+    {
+      "id": "haven-test-audit-20260910-006",
+      "title": "Skill artefaktgeneratorer og eksperimenter fra verifiserende tester",
+      "kind": "chore",
+      "status": "triage",
+      "priority": "P2",
+      "confidence": "likely",
+      "why": "Tre Butler-suiter er allerede dokumentert som rene dumper i unntakslisten. Den samme klassifikasjonen bør verifiseres i øvrig inventar; navnet alene avgjør ikke om en test har verdi.",
+      "evidence": [
+        "https://github.com/Digipomps/CellScaffold/blob/e10e93ea92c21d0d13cef600f1b276647617bf30/ci/test-exclusions.txt#L29"
+      ],
+      "nextAction": "Vurder generatorene og tilsvarende testlignende verktøy, med produsert artefakt, forbruker, valideringsmetode, ressursbehov og oppbevaring.",
+      "doneWhen": "Inventaret skiller test/generator/eksperiment, og eventuell flytting bevarer den separate valideringen og kjøreveien. Ingen filer er slettet bare fordi de genererer artefakter.",
+      "ownerRef": null,
+      "nativeRegistered": false
+    }
+  ],
+  "limitations": [
+    "No full test-ID discovery per platform was executed in this audit",
+    "No mutation or fault-injection runs executed in this audit",
+    "No test marked removable",
+    "No native queue mutation or production execution",
+    "Temporary original raw logs are not made durable merely by a path or checksum"
+  ]
+}

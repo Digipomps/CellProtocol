@@ -9,3 +9,9 @@ DerivedData/
 /.tmp-cache
 /.tmp-home
 /haven-*recovery*/
+
+# Lokale arbeidstrær, søppel og agentdata — skal aldri inn i historikken
+/_wt-*/
+/_to_delete/
+/.claude/
+*.zip

@@ -1,0 +1,422 @@
+{
+  "format": "security-main-integration-evidence-2026-09-10",
+  "formatStatus": "documentation snapshot only; not a native AgentJobs import contract or scheduler status mutation",
+  "observedAt": "2026-09-10T12:36:59.347490+00:00",
+  "project": "HAVEN.CellProtocol.securityAudit",
+  "sourceImportSHA256": "899757c6023e1b5a0a94b70ae1275acab7bad5e89f4b617421612521beab0e07",
+  "originalIntakeUnchanged": true,
+  "nativeQueueVerification": "not imported or activated in installed daemon; isolated import/readback/completion verified; final binaries and verified rollback copy unavailable locally; refreshed proxy-based free-space gate passes",
+  "repositories": [
+    {
+      "repository": "CellProtocol",
+      "mainRevision": "e03923cb2f1d5a339eaf62585ddc9dddf7750cec",
+      "candidateRevision": "9bf0d0ca49ab3b532cff65f87eb5917b4e989dce",
+      "integrationStatus": "merged",
+      "ci": [
+        "https://github.com/Digipomps/CellProtocol/actions/runs/34458867045",
+        "https://github.com/Digipomps/CellProtocol/actions/runs/34458866937",
+        "https://github.com/Digipomps/CellProtocol/actions/runs/34458867023"
+      ],
+      "validation": {
+        "tests": 1086,
+        "failures": 0,
+        "scope": "macOS full suite; separate Linux/OpenCombine and actual Vapor gates also passed"
+      }
+    },
+    {
+      "repository": "Sprout",
+      "mainRevision": "d5a70f35d59c8813dca9490a9fcef70d897eef19",
+      "candidateRevision": null,
+      "integrationStatus": "merged",
+      "ci": [],
+      "validation": {
+        "testsPerCryptoMajor": 107,
+        "cryptoMajors": [
+          3,
+          4
+        ],
+        "failures": 0
+      }
+    },
+    {
+      "repository": "CellProtocolDocuments",
+      "mainRevision": "9b1ff0d8ec7d7911c695c506e8b36bcb97a3ad96",
+      "candidateRevision": "db5ef225ac2baa45f7a82643c9adc46a9d81f899",
+      "integrationStatus": "merged",
+      "ci": [],
+      "validation": {
+        "scope": "documentation diff review; merge tree matches reviewed candidate"
+      }
+    },
+    {
+      "repository": "DiMyMicropayments",
+      "mainRevision": "c3544c2f7b9be967a71dd9d8c87ae1a999f707a2",
+      "candidateRevision": "92e0e50bb2f6ff701c8f84730c97fbeb5643ae3f",
+      "integrationStatus": "merged",
+      "ci": [
+        "https://github.com/DiMy-io/DiMyMicropayments/actions/runs/34460178765"
+      ],
+      "validation": {
+        "tests": 36,
+        "failures": 0
+      }
+    },
+    {
+      "repository": "DiMyMint",
+      "mainRevision": "25b679bafcb37d42709c15615274fcf1c19b86db",
+      "candidateRevision": "4cd0b89de4392c2e685444e6c7d297d962fbd5b2",
+      "integrationStatus": "merged",
+      "ci": [
+        "https://github.com/DiMy-io/DiMyMint/actions/runs/34461756612"
+      ],
+      "validation": {
+        "tests": 32,
+        "failures": 0,
+        "skips": 0,
+        "actualDisposablePostgres": true,
+        "gateExit": 0,
+        "databaseStopped": true
+      }
+    },
+    {
+      "repository": "CellScaffold",
+      "mainRevision": "e10e93ea92c21d0d13cef600f1b276647617bf30",
+      "candidateRevision": "56a3bbca407fd6bcd9476a9ffbfa6a53b7c8b1d9",
+      "integrationStatus": "merged",
+      "ci": [
+        "https://github.com/Digipomps/CellScaffold/actions/runs/34462506563",
+        "https://github.com/Digipomps/CellScaffold/actions/runs/34466967151"
+      ],
+      "validation": {
+        "testedPreviousCandidate": "a02483973459c0d21f9d602ea37b85d57eb933a8",
+        "swiftTestCases": 2067,
+        "swiftGroups": 24,
+        "swiftSkips": 13,
+        "swiftFailures": 0,
+        "adminBrowserPassed": 8,
+        "demoBrowserPassed": 14,
+        "scope": "Full combined gate passed on candidate56 including base066; post-merge fetch and tree comparison confirm identical main e10. No deployment performed.",
+        "testedCandidate": "56a3bbca407fd6bcd9476a9ffbfa6a53b7c8b1d9",
+        "treeIdentical": true,
+        "treeRevision": "b00b64c712fa619016ece11c47fe1354aa2023bf",
+        "durationSeconds": 2113
+      },
+      "observedBaseRevision": "06681d51da5527d39b9a4f6a7c02748098e4c897",
+      "mergedAt": "2026-09-10T12:17:28Z"
+    },
+    {
+      "repository": "Binding",
+      "mainRevision": "ba195299fd9fbf8621fd23eb907af77586e35c00",
+      "candidateRevision": "644017526471d0befdc7da8bcb32219c10e01108",
+      "integrationStatus": "merged",
+      "ci": [],
+      "validation": {
+        "scope": "Exact candidate locked resolution, fresh arm64 test build and full BindingTests passed in synthetic home; class-A write/read verified. Unsigned test host. BindingUITests and production rollout not included.",
+        "classAProbe": {
+          "passed": true,
+          "observedProtectionClass": 1,
+          "log": "/private/tmp/cp-security-binding-class-a-merge-recheck.log",
+          "initialFreeBytes": 5570920448
+        },
+        "resolvePassed": true,
+        "buildPassed": true,
+        "buildLog": "/private/tmp/cp-security-binding-e039-build.log",
+        "tests": 501,
+        "passed": 481,
+        "skips": 20,
+        "failures": 0,
+        "exitCode": 0,
+        "result": "Passed",
+        "summary": "/private/tmp/cp-security-binding-e039-summary.json",
+        "treeIdentical": true,
+        "treeRevision": "65582532b1ef3fde94979a9af7a5e36c1fb946b6"
+      },
+      "pr": "https://github.com/Digipomps/Binding/pull/31",
+      "mergedAt": "2026-09-10T12:34:58Z"
+    },
+    {
+      "repository": "HavenAgentD",
+      "mainRevision": "79b359fcd28f432ade9b67008fc7482349bf0d04",
+      "candidateRevision": "aa929180f807522a40e65b17707f7a33caf87d7d",
+      "integrationStatus": "merged",
+      "ci": [
+        "https://github.com/Digipomps/HavenAgentD/actions/runs/34460135601",
+        "https://github.com/Digipomps/HavenAgentD/actions/runs/34461572450"
+      ],
+      "validation": {
+        "scope": "Final CI success; main tree matches tested aa929180; live activation and native FIFO receipts still pending",
+        "tests": 179,
+        "suites": 37,
+        "failures": 0,
+        "releaseProducts": [
+          "haven-agentd",
+          "haven-agentd-mcp",
+          "haven-correspondence-mcp"
+        ]
+      }
+    }
+  ],
+  "entries": [
+    {
+      "jobId": "cp-sec-20260909-001",
+      "fifoSequence": 1,
+      "title": "Stopp oppgradering av innkommende offentlig identitet til lokal signer",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-002",
+      "fifoSequence": 2,
+      "title": "Bind bridge-signering til sesjon, lokal identitet og forventet utfordring",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-003",
+      "fifoSequence": 3,
+      "title": "Avslutt aktiv feed når autorisasjonen tilbakekalles",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-004",
+      "fifoSequence": 4,
+      "title": "La kontraktutløp og endrede vilkår stoppe aktive feeds",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-005",
+      "fifoSequence": 5,
+      "title": "Avvis tomme og ugyldige keypaths uten runtime-krasj",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-006",
+      "fifoSequence": 6,
+      "title": "Gjør FileCrypto-lengdeparsing overflytsikker og begrenset",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-007",
+      "fifoSequence": 7,
+      "title": "Begrens minneforbruk under FileCrypto-dekomprimering",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-008",
+      "fifoSequence": 8,
+      "title": "Autentiser FileCrypto-header og avvis ukjente formatversjoner",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-009",
+      "fifoSequence": 9,
+      "title": "La EntityAnchor-krypteringspolicy dekke sidefiler og journal",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-010",
+      "fifoSequence": 10,
+      "title": "Erstatt demogodkjenning av isMember med faktisk medlemskapsbevis",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-011",
+      "fifoSequence": 11,
+      "title": "Kontroller tillatelsesbitene i Identity.granted",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-012",
+      "fifoSequence": 12,
+      "title": "Avvis avtaler med ukjente eller feilformaterte conditions",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-013",
+      "fifoSequence": 13,
+      "title": "Returner faktisk feilstatus fra bridge-setter",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-014",
+      "fifoSequence": 14,
+      "title": "Fjern hemmeligheter og komplette private verdier fra resolverdiagnostikk",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-015",
+      "fifoSequence": 15,
+      "title": "Samordne relasjonsvalidering i Apple- og Vapor-EntityAnchor",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-016",
+      "fifoSequence": 16,
+      "title": "Avklar og håndhev grensen mellom betrodd Swift-API og beskyttet celle-API",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-017",
+      "fifoSequence": 17,
+      "title": "Gi FlowElementPusherCell en sannferdig og avgrenset kontrakt",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-018",
+      "fifoSequence": 18,
+      "title": "Skil Commons-permissionmetadata fra verifisert autorisasjon",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-019",
+      "fifoSequence": 19,
+      "title": "Avgrens og dokumenter replay- og determinismeløfter per støttet løp",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-020",
+      "fifoSequence": 20,
+      "title": "Etabler samlet regresjonskontroll for sikkerhetsrevisjonen i CI",
+      "implementationAssessment": "source-and-final-consumers-accepted-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-021",
+      "fifoSequence": 21,
+      "title": "Kontroller alle låste avhengigheter mot aktuelle sikkerhetsvarsler",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-022",
+      "fifoSequence": 22,
+      "title": "Kartlegg faktisk eksponering av bridge-identitet og sikkerhetskritiske ruter",
+      "implementationAssessment": "deployment-verification-pending",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-023",
+      "fifoSequence": 23,
+      "title": "Verifiser lagringsbeskyttelse og sikkerhetskopidekning for Entity-filer",
+      "implementationAssessment": "storage-permissions-and-historical-backup-verification-pending",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    },
+    {
+      "jobId": "cp-sec-20260909-024",
+      "fifoSequence": 24,
+      "title": "Test samtidighet og nettverksfeil i de integrerte sikkerhetskjedene",
+      "implementationAssessment": "source-implemented-and-integrated",
+      "nativeStatus": null,
+      "productionDeploymentVerified": false,
+      "evidence": "CellProtocol-security-main-integration.md"
+    }
+  ],
+  "limitations": [
+    "No production deployment performed",
+    "No actual historical production backup restore verified",
+    "Capacity figures are bounded synthetic observations, not a maximum-system-capacity claim",
+    "Binding final gate used an unsigned macOS app test host; BindingUITests and signed app distribution not exercised"
+  ],
+  "runtimeBenchmark": {
+    "taskId": "01a089e1-917c-74c2-9b80-d643fdf8657e",
+    "runtimeRevision": "e03923cb2f1d5a339eaf62585ddc9dddf7750cec",
+    "harnessRevision": "15ce0d9b419daa0cc13157692fc17f03023e0a31",
+    "ci": "https://github.com/Digipomps/CellProtocol/actions/runs/34461797114",
+    "validResults": 14,
+    "actualEncryptedPersistReloadOperations": 300,
+    "largerPersistenceSeries": "completed; see runtimeExtendedVerification",
+    "scope": "Short synthetic per-process samples; not a maximum-capacity or long-lived-memory conclusion"
+  },
+  "nativeStatusReceipt": "/private/tmp/haven-agentd-security-native-status-20260910.md",
+  "runtimeExtendedVerification": {
+    "runtimeRevision": "e03923cb2f1d5a339eaf62585ddc9dddf7750cec",
+    "harnessRevision": "8fc364afd99890a3923b32d811ca4950ef2aa539",
+    "ci": "https://github.com/Digipomps/CellProtocol/actions/runs/34463667558",
+    "successfulPersistenceOperations": 15000,
+    "operationsPerPoint": 5000,
+    "concurrency": [
+      1,
+      2,
+      4
+    ],
+    "physicalIOSaturationEstablished": false,
+    "longLivedMemoryEstablished": false,
+    "swarmAssessment": "HAVEN-runtime-swarm-nodegraph-assessment.md"
+  },
+  "nativeCapacityReceipt": {
+    "availableMiB": 5421.55,
+    "allocatedRollbackMiB": 273.03,
+    "existingExecutableProxyMiB": 317.15,
+    "minimumStagingFreeGiB": 3.196,
+    "minimumAtomicActivationFreeGiB": 3.505,
+    "actualArtifactSizesStillRequireValidation": true,
+    "sourceReceipt": "/private/tmp/haven-agentd-security-native-status-20260910.md",
+    "observedAt": "2026-09-10T12:21:45Z",
+    "previousAvailableMiB": 215.72,
+    "proxyCapacityGatePassed": true,
+    "verifiedRollbackCopyExists": false
+  }
+}

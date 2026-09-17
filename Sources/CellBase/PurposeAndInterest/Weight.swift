@@ -21,6 +21,9 @@ public struct Weight<T: PerspectiveNode & Codable> :  Weighted, Codable {
     
     public var reference: String?
     
+    // Resolved within a decoded graph. Keep reference edges weak so back edges
+    // do not retain the graph forever; inline `value` owns the node.
+    weak var resolvedReference: PerspectiveNodeImpl?
     weak var context: Perspective?
     var node: T {
         
@@ -30,6 +33,7 @@ public struct Weight<T: PerspectiveNode & Codable> :  Weighted, Codable {
                 return value
             }
             CellBase.diagnosticLog("Weight.node resolving reference \(String(describing: reference))", domain: .semantics)
+            if let resolvedReference = resolvedReference as? T { return resolvedReference }
             //lookup reference
             guard let context = self.context,
                   let reference = self.reference else {

@@ -23,6 +23,13 @@ public class PortholeViewModel: ObservableObject {
     @Published  var flowElements = [FlowElement]()
     @Published var cellReferences = [CellReference]()
     @Published public var localMutationVersion = 0
+    public let localization = SkeletonLocalizationRuntime()
+    @Published public private(set) var localizationLocale = "nb-NO"
+    @Published public private(set) var localizationDataVersion = 0
+    private var selectedLocalizationLocale: String?
+    private var localizationRootKeypaths: [String] = []
+    private var localizationGeneration = UUID()
+    private var localizationRefreshTask: Task<Void, Never>?
     @Published private var actionFeedbackStates: [String: ActionFeedbackState] = [:]
     
     @Published var skeleton = SkeletonDescriptions.skeletonDescriptionFromJson().skeleton
@@ -67,7 +74,9 @@ public class PortholeViewModel: ObservableObject {
                 let porthole: OrchestratorCell
                 do {
                     await MainActor.run {
-                        self.currentRequesterIdentity = identity
+                        // A host may already have supplied its explicit owner
+                        // while the asynchronous default bootstrap was waiting.
+                        if self.currentRequesterIdentity == nil { self.currentRequesterIdentity = identity }
                     }
                     guard let resolvedPorthole = try await resolver.cellAtEndpoint(
                         endpoint: "cell:///Porthole",
@@ -150,7 +159,77 @@ public class PortholeViewModel: ObservableObject {
     @MainActor
     public func markLocalMutation() {
         localMutationVersion += 1
+        scheduleLocalizationRefresh()
         schedulePendingAdmissionRetry(trigger: "local_mutation")
+    }
+
+    /// Presentation-only update: does not replace skeleton or mutate form data.
+    @MainActor
+    public func setLocalizationLocale(_ locale: String, timeZone: String = TimeZone.current.identifier) throws {
+        try localization.setLocale(locale, timeZone: timeZone)
+        selectedLocalizationLocale = locale
+        localizationLocale = locale
+    }
+
+    @MainActor
+    public func setLocalizationData(_ data: ValueType) throws {
+        try localization.setRootData(data)
+        localizationDataVersion += 1
+    }
+
+    @MainActor
+    public func configureLocalization(for configuration: CellConfiguration) {
+        localizationGeneration = UUID()
+        localizationRefreshTask?.cancel()
+        localizationRootKeypaths = configuration.skeleton?.localizationRootKeypaths ?? []
+        do {
+            try localization.configure(configuration.localization, skeleton: configuration.skeleton)
+            try localization.setRootData(.object([:]))
+            let locale = try localization.chooseLocale(selectedLocale: selectedLocalizationLocale,
+                supportedLocales: configuration.localization?.supportedLocales ?? ["nb-NO", "en-US"])
+            try localization.setLocale(locale, timeZone: TimeZone.current.identifier)
+            localizationLocale = locale
+            localizationDataVersion += 1
+            scheduleLocalizationRefresh()
+        } catch {
+            localization.clear()
+            localizationDataVersion += 1
+            CellBase.diagnosticLog("Skeleton localization configuration unavailable: \(error)", domain: .skeleton)
+        }
+    }
+
+    @MainActor
+    private func scheduleLocalizationRefresh() {
+        guard !localizationRootKeypaths.isEmpty else { return }
+        localizationRefreshTask?.cancel()
+        let generation = localizationGeneration
+        let paths = localizationRootKeypaths
+        localizationRefreshTask = Task { [weak self] in
+            guard let self, let resolver = CellBase.defaultCellResolver,
+                  let requester = await self.executionRequesterIdentity() else { return }
+            var snapshot: Object = [:]
+            for path in paths {
+                guard !Task.isCancelled else { return }
+                let targetURL: String
+                let childKeypath: String
+                if path.hasPrefix("cell://"), let url = URL(string: path) {
+                    let components = url.path.split(separator: "/", maxSplits: 1).map(String.init)
+                    guard components.count == 2 else { continue }
+                    var target = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                    target?.path = "/" + components[0]
+                    guard let endpoint = target?.url?.absoluteString else { continue }
+                    targetURL = endpoint; childKeypath = components[1]
+                } else {
+                    targetURL = "cell:///Porthole"; childKeypath = path
+                }
+                if let target = try? await resolver.cellAtEndpoint(endpoint: targetURL, requester: requester) as? Meddle,
+                   let value = try? await target.get(keypath: childKeypath, requester: requester) {
+                    snapshot[path] = value
+                }
+            }
+            guard !Task.isCancelled, generation == self.localizationGeneration else { return }
+            try? self.setLocalizationData(.object(snapshot))
+        }
     }
 
     @MainActor
@@ -170,6 +249,14 @@ public class PortholeViewModel: ObservableObject {
 
     @MainActor
     public func rememberRequesterIdentity(_ identity: Identity?) {
+        if currentRequesterIdentity != identity {
+            localizationGeneration = UUID()
+            localizationRefreshTask?.cancel()
+            localizationRootKeypaths = []
+            selectedLocalizationLocale = nil
+            localization.clear()
+            localizationDataVersion += 1
+        }
         currentRequesterIdentity = identity
     }
 
@@ -251,6 +338,7 @@ public class PortholeViewModel: ObservableObject {
     @MainActor
     func applyCellConfiguration(cellConfiguration: CellConfiguration) {
 //        print("Applying cellConf: \(cellConfiguration)")
+        configureLocalization(for: cellConfiguration)
         self.skeleton = cellConfiguration.skeleton
         self.currentConfigurationName = cellConfiguration.name
     }
@@ -264,7 +352,7 @@ public class PortholeViewModel: ObservableObject {
             if let identity = await executionRequesterIdentity() {
                 do {
                     await MainActor.run {
-                        self.currentRequesterIdentity = identity
+                        self.rememberRequesterIdentity(identity)
                     }
                     try await portholeCell.loadCellConfiguration(cellConfiguration, requester: identity)
                     await self.applyCellConfiguration(cellConfiguration: cellConfiguration)
