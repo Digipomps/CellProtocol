@@ -2,6 +2,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
 @testable import CellBase
 @testable import CellVapor
 
@@ -79,6 +84,104 @@ final class VaporBridgeTransportTests: XCTestCase {
             return XCTFail("Expected ValueType.string from Vapor VaultIdentity property publisher")
         }
         XCTAssertEqual(nickname, "Ada")
+    }
+
+    func testCopiedLocalDescriptorNeverReceivesLocalSigningVault() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporBridgeProvenance-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+        let localCandidate = await VaporIdentityVault.shared.identity(for: "bridge-provenance-owner")
+        let local = try XCTUnwrap(localCandidate)
+        let copied = local.publicIdentitySnapshot()
+        XCTAssertNotNil(copied.signingPublicKeyFingerprint)
+        XCTAssertEqual(copied.uuid, local.uuid)
+        XCTAssertEqual(copied.signingPublicKeyFingerprint, local.signingPublicKeyFingerprint)
+        // Also reproduce a descriptor previously registered as visiting.
+        await VaporIdentityVault.shared.addVisitingIdentity(snapshot: VaporBridgeIdentitySnapshot(copied))
+        let existsLocally = await VaporIdentityVault.shared.identityExistInVault(copied)
+        XCTAssertTrue(existsLocally, "The regression requires an exact match to a locally held key.")
+
+        let challenge = try IdentitySigningChallenge.signingData(
+            for: copied, trustedIdentity: local, domain: "bridge-provenance",
+            resource: "protected-cell", action: "checkIdentityOrigin", audience: "GeneralCell",
+            nonce: Data(repeating: 0x53, count: 32)
+        )
+        let localSignature = try await VaporIdentityVault.shared.signMessageForIdentity(
+            messageData: challenge, identity: local
+        )
+        XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(
+            signature: localSignature, messageData: challenge, identity: local
+        ), "The local key must actually be able to sign for this negative test.")
+
+        let transport = VaporBridgeTransport()
+        let peer = ProvenanceRecordingBridge(owner: local)
+        transport.setDelegate(peer)
+        for (cid, command) in [Command.get, .response].enumerated() {
+            let wireCommand = BridgeCommand(
+                cmd: command.rawValue, identity: copied, payload: .string("probe"), cid: cid
+            )
+            try await transport.extractCommand(JSONEncoder().encode(wireCommand))
+            let received = try XCTUnwrap(peer.receivedCommands().last)
+            XCTAssertEqual(received.command, command)
+            let requester = try XCTUnwrap(received.identity)
+            XCTAssertEqual(requester.uuid, local.uuid)
+            XCTAssertEqual(requester.signingPublicKeyFingerprint, local.signingPublicKeyFingerprint)
+            let vault = try XCTUnwrap(requester.identityVault)
+            XCTAssertTrue(vault is BridgeIdentityVault)
+            do {
+                _ = try await vault.signMessageForIdentity(messageData: challenge, identity: requester)
+                XCTFail("A copied descriptor must not borrow the server's signing key.")
+            } catch ProvenancePeerError.noPrivateKey {
+                // A valid challenge reached the peer, which cannot sign it.
+            } catch {
+                XCTFail("Expected peer denial, got \(error)")
+            }
+        }
+        XCTAssertEqual(peer.receivedCommands().count, 2)
+    }
+
+    func testFirstTimeAndReturningVisitorKeepBridgeVaultAndLookupMetadata() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VaporBridgeVisitor-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        CellBase.documentRootPath = root.path
+        _ = await VaporIdentityVault.shared.initialize()
+        let peerVault = MockIdentityVault()
+        let visitorCandidate = await peerVault.identity(for: "first-visitor", makeNewIfNotFound: true)
+        let visitor = try XCTUnwrap(visitorCandidate).publicIdentitySnapshot()
+        visitor.properties = ["role": .string("visitor")]
+        let before = await VaporIdentityVault.shared.getIdentity(by: visitor.uuid)
+        XCTAssertNil(before)
+
+        let transport = VaporBridgeTransport()
+        let peer = ProvenanceRecordingBridge(owner: visitor)
+        transport.setDelegate(peer)
+        for cid in 0..<2 {
+            let command = BridgeCommand(cmd: Command.get.rawValue, identity: visitor, payload: nil, cid: cid)
+            try await transport.extractCommand(JSONEncoder().encode(command))
+            let received = try XCTUnwrap(peer.receivedCommands().last?.identity)
+            XCTAssertTrue(received.identityVault is BridgeIdentityVault)
+            let registeredCandidate = await VaporIdentityVault.shared.getIdentity(by: visitor.uuid)
+            let registered = try XCTUnwrap(registeredCandidate)
+            XCTAssertEqual(registered.uuid, visitor.uuid)
+            XCTAssertEqual(registered.signingPublicKeyFingerprint, visitor.signingPublicKeyFingerprint)
+            XCTAssertEqual(registered.properties?["role"], .string("visitor"))
+            let hasLocalKey = await VaporIdentityVault.shared.identityExistInVault(visitor)
+            XCTAssertFalse(hasLocalKey, "Visitor registration must not create a local signing identity.")
+        }
+        XCTAssertEqual(peer.receivedCommands().count, 2)
+    }
+
+    func testMissingBridgeDelegateNeverFallsBackToLocalVault() async {
+        let transport = VaporBridgeTransport()
+        let absentDelegateVault = await transport.identityVault(for: nil)
+        XCTAssertTrue(absentDelegateVault is BridgeIdentityVault)
+
+        transport.setDelegate(RecordingBridgeDelegate(uuid: "non-signing-delegate"))
+        let nonBridgeDelegateVault = await transport.identityVault(for: nil)
+        XCTAssertTrue(nonBridgeDelegateVault is BridgeIdentityVault)
     }
 
     func testVaporIdentityVaultPersistsUnderCellBaseDocumentRoot() async throws {
@@ -286,6 +389,33 @@ final class VaporBridgeTransportTests: XCTestCase {
         let events = await sink.snapshot()
         XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.bridgePayloadTooLarge)
         XCTAssertEqual(events.last?.resource.identifier, "vapor-websocket")
+    }
+}
+
+private enum ProvenancePeerError: Error {
+    case noPrivateKey
+}
+
+// Observe the transport boundary before BridgeBase's independent requester
+// sanitization can hide a regression in which vault the transport attaches.
+private final class ProvenanceRecordingBridge: BridgeBase {
+    private let commandsLock = NSLock()
+    private var commands: [BridgeCommand] = []
+
+    func receivedCommands() -> [BridgeCommand] {
+        commandsLock.withLock { commands }
+    }
+
+    override func consumeCommand(command: BridgeCommand) async throws {
+        commandsLock.withLock { commands.append(command) }
+    }
+
+    override func consumeResponse(command: BridgeCommand) async throws {
+        commandsLock.withLock { commands.append(command) }
+    }
+
+    override func signMessageForIdentity(messageData: Data, identity: Identity) -> AnyPublisher<Data, Error> {
+        Fail<Data, Error>(error: ProvenancePeerError.noPrivateKey).eraseToAnyPublisher()
     }
 }
 
