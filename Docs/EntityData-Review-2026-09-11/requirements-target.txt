@@ -1,0 +1,3 @@
+# Separate from the historical runtime snapshot's validation environment.
+jsonschema==4.25.1
+rfc3339-validator==0.1.4

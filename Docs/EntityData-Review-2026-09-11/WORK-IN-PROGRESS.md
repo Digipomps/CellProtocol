@@ -1,5 +1,7 @@
 # Varig kontekst – 11. september 2026
 
+**Oppfølging 17. september 2026:** Brukeren oppdaget at gårsdagens skjemagjennomgang ikke var innarbeidet. Den lokale visningen hadde en fastlåst kopi av skjemaet fra 11. september. Se `current-review.json`, `OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md` og `TARGET-VALIDATION-2026-09-17.json` for målskjemaet etter de 45 kommentarene. Baseline er bevart uendret. Swift/runtime er ikke endret i denne oppfølgingen; målskjemaet er ikke en migrering eller ny wire-versjon. Navnet cellReference og plasseringen scaffoldPresence.mounts er foreslåtte detaljer; vurderingspunktene er fortsatt åpne. Den oppdaterte grafikken bygges fra gjeldende manifest. Ingen nye apper er startet og ingen koblingsstatus er bevist. Avsnittene nedenfor er historisk status, ikke verifikasjon per 17. september.
+
 Datamodelloppfølgingen er implementert lokalt og dokumentert i LES-MEG.md og IMPLEMENTASJON-OG-TEST.md. Se TESTRESULTATER.json: 57 valgte Swift-tester grønne, Binding build-for-testing grønt, 40 skjematilfeller grønne. Ingen commit/push/utrulling, brukerdata eller nøkler er endret.
 
 Brukerens siste presisering om serialiseringslooper er behandlet: eksisterende Weight/Facilitator-register via Codable userInfo gjenbrukes; alle tre rotklasser registreres først. Ekte sykliske objektgrafer testes mot én kropp per ID og bytegrense. Nye encodere/registre skal opprettes per dokument.

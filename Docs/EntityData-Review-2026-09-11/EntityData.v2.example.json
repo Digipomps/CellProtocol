@@ -9,52 +9,16 @@
       "headline": "Fiktiv profil for gjennomgang",
       "websiteURLs": [
         "https://example.org"
-      ],
-      "interestTags": [
-        "datastrukturer"
       ]
     },
     "contact": {
-      "endpoints": [
+      "emails": [
         {
-          "endpointId": "ep-mail-primary",
-          "kind": "email",
-          "label": "primary",
-          "value": "owner@example.org",
-          "status": "unverified",
-          "purposes": [
-            "purpose://contact.communication"
-          ]
-        },
-        {
-          "endpointId": "ep-phone-mobile",
-          "kind": "phone",
-          "label": "mobile",
-          "value": "+4700000000",
-          "status": "unverified",
-          "purposes": [
-            "purpose://contact.communication"
-          ]
-        },
-        {
-          "endpointId": "ep-some-demo",
-          "kind": "some",
-          "label": "fediverse",
-          "value": "@eksempel@example.social"
-        },
-        {
-          "endpointId": "ep-cell-demo",
-          "kind": "cellReference",
-          "label": "invitasjoner",
-          "endpointCell": "cell:///ExampleContactEndpoint",
-          "purposes": [
-            "purpose://contact.communication",
-            "purpose://digital-work.coordinate"
-          ]
+          "id": "email-demo",
+          "label": "work",
+          "value": "owner@example.org"
         }
-      ],
-      "preferredChannel": "endpoint",
-      "timezone": "Europe/Oslo"
+      ]
     },
     "languages": [
       {
@@ -65,23 +29,20 @@
     ],
     "preferences": {
       "locale": "nb-NO",
-      "timezone": "Europe/Oslo",
-      "privacy": {
-        "defaultVisibility": "private"
+      "timezone": "Europe/Oslo"
+    },
+    "relations": {
+      "interactionPolicy": {
+        "mode": "metadata",
+        "updatedAt": "2026-09-11T09:00:00Z",
+        "fullContentWarningAccepted": false
       }
     }
-  },
-  "conference": {
-    "registration": {},
-    "purposeSnapshot": {
-      "takenAt": "2026-09-16T09:00:00Z"
-    },
-    "consentRecords": {}
   },
   "relations": {
     "records": {
       "relation-demo": {
-        "schema": "haven.entity-relation-record.v2",
+        "schema": "review-only:entity-relation-record:2026-09-16",
         "relationID": "relation-demo",
         "entityRepresentation": {
           "name": "Fiktiv samarbeidspartner",
@@ -131,12 +92,7 @@
                 "purposes": [],
                 "entities": [],
                 "states": [],
-                "description": "Samme nodetype for eget formål og for et formål man leter etter. Ingen SearchPurpose.",
-                "goal": {
-                  "name": "Gjennomgang fullført",
-                  "uuid": "goal-review-demo",
-                  "description": "Målbart: alle elementer i skjemaet er vurdert og hvert har en beslutning."
-                },
+                "description": "Fiktivt formål, samme nodetype for eget formål og et formål man leter etter.",
                 "helperCells": [
                   {
                     "name": "Gjennomgang",
@@ -149,105 +105,94 @@
                       }
                     ]
                   }
-                ]
+                ],
+                "composition": {
+                  "type": "purpose",
+                  "purposeRef": "purpose-read-demo"
+                },
+                "goal": {
+                  "name": "DemoMaalKontroll",
+                  "description": "Fiktiv målkonfigurasjon; måleligheten er ikke validert her."
+                }
               }
             }
           ],
           "entities": [],
           "states": [],
-          "endpoints": [
-            {
-              "endpointId": "ep-collab-mail",
-              "kind": "email",
-              "label": "primary",
-              "value": "collaborator@example.org",
-              "status": "unverified"
-            }
-          ],
           "person": {
             "displayName": "Fiktiv samarbeidspartner",
             "work": {
               "title": "Fiktiv fagrolle"
+            },
+            "contact": {
+              "endpoints": [
+                {
+                  "endpointId": "contact-endpoint-demo",
+                  "cellReference": "cell:///DemoContact/relation-demo/1",
+                  "label": "primary",
+                  "purposes": [
+                    "purpose://contact.communication",
+                    "purpose://contact.introduction"
+                  ]
+                }
+              ]
             }
           },
           "agreementRefs": []
         },
         "subject": {
           "displayName": "Fiktiv samarbeidspartner",
-          "entityRef": "relations.entities.entity-collaborator-demo"
+          "validatedContactRef": "relations.validatedContacts.relation-demo"
         },
         "origin": {
           "kind": "manual",
-          "at": "2026-09-16T09:00:00Z",
+          "at": "2026-09-11T09:00:00Z",
           "sourceLabel": "Fiktivt eksempel"
         },
         "roles": [
           {
             "context": "Gjennomgang av EntityData",
             "role": "Samarbeidspartner"
-          },
-          {
-            "context": "privat",
-            "role": "venn"
           }
         ],
         "interactions": {
           "count": 0,
+          "byChannel": {},
           "byKind": {}
         },
         "tags": [
           "fiktivt-eksempel"
         ],
-        "createdAt": "2026-09-16T09:00:00Z",
-        "updatedAt": "2026-09-16T09:00:00Z",
+        "createdAt": "2026-09-11T09:00:00Z",
+        "updatedAt": "2026-09-11T09:00:00Z",
         "revision": 1
       }
     },
-    "entities": {
-      "entity-collaborator-demo": {
-        "identityRefs": [
-          "identity-collaborator-a"
+    "validatedContacts": {
+      "relation-demo": {
+        "schema": "haven.entity-validated-contact-record.v1",
+        "relationID": "relation-demo",
+        "displayName": "Fiktiv samarbeidspartner",
+        "channels": {
+          "email": "collaborator@example.org"
+        },
+        "provenance": {
+          "sourceKind": "user-supplied",
+          "sourceLabel": "Fiktivt eksempel",
+          "observedAt": "2026-09-11T09:00:00Z"
+        },
+        "purposeRefs": [
+          "purpose://access.audit.privacy",
+          "purpose://contact.communication"
         ],
-        "relationRefs": [
-          "relations.records.relation-demo"
-        ],
-        "contactEndpointRefs": [
-          "ep-collab-mail"
-        ]
-      }
-    },
-    "identities": {
-      "identity-collaborator-a": {
-        "identityUUID": "00000000-0000-4000-8000-000000000001",
-        "domain": "example.org",
-        "entityRefs": [
-          "relations.entities.entity-collaborator-demo"
-        ],
-        "proofRefs": []
-      }
-    },
-    "venner": [
-      "relation-demo"
-    ]
-  },
-  "proofs": {
-    "credentials": {},
-    "index": {
-      "byKeypath": {
-        "relations.records.relation-demo.entityRepresentation.endpoints[endpointId=\"ep-collab-mail\"].value": []
+        "retention": {
+          "storageAuthorized": true,
+          "disclosureAuthorized": false
+        },
+        "status": "owner-accepted"
       }
     }
   },
-  "signedAgreementEntity": {
-    "records": [
-      {
-        "counterparty": "Fiktiv samarbeidspartner",
-        "purpose": "Gjennomgang av EntityData",
-        "dataPointer": "relations.records.relation-demo",
-        "recordState": "template",
-        "signedAt": "2026-09-16T09:00:00Z"
-      }
-    ]
-  },
+  "proofs": {},
   "chronicle": []
 }
