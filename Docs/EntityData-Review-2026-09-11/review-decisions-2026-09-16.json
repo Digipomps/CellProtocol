@@ -1,0 +1,276 @@
+{
+  "source": "GJENNOMGANG_KJETIL_2026-09-16.md",
+  "sourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
+  "comments": [
+    {
+      "path": "person.contact.email",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Vi dropper ett fet for epost - det blir for lite fleksibelt. Vi ska bruke endpoints som beskriver endepunkter hvor brukeren kan nåes. Det kan være telefon, epost, some nick, url,  cellreference etc.",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "person.contact.phone",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "la oss bruke label på phones - primary",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations.people[].contact.email",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Her skal vi ha samme struktur som en person entityData altså endpoints",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations.people[].contact.mobile",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Her skal vi ha samme struktur som en person entityData altså endpoints",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations.people[].contact.endpointStatus",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Her skal vi ha samme struktur som en person entityData altså endpoints",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "person.contact.endpoints[].endpointCell",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Kanskje vi skulle kalle cellReference i stedet for",
+      "status": "proposed-name; endpoint-shape-open"
+    },
+    {
+      "path": "person.preferences.communication.preferredChannel",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Vi forenkler og går for den andre: person.contact.preferredChannel.",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "person.preferences.privacy.defaultVisibility",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Default private",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "person.conference",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "domeneskiver som denne heller ligge som egen rot",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Gå for object - da holder vi noen reserved keys. men brukeren kan legge til egne navngitte relasjoner med arrays",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations.people",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Vi bruker den nyere  relations.records/entityRepresentation",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "relations.people[].ownerUUID",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "dette er obsolete - vi bruker uuid i Identity (som minimum må inneholde uuid og offentlig nøkkel) vi peker vel en entityRepresentation til entity som igjen har en liste på hvilke Identities vi har oppfattet at den entiteten bruker. (Vi må med andre ord bli flinke til  - på en sikker og utvetydig måte - finne ut om to identities representerer samme Entity )",
+      "status": "removed-with-people; identity-contract-and-migration-open"
+    },
+    {
+      "path": "relations.people[].purposeRefs",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Vi skal bruke graf",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "/signedAgreementEntity/records",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Tenker vi går for dictionary fra signedAgreementEntity.commit. Si ifra om du har invendinger.",
+      "status": "applied-to-target"
+    },
+    {
+      "path": "/chronicle",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Ryddes",
+      "status": "legacy-empty-object-removed; storage-placement-open"
+    },
+    {
+      "path": "scaffoldPresence.staging",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Denne blir  en underlig løsning - veldig  spesifikk for vårt utviklingsmiljø. Vi må ha en mer generell måte å uttrykke det samme på. Kanskje bare scaffoldPresence.",
+      "status": "generic-presence-direction-decided; direct-mounts-layout-proposed"
+    },
+    {
+      "path": "/EntityRelationInterests",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Her bruker vi i tilfelle Interest/Purpose",
+      "status": "removed-from-target; replacement-direction-documented; migration-open"
+    },
+    {
+      "path": "/EntityRelationChannel",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Bruk helle endepunt i EntityRepresentation",
+      "status": "removed-from-target; replacement-direction-documented; migration-open"
+    },
+    {
+      "path": "/EntityRelationStanding",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Status eller tillit måles i om relasjonens uttalte formål er oppfylt (Weighted)",
+      "status": "removed-from-target; replacement-direction-documented; migration-open"
+    },
+    {
+      "path": "/EntityRelationEvidence",
+      "section": "Beslutninger som endrer strukturen",
+      "quote": "Her bruker vi proofs med keypaths som i egne bevis",
+      "status": "removed-from-target; replacement-direction-documented; migration-open"
+    },
+    {
+      "path": "person.work",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Burde vi ha en referanse til work organisasjoner i et work array? Dette kan være et godt mønster",
+      "status": "open-question"
+    },
+    {
+      "path": "person.work.organizationRef",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Se kommentaren på person work",
+      "status": "open-question"
+    },
+    {
+      "path": "person.skills",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Burde skills være annonserte formål som brukeren hevder hen kan løse?",
+      "status": "open-question"
+    },
+    {
+      "path": "relations.people[].relationship",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "vi kan ha et array som lister opp relasjonene personen er medlem av - så vi får en toveis binding. Vurder dette grundig.",
+      "status": "open-question"
+    },
+    {
+      "path": "relations.people[+]",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Dette var en skrivesyntaks som var nyttig - vurder nytte og konsekvens.",
+      "status": "open-question"
+    },
+    {
+      "path": "signedAgreementEntity.records[].purpose",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Vurder om vi skal ha et fritekst beskrivelse og muligheten for å knytte til formål.",
+      "status": "open-question"
+    },
+    {
+      "path": "chronicle",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Chronicle kan bli veldig stor og burde kanskje peke til en egen celle. Denne kan også ligge et i et annet scaffold - kanskje peke til en lokal celle som håndterer administrasjonen?",
+      "status": "open-question"
+    },
+    {
+      "path": "person.demographics",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "Dette er data som ikke er tilgjengelige for andre enn brukeren selv i utgangspunktet. Men verd å tenke etter om sensitive merkelapper ikke skal lagres i entityRepresentation (altså data en bruker har lager i egen entity om en annen etity)",
+      "status": "open-question"
+    },
+    {
+      "path": "person.displayName",
+      "section": "Til vurdering — Kjetil ber om at dette tenkes grundig gjennom",
+      "quote": "DisplayName burde kanskje heller være knyttet til PerspectiveCell. Det er gjerne noe en bruker forskjellig i forskjellige sammenhenger. Hm la denne stå så kan folk sette her at om de har et dobbeltnavn så bruker de bare det ene eller slik som Ninni som egentlig heter Ingrid Elisabeth men absolutt alle kjenner henne som Ninni. La det stå men vi må huske at displayName i mange sammenhenger er brukt i et mindre Scope",
+      "status": "open-question"
+    },
+    {
+      "path": "purposes",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Dette er hva som blir administrert av PerpectiveCell",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/EntityRepresentation",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Kontakt er en node i min graf. Det er det samme som jeg i mitt eget hode vet om mine relasjoner.",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/Interest",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Interesse er egentlig bare en node med en label. Lebelen er for gjenkjennelighet mens noden er definert av sine relasjoner til andre noder. Constraint er nyttig funksjonalitet der det er relevant.",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/Purpose",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Purpose er også en node label og definert av sine relasjoner - men i tillegg her den et målbart mål.  som er påkrevet. Purpose er egentlig den utførende delen av en Interesse",
+      "status": "required-goal-in-target; runtime-still-optional"
+    },
+    {
+      "path": "/CellConfiguration",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "CellConfiguration er veldig godt dokumentert i kode.  Forklar nøye - kan også brukes til å utføre get/set",
+      "status": "documented; partial-schema-retained"
+    },
+    {
+      "path": "person.conference.purposeSnapshot",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Fornyes når brukeren melder seg på en konferanse og når brukeren deltar",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "person.conference.consentRecords",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Dette er ikke autorativt samtykke på linje med Agreement",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "person.profile.interestTags",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "tagger er kun pynt - de kan avledes om brukeren vil. I denne settingen er det forenklede interesser som vil være med når man annonserer sine interesser som for eksempel med nearby scanner hvor man kan legge enkle data i userInfo. Da kan en interesse personen vil skal være med uavhengig av kontekst lagres her.",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "person.profile.visibility",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Kan gi litt mer styring til f.eks interestsTags. Men det vil være en veldig forenkling i forhold til interesser og formål uttrykt som PerspectiveNodes",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "person.demographics.ageBand",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Denne blir litt omtrentlig, men kan være grei å bruke om brukeren ikke har fått issuet en Verifiable Credential om birthdate - som igjen kan brukes som en undertøttet påstand om ageBand",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "person.contact.emails[].status",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Enig - bevis hører hjemme i proofs",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "proofs.index.byKeypath",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Dette må beskrives nøye i dokumentasjon",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/identityLinks",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Dokumenter tydelig",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/EntityRelationInteractionSummary",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Kan være nyttig - vi tar den med og vurderer når vi tar dette i bruk",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/EntityRelationSubject",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Kan være nyttig - vi tar den med og vurderer når vi tar dette i bruk",
+      "status": "documented-meaning"
+    },
+    {
+      "path": "/EntityRelationInteractionEvent",
+      "section": "Presiseringer — bekrefter eller skjerper forståelsen",
+      "quote": "Samhandling er mer generelt som i en interaction",
+      "status": "documented-meaning"
+    }
+  ]
+}

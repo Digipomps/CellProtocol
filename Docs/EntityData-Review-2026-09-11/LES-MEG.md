@@ -1,5 +1,7 @@
 # EntityData – gjennomgang med Vegar
 
+**Ny gjennomgang, 17. september:** Beslutningene fra 15.–16. september er nå innarbeidet i et [eget målskjema](EntityData.v2.schema.json). Les [oppdatert forklaring og åpne spørsmål](OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md) først. [current-review.json](current-review.json) peker til de gjeldende lokale filene. Teksten nedenfor og `EntityData.review.schema.json` er det historiske kodegrunnlaget fra 11. september og beskriver derfor også eldre former som er tatt ut av målmodellen.
+
 Datert 11. september 2026. Dette er et kildebasert diskusjonsgrunnlag, kontrollert mot de lokale arbeidsfilene i CellProtocol, Binding og CellScaffold. Oppdatert etter avklaringen om PerspectiveNode og med tilhørende lokale kodeendringer. Det fastsetter ingen ny protokollversjon. Eksemplene er fiktive.
 
 EntityData er her navnet på **dataene som en entitet holder under egen kontroll**: opplysninger om seg selv, formål, relasjoner, dokumentasjon, avtaler og historikk. I dagens Swift-kode er `Entity` et alias for `Object`, som igjen er `[String: ValueType]`. Det finnes derfor ikke én lukket Swift-type med alle feltene i dette dokumentet. EntityAnchorCell gir tilgang til og lagrer denne fleksible strukturen.

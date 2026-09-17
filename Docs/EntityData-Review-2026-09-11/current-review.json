@@ -1,0 +1,14 @@
+{
+  "status": "decision-target-draft",
+  "updatedAt": "2026-09-17",
+  "decisionsAsOf": "2026-09-16",
+  "schema": "EntityData.v2.schema.json",
+  "graphSchema": "EntityRepresentation.v2.schema.json",
+  "example": "EntityData.v2.example.json",
+  "documentation": "OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md",
+  "decisions": "review-decisions-2026-09-16.json",
+  "runtimeBaseline": "EntityData.review.schema.json",
+  "runtimeUpdated": false,
+  "dataMigrated": false,
+  "published": false
+}
