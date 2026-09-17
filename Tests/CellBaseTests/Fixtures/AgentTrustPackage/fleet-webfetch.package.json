@@ -1,0 +1,25 @@
+{
+  "schema": "haven.agent-trust-package.v0",
+  "fleetID": "fleet-research-assistant",
+  "generatedAt": "2026-09-08T10:12:00Z",
+  "packageDigest": "sha256:TO-BE-COMPUTED-BY-WP1",
+  "cells": [
+    { "id": "aigateway", "endpoint": "cell:///PurposeBoundAIGateway", "role": "agent",
+      "modelRoute": { "providerID": "anthropic", "model": "claude-sonnet-5", "hosting": "hosted", "baseURLDigest": "sha256:trusted-default" },
+      "instruction": { "keypath": "cell:///AssistantPersona#persona.text", "digest": "sha256:91ab…e07d" },
+      "templateGrants": [ { "keypath": "ai.invokePurposeBound", "permission": "rw--" } ],
+      "contracts": [ { "contractID": "00000000-0000-0000-0000-000000000001", "subject": "identity://fixture/aigateway", "grants": ["web.fetch --x-"], "expiresAt": "2026-12-31T00:00:00Z", "verified": true } ],
+      "ceiling": { "destinations": ["destination://provider/anthropic"], "dataClasses": ["data-class://haven/ai/user-prompt", "data-class://haven/ai/system-instruction"], "hostPatterns": [], "methods": [], "https": true, "allowCredentials": false, "storage": false, "disclosure": true, "providerTools": "off" },
+      "policy": { "policyID": "haven.aigateway.provider-invocation.single-prompt.v1", "policyVersion": "1.1.0", "policyDigest": "sha256:fixture", "configDigest": "sha256:fixture", "taxonomyDigest": "sha256:fixture" } },
+    { "id": "webfetch", "endpoint": "cell:///WebFetch", "role": "service",
+      "templateGrants": [ { "keypath": "web.fetch", "permission": "rw--" }, { "keypath": "web.setURLDraft", "permission": "rw--" }, { "keypath": "web.clear", "permission": "rw--" }, { "keypath": "state", "permission": "r---" } ],
+      "contracts": [],
+      "ceiling": { "destinations": [], "dataClasses": [], "hostPatterns": ["*.digipomps.org", "*.wikipedia.org", "docs.claude.com"], "methods": ["GET"], "https": true, "allowCredentials": false, "storage": false, "disclosure": false, "providerTools": "n/a" } },
+    { "id": "cred", "endpoint": "cell:///ScopedCredential", "role": "secrets",
+      "templateGrants": [ { "keypath": "credentials", "permission": "r---" }, { "keypath": "credential.upsert", "permission": "rw--" } ],
+      "contracts": [],
+      "ceiling": { "destinations": [], "dataClasses": [], "hostPatterns": [], "methods": [], "https": true, "allowCredentials": false, "storage": true, "disclosure": false, "providerTools": "n/a" } }
+  ],
+  "edges": [ { "from": "aigateway", "to": "webfetch", "keypath": "web.fetch", "permission": "--x-" } ],
+  "reach": "see fleet-webfetch.reach.json"
+}

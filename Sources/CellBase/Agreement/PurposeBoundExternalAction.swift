@@ -537,6 +537,31 @@ public struct ActionDecisionReceipt: Codable, Equatable, Sendable {
     public var reasonCodes: [String]?
     public var containsSecrets: Bool
     public var createdAt: String
+    // purposeRef: purpose://candidate.tillitspakke-agentflaate.signert-kvittering
+    public var signature: ReceiptSignature? = nil
+
+    /// Signs the canonical receipt with the signature field omitted.
+    public func signed(by signer: Identity) async throws -> ActionDecisionReceipt {
+        var copy = self
+        copy.createdAt = try AgentTrustPackageCanonicalEncoder.rfc3339UTC(createdAt)
+        copy.signature = nil
+        copy.signature = try await ReceiptSigning.sign(
+            copy, createdAt: copy.createdAt, by: signer
+        )
+        return copy
+    }
+
+    /// The caller pins the expected signing identity; no vault is needed to verify.
+    public func verify(against signer: Identity) -> ReceiptSignatureVerification {
+        guard let signature else { return .unsigned }
+        var unsigned = self
+        unsigned.signature = nil
+        guard let timestamp = try? AgentTrustPackageCanonicalEncoder.rfc3339UTC(createdAt) else {
+            return .invalid
+        }
+        unsigned.createdAt = timestamp
+        return ReceiptSigning.verify(unsigned, signature: signature, createdAt: timestamp, against: signer)
+    }
 
     public func recordingExecution(_ status: PurposeExecutionStatus) -> ActionDecisionReceipt {
         var copy = self
@@ -557,6 +582,7 @@ public struct ActionDecisionReceipt: Codable, Equatable, Sendable {
         case reasonCodes
         case containsSecrets
         case createdAt
+        case signature
     }
 }
 

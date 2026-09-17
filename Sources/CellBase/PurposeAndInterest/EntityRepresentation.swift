@@ -61,7 +61,9 @@ public struct AgreementReference: Codable, Equatable {
 public class EntityRepresentation:  PerspectiveNodeImpl {
 
     var fulfilled: Fullfilled = Fullfilled() // Until Interests and Purposes are moved
-    var person: Entity = [:]
+    /// The owner's knowledge of this entity. Storage and disclosure are separate:
+    /// ordinary graph encoding omits this; the owner-private codec retains it.
+    public var person: Entity = [:]
     var identities: [Identity] = []
     public var agreementRefs: [AgreementReference] = []
 
@@ -109,6 +111,7 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         case agreementRefs
         case nodeIdentifier
         case projectionSource
+        case person
     }
     
     required public init(from decoder: Decoder) throws {
@@ -126,9 +129,17 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         self.agreementRefs = (try? container.decode([AgreementReference].self, forKey: .agreementRefs)) ?? []
         self.nodeIdentifier = try? container.decodeIfPresent(String.self, forKey: .nodeIdentifier)
         self.projectionSource = try? container.decodeIfPresent(String.self, forKey: .projectionSource)
+        if decoder.userInfo[EntityRepresentationDataCodec.ownerPrivateKey] as? Bool == true {
+            self.person = try container.decodeIfPresent(Entity.self, forKey: .person) ?? [:]
+        }
+        EntityRepresentationDataCodec.resolveInlineReferences(in: self)
     }
     
     public override func encode(to encoder: Encoder) throws { // TODO: Check this override
+        // The root may also be reached by a reference farther down the graph.
+        if let facilitator = encoder.userInfo[CodingUserInfoKey(rawValue: "entityRepresentationsFacilitator")!] as? Facilitator<EntityRepresentation> {
+            facilitator.referenceablesDict[reference] = self
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)
         
@@ -145,12 +156,13 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
         try container.encode(self.agreementRefs, forKey: .agreementRefs)
         try container.encodeIfPresent(self.nodeIdentifier, forKey: .nodeIdentifier)
         try container.encodeIfPresent(self.projectionSource, forKey: .projectionSource)
+        if encoder.userInfo[EntityRepresentationDataCodec.ownerPrivateKey] as? Bool == true {
+            try container.encode(self.person, forKey: .person)
+        }
 
-        // `person`, `fulfilled` and `identities` are deliberately NOT encoded.
-        // For a projected relation they would carry another living person's
-        // contact details into a graph whose whole job is to be matched and
-        // compared against others. Keep the perspective to names, weights and
-        // interests; the reachable detail stays in the relations cell.
+        // `fulfilled` and `identities` remain outside this wire shape. Person
+        // knowledge belongs to the same node, but does not follow it into an
+        // ordinary matching projection. Matching itself grants no disclosure.
     
     }
     

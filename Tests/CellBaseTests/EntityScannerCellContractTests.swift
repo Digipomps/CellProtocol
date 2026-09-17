@@ -200,6 +200,34 @@ final class EntityScannerCellContractTests: XCTestCase {
         )
     }
 
+    func testRadarAndSelectionStayOwnerOnlyAcrossLegacyTemplateRestore() async throws {
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let ownerValue = await vault.identity(for: "radar-owner", makeNewIfNotFound: true)
+        let peerValue = await vault.identity(for: "radar-peer", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerValue)
+        let peer = try XCTUnwrap(peerValue)
+        let original = await EntityScannerCell(owner: owner)
+        original.agreementTemplate.ensureGrant("r---", for: "radar")
+        original.agreementTemplate.ensureGrant("-w--", for: "select")
+        let restored = try JSONDecoder().decode(EntityScannerCell.self, from: JSONEncoder().encode(original))
+        try await restored.ensureRuntimeReady()
+        XCTAssertFalse(restored.agreementTemplate.grants.contains { ["radar", "select"].contains($0.keypath) })
+        for cell in [original, restored] {
+            let radar = try await cell.get(keypath: "radar", requester: owner)
+            guard case .object = radar else { return XCTFail("Proved owner must retain radar access") }
+            let selected = try await cell.set(keypath: "select", value: .string("unknown-peer"), requester: owner)
+            XCTAssertEqual(selected, .string("notFound"))
+            for stranger in [peer, owner.publicIdentitySnapshot()] {
+                do {
+                    let value = try await cell.get(keypath: "radar", requester: stranger)
+                    XCTAssertEqual(value, .string("denied"))
+                } catch { /* Access denial must not produce a radar snapshot. */ }
+                try await CellContractHarness.assertSetDenied(on: cell, key: "select", input: .string("unknown-peer"), requester: stranger)
+            }
+        }
+    }
+
     func testProductionScannerConfigurationsRoundTripWithExplicitActionPayloads() async throws {
         let configurations = try await SkeletonDescriptions.menuConfigurations()
         var scannerReferenceCount = 0

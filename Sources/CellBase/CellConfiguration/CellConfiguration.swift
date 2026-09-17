@@ -149,6 +149,7 @@ public struct CellConfiguration {
     public var uuid: String
     public var description: String?
     public var discovery: CellConfigurationDiscovery?
+    public var localization: SkeletonLocalizationConfiguration?
     // instructions on how to configure the target
     public var cellReferences: [CellReference]?
     
@@ -185,6 +186,7 @@ extension CellConfiguration: Codable {
         case name
         case description
         case discovery
+        case localization
         case cellReferences
         case skeleton
     }
@@ -203,6 +205,7 @@ extension CellConfiguration: Codable {
         self.name = try values.decode(String.self, forKey: .name)
         self.description = try values.decodeIfPresent(String.self, forKey: .description)
         self.discovery = try values.decodeIfPresent(CellConfigurationDiscovery.self, forKey: .discovery)
+        self.localization = try values.decodeIfPresent(SkeletonLocalizationConfiguration.self, forKey: .localization)
         self.cellReferences = try values.decodeIfPresent([CellReference].self, forKey: .cellReferences)
         self.skeleton = try values.decodeIfPresent(SkeletonElement.self, forKey: .skeleton)
     }
@@ -215,6 +218,7 @@ extension CellConfiguration: Codable {
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
         try container.encodeIfPresent(discovery, forKey: .discovery)
+        try container.encodeIfPresent(localization, forKey: .localization)
         try container.encode(cellReferences, forKey: .cellReferences)
         try container.encodeIfPresent(skeleton, forKey: .skeleton)
         

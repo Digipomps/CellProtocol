@@ -376,3 +376,17 @@ private func deleteKeychainKey(withApplicationTag tag: String) {
     ]
     SecItemDelete(query as CFDictionary)
 }
+
+// MARK: - Nothing before authentication
+
+extension AppleIdentityVaultKeyStorageTests {
+
+    /// The shared vault in a test host has not been through Face ID, and it
+    /// must say so — that flag is what keeps Binding from making an
+    /// unauthenticated vault the app's default.
+    func testUnauthenticatedVaultSaysSo() async {
+        let vault = IdentityVault.shared
+        let authenticated = await vault.isAuthenticated
+        XCTAssertFalse(authenticated, "a test host cannot have authenticated the shared vault")
+    }
+}

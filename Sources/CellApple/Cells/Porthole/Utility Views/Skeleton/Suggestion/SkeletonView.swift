@@ -866,23 +866,23 @@ public struct SkeletonView: View {
                 )
             }
             return AnyView(
-                HStack(alignment: .center, spacing: h.spacing.map { CGFloat($0) } ?? 8) {
+                HStack(alignment: .center, spacing: h.spacing.map { CGFloat($0) } ?? 10) {
                     ForEach(h.elements, id: \.id) { el in
                         render(el)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(h.modifiers, userInfoValue: userInfoValue)
             )
         case .VStack(let v):
             let (navigationBar, restElements) = extractNavigationBar(from: v.elements)
             let stack = AnyView(
-                VStack(alignment: .center, spacing: v.spacing.map { CGFloat($0) } ?? 8) {
+                VStack(alignment: .leading, spacing: v.spacing.map { CGFloat($0) } ?? 10) {
                     ForEach(restElements, id: \.id) { el in
                         render(el)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(v.modifiers, userInfoValue: userInfoValue)
             )
             guard let navigationBar else { return stack }
@@ -931,7 +931,7 @@ public struct SkeletonView: View {
                 transform: buttonResolutionTransform
             )
             return AnyView(
-                CellActionButtonView(skeletonButton: resolvedButton)
+                CellActionButtonView(skeletonButton: resolvedButton, userInfoValue: userInfoValue)
                     .applySkeletonModifiers(resolvedButton.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
@@ -976,13 +976,14 @@ public struct SkeletonView: View {
             )
         case .Section(let sec):
             return AnyView(
-                VStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     if let header = sec.header { render(header) }
                     ForEach(sec.content, id: \.id) { el in
                         render(el)
                     }
                     if let footer = sec.footer { render(footer) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(sec.modifiers, userInfoValue: userInfoValue)
             )
         case .ZStack(let zs):
@@ -1706,7 +1707,9 @@ private struct CellTextView: View {
     }
 
     var body: some View {
-        renderText(resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""))
+        renderText(viewModel.localization.text(skeletonText.modifiers?.localization?["text"],
+            fallback: resolvedText.map(skeletonDisplayString) ?? (skeletonText.text ?? ""),
+            item: userInfoValue, contextValue: userInfoValue))
             .applyIf(resolvedForegroundColor != nil) { v in
                 v.foregroundColor(resolvedForegroundColor!)
             }
@@ -1725,7 +1728,7 @@ private struct CellTextView: View {
             .applyIf(skeletonText.modifiers?.minimumScaleFactor != nil) { v in
                 v.minimumScaleFactor(skeletonText.modifiers?.minimumScaleFactor ?? 1.0)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .task(id: contentTaskID()) {
                 if let cached = await cachedResolvedText() {
                     resolvedText = cached
@@ -1744,7 +1747,7 @@ private struct CellTextView: View {
     }
 
     private func renderText(_ content: String) -> Text {
-        guard shouldRenderMarkdown,
+        guard skeletonText.modifiers?.localization?["text"] == nil, shouldRenderMarkdown,
               let rendered = try? AttributedString(
                 markdown: content,
                 options: AttributedString.MarkdownParsingOptions(
@@ -1794,6 +1797,7 @@ private struct CellTextView: View {
 
 private struct CellActionButtonView: View {
     let skeletonButton: SkeletonButton
+    var userInfoValue: ValueType? = nil
     @State private var actionInstanceID = UUID().uuidString
     @EnvironmentObject var viewModel: PortholeViewModel
     @Environment(\.openURL) private var openURL
@@ -1835,7 +1839,7 @@ private struct CellActionButtonView: View {
         .buttonStyle(.plain)
         .disabled(executionState == .working)
         .opacity(executionState == .working ? 0.86 : 1.0)
-        .accessibilityLabel(Text(skeletonButton.label))
+        .accessibilityLabel(Text(localizedLabel))
         .accessibilityIdentifier("skeleton.button.\(skeletonButton.id.uuidString)")
         .accessibilityValue(accessibilityValue)
     }
@@ -1864,9 +1868,14 @@ private struct CellActionButtonView: View {
 
     private var labelText: String {
         if isChatPrimaryAction {
-            return skeletonButton.label
+            return localizedLabel
         }
-        return executionState == .working ? "\(skeletonButton.label) …" : skeletonButton.label
+        return executionState == .working ? "\(localizedLabel) …" : localizedLabel
+    }
+
+    private var localizedLabel: String {
+        viewModel.localization.text(skeletonButton.modifiers?.localization?["label"],
+            fallback: skeletonButton.label, item: userInfoValue, contextValue: userInfoValue)
     }
 
     private var isChatPrimaryAction: Bool {
@@ -2589,6 +2598,16 @@ private struct CellVisualizationView: View {
                 } else {
                     visualizationFallback(message: "Kartspesifikasjonen kunne ikke leses.")
                 }
+            case "radar":
+                if let radarSpec = RadarVisualizationSpec.decode(from: currentSpec) {
+                    VisualizationRadarView(
+                        spec: radarSpec,
+                        selection: selectionState,
+                        activateBlip: actionHandler(for: "blip")
+                    )
+                } else {
+                    visualizationFallback(message: "Radaren har ingen data ennå. Start skanneren.")
+                }
             case "calendar":
                 let calendarSpec = visualizationCalendarSpec(from: currentSpec)
                 if calendarSpec.occurrences.isEmpty {
@@ -2607,6 +2626,14 @@ private struct CellVisualizationView: View {
         }
         .task(id: refreshTaskID()) {
             await refresh()
+            // A radar is live or it is a picture. Poll while it is on screen;
+            // every other kind still refreshes on mutation only.
+            guard normalizedKind == "radar" else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                await refresh()
+            }
         }
     }
 
@@ -3327,7 +3354,8 @@ private struct CellTextFieldView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SwiftUI.TextField(skeletonTextField.placeholder ?? "", text: binding())
+            SwiftUI.TextField(viewModel.localization.text(skeletonTextField.modifiers?.localization?["placeholder"],
+                fallback: skeletonTextField.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue), text: binding())
                 .focused($isFocused)
                 .applyIf(skeletonTextField.modifiers?.foregroundColor != nil && Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "") != nil) { v in
                     v.foregroundColor(Color(hex: skeletonTextField.modifiers?.foregroundColor ?? "")!)
@@ -3734,6 +3762,11 @@ private struct CellTextAreaView: View {
     @StateObject private var richMarkdownController = RichMarkdownEditorController()
     @EnvironmentObject var viewModel: PortholeViewModel
 
+    private var localizedPlaceholder: String {
+        viewModel.localization.text(skeletonTextArea.modifiers?.localization?["placeholder"],
+            fallback: skeletonTextArea.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue)
+    }
+
     var body: some View {
         editorBody
         .frame(maxWidth: .infinity, alignment: .center)
@@ -3754,8 +3787,8 @@ private struct CellTextAreaView: View {
                 }
 
                 ZStack(alignment: .topLeading) {
-                    if text.isEmpty, let placeholder = skeletonTextArea.placeholder, !placeholder.isEmpty {
-                        Text(placeholder)
+                    if text.isEmpty, !localizedPlaceholder.isEmpty {
+                        Text(localizedPlaceholder)
                             .foregroundColor(.secondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 12)
@@ -3781,8 +3814,8 @@ private struct CellTextAreaView: View {
 
     private var plainEditorBody: some View {
         ZStack(alignment: .topLeading) {
-            if text.isEmpty, let placeholder = skeletonTextArea.placeholder, !placeholder.isEmpty {
-                Text(placeholder)
+            if text.isEmpty, !localizedPlaceholder.isEmpty {
+                Text(localizedPlaceholder)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 8)
