@@ -1,6 +1,9 @@
 .DS_Store
 /.build
-/Packages
+/Packages/*
+!/Packages/CellNearby/
+/Packages/CellNearby/.build/
+/Packages/CellNearby/.swiftpm/
 /*.xcodeproj
 xcuserdata/
 DerivedData/
