@@ -14,6 +14,7 @@ let package = Package(
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(name: "CellBase", targets: ["CellBase"]),
+        .library(name: "CellNearby", targets: ["CellNearby"]),
         .library(name: "CombineHelpers", targets: ["CombineHelpers"]),
         .library(name: "CodableHelpers", targets: ["CodableHelpers"]),
         .library(name: "CellApple", targets: ["CellApple"]),
@@ -44,6 +45,8 @@ let package = Package(
         .package(url: "https://github.com/attaswift/BigInt.git", from: "5.4.0"),
     ],
     targets: [
+        .target(name: "CellNearby", path: "Packages/CellNearby/Sources/CellNearby"),
+        .testTarget(name: "CellNearbyTests", dependencies: ["CellNearby"], path: "Packages/CellNearby/Tests/CellNearbyTests"),
         .target(name: "CombineHelpers",
                 dependencies: [
                     "OpenCombine",
