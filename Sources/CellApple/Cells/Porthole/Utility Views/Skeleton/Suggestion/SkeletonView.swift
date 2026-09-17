@@ -866,23 +866,23 @@ public struct SkeletonView: View {
                 )
             }
             return AnyView(
-                HStack(alignment: .center, spacing: h.spacing.map { CGFloat($0) } ?? 8) {
+                HStack(alignment: .center, spacing: h.spacing.map { CGFloat($0) } ?? 10) {
                     ForEach(h.elements, id: \.id) { el in
                         render(el)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(h.modifiers, userInfoValue: userInfoValue)
             )
         case .VStack(let v):
             let (navigationBar, restElements) = extractNavigationBar(from: v.elements)
             let stack = AnyView(
-                VStack(alignment: .center, spacing: v.spacing.map { CGFloat($0) } ?? 8) {
+                VStack(alignment: .leading, spacing: v.spacing.map { CGFloat($0) } ?? 10) {
                     ForEach(restElements, id: \.id) { el in
                         render(el)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(v.modifiers, userInfoValue: userInfoValue)
             )
             guard let navigationBar else { return stack }
@@ -976,13 +976,14 @@ public struct SkeletonView: View {
             )
         case .Section(let sec):
             return AnyView(
-                VStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
                     if let header = sec.header { render(header) }
                     ForEach(sec.content, id: \.id) { el in
                         render(el)
                     }
                     if let footer = sec.footer { render(footer) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .applySkeletonModifiers(sec.modifiers, userInfoValue: userInfoValue)
             )
         case .ZStack(let zs):
@@ -1727,7 +1728,7 @@ private struct CellTextView: View {
             .applyIf(skeletonText.modifiers?.minimumScaleFactor != nil) { v in
                 v.minimumScaleFactor(skeletonText.modifiers?.minimumScaleFactor ?? 1.0)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .task(id: contentTaskID()) {
                 if let cached = await cachedResolvedText() {
                     resolvedText = cached
