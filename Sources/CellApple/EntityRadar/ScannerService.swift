@@ -99,6 +99,27 @@ private final class ScannerPeerTransport: BridgeTransportProtocol {
 // Consider different name
 class ScannerService :  NSObject, ObservableObject {
 
+    @MainActor var advertisementExchange: NearbyAdvertisementExchange?
+    private var advertisementPeers: Set<String> = [] // Accessed on stateQueue.
+    private var advertisementProofPeers: Set<String> = []
+
+    func readAdvertisement(remoteUUID: String) async -> NearbyAdvertisement? {
+        guard let peer = withState({ advertisementPeers.contains(remoteUUID) ? _foundPeersDict[remoteUUID] : nil }) else { return nil }
+        return await advertisementExchange?.read(peer: peer, localPeer: myPeerId, browser: serviceBrowser)
+    }
+
+    func readAdvertisementResult(remoteUUID: String, evidence: NearbyAccessEvidence? = nil,
+                                 consentedPolicy: String? = nil) async -> NearbyAdvertisementReadResult {
+        guard let peer = withState({ advertisementPeers.contains(remoteUUID) ? _foundPeersDict[remoteUUID] : nil }) else { return .unavailable }
+        if withState({ advertisementProofPeers.contains(remoteUUID) }) {
+            return await advertisementExchange?.readWithProof(peer: peer, localPeer: myPeerId,
+                localID: mySessionUUID, remoteID: remoteUUID, browser: serviceBrowser,
+                reader: owner, evidence: evidence, consentedPolicy: consentedPolicy) ?? .unavailable
+        }
+        guard evidence == nil else { return .unavailable }
+        return .init(advertisement: await readAdvertisement(remoteUUID: remoteUUID), message: "Ingen tilgjengelige annonserte detaljer.")
+    }
+
     private struct PendingInvitation {
         let id: UUID
         let handler: (Bool, MCSession?) -> Void
@@ -285,11 +306,16 @@ class ScannerService :  NSObject, ObservableObject {
         set { withState { _connectedRemoteUUID = newValue } }
     }
     
-    lazy var mcSession : MCSession = {
-        let session = MCSession(peer: self.myPeerId, securityIdentity: nil, encryptionPreference: .required)
-        session.delegate = self
-        return session
-    }()
+    private var storedMCSession: MCSession?
+    var mcSession: MCSession {
+        withState {
+            if let session = storedMCSession { return session }
+            let session = MCSession(peer: myPeerId, securityIdentity: nil, encryptionPreference: .required)
+            session.delegate = self
+            storedMCSession = session
+            return session
+        }
+    }
 
     private func withState<T>(_ body: () throws -> T) rethrows -> T {
         if DispatchQueue.getSpecific(key: stateQueueKey) != nil {
@@ -369,6 +395,8 @@ class ScannerService :  NSObject, ObservableObject {
         
         var serviceDicoveryInfo = serviceDicoveryInfoDict
         serviceDicoveryInfo["uuid"] = mySessionUUID
+        serviceDicoveryInfo["ad"] = "1" // Preserve public-read discovery for older clients.
+        serviceDicoveryInfo["adp"] = "2" // Proof capability only; no chosen details in discovery metadata.
         
         self.serviceAdvertiser = MCNearbyServiceAdvertiser(peer: myPeerId, discoveryInfo: serviceDicoveryInfo, serviceType: HavenServiceType)
         self.serviceBrowser = MCNearbyServiceBrowser(peer: myPeerId, serviceType: HavenServiceType)
@@ -398,7 +426,9 @@ class ScannerService :  NSObject, ObservableObject {
     func stop() {
         self.serviceAdvertiser.stopAdvertisingPeer()
         self.serviceBrowser.stopBrowsingForPeers()
-        mcSession.disconnect()
+        // Deinitializing an unstarted service must not create a session whose
+        // weak delegate is already in deinit.
+        withState { storedMCSession }?.disconnect()
         rejectAllPendingInvitations()
         connectedRemoteUUID = nil
         connectedPeer = nil
@@ -411,6 +441,8 @@ class ScannerService :  NSObject, ObservableObject {
             bridgeDelegatesByRemoteUUID.removeAll()
             bridgeTransportsByRemoteUUID.removeAll()
             _foundPeersDict.removeAll()
+            advertisementPeers.removeAll()
+            advertisementProofPeers.removeAll()
             _reversedFoundPeersDict.removeAll()
             _connectedPeersDict.removeAll()
             _reversedConnectedPeersDict.removeAll()
@@ -806,7 +838,20 @@ extension ScannerService : MCNearbyServiceAdvertiserDelegate {
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         NSLog("%@", "didReceiveInvitationFromPeer \(peerID)")
-        receiveInvitation(from: peerID, handler: invitationHandler)
+        if let context {
+            Task { @MainActor [weak self] in
+                guard let self, let remoteID = self.withState({ self._reversedFoundPeersDict[peerID] }) else {
+                    invitationHandler(false, nil); return
+                }
+                if self.advertisementExchange?.accept(context: context, peer: peerID,
+                    localPeer: self.myPeerId, reply: invitationHandler,
+                    localSessionID: self.mySessionUUID, remoteSessionID: remoteID) == true { return }
+                // Unrecognized contexts never widen the ordinary bridge invitation policy.
+                self.receiveInvitation(from: peerID, handler: invitationHandler)
+            }
+        } else {
+            receiveInvitation(from: peerID, handler: invitationHandler)
+        }
     }
 
 }
@@ -830,6 +875,10 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
         let discoveredPeerNames = withState {
             _foundPeersDict[remoteUUID] = peerID
             _reversedFoundPeersDict[peerID] = remoteUUID
+            if info?["ad"] == "1" { advertisementPeers.insert(remoteUUID) }
+            else { advertisementPeers.remove(remoteUUID) }
+            if info?["ad"] == "1", info?["adp"] == "2" { advertisementProofPeers.insert(remoteUUID) }
+            else { advertisementProofPeers.remove(remoteUUID) }
             return _foundPeersDict.values.map(\.displayName)
         }
 
@@ -860,6 +909,8 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
                 return nil
             }
             _foundPeersDict.removeValue(forKey: remoteUUID)
+            advertisementPeers.remove(remoteUUID)
+            advertisementProofPeers.remove(remoteUUID)
             return remoteUUID
         }
         if let remoteUUID {

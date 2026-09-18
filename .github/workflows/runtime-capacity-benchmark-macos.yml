@@ -25,7 +25,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     env:
-      RUNTIME_REVISION: e03923cb2f1d5a339eaf62585ddc9dddf7750cec
+      RUNTIME_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
       BENCHMARK_BUILD_JOBS: '2'
       BENCHMARK_LOAD_LEVELS: '1 2 4'
       BENCHMARK_OPERATIONS: '5000'
@@ -39,16 +39,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Fetch the branch ref with history so the intentionally older
-          # measured runtime base remains resolvable as the harness evolves.
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          # Measure the exact candidate; never label changed runtime sources
+          # as the historical baseline revision.
+          ref: ${{ env.RUNTIME_REVISION }}
           fetch-depth: 0
 
       - name: Verify the measured runtime base
         shell: bash
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "$RUNTIME_REVISION" HEAD
+          test "$(git rev-parse HEAD)" = "$RUNTIME_REVISION"
           git diff --quiet "$RUNTIME_REVISION" HEAD -- Sources Tests Package.resolved
           echo "runtime_revision=$RUNTIME_REVISION"
           echo "harness_revision=$(git rev-parse HEAD)"

@@ -18,7 +18,7 @@ public final class RadarViewModel: ObservableObject {
 
     public let staleEntityTimeout: TimeInterval
 
-    private var entitiesById: [String: NearbyEntity] = [:]
+    private var ledger = RadarEntityLedger()
     private var flowCancellable: AnyCancellable?
     private var pruneCancellable: AnyCancellable?
     private var scannerEmit: Emit?
@@ -119,7 +119,7 @@ public final class RadarViewModel: ObservableObject {
     }
 
     public func clear() {
-        entitiesById.removeAll()
+        ledger.clear()
         entities.removeAll()
         connectedDevices.removeAll()
     }
@@ -162,117 +162,29 @@ public final class RadarViewModel: ObservableObject {
         guard let scannerEvent = RadarEventParser.parse(flowElement) else {
             return
         }
-
-        switch scannerEvent {
-        case let .found(update):
-            upsert(update, fallbackStatus: "found")
-        case var .connected(update):
-            if let devices = update.connectedDevices {
-                connectedDevices = devices
-            }
-            if update.remoteUUID != nil, update.connected == nil {
-                update.connected = true
-            }
-            upsert(update, fallbackStatus: "connected")
-        case let .lost(update):
-            handleLost(update)
-        case let .proximity(update):
-            upsert(update, fallbackStatus: "nearby")
-        case let .status(update):
-            if let status = update.status, !status.isEmpty {
-                scannerStatus = status
-            }
-            upsert(update, fallbackStatus: scannerStatus)
+        ledger.consume(scannerEvent)
+        if case let .status(update) = scannerEvent, let status = update.status, !status.isEmpty {
+            scannerStatus = status
         }
+        connectedDevices = ledger.connectedDevices
+        refreshEntities()
     }
 
-    private func handleLost(_ update: RadarEntityUpdate) {
-        guard let remoteUUID = normalizedRemoteUUID(update.remoteUUID) else {
-            return
+    private func pruneStaleEntities() {
+        // The ledger's own staleness plus the view's quicker drop of «lost».
+        ledger.staleAfter = staleEntityTimeout
+        let lostCutoff = Date().addingTimeInterval(-4.0)
+        var removed = ledger.prune()
+        for entity in ledger.entities where entity.status == "lost" && entity.lastSeenAt < lostCutoff {
+            ledger.remove(entity.remoteUUID)
+            removed.append(entity.remoteUUID)
         }
-        if var entity = entitiesById[remoteUUID] {
-            var lostUpdate = update
-            lostUpdate.remoteUUID = remoteUUID
-            if lostUpdate.status == nil {
-                lostUpdate.status = "lost"
-            }
-            lostUpdate.connected = false
-            entity.merge(update: lostUpdate, defaultStatus: "lost")
-            entitiesById[remoteUUID] = entity
+        if !removed.isEmpty || entities.count != ledger.entities.count {
             refreshEntities()
         }
     }
 
-    private func upsert(_ update: RadarEntityUpdate, fallbackStatus: String) {
-        guard let remoteUUID = normalizedRemoteUUID(update.remoteUUID) else {
-            return
-        }
-
-        var normalizedUpdate = update
-        normalizedUpdate.remoteUUID = remoteUUID
-        if normalizedUpdate.status == nil || normalizedUpdate.status?.isEmpty == true {
-            normalizedUpdate.status = fallbackStatus
-        }
-
-        if var entity = entitiesById[remoteUUID] {
-            entity.merge(update: normalizedUpdate, defaultStatus: fallbackStatus)
-            entitiesById[remoteUUID] = entity
-        } else {
-            entitiesById[remoteUUID] = NearbyEntity(update: normalizedUpdate, defaultStatus: fallbackStatus)
-        }
-        refreshEntities()
-    }
-
-    private func normalizedRemoteUUID(_ remoteUUID: String?) -> String? {
-        guard let remoteUUID else {
-            return nil
-        }
-        let normalizedUUID = remoteUUID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedUUID.isEmpty else {
-            return nil
-        }
-        return normalizedUUID
-    }
-
-    private func pruneStaleEntities() {
-        guard !entitiesById.isEmpty else {
-            return
-        }
-
-        let now = Date()
-        let staleCutoff = now.addingTimeInterval(-staleEntityTimeout)
-        let lostCutoff = now.addingTimeInterval(-4.0)
-
-        let keysToRemove = entitiesById.compactMap { key, entity -> String? in
-            if entity.status == "lost", entity.lastSeenAt < lostCutoff {
-                return key
-            }
-            if !entity.connected, entity.lastSeenAt < staleCutoff {
-                return key
-            }
-            return nil
-        }
-        guard !keysToRemove.isEmpty else {
-            return
-        }
-
-        keysToRemove.forEach { key in
-            entitiesById.removeValue(forKey: key)
-        }
-        refreshEntities()
-    }
-
     private func refreshEntities() {
-        entities = entitiesById.values.sorted { lhs, rhs in
-            if lhs.connected != rhs.connected {
-                return lhs.connected && !rhs.connected
-            }
-            let lhsDistance = lhs.distanceMeters ?? .greatestFiniteMagnitude
-            let rhsDistance = rhs.distanceMeters ?? .greatestFiniteMagnitude
-            if lhsDistance != rhsDistance {
-                return lhsDistance < rhsDistance
-            }
-            return lhs.lastSeenAt > rhs.lastSeenAt
-        }
+        entities = ledger.entities
     }
 }

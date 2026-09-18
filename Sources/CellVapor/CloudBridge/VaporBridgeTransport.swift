@@ -216,16 +216,18 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
-        if let identity = identity,
-        let delegate = currentDelegate(),
-        let bridgeProtocol = delegate as? BridgeProtocol {
+        let bridge = currentDelegate() as? BridgeProtocol
+        if let identity, bridge != nil {
             let identitySnapshot = VaporBridgeIdentitySnapshot(identity)
             if await VaporIdentityVault.shared.identityExistInVault(identity) == false {
-                await VaporIdentityVault.shared.addVisitingIdentity(snapshot: identitySnapshot) // This has to be reflected in conditions..
-                return BridgeIdentityVault(cloudBridge: (bridgeProtocol))
+                // Preserve visitor lookup metadata; registration grants no signing authority.
+                await VaporIdentityVault.shared.addVisitingIdentity(snapshot: identitySnapshot)
             }
         }
-        return VaporIdentityVault.shared
+        // Every identity resolved here came over the bridge. A known public
+        // descriptor is not proof of local origin, even when its key is stored here.
+        // With no bridge delegate, the proxy fails closed instead of signing locally.
+        return BridgeIdentityVault(cloudBridge: bridge)
     }
 
     private func currentDelegate() -> BridgeDelegateProtocol? {

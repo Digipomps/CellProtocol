@@ -78,6 +78,15 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private var outgoingDetailRequests = [String: String]()
     private var automaticProbeRemoteUUIDs = Set<String>()
     private var policyExpiryTask: Task<Void, Never>?
+    /// The current picture, kept by the cell itself so a skeleton can draw a
+    /// radar from `radar` without a view model subscribing to the flow.
+    private var radarLedger = RadarEntityLedger()
+    @MainActor private lazy var advertisementExchange = NearbyAdvertisementExchange()
+    private var selectedAdvertisement: NearbyAdvertisement?
+    private var selectedAccessChallenge: NearbyAccessChallenge?
+    private var advertisementSelectionID = UUID()
+    private var advertisementStatus = "Velg et treff for å lese det som er annonsert."
+
 
     required init(owner: Identity) async {
         await super.init(owner: owner)
@@ -114,7 +123,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "respondToInvitation"
         ]
         self.agreementTemplate.grants.removeAll {
-            actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--"
+            ["radar", "select"].contains($0.keypath)
+                || (actionKeys.contains($0.keypath) && $0.permission.permissionString != "-w--")
         }
         for key in actionKeys {
             self.agreementTemplate.ensureGrant("-w--", for: key)
@@ -157,6 +167,100 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
+        await addInterceptForGet(requester: owner, key: "radar", getValueIntercept: { [weak self] _, requester in
+            guard let self = self else { return .null }
+            if self.isAdvertisementOwner(requester),
+               await self.validateAccess("r---", at: "radar", for: requester) {
+                self.radarLedger.prune(visibleRemoteUUIDs: Set(self.connectService?.foundPeersDict.keys.map { $0 } ?? []))
+                var spec = self.radarLedger.radarSpec()
+                if self.isAdvertisementOwner(requester), let ad = self.selectedAdvertisement, (try? ad.validate()) != nil,
+                   self.radarLedger.selectedRemoteUUID != nil {
+                    spec["selectedAdvertisement"] = self.valueType(from: ad)
+                }
+                if self.isAdvertisementOwner(requester) {
+                    spec["advertisementStatus"] = .string(self.advertisementStatus)
+                    if let challenge = self.selectedAccessChallenge, self.selectedAdvertisement == nil,
+                       challenge.publisherSessionID == self.radarLedger.selectedRemoteUUID {
+                        spec["accessChallenge"] = self.valueType(from: challenge)
+                    }
+                }
+                return .object(spec)
+            }
+            return .string("denied")
+        })
+
+        await addInterceptForGet(requester: owner, key: "advertisement", getValueIntercept: { [weak self] _, requester in
+            guard let self, self.isAdvertisementOwner(requester),
+                  await self.validateAccess("r---", at: "advertisement", for: requester) else { return .string("denied") }
+            let value = await self.advertisementExchange.currentPublication
+            return value.flatMap { self.valueType(from: $0) } ?? .null
+        })
+        await addInterceptForSet(requester: owner, key: "publishAdvertisement", setValueIntercept: { [weak self] _, value, requester in
+            guard let self, self.isAdvertisementOwner(requester),
+                  await self.validateAccess("-w--", at: "publishAdvertisement", for: requester) else { return .string("denied") }
+            guard let ad = self.decode(NearbyAdvertisement.self, from: value) else { throw SetValueError.paramErr }
+            try ad.validate()
+            if self.connectService == nil { try await self.startConnectService(requester: requester) }
+            try await self.advertisementExchange.publish(ad)
+            self.pushScannerEvent(topic: "scanner.advertisement.changed", title: "Nearby Sharing Changed",
+                payload: ["active": .bool(true)], requesterOverride: requester)
+            return self.valueType(from: ad)
+        })
+        await addInterceptForSet(requester: owner, key: "withdrawAdvertisement", setValueIntercept: { [weak self] _, _, requester in
+            guard let self, self.isAdvertisementOwner(requester),
+                  await self.validateAccess("-w--", at: "withdrawAdvertisement", for: requester) else { return .string("denied") }
+            try await self.advertisementExchange.publish(nil)
+            self.pushScannerEvent(topic: "scanner.advertisement.changed", title: "Nearby Sharing Changed",
+                payload: ["active": .bool(false)], requesterOverride: requester)
+            return .bool(true)
+        })
+
+        await addInterceptForSet(requester: owner, key: "submitAdvertisementProof", setValueIntercept: { [weak self] _, value, requester in
+            guard let self, self.isAdvertisementOwner(requester),
+                  await self.validateAccess("-w--", at: "submitAdvertisementProof", for: requester) else { return .string("denied") }
+            guard case let .object(payload) = value,
+                  case let .string(remoteID)? = payload["remoteUUID"], remoteID == self.radarLedger.selectedRemoteUUID,
+                  case let .string(digest)? = payload["policyDigest"],
+                  let challenge = self.selectedAccessChallenge, challenge.policy.digest == digest,
+                  challenge.publisherSessionID == remoteID,
+                  let evidenceValue = payload["evidence"],
+                  let bytes = try? JSONEncoder().encode(evidenceValue),
+                  let evidence = try? NearbyAccessEvidence.importing(bytes) else { throw SetValueError.paramErr }
+            self.beginAdvertisementRead(remoteUUID: remoteID, evidence: evidence, consentedPolicy: digest)
+            self.pushScannerEvent(topic: "scanner.advertisement.proof", title: "Nearby Proof Presented",
+                payload: ["event": .string("proofPresented")], requesterOverride: requester)
+            return .bool(true)
+        })
+
+        // A tap on a blip. Records the choice so the radar can ring it and
+        // the surrounding surface can read only the peer's explicitly published excerpt.
+        await addInterceptForSet(requester: owner, key: "select", setValueIntercept: { [weak self] _, value, requester in
+            guard let self = self else { return .string("failure") }
+            guard self.isAdvertisementOwner(requester) else { return .string("denied") }
+            if await self.validateAccess("-w--", at: "select", for: requester) {
+                let remoteUUID: String? = {
+                    if let id = self.remoteUUID(from: value) { return id }
+                    switch value {
+                    case let .string(id): return id
+                    case let .object(object):
+                        if case let .string(id)? = object["id"] { return id }
+                        if case let .string(id)? = object["item"] { return id }
+                        return nil
+                    default: return nil
+                    }
+                }()
+                guard let remoteUUID, self.radarLedger.entitiesById[remoteUUID] != nil else { return .string("notFound") }
+                self.radarLedger.select(remoteUUID)
+                self.selectedAccessChallenge = nil
+                self.beginAdvertisementRead(remoteUUID: remoteUUID)
+                // The shared flow announces a refresh; peer details remain in
+                // the owner-only radar snapshot, never in a subscriber event.
+                let payload: Object = ["event": .string("selected")]
+                self.pushScannerEvent(topic: EntityScannerTopics.status, title: "Entity Selected", payload: payload, requesterOverride: requester)
+            }
+            return nil
+        })
+
         await addInterceptForGet(requester: owner, key: "encounters", getValueIntercept: { [weak self] _, requester in
             guard let self = self else { return .list([]) }
             if await self.validateAccess("r---", at: "encounters", for: requester) {
@@ -186,7 +290,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 }
                 self.requester = requester
                 CellBase.diagnosticLog("EntityScannerCell stop keypath=\(keypath)", domain: .flow)
-                self.stopConnectService(requester: requester)
+                await self.stopConnectService(requester: requester)
             }
             return nil
         })
@@ -382,6 +486,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
 
         service.radarDelegate = self
+        await MainActor.run {
+            service.advertisementExchange = self.advertisementExchange
+            self.advertisementExchange.authorizeProof = { evidence, policy, reader in
+                await NearbyAgreementAuthorization.allows(evidence, policy: policy, reader: reader)
+            }
+        }
         service.start()
         connectService = service
 
@@ -419,7 +529,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         return result
     }
 
-    func stopConnectService(requester: Identity) {
+    func stopConnectService(requester: Identity) async {
+        await advertisementExchange.stop()
         let service = connectService
         connectService = nil
         service?.stop()
@@ -428,6 +539,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         peerBeacons.removeAll()
         peerOverlaps.removeAll()
         peerStates.removeAll()
+        radarLedger.clear()
+        selectedAdvertisement = nil
+        selectedAccessChallenge = nil
+        advertisementSelectionID = UUID()
+        advertisementStatus = "Velg et treff for å lese det som er annonsert."
         probeSession.reset()
         probeResponseTimeoutTasks.values.forEach { $0.cancel() }
         probeResponseTimeoutTasks.removeAll()
@@ -467,7 +583,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             }
             guard let self, !Task.isCancelled else { return }
             self.disclosurePolicy = .strict
-            self.stopConnectService(requester: requester)
+            await self.stopConnectService(requester: requester)
             self.pushScannerEvent(
                 topic: EntityScannerTopics.status,
                 title: "Nearby Disclosure Policy Expired",
@@ -1054,6 +1170,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         )
         flowElement.topic = topic
         flowElement.origin = self.uuid
+        radarLedger.consume(flowElement)
         guard let requester = requesterOverride ?? activeLocalIdentity() else {
             return
         }
@@ -1829,6 +1946,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     private func registerContracts(requester: Identity) async {
+        await registerAdvertisementContracts(requester: requester)
         await registerExploreContract(
             requester: requester,
             key: "verificationMethods",
@@ -2085,6 +2203,69 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             required: true,
             description: .string("Accepts or rejects a pending invitation; no invitation is auto-accepted.")
         )
+    }
+
+    private func registerAdvertisementContracts(requester: Identity) async {
+        let adSchema = ExploreContract.objectSchema(properties: [
+            "displayName": ExploreContract.schema(type: "string"),
+            "purposes": ExploreContract.objectSchema(description: "At most six purpose URI to public label entries."),
+            "interests": ExploreContract.objectSchema(description: "At most six interest URI to public label entries."),
+            "scope": ExploreContract.schema(type: "string"),
+            "scopeID": ExploreContract.schema(type: "string"),
+            "accessAgreement": ExploreContract.objectSchema(properties: [
+                "title": ExploreContract.schema(type: "string"),
+                "domain": ExploreContract.schema(type: "string"),
+                "verifierDID": ExploreContract.schema(type: "string"),
+                "conditions": ExploreContract.listSchema(item: ExploreContract.objectSchema(description: "Native typed Agreement Condition.")),
+            ], requiredKeys: ["title", "domain", "verifierDID", "conditions"]),
+            "thumbnail": ExploreContract.schema(type: "string", description: "Optional base64 JPEG/PNG thumbnail, at most 32 KiB, 256 by 256."),
+            "expiresAt": ExploreContract.schema(type: "number")
+        ], requiredKeys: ["displayName", "purposes", "interests", "scope", "expiresAt"],
+           description: "Explicitly published excerpt. Restricted scopes require accessAgreement with native Agreement Conditions, a domain, and an explicitly pinned verifier DID. No condition-free fallback.")
+        for (key, schema) in [("radar", ExploreContract.objectSchema()), ("advertisement", adSchema)] {
+            await registerExploreContract(requester: requester, key: key, method: .get, input: .null,
+                returns: ExploreContract.oneOfSchema(options: [schema, ExploreContract.schema(type: "null"), ExploreContract.schema(type: "string")]),
+                permissions: ["r---"], required: false, description: .string(key == "radar" ? "Local radar snapshot including selected public details." : "Owner-only active publication."))
+        }
+        for (key, schema) in [("select", Self.remoteSelectionSchema(description: "Select a discovered peer and read its advertised excerpt.")),
+                              ("publishAdvertisement", adSchema), ("withdrawAdvertisement", ExploreContract.schema(type: "bool")),
+                              ("submitAdvertisementProof", ExploreContract.objectSchema(properties: [
+                                "remoteUUID": ExploreContract.schema(type: "string"),
+                                "policyDigest": ExploreContract.schema(type: "string"),
+                                "evidence": ExploreContract.objectSchema(description: "Explicitly chosen signed Agreement authorizations. Write-only; never emitted or persisted.")
+                              ], requiredKeys: ["remoteUUID", "policyDigest", "evidence"]))] {
+            await registerExploreContract(requester: requester, key: key, method: .set, input: schema,
+                returns: ExploreContract.oneOfSchema(options: [adSchema, ExploreContract.schema(type: "bool"), ExploreContract.schema(type: "null"), ExploreContract.schema(type: "string")]),
+                permissions: ["-w--"], required: true,
+                flowEffects: key == "select" ? [Self.flowEffect(topic: EntityScannerTopics.status)] : [Self.flowEffect(topic: key == "submitAdvertisementProof" ? "scanner.advertisement.proof" : "scanner.advertisement.changed")],
+                description: .string(key == "select" ? "Owner-only selection. Reads only an explicitly published nearby excerpt." : key == "submitAdvertisementProof" ? "Owner-only explicit proof presentation for the selected peer and reviewed policy. Flow contains only an event marker, never the proof." : "Owner-only publication change. Flow contains only the active flag, never the excerpt."))
+        }
+    }
+
+    private func isAdvertisementOwner(_ requester: Identity) -> Bool {
+        let owner = storedOwnerIdentity
+        guard requester.uuid == owner.uuid,
+              let expected = owner.publicSecureKey?.compressedKey,
+              let actual = requester.publicSecureKey?.compressedKey else { return false }
+        return expected == actual
+    }
+
+    private func beginAdvertisementRead(remoteUUID: String, evidence: NearbyAccessEvidence? = nil, consentedPolicy: String? = nil) {
+        let selectionID = UUID()
+        advertisementSelectionID = selectionID
+        selectedAdvertisement = nil
+        advertisementStatus = evidence == nil ? "Henter annonserte detaljer …" : "Kontrollerer bevis …"
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.connectService?.readAdvertisementResult(remoteUUID: remoteUUID,
+                evidence: evidence, consentedPolicy: consentedPolicy) ?? .unavailable
+            guard self.advertisementSelectionID == selectionID,
+                  self.radarLedger.selectedRemoteUUID == remoteUUID else { return }
+            self.selectedAdvertisement = result.advertisement
+            if let challenge = result.challenge { self.selectedAccessChallenge = challenge }
+            if result.advertisement != nil { self.selectedAccessChallenge = nil }
+            self.advertisementStatus = result.message
+        }
     }
 
     private static func flowEffect(

@@ -1,6 +1,9 @@
 .DS_Store
 /.build
-/Packages
+/Packages/*
+!/Packages/CellNearby/
+/Packages/CellNearby/.build/
+/Packages/CellNearby/.swiftpm/
 /*.xcodeproj
 xcuserdata/
 DerivedData/
@@ -9,3 +12,9 @@ DerivedData/
 /.tmp-cache
 /.tmp-home
 /haven-*recovery*/
+
+# Lokale arbeidstrær, søppel og agentdata — skal aldri inn i historikken
+/_wt-*/
+/_to_delete/
+/.claude/
+*.zip

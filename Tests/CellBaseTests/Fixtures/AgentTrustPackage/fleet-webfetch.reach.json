@@ -1,0 +1,5 @@
+[
+  { "agent": "aigateway", "path": ["aigateway"], "destinations": ["destination://provider/anthropic"], "credentials": false, "permissions": "--x-", "summary": "Kan sende: prompt + systeminstruksjon. Kan ikke: lagre svar hos oss (s = nei), bruke leverandørverktøy, nå andre leverandører." },
+  { "agent": "aigateway", "path": ["aigateway", "webfetch"], "destinations": ["*.digipomps.org", "*.wikipedia.org", "docs.claude.com"], "credentials": false, "permissions": "--x-", "summary": "Kan lese (GET, https, ≤ 256 KB) fra *.digipomps.org, *.wikipedia.org, docs.claude.com. Kan ikke: POST, andre verter, redirect ut, bruke credentials." },
+  { "agent": "aigateway", "path": ["aigateway", "cred"], "destinations": [], "credentials": false, "permissions": "----", "summary": "Ingen vei. Ingen Grant. Modellen ser aldri en nøkkel." }
+]
