@@ -1585,7 +1585,7 @@ final class SkeletonTests: XCTestCase {
         let json = """
         {
           "keypath": "state.select", "label": "Program", "icon": "calendar",
-          "url": "cell:///Program", "payload": { "string": "program" },
+          "url": "cell:///Program", "payload": "program",
           "keypathKeypath": "state.actionPath", "labelKeypath": "state.actionLabel",
           "payloadKeypath": "state.actionPayload", "activeValue": "program"
         }
