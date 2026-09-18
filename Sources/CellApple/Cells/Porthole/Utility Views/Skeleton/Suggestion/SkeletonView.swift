@@ -3272,9 +3272,10 @@ private struct CellNavigationBarView: View {
                 if let iconName = item.icon, iconName.isEmpty == false {
                     Image(systemName: iconName)
                         .font(.body)
+                        .accessibilityHidden(true)
                 }
                 Text(resolvedLabel(for: item))
-                    .font(.caption)
+                    .font(item.icon?.isEmpty == false ? .caption : .subheadline)
                     .fontWeight(active ? .semibold : .regular)
             }
             .foregroundStyle(active ? Color.accentColor : Color.primary)
