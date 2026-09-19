@@ -2158,6 +2158,80 @@ public struct SkeletonComponentSurface: Codable, Identifiable {
     }
 }
 
+/// Cell-supplied value at ComponentSurface.sourceKeypath (WP-R1, §2.2).
+/// The definition is unchanged across instances of the same componentID/revision.
+/// Reads use this mount's item first, then the host root; absent item uses root
+/// only. Actions target sourceCellEndpoint with {instanceID, componentID, revision}
+/// in a separate `mount` field beside the original payload. The source cell
+/// authorizes the action. The surface owns instanceID, including across updates;
+/// changing revision remounts the definition while retaining that instanceID.
+/// This descriptor performs no lookup, subscription, dispatch or authorization.
+public struct SkeletonComponentMount: Codable {
+    public var componentID: String
+    public var revision: String
+    public var sourceCellEndpoint: String
+    public var skeleton: SkeletonElement
+    public var item: ValueType?
+
+    public init(componentID: String, revision: String, sourceCellEndpoint: String,
+                skeleton: SkeletonElement, item: ValueType? = nil) {
+        self.componentID = componentID
+        self.revision = revision
+        self.sourceCellEndpoint = sourceCellEndpoint
+        self.skeleton = skeleton
+        self.item = item
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case componentID, revision, sourceCellEndpoint, skeleton, item
+    }
+
+    private func validate() throws {
+        try skeletonNonempty(componentID, field: "componentID")
+        try skeletonNonempty(revision, field: "revision")
+        try skeletonNonempty(sourceCellEndpoint, field: "sourceCellEndpoint")
+        if case .Unsupported(let failure) = skeleton {
+            throw SkeletonFormatError(field: "skeleton", reason: failure.reason ?? "unsupported definition")
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.componentID = try container.skeletonRequired(String.self, forKey: .componentID)
+        self.revision = try container.skeletonRequired(String.self, forKey: .revision)
+        self.sourceCellEndpoint = try container.skeletonRequired(String.self, forKey: .sourceCellEndpoint)
+        // Legacy element decoders can accept scalar payloads as empty elements.
+        // Require the canonical single-key wrapper and an object/array payload.
+        do {
+            let definition = try container.superDecoder(forKey: .skeleton)
+            let wrapper = try definition.container(keyedBy: DynamicCodingKey.self)
+            guard wrapper.allKeys.count == 1, let key = wrapper.allKeys.first else {
+                throw SkeletonFormatError(field: "skeleton", reason: "expected one element wrapper")
+            }
+            let body = try wrapper.superDecoder(forKey: key)
+            if (try? body.container(keyedBy: DynamicCodingKey.self)) == nil {
+                _ = try body.unkeyedContainer()
+            }
+        } catch {
+            throw SkeletonFormatError(field: "skeleton", reason: String(describing: error))
+        }
+        self.skeleton = try container.skeletonRequired(SkeletonElement.self, forKey: .skeleton)
+        self.item = try container.skeletonValue(ValueType.self, forKey: .item)
+        try validate()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(componentID, forKey: .componentID)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(sourceCellEndpoint, forKey: .sourceCellEndpoint)
+        try container.encode(skeleton, forKey: .skeleton)
+        try container.encodeIfPresent(item, forKey: .item)
+    }
+}
+
 public enum SkeletonListSelectionMode: String, Codable {
     case none
     case single

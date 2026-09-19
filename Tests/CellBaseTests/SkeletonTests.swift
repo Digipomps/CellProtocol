@@ -1642,6 +1642,174 @@ extension SkeletonTests {
         XCTAssertEqual(b.variant, .inline)
     }
 
+    private struct MountFixture: Decodable {
+        struct Root: Decodable {
+            let title: String
+            let subtitle: String
+            let mounts: [String: SkeletonComponentMount]
+        }
+        struct Update: Decodable { let sourceKeypath: String; let value: SkeletonComponentMount }
+        struct Expected: Decodable {
+            struct Display: Decodable, Equatable { let title: String; let subtitle: String }
+            struct Action: Decodable {
+                struct Trigger: Decodable { let instanceID: String; let keypath: String }
+                struct Dispatch: Decodable {
+                    let sourceCellEndpoint: String
+                    let keypath: String
+                    let payload: ValueType
+                    let mount: [String: String]
+                }
+                let trigger: Trigger
+                let dispatch: Dispatch
+            }
+            let initial: [String: Display]
+            let actions: [Action]
+            let afterUpdates: [String: Display]
+            let unchangedInstanceIDs: [String]
+            let remountedInstanceIDs: [String]
+            let unchangedMounts: [String]
+            let unchangedDefinition: Bool
+        }
+        let hostCellEndpoint: String
+        let skeleton: SkeletonElement
+        let initialRoot: Root
+        let sourceUpdates: [Update]
+        let expected: Expected
+    }
+
+    private func wpR1MountFixture() throws -> MountFixture {
+        try JSONDecoder().decode(MountFixture.self, from: wpR1Fixture("component-mount-two-instances"))
+    }
+
+    private func wpR1Encoded<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+
+    func testWPR1ComponentMountRoundTripPreservesEveryField() throws {
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Fixture("component-mount-two-instances")) as? [String: Any])
+        let root = try XCTUnwrap(json["initialRoot"] as? [String: Any])
+        let mounts = try XCTUnwrap(root["mounts"] as? [String: Any])
+        let updates = try XCTUnwrap(json["sourceUpdates"] as? [[String: Any]])
+        for raw in Array(mounts.values) + updates.compactMap({ $0["value"] }) {
+            let data = try wpR1JSON(raw)
+            let mount = try JSONDecoder().decode(SkeletonComponentMount.self, from: data)
+            XCTAssertTrue(wpR1UnsupportedReasons(mount.skeleton).isEmpty)
+            XCTAssertEqual(try wpR1JSON(JSONSerialization.jsonObject(with: wpR1Encoded(mount))), data)
+            let again = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+            XCTAssertEqual(try wpR1Encoded(again), try wpR1Encoded(mount))
+        }
+    }
+
+    func testWPR1ComponentMountDefinitionsAreByteIdenticalAcrossInstancesAndItemUpdate() throws {
+        let fixture = try wpR1MountFixture()
+        let a = try XCTUnwrap(fixture.initialRoot.mounts["A"])
+        let b = try XCTUnwrap(fixture.initialRoot.mounts["B"])
+        let update = try XCTUnwrap(fixture.sourceUpdates.first)
+        for mount in [b, update.value] {
+            XCTAssertEqual(mount.componentID, a.componentID)
+            XCTAssertEqual(mount.revision, a.revision)
+            // Compare actual serialized bytes, including every nested field.
+            XCTAssertEqual(try wpR1Encoded(mount.skeleton), try wpR1Encoded(a.skeleton))
+        }
+        XCTAssertNotEqual(try wpR1Encoded(a.item), try wpR1Encoded(b.item))
+        XCTAssertNotEqual(try wpR1Encoded(a.item), try wpR1Encoded(update.value.item))
+        guard case .VStack(let definition) = a.skeleton,
+              case .Text(let title) = definition.elements[0],
+              case .Text(let subtitle) = definition.elements[1],
+              case .Button(let button) = definition.elements[2] else { return XCTFail("Definition lost") }
+        XCTAssertEqual(title.keypath, "title")
+        XCTAssertEqual(subtitle.keypath, "subtitle")
+        XCTAssertEqual(button.keypath, "actions.refresh", "Never rewrite keypaths per instance")
+    }
+
+    func testWPR1ComponentMountSharedRendererOracleHasConsistentBindingsActionsAndUpdate() throws {
+        // Validate the shared oracle; actual reads, dispatch and identity retention
+        // must still be executed by both renderers in T-F3.
+        let fixture = try wpR1MountFixture()
+        guard case .VStack(let surface) = fixture.skeleton else { return XCTFail("Expected two surfaces") }
+        XCTAssertEqual(surface.elements.count, 2)
+        var ids: [String] = []
+        for element in surface.elements {
+            guard case .ComponentSurface(let mountSurface) = element else { return XCTFail("Missing surface") }
+            ids.append(mountSurface.instanceID)
+            XCTAssertEqual(mountSurface.sourceKeypath, "mounts.\(mountSurface.instanceID)")
+            let mount = try XCTUnwrap(fixture.initialRoot.mounts[mountSurface.instanceID])
+            let expected = try XCTUnwrap(fixture.expected.initial[mountSurface.instanceID])
+            XCTAssertEqual(try wpR1Encoded(mount.item), try wpR1Encoded(["title": expected.title]))
+            XCTAssertEqual(expected.subtitle, fixture.initialRoot.subtitle)
+            XCTAssertNotEqual(expected.title, fixture.initialRoot.title)
+        }
+        XCTAssertEqual(ids, ["A", "B"])
+        XCTAssertEqual(fixture.expected.initial["A"]?.title, "Program")
+        XCTAssertEqual(fixture.expected.initial["B"]?.title, "Sesjoner")
+        XCTAssertEqual(fixture.expected.unchangedInstanceIDs, ids)
+        XCTAssertTrue(fixture.expected.remountedInstanceIDs.isEmpty)
+        XCTAssertEqual(fixture.expected.unchangedMounts, ["B"])
+        XCTAssertTrue(fixture.expected.unchangedDefinition)
+        XCTAssertEqual(fixture.sourceUpdates.count, 1)
+        let update = try XCTUnwrap(fixture.sourceUpdates.first)
+        XCTAssertEqual(update.sourceKeypath, "mounts.A")
+        XCTAssertEqual(try wpR1Encoded(update.value.item), try wpR1Encoded(["title": "Program oppdatert"]))
+        XCTAssertEqual(fixture.expected.afterUpdates["A"]?.title, "Program oppdatert")
+        XCTAssertEqual(fixture.expected.afterUpdates["A"]?.subtitle, fixture.initialRoot.subtitle)
+        XCTAssertEqual(fixture.expected.afterUpdates["B"], fixture.expected.initial["B"])
+        XCTAssertEqual(fixture.expected.actions.count, 1)
+        let action = try XCTUnwrap(fixture.expected.actions.first)
+        XCTAssertEqual(action.trigger.instanceID, "A")
+        let a = try XCTUnwrap(fixture.initialRoot.mounts[action.trigger.instanceID])
+        guard case .VStack(let definition) = a.skeleton,
+              case .Button(let button)? = definition.elements.last else { return XCTFail("Missing action") }
+        XCTAssertEqual(action.trigger.keypath, button.keypath)
+        XCTAssertEqual(action.dispatch.keypath, button.keypath)
+        XCTAssertEqual(action.dispatch.sourceCellEndpoint, a.sourceCellEndpoint)
+        XCTAssertNotEqual(action.dispatch.sourceCellEndpoint, fixture.hostCellEndpoint)
+        XCTAssertEqual(action.dispatch.mount, ["instanceID": "A", "componentID": a.componentID, "revision": a.revision])
+        XCTAssertEqual(try wpR1Encoded(action.dispatch.payload), try wpR1Encoded(button.payload))
+        XCTAssertEqual(try wpR1Encoded(action.dispatch.payload),
+                       try wpR1Encoded(["reason": "manual", "instanceID": "user-payload"]))
+    }
+
+    func testWPR1ComponentMountNegativeFixturesRejectWithFieldName() throws {
+        struct Fixture: Decodable { let name: String; let field: String; let mount: ValueType }
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: wpR1Fixture("negative-component-mounts"))
+        XCTAssertEqual(fixtures.count, 35)
+        for fixture in fixtures {
+            XCTAssertThrowsError(try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(fixture.mount)), fixture.name) {
+                XCTAssertTrue(String(describing: $0).contains(fixture.field), "\(fixture.name): \($0)")
+            }
+        }
+    }
+
+    func testWPR1ComponentMountOptionalItemAndProgrammaticValidation() throws {
+        var mount = try XCTUnwrap(wpR1MountFixture().initialRoot.mounts["A"])
+        mount.item = nil
+        let missing = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+        XCTAssertNil(missing.item)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Encoded(mount)) as? [String: Any])
+        json["item"] = NSNull()
+        XCTAssertNil(try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1JSON(json)).item)
+        // ValueType? is not restricted to object items.
+        for item in [ValueType.string("value"), .integer(3), .bool(false), .list([.string("row")])] {
+            mount.item = item
+            let again = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+            XCTAssertEqual(try wpR1Encoded(again.item), try wpR1Encoded(item))
+        }
+        for field in ["componentID", "revision", "sourceCellEndpoint", "skeleton"] {
+            var invalid = mount
+            switch field {
+            case "componentID": invalid.componentID = " \n"
+            case "revision": invalid.revision = ""
+            case "sourceCellEndpoint": invalid.sourceCellEndpoint = "\t"
+            default: invalid.skeleton = .Unsupported(.init(elementType: "Broken", reason: "invalid definition"))
+            }
+            XCTAssertThrowsError(try wpR1Encoded(invalid)) {
+                XCTAssertTrue(String(describing: $0).contains(field))
+            }
+        }
+    }
+
     func testWPR1NewModifierDefaultsAndPerEdgePaddingFallback() throws {
         let modifiers = try JSONDecoder().decode(SkeletonModifiers.self, from: Data("{}".utf8))
         // All 23 new optional fields stay absent; nil means the documented base behavior.

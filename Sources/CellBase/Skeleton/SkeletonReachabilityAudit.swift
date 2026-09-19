@@ -110,6 +110,18 @@ public struct SkeletonResolvedComponent {
         self.skeleton = skeleton
         self.dataContext = dataContext
     }
+
+    /// Adapts the wire mount without mistaking its item for the host root.
+    /// Host root/context availability is explicit; an enclosing row's item is
+    /// replaced even when this mount has no item. Endpoint routing and access
+    /// checks belong to the runtime, outside this structural reachability audit.
+    public init(mount: SkeletonComponentMount, hostContext: SkeletonReachabilityContext) {
+        let hasItem: Bool
+        if let item = mount.item, case .null = item { hasItem = false }
+        else { hasItem = mount.item != nil }
+        self.init(componentID: mount.componentID, revision: mount.revision, skeleton: mount.skeleton,
+                  dataContext: .init(root: hostContext.root, item: hasItem, context: hostContext.context))
+    }
 }
 
 public enum SkeletonReachabilityAudit {

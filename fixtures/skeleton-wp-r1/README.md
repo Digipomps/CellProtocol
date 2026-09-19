@@ -1,12 +1,44 @@
 # WP-R1 portable format fixtures
 
-These fixtures pin the approved `SKJELETT_ELEMENTER.md` iteration 5 contract.
+These fixtures pin the approved `SKJELETT_ELEMENTER.md` iteration 6 contract,
+including the mount binding in §2.2 (the other R1 fields retain iteration 5).
 They are shared inputs for the CellBase tests and the later web/native work.
 
 - `tree.json`: all required Tree fields, a wrapped VStack row, and all 23 new modifiers.
 - `component.json`: source keypath, stable instance ID, explicit pinned variant, and modifiers.
 - `modifiers.json`: the same complete modifier payload without an element wrapper.
 - `negative-modifiers.json`: named invalid payloads and the field that must appear in the rejection.
+- `component-mount-two-instances.json`: the shared web/native T-F3 oracle.
+- `negative-component-mounts.json`: 35 named rejected descriptors, including every
+  required field missing/null/wrong-type/blank, malformed skeleton wrappers, and
+  `instanceID` incorrectly placed in the descriptor.
+
+## Shared mount scenario
+
+Render `skeleton` with `initialRoot` as the host root at `hostCellEndpoint`.
+Resolve each surface's `sourceKeypath` item-first then root, just like other
+keypaths. The resolved value is a `SkeletonComponentMount`, without an extra
+wrapper. Its `item` replaces the current item for the mounted definition;
+the host root stays unchanged. Omitted/null item supplies no item data.
+
+`expected.initial` names the text shown by each stable instance ID. `title`
+comes from each mount's item and `subtitle` falls back to the host root.
+Execute each `expected.actions[].trigger` through the renderer's real action
+path and compare the emitted envelope with `dispatch`: sourceCellEndpoint,
+keypath, unchanged payload and separate mount metadata. The user payload's
+own instanceID deliberately differs from mount.instanceID to detect merging.
+The source cell decides access; this fixture does not grant any authority.
+
+Apply `sourceUpdates` in order by replacing only the value at sourceKeypath
+in the host root. Compare the resulting view with `expected.afterUpdates`.
+Assert unchangedInstanceIDs, no remountedInstanceIDs, unchangedMounts and the
+unchangedDefinition flag against actual renderer state. A's title changes;
+B's descriptor and both mounting identities stay unchanged.
+
+Both initial definitions and the update encode to byte-identical skeleton JSON
+with sorted keys. Only item changes; keypaths are never rewritten. Swift tests
+verify serialization and oracle consistency. T-F3 in each renderer must still
+prove actual binding, source dispatch, update isolation and retained identity.
 
 Swift tests: `swift test --filter SkeletonTests` and
 `swift test --filter SkeletonReachabilityAuditTests` from the package root.

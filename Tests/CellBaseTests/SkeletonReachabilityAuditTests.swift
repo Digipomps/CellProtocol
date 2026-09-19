@@ -214,6 +214,58 @@ extension SkeletonReachabilityAuditTests {
         XCTAssertEqual(SkeletonReachabilityAudit.reachableActionKeypaths(wpR1Mount()) { _ in definition }, ["contactImport.import.commit"])
     }
 
+    func testWPR1WireMountAdapterPreservesHostRootAndReplacesEnclosingItem() {
+        let itemAction = gated(SkeletonCondition(scope: .item, keypath: "canRefresh", equals: .bool(true)), importButton)
+        var mount = SkeletonComponentMount(componentID: "program", revision: "r1",
+            sourceCellEndpoint: "cell:///Program", skeleton: itemAction, item: .object(["canRefresh": .bool(true)]))
+        let withItem = SkeletonResolvedComponent(mount: mount, hostContext: .init())
+        XCTAssertEqual(withItem.componentID, "program")
+        XCTAssertEqual(withItem.revision, "r1")
+        XCTAssertEqual(withItem.dataContext, .init(item: true))
+        XCTAssertTrue(SkeletonReachabilityAudit.audit(wpR1Mount()) { _ in withItem }.isEmpty)
+        for absent in [nil, ValueType.null] as [ValueType?] {
+            mount.item = absent
+            let resolved = SkeletonResolvedComponent(mount: mount, hostContext: .row)
+            XCTAssertEqual(resolved.dataContext, .init(root: true, item: false, context: true))
+            let findings = SkeletonReachabilityAudit.audit(wpR1Mount(), context: .row) { _ in resolved }
+            XCTAssertEqual(findings.first?.kind, .unreachableAtRootScope)
+            XCTAssertEqual(findings.first?.lostActionKeypaths, ["contactImport.import.commit"])
+        }
+    }
+
+    func testWPR1WireMountItemDoesNotInventHostRootAvailability() {
+        let rootAction = gated(SkeletonCondition(scope: .root, keypath: "canRefresh", equals: .bool(true)), importButton)
+        let mount = SkeletonComponentMount(componentID: "program", revision: "r1",
+            sourceCellEndpoint: "cell:///Program", skeleton: rootAction, item: .object(["canRefresh": .bool(true)]))
+        let noRoot = SkeletonResolvedComponent(mount: mount, hostContext: .init())
+        XCTAssertEqual(SkeletonReachabilityAudit.audit(wpR1Mount()) { _ in noRoot }.first?.kind, .unreachableAtRootScope)
+        let withRoot = SkeletonResolvedComponent(mount: mount, hostContext: .init(root: true))
+        XCTAssertTrue(SkeletonReachabilityAudit.audit(wpR1Mount()) { _ in withRoot }.isEmpty)
+        XCTAssertEqual(SkeletonReachabilityAudit.reachableActionKeypaths(wpR1Mount()) { _ in withRoot }, ["contactImport.import.commit"])
+    }
+
+    func testWPR1WireMountSharedFixtureResolvesBothInstances() throws {
+        struct Fixture: Decodable {
+            struct Root: Decodable { let mounts: [String: SkeletonComponentMount] }
+            let skeleton: SkeletonElement
+            let initialRoot: Root
+        }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf:
+            root.appendingPathComponent("fixtures/skeleton-wp-r1/component-mount-two-instances.json")))
+        var seen: [String] = []
+        let findings = SkeletonReachabilityAudit.audit(fixture.skeleton, context: .init(root: true),
+                                                      requiredActionKeypaths: ["actions.refresh"]) { surface in
+            seen.append(surface.instanceID)
+            return fixture.initialRoot.mounts[surface.instanceID].map {
+                SkeletonResolvedComponent(mount: $0, hostContext: .init(root: true))
+            }
+        }
+        XCTAssertEqual(seen, ["A", "B"])
+        XCTAssertTrue(findings.isEmpty, "\(findings)")
+    }
+
     func testWPR1ComponentInTreeRowInheritsDataWithoutInventingItAtRoot() {
         let gatedAction = gated(SkeletonCondition(scope: .item, keypath: "canRefresh", equals: .bool(true)), importButton)
         let definition = SkeletonResolvedComponent(componentID: "program", revision: "r1", skeleton: gatedAction)
