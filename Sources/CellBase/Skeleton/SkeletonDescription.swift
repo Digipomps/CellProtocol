@@ -516,6 +516,467 @@ public struct SkeletonConditionExpression: Codable, Equatable {
     }
 }
 
+// MARK: - Portable layout and style contracts (WP-R1)
+
+/// New fields fail with a field name; legacy lossy modifier decoding is unchanged.
+public struct SkeletonFormatError: Error, Equatable, CustomStringConvertible {
+    public let field: String
+    public let reason: String
+    public var description: String { "SkeletonFormatError[\(field)]: \(reason)" }
+}
+
+private func skeletonNumber(_ value: Double?, field: String, minimum: Double? = nil, positive: Bool = false) throws {
+    guard let value else { return }
+    guard value.isFinite else { throw SkeletonFormatError(field: field, reason: "must be finite") }
+    if let minimum, value < minimum {
+        throw SkeletonFormatError(field: field, reason: "must be >= \(minimum)")
+    }
+    if positive && value <= 0 { throw SkeletonFormatError(field: field, reason: "must be > 0") }
+}
+
+private func skeletonRange(_ minimum: Double?, _ maximum: Double?, field: String) throws {
+    if let minimum, let maximum, minimum > maximum {
+        throw SkeletonFormatError(field: field, reason: "minimum exceeds maximum")
+    }
+}
+
+private func skeletonNonempty(_ value: String, field: String) throws {
+    if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        throw SkeletonFormatError(field: field, reason: "must not be blank")
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func skeletonValue<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T? {
+        do { return try decodeIfPresent(type, forKey: key) }
+        catch { throw SkeletonFormatError(field: key.stringValue, reason: String(describing: error)) }
+    }
+    func skeletonRequired<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
+        do { return try decode(type, forKey: key) }
+        catch { throw SkeletonFormatError(field: key.stringValue, reason: String(describing: error)) }
+    }
+}
+
+/// Closed objects for the new typed structures. No CSS, actions, or legacy aliases.
+private func skeletonKnownKeys(_ decoder: Decoder, allowed: [String]) throws {
+    let container = try decoder.container(keyedBy: DynamicCodingKey.self)
+    for key in container.allKeys.sorted(by: { $0.stringValue < $1.stringValue }) where !allowed.contains(key.stringValue) {
+        throw SkeletonFormatError(field: key.stringValue, reason: "unknown field")
+    }
+}
+
+public enum SkeletonNumericVariant: String, Codable { case proportional, tabular }
+public enum SkeletonRowDecoration: String, Codable { case platform, none }
+public enum SkeletonControlStyle: String, Codable { case platform, plain }
+public enum SkeletonBorderStyle: String, Codable { case solid, dashed, dotted }
+public enum SkeletonEdge: String, Codable { case top, leading, bottom, trailing }
+public enum SkeletonTextDecoration: String, Codable { case none, underline }
+public enum SkeletonLayoutAxis: String, Codable { case horizontal, vertical }
+public enum SkeletonCapability: String, Codable, Hashable { case pointer, hover, keyboard, drag, touch }
+public enum SkeletonComponentVariant: String, Codable { case inline, pinned }
+
+/// Logical edges, in the same units as width. Omitted edges use uniform padding,
+/// then zero; an explicit zero overrides padding. Insets must be finite and >= 0.
+public struct SkeletonInsets: Codable, Equatable {
+    public var top: Double?
+    public var leading: Double?
+    public var bottom: Double?
+    public var trailing: Double?
+
+    public init(
+        top: Double? = nil,
+        leading: Double? = nil,
+        bottom: Double? = nil,
+        trailing: Double? = nil
+    ) {
+        self.top = top
+        self.leading = leading
+        self.bottom = bottom
+        self.trailing = trailing
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case top, leading, bottom, trailing
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.top = try container.skeletonValue(Double.self, forKey: .top)
+        self.leading = try container.skeletonValue(Double.self, forKey: .leading)
+        self.bottom = try container.skeletonValue(Double.self, forKey: .bottom)
+        self.trailing = try container.skeletonValue(Double.self, forKey: .trailing)
+        try validate()
+    }
+
+    public func validate() throws {
+        try skeletonNumber(top, field: "top", minimum: 0)
+        try skeletonNumber(leading, field: "leading", minimum: 0)
+        try skeletonNumber(bottom, field: "bottom", minimum: 0)
+        try skeletonNumber(trailing, field: "trailing", minimum: 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(top, forKey: .top)
+        try container.encodeIfPresent(leading, forKey: .leading)
+        try container.encodeIfPresent(bottom, forKey: .bottom)
+        try container.encodeIfPresent(trailing, forKey: .trailing)
+    }
+
+    public func resolved(padding: Double? = nil) -> SkeletonInsets {
+        SkeletonInsets(top: top ?? padding ?? 0, leading: leading ?? padding ?? 0,
+                       bottom: bottom ?? padding ?? 0, trailing: trailing ?? padding ?? 0)
+    }
+}
+
+/// A partial visual override. Missing properties leave the existing style intact.
+public struct SkeletonInteractionStyle: Codable, Equatable {
+    public var background: String?
+    public var foregroundColor: String?
+    public var opacity: Double?
+
+    public init(
+        background: String? = nil,
+        foregroundColor: String? = nil,
+        opacity: Double? = nil
+    ) {
+        self.background = background
+        self.foregroundColor = foregroundColor
+        self.opacity = opacity
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case background, foregroundColor, opacity
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.background = try container.skeletonValue(String.self, forKey: .background)
+        self.foregroundColor = try container.skeletonValue(String.self, forKey: .foregroundColor)
+        self.opacity = try container.skeletonValue(Double.self, forKey: .opacity)
+        try validate()
+    }
+
+    public func validate() throws {
+        try skeletonNumber(opacity, field: "opacity", minimum: 0)
+        if let opacity, opacity > 1 { throw SkeletonFormatError(field: "opacity", reason: "must be <= 1") }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(background, forKey: .background)
+        try container.encodeIfPresent(foregroundColor, forKey: .foregroundColor)
+        try container.encodeIfPresent(opacity, forKey: .opacity)
+    }
+}
+
+/// Host drag state is transient (R4). Absence means no override. When both drag
+/// states apply, dragSource properties override dragActive properties.
+public struct SkeletonInteractionStyles: Codable, Equatable {
+    public var hover: SkeletonInteractionStyle?
+    public var focusVisible: SkeletonInteractionStyle?
+    public var dragSource: SkeletonInteractionStyle?
+    public var dragActive: SkeletonInteractionStyle?
+
+    public init(
+        hover: SkeletonInteractionStyle? = nil,
+        focusVisible: SkeletonInteractionStyle? = nil,
+        dragSource: SkeletonInteractionStyle? = nil,
+        dragActive: SkeletonInteractionStyle? = nil
+    ) {
+        self.hover = hover
+        self.focusVisible = focusVisible
+        self.dragSource = dragSource
+        self.dragActive = dragActive
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case hover, focusVisible, dragSource, dragActive
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hover = try container.skeletonValue(SkeletonInteractionStyle.self, forKey: .hover)
+        self.focusVisible = try container.skeletonValue(SkeletonInteractionStyle.self, forKey: .focusVisible)
+        self.dragSource = try container.skeletonValue(SkeletonInteractionStyle.self, forKey: .dragSource)
+        self.dragActive = try container.skeletonValue(SkeletonInteractionStyle.self, forKey: .dragActive)
+    }
+
+    public func dragStyle(isSource: Bool, isActive: Bool) -> SkeletonInteractionStyle? {
+        // A source always implies an active drag, even if a caller omitted that flag.
+        let active = (isActive || isSource) ? dragActive : nil
+        guard isSource, let source = dragSource else { return active }
+        return SkeletonInteractionStyle(background: source.background ?? active?.background,
+            foregroundColor: source.foregroundColor ?? active?.foregroundColor,
+            opacity: source.opacity ?? active?.opacity)
+    }
+}
+
+/// Decorative overlay at the logical leading edge; no layout or hit-test area.
+/// Offset is signed; dimensions/insets/radius are finite and nonnegative.
+public struct SkeletonLeadingMarker: Codable, Equatable {
+    public var width: Double
+    public var insetTop: Double
+    public var insetBottom: Double
+    public var offset: Double
+    public var cornerRadius: Double
+    public var color: String
+
+    public init(
+        width: Double,
+        insetTop: Double,
+        insetBottom: Double,
+        offset: Double,
+        cornerRadius: Double,
+        color: String
+    ) {
+        self.width = width
+        self.insetTop = insetTop
+        self.insetBottom = insetBottom
+        self.offset = offset
+        self.cornerRadius = cornerRadius
+        self.color = color
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case width, insetTop, insetBottom, offset, cornerRadius, color
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.width = try container.skeletonRequired(Double.self, forKey: .width)
+        self.insetTop = try container.skeletonRequired(Double.self, forKey: .insetTop)
+        self.insetBottom = try container.skeletonRequired(Double.self, forKey: .insetBottom)
+        self.offset = try container.skeletonRequired(Double.self, forKey: .offset)
+        self.cornerRadius = try container.skeletonRequired(Double.self, forKey: .cornerRadius)
+        self.color = try container.skeletonRequired(String.self, forKey: .color)
+        try validate()
+    }
+
+    public func validate() throws {
+        try skeletonNumber(width, field: "width", minimum: 0)
+        try skeletonNumber(insetTop, field: "insetTop", minimum: 0)
+        try skeletonNumber(insetBottom, field: "insetBottom", minimum: 0)
+        try skeletonNumber(offset, field: "offset")
+        try skeletonNumber(cornerRadius, field: "cornerRadius", minimum: 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(width, forKey: .width)
+        try container.encode(insetTop, forKey: .insetTop)
+        try container.encode(insetBottom, forKey: .insetBottom)
+        try container.encode(offset, forKey: .offset)
+        try container.encode(cornerRadius, forKey: .cornerRadius)
+        try container.encode(color, forKey: .color)
+    }
+}
+
+/// Inclusive declared thresholds; all capability requirements must hold. Unknown
+/// dimensions cannot match a threshold. Array order determines the first match.
+/// Overrides change layout only, preserving the mounted element and its state.
+public struct SkeletonLayoutVariant: Codable {
+    public var when: SkeletonCondition?
+    public var minAvailableWidth: Double?
+    public var maxAvailableWidth: Double?
+    public var minAvailableHeight: Double?
+    public var maxAvailableHeight: Double?
+    public var requiresCapability: [SkeletonCapability]?
+    public var axis: SkeletonLayoutAxis?
+    public var columns: [SkeletonGridColumn]?
+    public var spacing: Double?
+    public var paddingInsets: SkeletonInsets?
+    public var minHeight: Double?
+    public var maxHeight: Double?
+    public var flexGrow: Double?
+    public var fontSize: Double?
+    public var borderColor: String?
+    public var foregroundColor: String?
+
+    public init(
+        when: SkeletonCondition? = nil,
+        minAvailableWidth: Double? = nil,
+        maxAvailableWidth: Double? = nil,
+        minAvailableHeight: Double? = nil,
+        maxAvailableHeight: Double? = nil,
+        requiresCapability: [SkeletonCapability]? = nil,
+        axis: SkeletonLayoutAxis? = nil,
+        columns: [SkeletonGridColumn]? = nil,
+        spacing: Double? = nil,
+        paddingInsets: SkeletonInsets? = nil,
+        minHeight: Double? = nil,
+        maxHeight: Double? = nil,
+        flexGrow: Double? = nil,
+        fontSize: Double? = nil,
+        borderColor: String? = nil,
+        foregroundColor: String? = nil
+    ) {
+        self.when = when
+        self.minAvailableWidth = minAvailableWidth
+        self.maxAvailableWidth = maxAvailableWidth
+        self.minAvailableHeight = minAvailableHeight
+        self.maxAvailableHeight = maxAvailableHeight
+        self.requiresCapability = requiresCapability
+        self.axis = axis
+        self.columns = columns
+        self.spacing = spacing
+        self.paddingInsets = paddingInsets
+        self.minHeight = minHeight
+        self.maxHeight = maxHeight
+        self.flexGrow = flexGrow
+        self.fontSize = fontSize
+        self.borderColor = borderColor
+        self.foregroundColor = foregroundColor
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case when, minAvailableWidth, maxAvailableWidth, minAvailableHeight, maxAvailableHeight, requiresCapability, axis, columns, spacing, paddingInsets, minHeight, maxHeight, flexGrow, fontSize, borderColor, foregroundColor
+    }
+
+    public init(from decoder: Decoder) throws {
+        try skeletonKnownKeys(decoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.when = try container.skeletonValue(SkeletonCondition.self, forKey: .when)
+        self.minAvailableWidth = try container.skeletonValue(Double.self, forKey: .minAvailableWidth)
+        self.maxAvailableWidth = try container.skeletonValue(Double.self, forKey: .maxAvailableWidth)
+        self.minAvailableHeight = try container.skeletonValue(Double.self, forKey: .minAvailableHeight)
+        self.maxAvailableHeight = try container.skeletonValue(Double.self, forKey: .maxAvailableHeight)
+        self.requiresCapability = try container.skeletonValue([SkeletonCapability].self, forKey: .requiresCapability)
+        self.axis = try container.skeletonValue(SkeletonLayoutAxis.self, forKey: .axis)
+        self.columns = try container.skeletonValue([SkeletonGridColumn].self, forKey: .columns)
+        if columns != nil {
+            var encodedColumns = try container.nestedUnkeyedContainer(forKey: .columns)
+            while !encodedColumns.isAtEnd {
+                try skeletonKnownKeys(encodedColumns.superDecoder(), allowed: ["type", "value", "min", "max"])
+            }
+        }
+        self.spacing = try container.skeletonValue(Double.self, forKey: .spacing)
+        self.paddingInsets = try container.skeletonValue(SkeletonInsets.self, forKey: .paddingInsets)
+        self.minHeight = try container.skeletonValue(Double.self, forKey: .minHeight)
+        self.maxHeight = try container.skeletonValue(Double.self, forKey: .maxHeight)
+        self.flexGrow = try container.skeletonValue(Double.self, forKey: .flexGrow)
+        self.fontSize = try container.skeletonValue(Double.self, forKey: .fontSize)
+        self.borderColor = try container.skeletonValue(String.self, forKey: .borderColor)
+        self.foregroundColor = try container.skeletonValue(String.self, forKey: .foregroundColor)
+        try validate()
+    }
+
+    public func validate() throws {
+        try skeletonNumber(minAvailableWidth, field: "minAvailableWidth", minimum: 0)
+        try skeletonNumber(maxAvailableWidth, field: "maxAvailableWidth", minimum: 0)
+        try skeletonNumber(minAvailableHeight, field: "minAvailableHeight", minimum: 0)
+        try skeletonNumber(maxAvailableHeight, field: "maxAvailableHeight", minimum: 0)
+        try skeletonNumber(spacing, field: "spacing", minimum: 0)
+        try skeletonNumber(minHeight, field: "minHeight", minimum: 0)
+        try skeletonNumber(maxHeight, field: "maxHeight", minimum: 0)
+        try skeletonNumber(flexGrow, field: "flexGrow", minimum: 0)
+        try skeletonNumber(fontSize, field: "fontSize", positive: true)
+        try skeletonRange(minAvailableWidth, maxAvailableWidth, field: "availableWidth")
+        try skeletonRange(minAvailableHeight, maxAvailableHeight, field: "availableHeight")
+        try skeletonRange(minHeight, maxHeight, field: "height")
+        if let when { try Self.validateCondition(when) }
+        if let columns {
+            guard !columns.isEmpty else { throw SkeletonFormatError(field: "columns", reason: "must not be empty") }
+            for (index, column) in columns.enumerated() {
+                let field = "columns[\(index)]"
+                try skeletonNumber(column.value, field: field + ".value", minimum: 0)
+                try skeletonNumber(column.min, field: field + ".min", minimum: 0)
+                try skeletonNumber(column.max, field: field + ".max", minimum: 0)
+                try skeletonRange(column.min, column.max, field: field)
+                if column.type == .fixed && column.value == nil {
+                    throw SkeletonFormatError(field: field + ".value", reason: "fixed column requires value")
+                }
+                if column.type == .adaptive {
+                    guard let minimum = column.min, minimum > 0 else {
+                        throw SkeletonFormatError(field: field + ".min", reason: "adaptive column requires min > 0")
+                    }
+                }
+            }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try validate()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(when, forKey: .when)
+        try container.encodeIfPresent(minAvailableWidth, forKey: .minAvailableWidth)
+        try container.encodeIfPresent(maxAvailableWidth, forKey: .maxAvailableWidth)
+        try container.encodeIfPresent(minAvailableHeight, forKey: .minAvailableHeight)
+        try container.encodeIfPresent(maxAvailableHeight, forKey: .maxAvailableHeight)
+        try container.encodeIfPresent(requiresCapability, forKey: .requiresCapability)
+        try container.encodeIfPresent(axis, forKey: .axis)
+        try container.encodeIfPresent(columns, forKey: .columns)
+        try container.encodeIfPresent(spacing, forKey: .spacing)
+        try container.encodeIfPresent(paddingInsets, forKey: .paddingInsets)
+        try container.encodeIfPresent(minHeight, forKey: .minHeight)
+        try container.encodeIfPresent(maxHeight, forKey: .maxHeight)
+        try container.encodeIfPresent(flexGrow, forKey: .flexGrow)
+        try container.encodeIfPresent(fontSize, forKey: .fontSize)
+        try container.encodeIfPresent(borderColor, forKey: .borderColor)
+        try container.encodeIfPresent(foregroundColor, forKey: .foregroundColor)
+    }
+
+    private static func validateCondition(_ condition: SkeletonCondition) throws {
+        guard case .expression(let expression) = condition else { return }
+        if expression.isMalformed {
+            throw SkeletonFormatError(field: "when", reason: "malformed condition")
+        }
+        for child in (expression.allOf ?? []) + (expression.anyOf ?? []) { try validateCondition(child) }
+        if let child = expression.not { try validateCondition(child) }
+    }
+
+    public func matches(_ layout: SkeletonLayoutContext, root: ValueType? = nil,
+                        item: ValueType? = nil, context: ValueType? = nil) -> Bool {
+        guard (try? validate()) != nil else { return false }
+        func within(_ value: Double?, _ minimum: Double?, _ maximum: Double?) -> Bool {
+            guard minimum != nil || maximum != nil else { return true }
+            guard let value else { return false }
+            return (minimum.map { value >= $0 } ?? true) && (maximum.map { value <= $0 } ?? true)
+        }
+        return within(layout.availableWidth, minAvailableWidth, maxAvailableWidth)
+            && within(layout.availableHeight, minAvailableHeight, maxAvailableHeight)
+            && Set(requiresCapability ?? []).isSubset(of: layout.capabilities)
+            && (when?.evaluate(root: root, item: item, context: context) ?? true)
+    }
+}
+
+/// V3-A: the host declares available content space once, then known containers
+/// narrow it for their children (fixed panel/drawer widths or allocated Grid tracks).
+/// No measurement occurs here. Undeclared axes inherit; nil means unknown, never
+/// infinity. A child cannot enlarge a known parent budget. Capabilities are inherited.
+public struct SkeletonLayoutContext: Equatable {
+    public let availableWidth: Double?
+    public let availableHeight: Double?
+    public let capabilities: Set<SkeletonCapability>
+
+    public init(availableWidth: Double? = nil, availableHeight: Double? = nil,
+                capabilities: Set<SkeletonCapability> = []) throws {
+        try skeletonNumber(availableWidth, field: "availableWidth", minimum: 0)
+        try skeletonNumber(availableHeight, field: "availableHeight", minimum: 0)
+        self.availableWidth = availableWidth
+        self.availableHeight = availableHeight
+        self.capabilities = capabilities
+    }
+
+    public func narrowed(availableWidth: Double? = nil, availableHeight: Double? = nil) throws -> SkeletonLayoutContext {
+        try skeletonNumber(availableWidth, field: "availableWidth", minimum: 0)
+        try skeletonNumber(availableHeight, field: "availableHeight", minimum: 0)
+        func narrow(_ parent: Double?, _ child: Double?) -> Double? {
+            guard let child else { return parent }
+            return parent.map { min($0, child) } ?? child
+        }
+        return try SkeletonLayoutContext(availableWidth: narrow(self.availableWidth, availableWidth),
+            availableHeight: narrow(self.availableHeight, availableHeight), capabilities: capabilities)
+    }
+}
+
 public struct SkeletonModifiers: Codable {
     public var localization: [String: SkeletonLocalizedText]?
     public var padding: Double?
@@ -578,9 +1039,71 @@ public struct SkeletonModifiers: Codable {
     public var dropDeniedReasonKeypath: String?
     public var accessibilityDropLabel: String?
 
+    // M1-M10 defaults: nil preserves the existing renderer style/layout. Insets
+    // fall back per edge to uniform padding; fontFamilies is ordered, ending in
+    // the host's existing font fallback. lineHeightMultiple (> 0) is the line box
+    // height / fontSize, not extra inter-line spacing. Signed tracking, spread,
+    // and rotation are allowed; sizes, itemSpacing and flexGrow must be >= 0.
+    // nil rowDecoration/controlStyle means platform; nil borderStyle means solid;
+    // nil borderEdges means all, [] means none. contentClip defaults to false and
+    // clips to the rounded content boundary. nil textDecoration means no override.
+    public var paddingInsets: SkeletonInsets?
+    public var fontFamilies: [String]?
+    public var lineHeightMultiple: Double?
+    public var letterSpacing: Double?
+    public var numericVariant: SkeletonNumericVariant?
+    public var itemSpacing: Double?
+    public var rowInsets: SkeletonInsets?
+    public var rowDecoration: SkeletonRowDecoration?
+    public var minHeight: Double?
+    public var maxHeight: Double?
+    public var minWidth: Double?
+    public var flexGrow: Double?
+    public var controlStyle: SkeletonControlStyle?
+    public var accessibilityLabel: String?
+    public var borderStyle: SkeletonBorderStyle?
+    public var shadowSpread: Double?
+    public var borderEdges: [SkeletonEdge]?
+    public var contentClip: Bool?
+    public var layoutVariants: [SkeletonLayoutVariant]?
+    public var interactionStyles: SkeletonInteractionStyles?
+    public var textDecoration: SkeletonTextDecoration?
+    public var textRotationDegrees: Double?
+    public var leadingMarker: SkeletonLeadingMarker?
+
     public init() {}
 
+    /// Nil means use the base layout, with no remount or action substitution.
+    public func layoutVariant(in layout: SkeletonLayoutContext, root: ValueType? = nil,
+                              item: ValueType? = nil, context: ValueType? = nil) -> SkeletonLayoutVariant? {
+        layoutVariants?.first { $0.matches(layout, root: root, item: item, context: context) }
+    }
+
+
     enum CodingKeys: String, CodingKey {
+        case paddingInsets
+        case fontFamilies
+        case lineHeightMultiple
+        case letterSpacing
+        case numericVariant
+        case itemSpacing
+        case rowInsets
+        case rowDecoration
+        case minHeight
+        case maxHeight
+        case minWidth
+        case flexGrow
+        case controlStyle
+        case accessibilityLabel
+        case borderStyle
+        case shadowSpread
+        case borderEdges
+        case contentClip
+        case layoutVariants
+        case interactionStyles
+        case textDecoration
+        case textRotationDegrees
+        case leadingMarker
         case localization
         case padding
         case maxWidthInfinity
@@ -632,6 +1155,43 @@ public struct SkeletonModifiers: Codable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        self.paddingInsets = try container.skeletonValue(SkeletonInsets.self, forKey: .paddingInsets)
+        self.fontFamilies = try container.skeletonValue([String].self, forKey: .fontFamilies)
+        self.lineHeightMultiple = try container.skeletonValue(Double.self, forKey: .lineHeightMultiple)
+        self.letterSpacing = try container.skeletonValue(Double.self, forKey: .letterSpacing)
+        self.numericVariant = try container.skeletonValue(SkeletonNumericVariant.self, forKey: .numericVariant)
+        self.itemSpacing = try container.skeletonValue(Double.self, forKey: .itemSpacing)
+        self.rowInsets = try container.skeletonValue(SkeletonInsets.self, forKey: .rowInsets)
+        self.rowDecoration = try container.skeletonValue(SkeletonRowDecoration.self, forKey: .rowDecoration)
+        self.minHeight = try container.skeletonValue(Double.self, forKey: .minHeight)
+        self.maxHeight = try container.skeletonValue(Double.self, forKey: .maxHeight)
+        self.minWidth = try container.skeletonValue(Double.self, forKey: .minWidth)
+        self.flexGrow = try container.skeletonValue(Double.self, forKey: .flexGrow)
+        self.controlStyle = try container.skeletonValue(SkeletonControlStyle.self, forKey: .controlStyle)
+        self.accessibilityLabel = try container.skeletonValue(String.self, forKey: .accessibilityLabel)
+        self.borderStyle = try container.skeletonValue(SkeletonBorderStyle.self, forKey: .borderStyle)
+        self.shadowSpread = try container.skeletonValue(Double.self, forKey: .shadowSpread)
+        self.borderEdges = try container.skeletonValue([SkeletonEdge].self, forKey: .borderEdges)
+        self.contentClip = try container.skeletonValue(Bool.self, forKey: .contentClip)
+        self.layoutVariants = try container.skeletonValue([SkeletonLayoutVariant].self, forKey: .layoutVariants)
+        self.interactionStyles = try container.skeletonValue(SkeletonInteractionStyles.self, forKey: .interactionStyles)
+        self.textDecoration = try container.skeletonValue(SkeletonTextDecoration.self, forKey: .textDecoration)
+        self.textRotationDegrees = try container.skeletonValue(Double.self, forKey: .textRotationDegrees)
+        self.leadingMarker = try container.skeletonValue(SkeletonLeadingMarker.self, forKey: .leadingMarker)
+        try skeletonNumber(lineHeightMultiple, field: "lineHeightMultiple", positive: true)
+        try skeletonNumber(letterSpacing, field: "letterSpacing")
+        try skeletonNumber(itemSpacing, field: "itemSpacing", minimum: 0)
+        try skeletonNumber(minHeight, field: "minHeight", minimum: 0)
+        try skeletonNumber(maxHeight, field: "maxHeight", minimum: 0)
+        try skeletonNumber(minWidth, field: "minWidth", minimum: 0)
+        try skeletonNumber(flexGrow, field: "flexGrow", minimum: 0)
+        try skeletonNumber(shadowSpread, field: "shadowSpread")
+        try skeletonNumber(textRotationDegrees, field: "textRotationDegrees")
+        try skeletonRange(minHeight, maxHeight, field: "height")
+        if let fontFamilies {
+            for family in fontFamilies { try skeletonNonempty(family, field: "fontFamilies") }
+        }
 
         self.localization = try container.decodeIfPresent([String: SkeletonLocalizedText].self, forKey: .localization)
         self.padding = Self.decodeLossy(Double.self, from: container, forKey: .padding)
@@ -1390,6 +1950,211 @@ public struct SkeletonVStack: Codable, Identifiable {
         try elementContainer.encode(self.elements, forKey: .elements)
         try elementContainer.encodeIfPresent(self.spacing, forKey: .spacing)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
+    }
+}
+
+/// A cell-supplied, already ordered visible node list. No renderer traversal or
+/// filtering. ID/parentID and level (root = 1) are independent of leading inset.
+/// Selection sends {nodeID:String}; expansion sends {nodeID:String, expanded:Bool}
+/// and waits for the cell's confirmed list. Row data drives row/disclosure modifiers.
+/// All keypaths and the wrapped rowSkeleton are required; optional modifiers add
+/// no List shell. Missing actions are format errors and also audit errors for
+/// programmatically incomplete trees.
+public struct SkeletonTree: Codable, Identifiable {
+    public var id = UUID() // transient Swift identity; never a source/node/instance identifier
+    public var keypath: String
+    public var idKeypath: String
+    public var parentIDKeypath: String
+    public var levelKeypath: String
+    public var leadingInsetKeypath: String
+    public var hasChildrenKeypath: String
+    public var expandedKeypath: String
+    public var selectedIDStateKeypath: String
+    public var selectionActionKeypath: String
+    public var expansionActionKeypath: String
+    public var rowSkeleton: SkeletonVStack
+    public var disclosureModifiers: SkeletonModifiers?
+    public var rowModifiers: SkeletonModifiers?
+    public var modifiers: SkeletonModifiers?
+
+    public init(
+        keypath: String,
+        idKeypath: String,
+        parentIDKeypath: String,
+        levelKeypath: String,
+        leadingInsetKeypath: String,
+        hasChildrenKeypath: String,
+        expandedKeypath: String,
+        selectedIDStateKeypath: String,
+        selectionActionKeypath: String,
+        expansionActionKeypath: String,
+        rowSkeleton: SkeletonVStack,
+        disclosureModifiers: SkeletonModifiers? = nil,
+        rowModifiers: SkeletonModifiers? = nil,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.keypath = keypath
+        self.idKeypath = idKeypath
+        self.parentIDKeypath = parentIDKeypath
+        self.levelKeypath = levelKeypath
+        self.leadingInsetKeypath = leadingInsetKeypath
+        self.hasChildrenKeypath = hasChildrenKeypath
+        self.expandedKeypath = expandedKeypath
+        self.selectedIDStateKeypath = selectedIDStateKeypath
+        self.selectionActionKeypath = selectionActionKeypath
+        self.expansionActionKeypath = expansionActionKeypath
+        self.rowSkeleton = rowSkeleton
+        self.disclosureModifiers = disclosureModifiers
+        self.rowModifiers = rowModifiers
+        self.modifiers = modifiers
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case keypath, idKeypath, parentIDKeypath, levelKeypath, leadingInsetKeypath, hasChildrenKeypath, expandedKeypath, selectedIDStateKeypath, selectionActionKeypath, expansionActionKeypath, rowSkeleton, disclosureModifiers, rowModifiers, modifiers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let payloadDecoder: Decoder
+        let wrapper = try decoder.container(keyedBy: DynamicCodingKey.self)
+        if wrapper.allKeys.count == 1, let key = wrapper.allKeys.first, key.stringValue == "Tree" {
+            payloadDecoder = try wrapper.superDecoder(forKey: key)
+        } else { payloadDecoder = decoder }
+        try skeletonKnownKeys(payloadDecoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try payloadDecoder.container(keyedBy: CodingKeys.self)
+        self.keypath = try container.skeletonRequired(String.self, forKey: .keypath)
+        self.idKeypath = try container.skeletonRequired(String.self, forKey: .idKeypath)
+        self.parentIDKeypath = try container.skeletonRequired(String.self, forKey: .parentIDKeypath)
+        self.levelKeypath = try container.skeletonRequired(String.self, forKey: .levelKeypath)
+        self.leadingInsetKeypath = try container.skeletonRequired(String.self, forKey: .leadingInsetKeypath)
+        self.hasChildrenKeypath = try container.skeletonRequired(String.self, forKey: .hasChildrenKeypath)
+        self.expandedKeypath = try container.skeletonRequired(String.self, forKey: .expandedKeypath)
+        self.selectedIDStateKeypath = try container.skeletonRequired(String.self, forKey: .selectedIDStateKeypath)
+        self.selectionActionKeypath = try container.skeletonRequired(String.self, forKey: .selectionActionKeypath)
+        self.expansionActionKeypath = try container.skeletonRequired(String.self, forKey: .expansionActionKeypath)
+        // Do not pass a wrapper to VStack's permissive bare-payload decoder.
+        let rowDecoder = try container.superDecoder(forKey: .rowSkeleton)
+        let rowWrapper = try rowDecoder.container(keyedBy: DynamicCodingKey.self)
+        guard rowWrapper.allKeys.count == 1, let key = rowWrapper.allKeys.first, key.stringValue == "VStack" else {
+            throw SkeletonFormatError(field: "rowSkeleton", reason: "expected a wrapped VStack")
+        }
+        let body = try rowWrapper.superDecoder(forKey: key)
+        // VStack's legacy decoder can turn invalid payloads into an empty stack.
+        if let object = try? body.container(keyedBy: SkeletonVStack.CodingKeys.self) {
+            _ = try object.skeletonRequired(SkeletonElementList.self, forKey: .elements)
+        } else {
+            _ = try body.unkeyedContainer()
+        }
+        let decodedRow = try container.skeletonRequired(SkeletonElement.self, forKey: .rowSkeleton)
+        guard case .VStack(let row) = decodedRow else {
+            let reason: String
+            if case .Unsupported(let failure) = decodedRow { reason = failure.reason ?? "unsupported VStack" }
+            else { reason = "expected VStack" }
+            throw SkeletonFormatError(field: "rowSkeleton", reason: reason)
+        }
+        self.rowSkeleton = row
+        self.disclosureModifiers = try container.skeletonValue(SkeletonModifiers.self, forKey: .disclosureModifiers)
+        self.rowModifiers = try container.skeletonValue(SkeletonModifiers.self, forKey: .rowModifiers)
+        self.modifiers = try container.skeletonValue(SkeletonModifiers.self, forKey: .modifiers)
+        try skeletonNonempty(keypath, field: "keypath")
+        try skeletonNonempty(idKeypath, field: "idKeypath")
+        try skeletonNonempty(parentIDKeypath, field: "parentIDKeypath")
+        try skeletonNonempty(levelKeypath, field: "levelKeypath")
+        try skeletonNonempty(leadingInsetKeypath, field: "leadingInsetKeypath")
+        try skeletonNonempty(hasChildrenKeypath, field: "hasChildrenKeypath")
+        try skeletonNonempty(expandedKeypath, field: "expandedKeypath")
+        try skeletonNonempty(selectedIDStateKeypath, field: "selectedIDStateKeypath")
+        try skeletonNonempty(selectionActionKeypath, field: "selectionActionKeypath")
+        try skeletonNonempty(expansionActionKeypath, field: "expansionActionKeypath")
+    }
+
+    private enum ElementKey: CodingKey { case Tree }
+
+    public func encode(to encoder: Encoder) throws {
+        try skeletonNonempty(keypath, field: "keypath")
+        try skeletonNonempty(idKeypath, field: "idKeypath")
+        try skeletonNonempty(parentIDKeypath, field: "parentIDKeypath")
+        try skeletonNonempty(levelKeypath, field: "levelKeypath")
+        try skeletonNonempty(leadingInsetKeypath, field: "leadingInsetKeypath")
+        try skeletonNonempty(hasChildrenKeypath, field: "hasChildrenKeypath")
+        try skeletonNonempty(expandedKeypath, field: "expandedKeypath")
+        try skeletonNonempty(selectedIDStateKeypath, field: "selectedIDStateKeypath")
+        try skeletonNonempty(selectionActionKeypath, field: "selectionActionKeypath")
+        try skeletonNonempty(expansionActionKeypath, field: "expansionActionKeypath")
+        var wrapper = encoder.container(keyedBy: ElementKey.self)
+        var container = wrapper.nestedContainer(keyedBy: CodingKeys.self, forKey: .Tree)
+        try container.encode(keypath, forKey: .keypath)
+        try container.encode(idKeypath, forKey: .idKeypath)
+        try container.encode(parentIDKeypath, forKey: .parentIDKeypath)
+        try container.encode(levelKeypath, forKey: .levelKeypath)
+        try container.encode(leadingInsetKeypath, forKey: .leadingInsetKeypath)
+        try container.encode(hasChildrenKeypath, forKey: .hasChildrenKeypath)
+        try container.encode(expandedKeypath, forKey: .expandedKeypath)
+        try container.encode(selectedIDStateKeypath, forKey: .selectedIDStateKeypath)
+        try container.encode(selectionActionKeypath, forKey: .selectionActionKeypath)
+        try container.encode(expansionActionKeypath, forKey: .expansionActionKeypath)
+        try container.encode(rowSkeleton, forKey: .rowSkeleton)
+        try container.encodeIfPresent(disclosureModifiers, forKey: .disclosureModifiers)
+        try container.encodeIfPresent(rowModifiers, forKey: .rowModifiers)
+        try container.encodeIfPresent(modifiers, forKey: .modifiers)
+    }
+}
+
+/// Mount a versioned definition obtained through sourceKeypath. The source
+/// descriptor owns componentID/revision; instanceID is a nonblank, persisted,
+/// opaque ID supplied by the cell. Two mounts of one source need different IDs.
+/// Preserve instanceID across layout/variant changes; do not key mounts by source
+/// keypath or the transient UUID. variant is required (inline or pinned).
+/// Resolution, subscriptions and persistence are host/cell work, not parser I/O.
+public struct SkeletonComponentSurface: Codable, Identifiable {
+    public var id = UUID() // transient Swift identity; never a source/node/instance identifier
+    public var sourceKeypath: String
+    public var instanceID: String
+    public var variant: SkeletonComponentVariant
+    public var modifiers: SkeletonModifiers?
+
+    public init(
+        sourceKeypath: String,
+        instanceID: String,
+        variant: SkeletonComponentVariant,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.sourceKeypath = sourceKeypath
+        self.instanceID = instanceID
+        self.variant = variant
+        self.modifiers = modifiers
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case sourceKeypath, instanceID, variant, modifiers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let payloadDecoder: Decoder
+        let wrapper = try decoder.container(keyedBy: DynamicCodingKey.self)
+        if wrapper.allKeys.count == 1, let key = wrapper.allKeys.first, key.stringValue == "ComponentSurface" {
+            payloadDecoder = try wrapper.superDecoder(forKey: key)
+        } else { payloadDecoder = decoder }
+        try skeletonKnownKeys(payloadDecoder, allowed: CodingKeys.allCases.map(\.rawValue))
+        let container = try payloadDecoder.container(keyedBy: CodingKeys.self)
+        self.sourceKeypath = try container.skeletonRequired(String.self, forKey: .sourceKeypath)
+        self.instanceID = try container.skeletonRequired(String.self, forKey: .instanceID)
+        self.variant = try container.skeletonRequired(SkeletonComponentVariant.self, forKey: .variant)
+        self.modifiers = try container.skeletonValue(SkeletonModifiers.self, forKey: .modifiers)
+        try skeletonNonempty(sourceKeypath, field: "sourceKeypath")
+        try skeletonNonempty(instanceID, field: "instanceID")
+    }
+
+    private enum ElementKey: CodingKey { case ComponentSurface }
+
+    public func encode(to encoder: Encoder) throws {
+        try skeletonNonempty(sourceKeypath, field: "sourceKeypath")
+        try skeletonNonempty(instanceID, field: "instanceID")
+        var wrapper = encoder.container(keyedBy: ElementKey.self)
+        var container = wrapper.nestedContainer(keyedBy: CodingKeys.self, forKey: .ComponentSurface)
+        try container.encode(sourceKeypath, forKey: .sourceKeypath)
+        try container.encode(instanceID, forKey: .instanceID)
+        try container.encode(variant, forKey: .variant)
+        try container.encodeIfPresent(modifiers, forKey: .modifiers)
     }
 }
 
@@ -2783,6 +3548,8 @@ public struct SkeletonUnsupported: Codable, Identifiable {
 
 public indirect enum SkeletonElement : Codable, Identifiable {
     case List(SkeletonList)
+    case Tree(SkeletonTree)
+    case ComponentSurface(SkeletonComponentSurface)
     case Object(SkeletonObject)
     case Spacer(SkeletonSpacer)
     case Image(SkeletonImage)
@@ -2809,6 +3576,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     
     public var id: UUID {
         switch self {
+        case .Tree(let value): return value.id
+        case .ComponentSurface(let value): return value.id
         case .Text(let value):
             return value.id
 
@@ -2923,6 +3692,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         }
 
         switch key {
+        case "Tree": return decode(SkeletonTree.self, wrap: SkeletonElement.Tree)
+        case "ComponentSurface": return decode(SkeletonComponentSurface.self, wrap: SkeletonElement.ComponentSurface)
         case "List":
             return decode(SkeletonList.self, wrap: SkeletonElement.List)
         case "Object":
@@ -3058,6 +3829,10 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         
         var container = encoder.singleValueContainer()
         switch self {
+        case let .Tree(value):
+            try container.encode(value)
+        case let .ComponentSurface(value):
+            try container.encode(value)
         case let .List(value):
             try container.encode(value) //
         case let .Object(value):
