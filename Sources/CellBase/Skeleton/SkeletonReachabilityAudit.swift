@@ -203,13 +203,15 @@ public enum SkeletonReachabilityAudit {
                                           context: .row, definitions: definitions))
                 node.children = [row]
             case .ComponentSurface(let surface):
-                guard instanceIDs.insert(surface.instanceID).inserted else {
-                    node.findings.append(finding(.duplicateComponentInstanceID, "Duplicate instanceID: \(surface.instanceID)."))
+                // An instanceIDKeypath is resolved per row when rendered; only fixed IDs can collide here.
+                let instanceLabel = surface.instanceID ?? "{\(surface.instanceIDKeypath ?? "")}"
+                if let fixedID = surface.instanceID, !instanceIDs.insert(fixedID).inserted {
+                    node.findings.append(finding(.duplicateComponentInstanceID, "Duplicate instanceID: \(fixedID)."))
                     return node
                 }
                 guard let resolved = resolveComponent?(surface), nonempty(resolved.componentID), nonempty(resolved.revision) else {
                     node.findings.append(finding(.unresolvedComponentDefinition,
-                        "No resolved definition/revision for instance \(surface.instanceID), source \(surface.sourceKeypath)."))
+                        "No resolved definition/revision for instance \(instanceLabel), source \(surface.sourceKeypath)."))
                     return node
                 }
                 let identity = DefinitionID(componentID: resolved.componentID, revision: resolved.revision)
@@ -219,7 +221,7 @@ public enum SkeletonReachabilityAudit {
                     return node
                 }
                 node.children = [build(resolved.skeleton,
-                    path: here + "[\(surface.instanceID):\(resolved.componentID)@\(resolved.revision)]",
+                    path: here + "[\(instanceLabel):\(resolved.componentID)@\(resolved.revision)]",
                     context: resolved.dataContext ?? context, definitions: definitions.union([identity]))]
             default:
                 for (index, child) in children(of: element).enumerated() {

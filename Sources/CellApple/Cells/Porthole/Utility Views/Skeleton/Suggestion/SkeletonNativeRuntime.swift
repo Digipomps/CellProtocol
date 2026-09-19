@@ -269,6 +269,7 @@ enum SkeletonNativeLayout {
             result.fontSize = v.fontSize ?? result.fontSize
             result.borderColor = v.borderColor ?? result.borderColor
             result.foregroundColor = v.foregroundColor ?? result.foregroundColor
+            result.width = v.width ?? result.width
         }
         if case .string(let value)? = data.resolve(result.backgroundKeypath) { result.background = value }
         if variant?.foregroundColor == nil, case .string(let value)? = data.resolve(result.foregroundColorKeypath) { result.foregroundColor = value }
@@ -392,7 +393,7 @@ extension SkeletonElement {
     }
     func nativeIdentity(fallback: String) -> String {
         switch self {
-        case .ComponentSurface(let surface): return "component:" + surface.instanceID
+        case .ComponentSurface(let surface): return "component:" + (surface.instanceID ?? "{" + (surface.instanceIDKeypath ?? "") + "}")
         case .TextField(let field): return "field:" + (field.targetKeypath ?? field.sourceKeypath ?? fallback)
         case .TextArea(let field): return "area:" + (field.targetKeypath ?? field.sourceKeypath ?? fallback)
         case .Tree(let tree): return "tree:" + tree.keypath

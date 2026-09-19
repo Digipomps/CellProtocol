@@ -1733,10 +1733,11 @@ extension SkeletonTests {
         var ids: [String] = []
         for element in surface.elements {
             guard case .ComponentSurface(let mountSurface) = element else { return XCTFail("Missing surface") }
-            ids.append(mountSurface.instanceID)
-            XCTAssertEqual(mountSurface.sourceKeypath, "mounts.\(mountSurface.instanceID)")
-            let mount = try XCTUnwrap(fixture.initialRoot.mounts[mountSurface.instanceID])
-            let expected = try XCTUnwrap(fixture.expected.initial[mountSurface.instanceID])
+            let instanceID = try XCTUnwrap(mountSurface.instanceID)
+            ids.append(instanceID)
+            XCTAssertEqual(mountSurface.sourceKeypath, "mounts.\(instanceID)")
+            let mount = try XCTUnwrap(fixture.initialRoot.mounts[instanceID])
+            let expected = try XCTUnwrap(fixture.expected.initial[instanceID])
             XCTAssertEqual(try wpR1Encoded(mount.item), try wpR1Encoded(["title": expected.title]))
             XCTAssertEqual(expected.subtitle, fixture.initialRoot.subtitle)
             XCTAssertNotEqual(expected.title, fixture.initialRoot.title)

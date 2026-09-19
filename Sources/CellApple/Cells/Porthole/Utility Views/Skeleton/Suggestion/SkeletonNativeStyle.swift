@@ -307,6 +307,18 @@ struct SkeletonLinearLayout: Layout {
         let occupied = sizes.reduce(CGFloat(0)) { $0 + (axis == .horizontal ? $1.width : $1.height) } + spacing * CGFloat(max(0, subviews.count - 1))
         let available = (axis == .horizontal ? proposal.width : proposal.height) ?? occupied
         let total = subviews.reduce(0.0) { $0 + $1[SkeletonFlexGrowKey.self] }
+        // WP-F: som SwiftUI-stakken krymper barna når ideell bredde ikke får plass, så tekst
+        // brytes i stedet for å gå ut over kanten. Hvert barn krymper mot sin minste bredde,
+        // i forhold til hvor mye det kan krympe; faste rammer krymper ikke.
+        if axis == .horizontal, let width = proposal.width, occupied > width {
+            let minimum = subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: proposal.height)).width }
+            let slack = sizes.indices.map { max(0, sizes[$0].width - minimum[$0]) }
+            let totalSlack = slack.reduce(0, +)
+            if totalSlack > 0 {
+                let shortfall = min(occupied - width, totalSlack)
+                for i in sizes.indices { sizes[i].width -= shortfall * slack[i] / totalSlack }
+            }
+        }
         if total > 0, available > occupied {
             for i in sizes.indices {
                 let extra = (available - occupied) * subviews[i][SkeletonFlexGrowKey.self] / total

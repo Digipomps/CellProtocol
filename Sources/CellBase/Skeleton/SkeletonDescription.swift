@@ -799,6 +799,10 @@ public struct SkeletonLayoutVariant: Codable {
     public var fontSize: Double?
     public var borderColor: String?
     public var foregroundColor: String?
+    /// WP-F: skjuler elementet mens varianten gjelder (for eksempel treet i appbredde).
+    public var hidden: Bool?
+    /// WP-F: fast bredde mens varianten gjelder; overstyrer elementets `width`.
+    public var width: Double?
 
     public init(
         when: SkeletonCondition? = nil,
@@ -816,7 +820,9 @@ public struct SkeletonLayoutVariant: Codable {
         flexGrow: Double? = nil,
         fontSize: Double? = nil,
         borderColor: String? = nil,
-        foregroundColor: String? = nil
+        foregroundColor: String? = nil,
+        hidden: Bool? = nil,
+        width: Double? = nil
     ) {
         self.when = when
         self.minAvailableWidth = minAvailableWidth
@@ -834,10 +840,12 @@ public struct SkeletonLayoutVariant: Codable {
         self.fontSize = fontSize
         self.borderColor = borderColor
         self.foregroundColor = foregroundColor
+        self.hidden = hidden
+        self.width = width
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case when, minAvailableWidth, maxAvailableWidth, minAvailableHeight, maxAvailableHeight, requiresCapability, axis, columns, spacing, paddingInsets, minHeight, maxHeight, flexGrow, fontSize, borderColor, foregroundColor
+        case when, minAvailableWidth, maxAvailableWidth, minAvailableHeight, maxAvailableHeight, requiresCapability, axis, columns, spacing, paddingInsets, minHeight, maxHeight, flexGrow, fontSize, borderColor, foregroundColor, hidden, width
     }
 
     public init(from decoder: Decoder) throws {
@@ -865,6 +873,8 @@ public struct SkeletonLayoutVariant: Codable {
         self.fontSize = try container.skeletonValue(Double.self, forKey: .fontSize)
         self.borderColor = try container.skeletonValue(String.self, forKey: .borderColor)
         self.foregroundColor = try container.skeletonValue(String.self, forKey: .foregroundColor)
+        self.hidden = try container.skeletonValue(Bool.self, forKey: .hidden)
+        self.width = try container.skeletonValue(Double.self, forKey: .width)
         try validate()
     }
 
@@ -878,6 +888,7 @@ public struct SkeletonLayoutVariant: Codable {
         try skeletonNumber(maxHeight, field: "maxHeight", minimum: 0)
         try skeletonNumber(flexGrow, field: "flexGrow", minimum: 0)
         try skeletonNumber(fontSize, field: "fontSize", positive: true)
+        try skeletonNumber(width, field: "width", minimum: 0)
         try skeletonRange(minAvailableWidth, maxAvailableWidth, field: "availableWidth")
         try skeletonRange(minAvailableHeight, maxAvailableHeight, field: "availableHeight")
         try skeletonRange(minHeight, maxHeight, field: "height")
@@ -921,6 +932,8 @@ public struct SkeletonLayoutVariant: Codable {
         try container.encodeIfPresent(fontSize, forKey: .fontSize)
         try container.encodeIfPresent(borderColor, forKey: .borderColor)
         try container.encodeIfPresent(foregroundColor, forKey: .foregroundColor)
+        try container.encodeIfPresent(hidden, forKey: .hidden)
+        try container.encodeIfPresent(width, forKey: .width)
     }
 
     private static func validateCondition(_ condition: SkeletonCondition) throws {
@@ -2502,7 +2515,12 @@ public struct SkeletonTree: Codable, Identifiable {
 public struct SkeletonComponentSurface: Codable, Identifiable {
     public var id = UUID() // transient Swift identity; never a source/node/instance identifier
     public var sourceKeypath: String
-    public var instanceID: String
+    /// Fast instans-ID for én flate.
+    public var instanceID: String?
+    /// WP-F (vei B): instans-ID lest fra data (radens item først, så roten), slik at hver rad i
+    /// en List får sin egen flate og tilstand. Nøyaktig én av `instanceID` og
+    /// `instanceIDKeypath` er satt.
+    public var instanceIDKeypath: String?
     public var variant: SkeletonComponentVariant
     public var modifiers: SkeletonModifiers?
 
@@ -2518,8 +2536,29 @@ public struct SkeletonComponentSurface: Codable, Identifiable {
         self.modifiers = modifiers
     }
 
+    public init(
+        sourceKeypath: String,
+        instanceIDKeypath: String,
+        variant: SkeletonComponentVariant,
+        modifiers: SkeletonModifiers? = nil
+    ) {
+        self.sourceKeypath = sourceKeypath
+        self.instanceIDKeypath = instanceIDKeypath
+        self.variant = variant
+        self.modifiers = modifiers
+    }
+
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case sourceKeypath, instanceID, variant, modifiers
+        case sourceKeypath, instanceID, instanceIDKeypath, variant, modifiers
+    }
+
+    private static func validateInstance(_ id: String?, _ keypath: String?) throws {
+        switch (id, keypath) {
+        case let (id?, nil): try skeletonNonempty(id, field: "instanceID")
+        case let (nil, keypath?): try skeletonNonempty(keypath, field: "instanceIDKeypath")
+        case (nil, nil): throw SkeletonFormatError(field: "instanceID", reason: "instanceID or instanceIDKeypath is required")
+        default: throw SkeletonFormatError(field: "instanceIDKeypath", reason: "use either instanceID or instanceIDKeypath, not both")
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -2531,22 +2570,24 @@ public struct SkeletonComponentSurface: Codable, Identifiable {
         try skeletonKnownKeys(payloadDecoder, allowed: CodingKeys.allCases.map(\.rawValue))
         let container = try payloadDecoder.container(keyedBy: CodingKeys.self)
         self.sourceKeypath = try container.skeletonRequired(String.self, forKey: .sourceKeypath)
-        self.instanceID = try container.skeletonRequired(String.self, forKey: .instanceID)
+        self.instanceID = try container.skeletonValue(String.self, forKey: .instanceID)
+        self.instanceIDKeypath = try container.skeletonValue(String.self, forKey: .instanceIDKeypath)
         self.variant = try container.skeletonRequired(SkeletonComponentVariant.self, forKey: .variant)
         self.modifiers = try container.skeletonValue(SkeletonModifiers.self, forKey: .modifiers)
         try skeletonNonempty(sourceKeypath, field: "sourceKeypath")
-        try skeletonNonempty(instanceID, field: "instanceID")
+        try Self.validateInstance(instanceID, instanceIDKeypath)
     }
 
     private enum ElementKey: CodingKey { case ComponentSurface }
 
     public func encode(to encoder: Encoder) throws {
         try skeletonNonempty(sourceKeypath, field: "sourceKeypath")
-        try skeletonNonempty(instanceID, field: "instanceID")
+        try Self.validateInstance(instanceID, instanceIDKeypath)
         var wrapper = encoder.container(keyedBy: ElementKey.self)
         var container = wrapper.nestedContainer(keyedBy: CodingKeys.self, forKey: .ComponentSurface)
         try container.encode(sourceKeypath, forKey: .sourceKeypath)
-        try container.encode(instanceID, forKey: .instanceID)
+        try container.encodeIfPresent(instanceID, forKey: .instanceID)
+        try container.encodeIfPresent(instanceIDKeypath, forKey: .instanceIDKeypath)
         try container.encode(variant, forKey: .variant)
         try container.encodeIfPresent(modifiers, forKey: .modifiers)
     }

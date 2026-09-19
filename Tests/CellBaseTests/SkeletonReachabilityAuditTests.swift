@@ -257,8 +257,8 @@ extension SkeletonReachabilityAuditTests {
         var seen: [String] = []
         let findings = SkeletonReachabilityAudit.audit(fixture.skeleton, context: .init(root: true),
                                                       requiredActionKeypaths: ["actions.refresh"]) { surface in
-            seen.append(surface.instanceID)
-            return fixture.initialRoot.mounts[surface.instanceID].map {
+            seen.append(surface.instanceID ?? "")
+            return fixture.initialRoot.mounts[surface.instanceID ?? ""].map {
                 SkeletonResolvedComponent(mount: $0, hostContext: .init(root: true))
             }
         }
@@ -278,9 +278,9 @@ extension SkeletonReachabilityAuditTests {
         let surface = SkeletonElement.VStack(.init(elements: [wpR1Mount("a"), wpR1Mount("b")]))
         var seen: [String] = []
         let actions = SkeletonReachabilityAudit.reachableActionKeypaths(surface) { mount in
-            seen.append(mount.instanceID)
+            seen.append(mount.instanceID ?? "")
             return SkeletonResolvedComponent(componentID: "program", revision: "r1",
-                skeleton: .Button(.init(keypath: "refresh.\(mount.instanceID)", label: "Refresh")))
+                skeleton: .Button(.init(keypath: "refresh.\(mount.instanceID ?? "")", label: "Refresh")))
         }
         XCTAssertEqual(seen, ["a", "b"])
         XCTAssertEqual(actions, ["refresh.a", "refresh.b"])

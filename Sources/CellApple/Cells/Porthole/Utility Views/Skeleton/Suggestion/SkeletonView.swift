@@ -765,6 +765,8 @@ public struct SkeletonView: View {
         }
         let (modifiers, variant) = SkeletonNativeLayout.effective(element.nativeModifiers, layout: layoutContext, data: dataContext)
         let element = element.withNativeModifiers(modifiers)
+        // WP-F: en layoutvariant kan skjule elementet (som `display: none` på web).
+        if variant?.hidden == true { return AnyView(EmptyView()) }
         let userInfoValue = dataContext.item ?? self.userInfoValue
         switch element {
         case .Text(let text):
@@ -788,10 +790,14 @@ public struct SkeletonView: View {
         case .Image(let image):
             return renderSkeletonImage(image)
         case .Spacer(let spacer):
+            // WP-F: som i SwiftUI-stakken tar en Spacer uten bredde ledig plass. Vekst settes i
+            // modifikatorene, fordi stilmodifikatorens egen layoutverdi ligger innerst og vinner.
+            var spacerModifiers = spacer.modifiers ?? SkeletonModifiers()
+            if spacerModifiers.flexGrow == nil && spacer.width == nil { spacerModifiers.flexGrow = 1 }
             return AnyView(
                 Spacer()
                     .frame(width: spacer.width.map { CGFloat($0) })
-                    .applySkeletonModifiers(spacer.modifiers, userInfoValue: userInfoValue)
+                    .applySkeletonModifiers(spacerModifiers, userInfoValue: userInfoValue)
             )
         case .HStack(let h):
             let axis: Axis = variant?.axis == .vertical ? .vertical : .horizontal

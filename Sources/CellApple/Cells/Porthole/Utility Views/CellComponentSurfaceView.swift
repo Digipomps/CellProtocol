@@ -43,6 +43,14 @@ struct CellComponentSurfaceView: View {
     @State private var instance: SkeletonComponentInstance?
     @State private var failure: String?
 
+    /// WP-F: fast instans-ID, eller ID lest fra data (radens item først) via instanceIDKeypath.
+    private var resolvedInstanceID: String? {
+        if let id = surface.instanceID { return id }
+        if case .string(let id)? = data.resolve(surface.instanceIDKeypath), !id.isEmpty { return id }
+        return nil
+    }
+    private var instanceKey: String { resolvedInstanceID ?? "" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let instance, failure == nil {
@@ -50,8 +58,8 @@ struct CellComponentSurfaceView: View {
                     renderData: data.row(instance.mount.item))
                     .environment(\.skeletonComponentLocalState, localState)
                     .environment(\.skeletonNativeActionScope, instance.actionScope)
-                    .environment(\.skeletonComponentAncestors, ancestors + [surface.instanceID])
-                    .environment(\.skeletonNativeElementID, "component:" + surface.instanceID)
+                    .environment(\.skeletonComponentAncestors, ancestors + [instanceKey])
+                    .environment(\.skeletonNativeElementID, "component:" + instanceKey)
                 if actionHandler == nil {
                     Text("ComponentSurface: source actions require a host adapter (mount metadata).")
                         .font(.caption).foregroundStyle(.secondary)
@@ -60,9 +68,14 @@ struct CellComponentSurfaceView: View {
                 Text(failure ?? "ComponentSurface: unresolved mount").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .accessibilityIdentifier("skeleton.component.\(surface.instanceID)")
-        .task(id: surface.instanceID + ":" + surface.sourceKeypath + ":" + data.signature) {
-            guard !ancestors.contains(surface.instanceID), ancestors.count < 64,
+        .accessibilityIdentifier("skeleton.component.\(instanceKey)")
+        .task(id: instanceKey + ":" + surface.sourceKeypath + ":" + data.signature) {
+            guard resolvedInstanceID != nil else {
+                failure = "ComponentSurface: unresolved instanceID"
+                instance = nil
+                return
+            }
+            guard !ancestors.contains(instanceKey), ancestors.count < 64,
                   let value = data.resolve(surface.sourceKeypath) else {
                 failure = "ComponentSurface: unresolved or recursive mount"
                 instance = nil
@@ -70,8 +83,8 @@ struct CellComponentSurfaceView: View {
             }
             do {
                 let mount = try SkeletonComponentInstance.decode(value)
-                if instance?.instanceID == surface.instanceID { instance?.update(mount) }
-                else { instance = .init(instanceID: surface.instanceID, mount: mount) }
+                if instance?.instanceID == instanceKey { instance?.update(mount) }
+                else { instance = .init(instanceID: instanceKey, mount: mount) }
                 failure = nil
             } catch {
                 instance = nil; failure = "ComponentSurface: invalid mount — \(error.localizedDescription)"
