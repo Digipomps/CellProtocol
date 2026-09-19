@@ -977,7 +977,401 @@ public struct SkeletonLayoutContext: Equatable {
     }
 }
 
+/// Stil- og layoutmodifikatorer som hvert skjelettelement bærer.
+///
+/// Feltene ligger i en copy-on-write-boks på heapen. Hvert element har
+/// modifikatorene sine inline, og med 70 valgfrie felt ble hvert element
+/// 1,3-5,5 KB. Debugbygg av funksjoner som setter sammen store skjeletter
+/// (for eksempel `PersonalCopilotConfigurationFactory.chatHubSkeletonBody`)
+/// trengte da stackrammer større enn de 512 KiB en Swift-concurrency-tråd har
+/// på Apple-plattformer, og testprosessene døde med `Thread stack size exceeded`
+/// (WP-R4b). Boksen gjør `SkeletonModifiers` én peker bred. Verdisemantikk,
+/// offentlig API og JSON-format er uendret.
 public struct SkeletonModifiers: Codable {
+    private final class Box {
+        var fields: SkeletonModifiersFields
+        init(_ fields: SkeletonModifiersFields) { self.fields = fields }
+    }
+
+    private var box: Box
+
+    public init() {
+        box = Box(SkeletonModifiersFields())
+    }
+
+    public init(from decoder: any Decoder) throws {
+        box = Box(try SkeletonModifiersFields(from: decoder))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        try box.fields.encode(to: encoder)
+    }
+
+    /// Nil means use the base layout, with no remount or action substitution.
+    public func layoutVariant(in layout: SkeletonLayoutContext, root: ValueType? = nil,
+                              item: ValueType? = nil, context: ValueType? = nil) -> SkeletonLayoutVariant? {
+        box.fields.layoutVariant(in: layout, root: root, item: item, context: context)
+    }
+
+    private mutating func uniqueBox() -> Box {
+        if !isKnownUniquelyReferenced(&box) { box = Box(box.fields) }
+        return box
+    }
+
+    public var localization: [String: SkeletonLocalizedText]? {
+        get { box.fields.localization }
+        set { uniqueBox().fields.localization = newValue }
+    }
+
+    public var padding: Double? {
+        get { box.fields.padding }
+        set { uniqueBox().fields.padding = newValue }
+    }
+
+    public var maxWidthInfinity: Bool? {
+        get { box.fields.maxWidthInfinity }
+        set { uniqueBox().fields.maxWidthInfinity = newValue }
+    }
+
+    public var maxHeightInfinity: Bool? {
+        get { box.fields.maxHeightInfinity }
+        set { uniqueBox().fields.maxHeightInfinity = newValue }
+    }
+
+    public var width: Double? {
+        get { box.fields.width }
+        set { uniqueBox().fields.width = newValue }
+    }
+
+    public var height: Double? {
+        get { box.fields.height }
+        set { uniqueBox().fields.height = newValue }
+    }
+
+    public var hAlignment: String? {
+        get { box.fields.hAlignment }
+        set { uniqueBox().fields.hAlignment = newValue }
+    }
+
+    public var vAlignment: String? {
+        get { box.fields.vAlignment }
+        set { uniqueBox().fields.vAlignment = newValue }
+    }
+
+    public var hAlignmentKeypath: String? {
+        get { box.fields.hAlignmentKeypath }
+        set { uniqueBox().fields.hAlignmentKeypath = newValue }
+    }
+
+    public var background: String? {
+        get { box.fields.background }
+        set { uniqueBox().fields.background = newValue }
+    }
+
+    public var backgroundKeypath: String? {
+        get { box.fields.backgroundKeypath }
+        set { uniqueBox().fields.backgroundKeypath = newValue }
+    }
+
+    public var cornerRadius: Double? {
+        get { box.fields.cornerRadius }
+        set { uniqueBox().fields.cornerRadius = newValue }
+    }
+
+    public var shadowRadius: Double? {
+        get { box.fields.shadowRadius }
+        set { uniqueBox().fields.shadowRadius = newValue }
+    }
+
+    public var shadowX: Double? {
+        get { box.fields.shadowX }
+        set { uniqueBox().fields.shadowX = newValue }
+    }
+
+    public var shadowY: Double? {
+        get { box.fields.shadowY }
+        set { uniqueBox().fields.shadowY = newValue }
+    }
+
+    public var shadowColor: String? {
+        get { box.fields.shadowColor }
+        set { uniqueBox().fields.shadowColor = newValue }
+    }
+
+    public var borderWidth: Double? {
+        get { box.fields.borderWidth }
+        set { uniqueBox().fields.borderWidth = newValue }
+    }
+
+    public var borderColor: String? {
+        get { box.fields.borderColor }
+        set { uniqueBox().fields.borderColor = newValue }
+    }
+
+    public var opacity: Double? {
+        get { box.fields.opacity }
+        set { uniqueBox().fields.opacity = newValue }
+    }
+
+    public var hidden: Bool? {
+        get { box.fields.hidden }
+        set { uniqueBox().fields.hidden = newValue }
+    }
+
+    public var wrap: Bool? {
+        get { box.fields.wrap }
+        set { uniqueBox().fields.wrap = newValue }
+    }
+
+    public var visibility: SkeletonVisibilityRule? {
+        get { box.fields.visibility }
+        set { uniqueBox().fields.visibility = newValue }
+    }
+
+    public var foregroundColor: String? {
+        get { box.fields.foregroundColor }
+        set { uniqueBox().fields.foregroundColor = newValue }
+    }
+
+    public var foregroundColorKeypath: String? {
+        get { box.fields.foregroundColorKeypath }
+        set { uniqueBox().fields.foregroundColorKeypath = newValue }
+    }
+
+    public var fontStyle: String? {
+        get { box.fields.fontStyle }
+        set { uniqueBox().fields.fontStyle = newValue }
+    }
+
+    public var fontSize: Double? {
+        get { box.fields.fontSize }
+        set { uniqueBox().fields.fontSize = newValue }
+    }
+
+    public var fontWeight: String? {
+        get { box.fields.fontWeight }
+        set { uniqueBox().fields.fontWeight = newValue }
+    }
+
+    public var lineLimit: Int? {
+        get { box.fields.lineLimit }
+        set { uniqueBox().fields.lineLimit = newValue }
+    }
+
+    public var multilineTextAlignment: String? {
+        get { box.fields.multilineTextAlignment }
+        set { uniqueBox().fields.multilineTextAlignment = newValue }
+    }
+
+    public var minimumScaleFactor: Double? {
+        get { box.fields.minimumScaleFactor }
+        set { uniqueBox().fields.minimumScaleFactor = newValue }
+    }
+
+    public var styleRole: String? {
+        get { box.fields.styleRole }
+        set { uniqueBox().fields.styleRole = newValue }
+    }
+
+    public var styleClasses: [String]? {
+        get { box.fields.styleClasses }
+        set { uniqueBox().fields.styleClasses = newValue }
+    }
+
+    public var motionHint: SkeletonMotionHint? {
+        get { box.fields.motionHint }
+        set { uniqueBox().fields.motionHint = newValue }
+    }
+
+    public var motionSourceRole: String? {
+        get { box.fields.motionSourceRole }
+        set { uniqueBox().fields.motionSourceRole = newValue }
+    }
+
+    public var presentation: SkeletonPresentation? {
+        get { box.fields.presentation }
+        set { uniqueBox().fields.presentation = newValue }
+    }
+
+    public var draggableRole: String? {
+        get { box.fields.draggableRole }
+        set { uniqueBox().fields.draggableRole = newValue }
+    }
+
+    public var dragPayloadKeypath: String? {
+        get { box.fields.dragPayloadKeypath }
+        set { uniqueBox().fields.dragPayloadKeypath = newValue }
+    }
+
+    public var dragPreviewRole: String? {
+        get { box.fields.dragPreviewRole }
+        set { uniqueBox().fields.dragPreviewRole = newValue }
+    }
+
+    public var accessibilityDragLabel: String? {
+        get { box.fields.accessibilityDragLabel }
+        set { uniqueBox().fields.accessibilityDragLabel = newValue }
+    }
+
+    public var dropTargetRole: String? {
+        get { box.fields.dropTargetRole }
+        set { uniqueBox().fields.dropTargetRole = newValue }
+    }
+
+    public var acceptedDragRoles: [String]? {
+        get { box.fields.acceptedDragRoles }
+        set { uniqueBox().fields.acceptedDragRoles = newValue }
+    }
+
+    public var dropTargetPayloadKeypath: String? {
+        get { box.fields.dropTargetPayloadKeypath }
+        set { uniqueBox().fields.dropTargetPayloadKeypath = newValue }
+    }
+
+    public var dropActionKeypath: String? {
+        get { box.fields.dropActionKeypath }
+        set { uniqueBox().fields.dropActionKeypath = newValue }
+    }
+
+    public var dropIntents: [String]? {
+        get { box.fields.dropIntents }
+        set { uniqueBox().fields.dropIntents = newValue }
+    }
+
+    public var dropValidationStateKeypath: String? {
+        get { box.fields.dropValidationStateKeypath }
+        set { uniqueBox().fields.dropValidationStateKeypath = newValue }
+    }
+
+    public var dropDeniedReasonKeypath: String? {
+        get { box.fields.dropDeniedReasonKeypath }
+        set { uniqueBox().fields.dropDeniedReasonKeypath = newValue }
+    }
+
+    public var accessibilityDropLabel: String? {
+        get { box.fields.accessibilityDropLabel }
+        set { uniqueBox().fields.accessibilityDropLabel = newValue }
+    }
+
+    public var paddingInsets: SkeletonInsets? {
+        get { box.fields.paddingInsets }
+        set { uniqueBox().fields.paddingInsets = newValue }
+    }
+
+    public var fontFamilies: [String]? {
+        get { box.fields.fontFamilies }
+        set { uniqueBox().fields.fontFamilies = newValue }
+    }
+
+    public var lineHeightMultiple: Double? {
+        get { box.fields.lineHeightMultiple }
+        set { uniqueBox().fields.lineHeightMultiple = newValue }
+    }
+
+    public var letterSpacing: Double? {
+        get { box.fields.letterSpacing }
+        set { uniqueBox().fields.letterSpacing = newValue }
+    }
+
+    public var numericVariant: SkeletonNumericVariant? {
+        get { box.fields.numericVariant }
+        set { uniqueBox().fields.numericVariant = newValue }
+    }
+
+    public var itemSpacing: Double? {
+        get { box.fields.itemSpacing }
+        set { uniqueBox().fields.itemSpacing = newValue }
+    }
+
+    public var rowInsets: SkeletonInsets? {
+        get { box.fields.rowInsets }
+        set { uniqueBox().fields.rowInsets = newValue }
+    }
+
+    public var rowDecoration: SkeletonRowDecoration? {
+        get { box.fields.rowDecoration }
+        set { uniqueBox().fields.rowDecoration = newValue }
+    }
+
+    public var minHeight: Double? {
+        get { box.fields.minHeight }
+        set { uniqueBox().fields.minHeight = newValue }
+    }
+
+    public var maxHeight: Double? {
+        get { box.fields.maxHeight }
+        set { uniqueBox().fields.maxHeight = newValue }
+    }
+
+    public var minWidth: Double? {
+        get { box.fields.minWidth }
+        set { uniqueBox().fields.minWidth = newValue }
+    }
+
+    public var flexGrow: Double? {
+        get { box.fields.flexGrow }
+        set { uniqueBox().fields.flexGrow = newValue }
+    }
+
+    public var controlStyle: SkeletonControlStyle? {
+        get { box.fields.controlStyle }
+        set { uniqueBox().fields.controlStyle = newValue }
+    }
+
+    public var accessibilityLabel: String? {
+        get { box.fields.accessibilityLabel }
+        set { uniqueBox().fields.accessibilityLabel = newValue }
+    }
+
+    public var borderStyle: SkeletonBorderStyle? {
+        get { box.fields.borderStyle }
+        set { uniqueBox().fields.borderStyle = newValue }
+    }
+
+    public var shadowSpread: Double? {
+        get { box.fields.shadowSpread }
+        set { uniqueBox().fields.shadowSpread = newValue }
+    }
+
+    public var borderEdges: [SkeletonEdge]? {
+        get { box.fields.borderEdges }
+        set { uniqueBox().fields.borderEdges = newValue }
+    }
+
+    public var contentClip: Bool? {
+        get { box.fields.contentClip }
+        set { uniqueBox().fields.contentClip = newValue }
+    }
+
+    public var layoutVariants: [SkeletonLayoutVariant]? {
+        get { box.fields.layoutVariants }
+        set { uniqueBox().fields.layoutVariants = newValue }
+    }
+
+    public var interactionStyles: SkeletonInteractionStyles? {
+        get { box.fields.interactionStyles }
+        set { uniqueBox().fields.interactionStyles = newValue }
+    }
+
+    public var textDecoration: SkeletonTextDecoration? {
+        get { box.fields.textDecoration }
+        set { uniqueBox().fields.textDecoration = newValue }
+    }
+
+    public var textRotationDegrees: Double? {
+        get { box.fields.textRotationDegrees }
+        set { uniqueBox().fields.textRotationDegrees = newValue }
+    }
+
+    public var leadingMarker: SkeletonLeadingMarker? {
+        get { box.fields.leadingMarker }
+        set { uniqueBox().fields.leadingMarker = newValue }
+    }
+}
+
+/// Feltene til `SkeletonModifiers`, uendret fra da de lå inline. Brukes bare
+/// bak copy-on-write-boksen i `SkeletonModifiers`; se forklaringen der.
+struct SkeletonModifiersFields: Codable {
     public var localization: [String: SkeletonLocalizedText]?
     public var padding: Double?
     public var maxWidthInfinity: Bool?
