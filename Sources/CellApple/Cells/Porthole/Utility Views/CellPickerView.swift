@@ -30,6 +30,9 @@ struct CellPickerView: View {
     var skeletonPicker: SkeletonPicker
     @State private var valueTypeList: ValueTypeList = ValueTypeList()
     @State private var selectedIndex: Int?
+    @Environment(\.skeletonNativeActionScope) private var actionScope
+    @Environment(\.skeletonNativeActionHandler) private var actionHandler
+    @Environment(\.skeletonRenderData) private var renderData
     @EnvironmentObject var viewModel: PortholeViewModel
 
     init(skeletonPicker: SkeletonPicker, userInfoValue: ValueType? = nil) {
@@ -79,7 +82,9 @@ struct CellPickerView: View {
             .pickerStyle(.menu)
         }
         .task(id: refreshTaskID()) {
-            if skeletonPicker.keypath?.isEmpty == false,
+            if let value = renderData?.resolve(skeletonPicker.keypath) {
+                if case .list(let elements) = value { valueTypeList = elements } else { valueTypeList = [] }
+            } else if actionScope == nil, skeletonPicker.keypath?.isEmpty == false,
                let elements = try? await skeletonPicker.getElements() {
                 valueTypeList = elements
             }
@@ -104,7 +109,7 @@ struct CellPickerView: View {
         let keypath = skeletonPicker.keypath ?? "__static__"
         let selection = skeletonPicker.selectionStateKeypath ?? "__no_selection_state__"
         let revision = skeletonPicker.keypath?.isEmpty == false ? String(viewModel.localMutationVersion) : "static"
-        return "\(keypath)::\(selection)::\(revision)"
+        return "\(keypath)::\(selection)::\(revision)::\(renderData?.signature ?? "nil")"
     }
 
     private func optionLabel(for value: ValueType) -> String {
@@ -191,6 +196,10 @@ struct CellPickerView: View {
     }
 
     private func submit(payload: ValueType, to actionKeypath: String) async throws {
+        if actionScope != nil || actionHandler != nil {
+            _ = try await skeletonNativeSend(keypath: actionKeypath, payload: payload, scope: actionScope, handler: actionHandler, viewModel: viewModel)
+            return
+        }
         guard let _ = CellBase.defaultCellResolver,
               let vault = CellBase.defaultIdentityVault,
               let requester = await vault.identity(for: "private", makeNewIfNotFound: true) else {
@@ -225,6 +234,11 @@ struct CellPickerView: View {
     }
 
     private func hydrateInitialSelection() async {
+        if let state = renderData?.resolve(skeletonPicker.selectionStateKeypath) {
+            selectedIndex = selectionIndex(from: state)
+            return
+        }
+        if actionScope != nil { return }
         guard let selectionStateKeypath = skeletonPicker.selectionStateKeypath,
               selectionStateKeypath.isEmpty == false else {
             return
