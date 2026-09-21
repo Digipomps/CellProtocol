@@ -32,3 +32,21 @@ and no registration before proof. Existing paired-client signing-lease tests,
 resolver recovery tests, and public-key signature tests remain in the gate.
 Palazzo's separate suite exercises the actual Vapor route/upgrade/framing,
 reaction write, HTTP parity, persistence reload and private graph rejection.
+
+## Supplemental review
+
+The fresh-cell path is also tested with two real `BridgeBase` ends using the
+existing paired serialized transport. A fixture explicitly pins the creation
+name/domain and the known private Cell UUID/domain. A wrong creation scope is
+denied without registering an instance; both correct scopes permit the guest
+read. Replaying a challenge after completion is denied. No wildcard or automatic
+scope authorization is added. Discovery/bootstrap when a client does not already
+know these scopes remains a separate host concern, not a Porthole loading claim.
+The house UUID rejection test first proves a guest read on that exact route and
+then requires `ownerAuthorityUnavailable` for the house.
+
+PR CI exposed an existing lifecycle test race: the expiry responder records its
+notification before eviction completes. The test now also waits for actual
+auditor eviction before reloading. The UUID-equality and distinct-instance
+assertions remain unchanged, with an added eviction assertion; runtime lifecycle
+behavior is unchanged.
