@@ -93,7 +93,11 @@ public actor IdentityLinkRegistry {
             guard record.linkedIdentity.uuid == requesterUUID,
                   record.linkedIdentity.publicKey == signingKey,
                   IdentityLinkScope.grantsSameEntity(record.approvedScopes),
-                  record.approvedDomains.contains(domain) else {
+                  record.approvedDomains.contains(domain),
+                  // purpose://candidate.entitetsdata.authorization-resolves-entity:
+                  // pairwise and blinded bindings prove membership to *others*;
+                  // only a link bound to the local anchor opens the entity itself.
+                  record.entityBinding.mode == .localEntityAnchor else {
                 continue
             }
             return record

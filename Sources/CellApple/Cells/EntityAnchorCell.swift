@@ -248,6 +248,7 @@ public class EntityAnchorCell: GeneralCell {
             return await self.handleIdentityLinksSet(keypath: keypath, value: value, requester: requester)
         })
         for identityLinkAction in [
+            "identityLinks.genesis",
             "identityLinks.approveEnrollment",
             "identityLinks.completeEnrollment",
             "identityLinks.revoke"
@@ -487,6 +488,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "identityLinks", method: .set, input: storedValue, returns: identityLinkResult, permissions: ["-w--"], required: false, flowEffects: [identityLinkEffect], description: .string("Stores identity-link state below the owner entity."))
         await registerExploreContract(requester: requester, key: "identityLinks", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads identity-link state below the owner entity."))
         await registerExploreContract(requester: requester, key: "identityLinks.state", method: .get, input: .null, returns: identityLinkResult, permissions: ["r---"], required: false, description: .string("Reads normalized identity-link runtime state."))
+        await registerExploreContract(requester: requester, key: "identityLinks.genesis", method: .set, input: ExploreContract.oneOfSchema(options: [ExploreContract.schema(type: "string"), ExploreContract.objectSchema(properties: ["trigger": ExploreContract.schema(type: "string")], requiredKeys: [])]), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Seals the anchor to the requesting owner identity. Irreversible; refused once sealed."))
         await registerExploreContract(requester: requester, key: "identityLinks.approveEnrollment", method: .set, input: ExploreContract.schema(type: "object"), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Approves a cryptographically bound identity enrollment."))
         await registerExploreContract(requester: requester, key: "identityLinks.completeEnrollment", method: .set, input: ExploreContract.schema(type: "object"), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Completes a previously approved identity enrollment."))
         await registerExploreContract(requester: requester, key: "identityLinks.revoke", method: .set, input: ExploreContract.oneOfSchema(options: [ExploreContract.schema(type: "string"), ExploreContract.objectSchema(properties: ["linkID": ExploreContract.schema(type: "string")], requiredKeys: ["linkID"])]), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Revokes an exact identity link."))
@@ -727,7 +729,16 @@ public class EntityAnchorCell: GeneralCell {
             await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: [])
             return
         }
-        let records = recordsObject.values.compactMap { try? decodeValue($0, as: IdentityLinkRecord.self) }
+        let seal = loadGenesisSeal()
+        let records = recordsObject.values
+            .compactMap { try? decodeValue($0, as: IdentityLinkRecord.self) }
+            .filter { record in
+                // A genesis link is honoured only while its seal verifies against
+                // the key in the record. Storage is not trusted on its own.
+                guard EntityGenesisService.isGenesisLink(record.linkID) else { return true }
+                guard let seal else { return false }
+                return (try? EntityGenesisService.verify(seal: seal, record: record)) != nil
+            }
         await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: records)
     }
     
@@ -823,6 +834,12 @@ public class EntityAnchorCell: GeneralCell {
         _ envelope: EntityBatchPersistEnvelope,
         requester: Identity
     ) async throws -> EntityAnchorBatchPersistResult {
+        // Genesis on first need. Outside the gate: sealing writes through
+        // saveKeypathStorage, which takes the gate itself. Only a proven owner
+        // seals; anyone else falls through to the ownership guard below.
+        if loadGenesisSeal() == nil, await requesterProvesOwnership(requester) {
+            _ = try await performGenesis(requester: requester, trigger: .firstPersist, ownershipAlreadyProven: true)
+        }
         await authorityCommitGate.acquire()
         do {
             try ensurePersistenceAvailable()
@@ -929,8 +946,11 @@ public class EntityAnchorCell: GeneralCell {
         if keypath == "identityLinks" || keypath == "identityLinks.state" || keypath == "state" {
             let records = (try? storage.get(keypath: "identityLinks.records")) ?? .object(Object())
             let used = (try? storage.get(keypath: "identityLinks.usedApprovalJTIs")) ?? .object(Object())
+            let genesis = (try? storage.get(keypath: EntityGenesisService.sealKeypath)) ?? .null
             return .object([
                 "status": .string("ready"),
+                "sealed": .bool(loadGenesisSeal() != nil),
+                "genesis": genesis,
                 "records": records,
                 "usedApprovalJTIs": used,
                 "summary": .string("EntityAnchor identityLinks er klar for approveEnrollment, completeEnrollment og revoke.")
@@ -942,6 +962,8 @@ public class EntityAnchorCell: GeneralCell {
     private func handleIdentityLinksSet(keypath: String, value: ValueType, requester: Identity) async -> ValueType? {
         do {
             switch keypath {
+            case "identityLinks.genesis":
+                return try await sealGenesis(value: value, requester: requester)
             case "identityLinks.approveEnrollment":
                 return try await approveIdentityEnrollment(value: value, requester: requester)
             case "identityLinks.completeEnrollment":
@@ -949,8 +971,17 @@ public class EntityAnchorCell: GeneralCell {
             case "identityLinks.revoke":
                 return try await revokeIdentityLink(value: value, requester: requester)
             default:
+                if EntityGenesisService.isImmutableGenesisKeypath(keypath) {
+                    throw EntityGenesisError.genesisKeypathIsImmutable(keypath)
+                }
+                if keypath.hasPrefix(EntityGenesisService.recordsKeypath + "."),
+                   let seal = loadGenesisSeal(),
+                   keypath == EntityGenesisService.recordKeypath(linkID: seal.linkID) {
+                    throw EntityGenesisError.genesisKeypathIsImmutable(keypath)
+                }
                 try storage.set(keypath: keypath, setValue: value)
                 try await saveKeypathStorage(entity: storage)
+                await restoreIdentityLinkRegistry()
                 pushIdentityLinkEvent(keypath: keypath, value: value, requester: requester)
                 return .object(["status": .string("stored"), "keypath": .string(keypath)])
             }
@@ -1037,6 +1068,9 @@ public class EntityAnchorCell: GeneralCell {
             linkID = rawLinkID
         }
 
+        if EntityGenesisService.isGenesisLink(linkID) {
+            throw EntityGenesisError.cannotRevokeGenesisLink(linkID)
+        }
         let recordKey = safeIdentityLinkKey(linkID)
         let recordKeypath = "identityLinks.records.\(recordKey)"
         let recordValue = try storage.get(keypath: recordKeypath)
@@ -1067,6 +1101,76 @@ public class EntityAnchorCell: GeneralCell {
             "record": revokedValue,
             "recordKeypath": .string(recordKeypath)
         ])
+    }
+
+
+    // MARK: - Genesis
+    // purpose://candidate.entitetsdata.genesis-seals-to-initiator
+    //
+    // The first time this anchor must persist entity data it is sealed to the
+    // identity that did it. The seal is a signed IdentityLinkRecord issued by
+    // the initiator to itself, with scope same_entity, so the initiator is
+    // recognised through the same IdentityLinkRegistry path as any other linked
+    // identity. Nothing below ever removes it.
+
+    private func sealGenesis(value: ValueType, requester: Identity) async throws -> ValueType {
+        var trigger: EntityGenesisTrigger = .firstPersist
+        if case let .object(object) = value,
+           case let .string(raw)? = object["trigger"],
+           let parsed = EntityGenesisTrigger(rawValue: raw) {
+            trigger = parsed
+        } else if case let .string(raw) = value, let parsed = EntityGenesisTrigger(rawValue: raw) {
+            trigger = parsed
+        }
+        let result = try await performGenesis(requester: requester, trigger: trigger, ownershipAlreadyProven: false)
+        return .object([
+            "status": .string("sealed"),
+            "seal": try IdentityLinkProtocolService.value(from: result.seal),
+            "record": try IdentityLinkProtocolService.value(from: result.record)
+        ])
+    }
+
+    /// Must be called OUTSIDE `authorityCommitGate`: it writes through
+    /// `saveKeypathStorage`, which takes that gate itself.
+    private func performGenesis(
+        requester: Identity,
+        trigger: EntityGenesisTrigger,
+        ownershipAlreadyProven: Bool
+    ) async throws -> EntityGenesisResult {
+        if let existing = loadGenesisSeal() {
+            throw EntityGenesisError.alreadySealed(linkID: existing.linkID)
+        }
+        if ownershipAlreadyProven == false {
+            guard await requesterProvesOwnership(requester) else {
+                throw EntityGenesisError.initiatorIsNotOwner(requester: requester.uuid, owner: storedOwnerIdentity.uuid)
+            }
+        }
+        let result = try await EntityGenesisService.seal(
+            anchorID: uuid,
+            initiator: requester,
+            identityDomain: identityDomain,
+            trigger: trigger
+        )
+        let sealValue = try IdentityLinkProtocolService.value(from: result.seal)
+        let recordValue = try IdentityLinkProtocolService.value(from: result.record)
+        let recordKey = EntityGenesisService.safeRecordKey(result.record.linkID)
+        try storage.set(keypath: EntityGenesisService.sealKeypath, setValue: sealValue)
+        try storage.set(keypath: EntityGenesisService.recordKeypath(linkID: result.record.linkID), setValue: recordValue)
+        try storage.set(keypath: "proofs.identityLinks.\(recordKey)", setValue: .object([
+            "record": recordValue,
+            "seal": sealValue
+        ]))
+        try await saveKeypathStorage(entity: storage)
+        await restoreIdentityLinkRegistry()
+        pushIdentityLinkEvent(keypath: EntityGenesisService.sealKeypath, value: sealValue, requester: requester)
+        return result
+    }
+
+    private func loadGenesisSeal() -> EntityGenesisSeal? {
+        guard let value = try? storage.get(keypath: EntityGenesisService.sealKeypath) else {
+            return nil
+        }
+        return try? decodeValue(value, as: EntityGenesisSeal.self)
     }
 
     private func usedApprovalJTIs() -> Set<String> {
