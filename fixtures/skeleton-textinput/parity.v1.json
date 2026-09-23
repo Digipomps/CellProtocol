@@ -1,0 +1,29 @@
+{
+  "schema": "haven.skeleton-textinput-parity.v1",
+  "purpose": "Samme tilstand gir samme plassholder og samme skjult/synlig i CellApple (SkeletonTextInputPresentation) og CellScaffold (skeleton-runtime.js). PDD_butler-onboarding-og-formaalsforstaaelse_2026-09-23, WP-S.",
+  "rules": [
+    "Ikke-tom tekst ved placeholderKeypath vinner over placeholder (trimmet). Tom, blank, manglende eller ikke-tekst gir placeholder.",
+    "secure == true gjelder alltid. Ellers gir en sann verdi ved secureKeypath (true, 1, \"true\") skjult inndata.",
+    "Et skjult felt viser aldri verdien fra sourceKeypath (expectedValue gjelder web-rendreren)."
+  ],
+  "cases": [
+    { "id": "statisk-plassholder", "spec": { "placeholder": "Skriv til Butler …" }, "data": {}, "expectedPlaceholder": "Skriv til Butler …", "expectedSecure": false },
+    { "id": "keypath-vinner", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": { "onboarding": { "prompt": "Svar på steg 1: leverandør og modell …" } }, "expectedPlaceholder": "Svar på steg 1: leverandør og modell …", "expectedSecure": false },
+    { "id": "keypath-trimmes", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": { "onboarding": { "prompt": "  Lim inn API-nøkkelen  " } }, "expectedPlaceholder": "Lim inn API-nøkkelen", "expectedSecure": false },
+    { "id": "keypath-tom-faller-tilbake", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": { "onboarding": { "prompt": "" } }, "expectedPlaceholder": "Skriv til Butler …", "expectedSecure": false },
+    { "id": "keypath-blank-faller-tilbake", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": { "onboarding": { "prompt": "   " } }, "expectedPlaceholder": "Skriv til Butler …", "expectedSecure": false },
+    { "id": "keypath-mangler", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": {}, "expectedPlaceholder": "Skriv til Butler …", "expectedSecure": false },
+    { "id": "keypath-ikke-tekst", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt" }, "data": { "onboarding": { "prompt": 3 } }, "expectedPlaceholder": "Skriv til Butler …", "expectedSecure": false },
+    { "id": "keypath-uten-statisk", "spec": { "placeholderKeypath": "onboarding.prompt" }, "data": {}, "expectedPlaceholder": "", "expectedSecure": false },
+    { "id": "secure-statisk", "spec": { "placeholder": "Nøkkel", "secure": true }, "data": {}, "expectedPlaceholder": "Nøkkel", "expectedSecure": true },
+    { "id": "secure-false-statisk", "spec": { "placeholder": "Nøkkel", "secure": false }, "data": {}, "expectedPlaceholder": "Nøkkel", "expectedSecure": false },
+    { "id": "securekeypath-sann", "spec": { "secureKeypath": "onboarding.secret" }, "data": { "onboarding": { "secret": true } }, "expectedPlaceholder": "", "expectedSecure": true },
+    { "id": "securekeypath-usann", "spec": { "secureKeypath": "onboarding.secret" }, "data": { "onboarding": { "secret": false } }, "expectedPlaceholder": "", "expectedSecure": false },
+    { "id": "securekeypath-tekst-true", "spec": { "secureKeypath": "onboarding.secret" }, "data": { "onboarding": { "secret": "true" } }, "expectedPlaceholder": "", "expectedSecure": true },
+    { "id": "securekeypath-en", "spec": { "secureKeypath": "onboarding.secret" }, "data": { "onboarding": { "secret": 1 } }, "expectedPlaceholder": "", "expectedSecure": true },
+    { "id": "securekeypath-mangler", "spec": { "secureKeypath": "onboarding.secret" }, "data": {}, "expectedPlaceholder": "", "expectedSecure": false },
+    { "id": "secure-kan-ikke-slaas-av-med-data", "spec": { "secure": true, "secureKeypath": "onboarding.secret" }, "data": { "onboarding": { "secret": false } }, "expectedPlaceholder": "", "expectedSecure": true },
+    { "id": "onboarding-noekkelsteg", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt", "secureKeypath": "onboarding.secret", "sourceKeypath": "draft", "targetKeypath": "draft" }, "data": { "draft": "sk-ant-dette-skal-aldri-vises", "onboarding": { "prompt": "Lim inn API-nøkkelen (skjules)", "secret": true } }, "expectedPlaceholder": "Lim inn API-nøkkelen (skjules)", "expectedSecure": true, "expectedValue": "" },
+    { "id": "vanlig-steg-viser-utkast", "spec": { "placeholder": "Skriv til Butler …", "placeholderKeypath": "onboarding.prompt", "secureKeypath": "onboarding.secret", "sourceKeypath": "draft", "targetKeypath": "draft" }, "data": { "draft": "Claude fra Anthropic", "onboarding": { "prompt": "Svar på steg 1: leverandør og modell …", "secret": false } }, "expectedPlaceholder": "Svar på steg 1: leverandør og modell …", "expectedSecure": false, "expectedValue": "Claude fra Anthropic" }
+  ]
+}

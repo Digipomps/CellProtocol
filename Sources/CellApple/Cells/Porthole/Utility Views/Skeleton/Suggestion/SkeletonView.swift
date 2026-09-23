@@ -3297,10 +3297,36 @@ private struct CellTextFieldView: View {
 //    private var requester: Identity? = nil
 //    private var fullURL: String? = nil
     
+    // WP-S: plassholder fra data og skjult inndata. Reglene står i CellBase
+    // (`SkeletonTextInputPresentation`) og deles med web-rendereren via paritetsfixturen.
+    private func resolveInputValue(_ keypath: String) -> ValueType? {
+        if let value = renderData?.resolve(keypath) { return value }
+        return userInfoValue?[keypath]
+    }
+
+    private var isSecureInput: Bool {
+        skeletonTextField.isSecureInput(resolve: resolveInputValue)
+    }
+
+    private var placeholderText: String {
+        skeletonTextField.effectivePlaceholder(
+            fallback: viewModel.localization.text(skeletonTextField.modifiers?.localization?["placeholder"],
+                fallback: skeletonTextField.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue),
+            resolve: resolveInputValue)
+    }
+
+    @ViewBuilder
+    private func textInput() -> some View {
+        if isSecureInput {
+            SwiftUI.SecureField(placeholderText, text: binding())
+        } else {
+            SwiftUI.TextField(placeholderText, text: binding())
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SwiftUI.TextField(viewModel.localization.text(skeletonTextField.modifiers?.localization?["placeholder"],
-                fallback: skeletonTextField.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue), text: binding())
+            textInput()
                 .focused($isFocused)
                 .onAppear { if componentState?.focusedField == fieldKey { isFocused = true } }
                 .tracking((skeletonTextField.modifiers ?? .init()).inheritingTypography(inheritedTypography).letterSpacing ?? 0)
@@ -3318,10 +3344,17 @@ private struct CellTextFieldView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .task(id: refreshTaskID()) { await loadInitial() }
+                .onChange(of: isSecureInput) { secure in
+                    // Et felt som blir skjult (f.eks. nøkkelsteget) starter tomt, uten tidligere utkast.
+                    if secure {
+                        text = ""
+                        isDropdownVisible = false
+                    }
+                }
                 .onChange(of: isFocused) { focused in
                     if focused {
                         componentState?.focusedField = fieldKey
-                        scheduleAutocompleteQuery(text)
+                        if !isSecureInput { scheduleAutocompleteQuery(text) }
                     } else {
                         isDropdownVisible = false
                     }
@@ -3393,6 +3426,8 @@ private struct CellTextFieldView: View {
             get: { text },
             set: { newValue in
                 text = newValue
+                // Skjult inndata forlater bare feltet ved innsending: ingen utkast, ingen autocomplete, ingen cache.
+                if isSecureInput { return }
                 componentState?.drafts[fieldKey] = newValue
                 scheduleAutocompleteQuery(newValue)
                 Task {
@@ -3427,9 +3462,12 @@ private struct CellTextFieldView: View {
             return
         }
 
+        // Skjult inndata: feltet tømmes med en gang verdien er tatt med i innsendingen.
+        let payloadText = text
+        if isSecureInput { text = "" }
         if actionScope != nil || actionHandler != nil {
             do {
-                _ = try await skeletonNativeSend(keypath: targetKeypath, payload: .string(text), scope: actionScope, handler: actionHandler, viewModel: viewModel)
+                _ = try await skeletonNativeSend(keypath: targetKeypath, payload: .string(payloadText), scope: actionScope, handler: actionHandler, viewModel: viewModel)
                 viewModel.markLocalMutation()
             } catch { viewModel.alertMessage = error.localizedDescription; viewModel.showAlert = true }
             return
@@ -3437,7 +3475,7 @@ private struct CellTextFieldView: View {
         var submitButton = SkeletonButton(
             keypath: targetKeypath,
             label: "Submit",
-            payload: .string(text)
+            payload: .string(payloadText)
         )
         if targetKeypath.hasPrefix("cell://"), let targetURL = URL(string: targetKeypath) {
             let (cellURL, child) = splitCellURLLocal(targetURL)
@@ -3616,6 +3654,8 @@ private struct CellTextFieldView: View {
     }
 
     private func loadInitial() async {
+        // Regel 3: et skjult felt viser aldri verdien fra sourceKeypath, et utkast eller cachen.
+        if isSecureInput { return }
         if let draft = componentState?.drafts[fieldKey] { text = draft; return }
         if let value = renderData?.resolve(skeletonTextField.sourceKeypath) {
             if !isFocused { text = skeletonEditableStringValue(value) ?? "" }
@@ -3734,13 +3774,50 @@ private struct CellTextAreaView: View {
     @EnvironmentObject var viewModel: PortholeViewModel
 
     private var localizedPlaceholder: String {
-        viewModel.localization.text(skeletonTextArea.modifiers?.localization?["placeholder"],
-            fallback: skeletonTextArea.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue)
+        skeletonTextArea.effectivePlaceholder(
+            fallback: viewModel.localization.text(skeletonTextArea.modifiers?.localization?["placeholder"],
+                fallback: skeletonTextArea.placeholder ?? "", item: userInfoValue, contextValue: userInfoValue),
+            resolve: resolveInputValue)
+    }
+
+    // WP-S: plassholder fra data og skjult inndata (regler i CellBase `SkeletonTextInputPresentation`).
+    private func resolveInputValue(_ keypath: String) -> ValueType? {
+        if let value = renderData?.resolve(keypath) { return value }
+        return userInfoValue?[keypath]
+    }
+
+    private var isSecureInput: Bool {
+        skeletonTextArea.isSecureInput(resolve: resolveInputValue)
+    }
+
+    /// Regel 5: en skjult TextArea er ett linjefelt. Verdien forlater feltet bare ved innsending.
+    private var secureEditorBody: some View {
+        SwiftUI.SecureField(localizedPlaceholder, text: Binding<String>(get: { text }, set: { text = $0 }))
+            .onSubmit {
+                let value = text
+                text = ""
+                Task { await submitCurrentValue(value) }
+            }
+    }
+
+    @ViewBuilder
+    private var inputBody: some View {
+        if isSecureInput {
+            secureEditorBody
+        } else {
+            editorBody
+        }
     }
 
     var body: some View {
-        editorBody
+        inputBody
         .focused($isFocused)
+        .onChange(of: isSecureInput) { secure in
+            if secure {
+                persistTask?.cancel()
+                text = ""
+            }
+        }
         .onChange(of: isFocused) { value in if value { componentState?.focusedField = fieldKey } }
         .onAppear { if componentState?.focusedField == fieldKey { isFocused = true } }
         .frame(maxWidth: .infinity, alignment: .center)
@@ -3938,6 +4015,7 @@ private struct CellTextAreaView: View {
     }
 
     private func loadInitial() async {
+        if isSecureInput { return }
         if let draft = componentState?.drafts[fieldKey] { text = draft; return }
         if let value = renderData?.resolve(skeletonTextArea.sourceKeypath) {
             if lastLocalEditAt == nil { text = skeletonEditableStringValue(value) ?? "" }
