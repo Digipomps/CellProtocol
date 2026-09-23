@@ -386,69 +386,36 @@ public extension PerspectiveMatchingScenarioSupport {
         for userProfile: RestaurantUserPurposeProfile,
         maxResults: Int = 10
     ) async -> [RestaurantRecommendation] {
-        let purposeNodes = Dictionary(
-            uniqueKeysWithValues: restaurantAdvertisedPurposes.map { advertisedPurpose in
-                (
-                    advertisedPurpose.matchPurposeID,
-                    Purpose(
-                        name: advertisedPurpose.matchPurposeID,
-                        description: advertisedPurpose.description
-                    )
-                )
-            }
+        let candidates = restaurantAdvertisedPurposes.map { advertisedPurpose in
+            InterestPurposeCandidate(
+                matchPurposeID: advertisedPurpose.matchPurposeID,
+                description: advertisedPurpose.description,
+                interestWeights: advertisedPurpose.interestWeights
+            )
+        }
+        let matches: [InterestPurposeMatch]
+        do {
+            matches = try await InterestPurposeWeightedSum.match(
+                requesterInterestWeights: userProfile.interestWeights,
+                candidates: candidates,
+                tokenPrefix: "restaurant.\(userProfile.purposeID)"
+            )
+        } catch {
+            matches = []
+        }
+        let matchesByID = Dictionary(
+            uniqueKeysWithValues: matches.map { ($0.matchPurposeID, $0) }
         )
 
-        var purposeEdgesByInterest = [String: [Weight<Purpose>]]()
-        for advertisedPurpose in restaurantAdvertisedPurposes {
-            guard let purpose = purposeNodes[advertisedPurpose.matchPurposeID] else { continue }
-            for (interestID, restaurantWeight) in advertisedPurpose.interestWeights
-                where userProfile.interestWeights[interestID] != nil {
-                purposeEdgesByInterest[interestID, default: []].append(
-                    Weight<Purpose>(weight: restaurantWeight, value: purpose)
-                )
-            }
-        }
-
-        let runtime = WeightedGraphRuntime()
-        var scoresByMatchID = [String: Double]()
-        var matchedInterestsByMatchID = [String: Set<String>]()
-
-        for (interestID, userWeight) in userProfile.interestWeights {
-            let interest = Interest(
-                name: interestID,
-                types: [],
-                parts: [],
-                partOf: [],
-                purposes: purposeEdgesByInterest[interestID] ?? []
-            )
-            let signal = Signal(
-                relationship: .purposes,
-                weight: 0.5,
-                tolerance: Double.greatestFiniteMagnitude,
-                token: "restaurant.\(userProfile.purposeID).\(interestID)",
-                ttl: 5.0,
-                hops: 1
-            )
-
-            guard let result = try? await runtime.match(start: interest, signal: signal) else {
-                continue
-            }
-
-            for hit in result.hits where hit.node.kind == .purpose {
-                let restaurantWeight = hit.evidence.last(where: { $0.relationship == .purposes })?.edgeWeight ?? 0.0
-                scoresByMatchID[hit.ref, default: 0.0] += userWeight * restaurantWeight
-                matchedInterestsByMatchID[hit.ref, default: []].insert(interestID)
-            }
-        }
-
         let recommendations = restaurantAdvertisedPurposes.map { advertisedPurpose -> RestaurantRecommendation in
-            RestaurantRecommendation(
+            let match = matchesByID[advertisedPurpose.matchPurposeID]
+            return RestaurantRecommendation(
                 restaurantID: advertisedPurpose.restaurantID,
                 restaurantName: advertisedPurpose.restaurantName,
                 advertisedPurposeID: advertisedPurpose.purposeID,
                 matchPurposeID: advertisedPurpose.matchPurposeID,
-                score: scoresByMatchID[advertisedPurpose.matchPurposeID] ?? 0.0,
-                matchedInterestRefs: Array(matchedInterestsByMatchID[advertisedPurpose.matchPurposeID] ?? []).sorted()
+                score: match?.score ?? 0.0,
+                matchedInterestRefs: match?.matchedInterestRefs ?? []
             )
         }
 

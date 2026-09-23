@@ -926,79 +926,29 @@ private extension PerspectiveMatchingScenarioSupport {
         requester: ConferenceSwarmEntity,
         carriedLocalVariables: [String: String]
     ) async throws -> [ConferenceSwarmRawRanking] {
-        let purposeNodes = Dictionary(
-            uniqueKeysWithValues: conferenceSwarmOpportunities.map { opportunity in
-                (
-                    opportunity.matchPurposeID,
-                    Purpose(
-                        name: opportunity.matchPurposeID,
-                        description: opportunity.description
-                    )
-                )
-            }
-        )
-        var purposeEdgesByInterest = [String: [Weight<Purpose>]]()
-
-        for opportunity in conferenceSwarmOpportunities {
-            guard let purpose = purposeNodes[opportunity.matchPurposeID] else { continue }
-            for (interestID, opportunityWeight) in opportunity.interestWeights
-                where requester.interestWeights[interestID] != nil {
-                purposeEdgesByInterest[interestID, default: []].append(
-                    Weight<Purpose>(weight: opportunityWeight, value: purpose)
-                )
-            }
+        let candidates = conferenceSwarmOpportunities.map { opportunity in
+            InterestPurposeCandidate(
+                matchPurposeID: opportunity.matchPurposeID,
+                description: opportunity.description,
+                interestWeights: opportunity.interestWeights
+            )
         }
-
-        let runtime = WeightedGraphRuntime()
-        let configuration = WeightedGraphRuntimeConfiguration(
-            relationships: [.purposes],
-            maxHops: 1,
-            ttl: 5.0,
-            maxHits: Int.max,
-            minScore: 0.0,
+        let matches = try await InterestPurposeWeightedSum.match(
+            requesterInterestWeights: requester.interestWeights,
+            candidates: candidates,
+            tokenPrefix: "conference.swarm.\(requester.entityRef)",
             localVariables: object(from: carriedLocalVariables)
         )
-        var scoresByMatchPurposeID = [String: Double]()
-        var matchedInterestsByMatchPurposeID = [String: Set<String>]()
-
-        for (interestID, requesterWeight) in requester.interestWeights.sorted(by: { $0.key < $1.key }) {
-            let edges = (purposeEdgesByInterest[interestID] ?? []).sorted {
-                ($0.value?.reference ?? $0.reference ?? "") < ($1.value?.reference ?? $1.reference ?? "")
-            }
-            let interest = Interest(
-                name: interestID,
-                types: [],
-                parts: [],
-                partOf: [],
-                purposes: edges
-            )
-            let signal = Signal(
-                relationship: .purposes,
-                weight: 0.5,
-                tolerance: Double.greatestFiniteMagnitude,
-                token: "conference.swarm.\(requester.entityRef).\(interestID)",
-                ttl: 5.0,
-                hops: 1,
-                localVariables: object(from: carriedLocalVariables)
-            )
-            let result = try await runtime.match(
-                start: interest,
-                signal: signal,
-                configuration: configuration
-            )
-
-            for hit in result.hits where hit.node.kind == .purpose {
-                let opportunityWeight = hit.evidence.last(where: { $0.relationship == .purposes })?.edgeWeight ?? 0.0
-                scoresByMatchPurposeID[hit.ref, default: 0.0] += requesterWeight * opportunityWeight
-                matchedInterestsByMatchPurposeID[hit.ref, default: []].insert(interestID)
-            }
-        }
+        let matchesByID = Dictionary(
+            uniqueKeysWithValues: matches.map { ($0.matchPurposeID, $0) }
+        )
 
         return conferenceSwarmOpportunities.map { opportunity in
-            ConferenceSwarmRawRanking(
+            let match = matchesByID[opportunity.matchPurposeID]
+            return ConferenceSwarmRawRanking(
                 opportunity: opportunity,
-                score: scoresByMatchPurposeID[opportunity.matchPurposeID] ?? 0.0,
-                matchedInterestRefs: Array(matchedInterestsByMatchPurposeID[opportunity.matchPurposeID] ?? []).sorted()
+                score: match?.score ?? 0.0,
+                matchedInterestRefs: match?.matchedInterestRefs ?? []
             )
         }
         .sorted {
