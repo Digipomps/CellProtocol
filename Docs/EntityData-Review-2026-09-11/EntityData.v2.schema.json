@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:haven:entity-data:review-decisions:2026-09-16",
-  "title": "EntityData – målmodell etter Kjetils gjennomgang 16. september 2026",
-  "description": "Målmodell etter eierens gjennomgang, oppdatert 17. september. Endringene er ikke en ferdig implementert wire-kontrakt. Uavklarte detaljformer er merket.",
+  "title": "EntityData – løpende målmodell etter beslutningene 23. september 2026",
+  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -26,7 +26,7 @@
     },
     "relations": {
       "type": "object",
-      "description": "Objekt med reserverte nøkler. Eierdefinerte relasjonsnavn kan inneholde lister; elementkontrakten for disse listene er ikke avgjort. records/<id>/entityRepresentation er den anbefalte typede kontaktbanen.",
+      "description": "Objekt med bare reserverte nøkler. Eierdefinerte navngitte lister er erstattet av groups. Relasjoner bærer den vektede perspektivgrafen; groups er uvektet medlemskap. records/<uuid>/entityRepresentation er den typede kontaktbanen. bokprosjekt er et bevart, uavklart migreringsunntak, ikke en ny eierdefinert liste.",
       "title": "Relations root",
       "x-haven": {
         "keypath": "relations",
@@ -57,7 +57,7 @@
         "entities": {
           "type": "object",
           "title": "Entity records",
-          "description": "Owner-local normalized entity records keyed by local entity id. Relation rows may point here through entityRef.",
+          "description": "Entitetsposter nøklet på entitets-uuid. Relasjoners subject.entityRef og groups.members peker hit.",
           "x-haven": {
             "keypath": "relations.entities",
             "sourceLine": 473,
@@ -71,7 +71,7 @@
           "additionalProperties": {
             "type": "object",
             "title": "Entity record",
-            "description": "One local entity record with identity refs, relation refs and optional endpoint refs.",
+            "description": "Entitetspost nøklet på entitets-uuid med identityRefs og valgfrie kontaktreferanser. relationRefs persisteres ikke; de bygges fra relasjonenes subject.entityRef ved dekoding, i minnet.",
             "x-haven": {
               "keypath": "relations.entities.<entityID>",
               "sourceLine": 474,
@@ -86,7 +86,7 @@
               "identityRefs": {
                 "type": "array",
                 "title": "Entity identity refs",
-                "description": "References to relations.identities records associated with an entity record.",
+                "description": "Referanser til relations.identities, lagret bare fra entitet til identitet. Motsatt retning, fra identitet til entiteter, bygges ved dekoding, i minnet.",
                 "x-haven": {
                   "keypath": "relations.entities.<entityID>.identityRefs",
                   "sourceLine": 475,
@@ -95,21 +95,6 @@
                   "storageDomain": "entity-anchor",
                   "mutability": "read-write",
                   "sourceOfTruthLabel": "EntityAnchorCell/SproutResolverAdapter",
-                  "derived": false
-                }
-              },
-              "relationRefs": {
-                "type": "array",
-                "title": "Entity relation refs",
-                "description": "References back to owner-local relation rows such as relations.people[id=...].",
-                "x-haven": {
-                  "keypath": "relations.entities.<entityID>.relationRefs",
-                  "sourceLine": 476,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell",
                   "derived": false
                 }
               },
@@ -128,13 +113,25 @@
                   "derived": false
                 }
               }
-            }
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "relationRefs"
+                  ]
+                }
+              }
+            ]
+          },
+          "propertyNames": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         },
         "identities": {
           "type": "object",
           "title": "Linked identities",
-          "description": "Local identity records or handles keyed by identity UUID/public-key handle.",
+          "description": "Identitetsposter nøklet på identitets-uuid; andre steder refererer til denne nøkkelen.",
           "x-haven": {
             "keypath": "relations.identities",
             "sourceLine": 478,
@@ -148,7 +145,7 @@
           "additionalProperties": {
             "type": "object",
             "title": "Linked identity record",
-            "description": "One local identity relation record keyed by local identity id, UUID or public-key handle.",
+            "description": "Identitetspost nøklet på identitets-uuid. entityRefs persisteres ikke; de bygges fra entitetenes identityRefs ved dekoding, i minnet.",
             "x-haven": {
               "keypath": "relations.identities.<identityID>",
               "sourceLine": 479,
@@ -190,25 +187,10 @@
                   "derived": false
                 }
               },
-              "entityRefs": {
-                "type": "array",
-                "title": "Linked identity entity refs",
-                "description": "References to local relations.entities records that claim or use this identity.",
-                "x-haven": {
-                  "keypath": "relations.identities.<identityID>.entityRefs",
-                  "sourceLine": 482,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell",
-                  "derived": false
-                }
-              },
               "proofRefs": {
                 "type": "array",
                 "title": "Linked identity proof refs",
-                "description": "References to proofs.credentials, proofs.identityLinks or Sprout proof records that support this identity relation.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte identitetsrelasjonen. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "relations.identities.<identityID>.proofRefs",
                   "sourceLine": 483,
@@ -220,7 +202,19 @@
                   "derived": false
                 }
               }
-            }
+            },
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "entityRefs"
+                  ]
+                }
+              }
+            ]
+          },
+          "propertyNames": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         },
         "issuers": {
@@ -541,7 +535,11 @@
           "additionalProperties": {
             "$ref": "#/$defs/EntityRelationRecord"
           },
-          "description": "Nyere, typede relasjonsposter indeksert med relationID. Runtime kontrollerer ID-binding og egen batch-kontrakt. Null er en sletteoperasjon, ikke en lagret relasjonspost."
+          "description": "Relasjonsposter nøklet på relasjons-uuid der posten faktisk bor. propertyNames håndhever uuid-form; det fiktive eksempelets nøkler og referanser er omskrevet. Null er en sletteoperasjon, ikke en lagret relasjonspost. Målkrav, ikke implementert i Swift eller en ny wire-kontrakt.",
+          "propertyNames": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "maxLength": 36
+          }
         },
         "validatedContacts": {
           "type": "object",
@@ -564,10 +562,7 @@
           }
         }
       ],
-      "additionalProperties": {
-        "type": "array",
-        "items": {}
-      }
+      "additionalProperties": false
     },
     "proofs": {
       "type": "object",
@@ -587,75 +582,163 @@
         "credentials": {
           "type": "object",
           "title": "Credential records",
-          "description": "Credential or verifiable-credential records keyed by local credential id.",
+          "description": "Det ene persisterte, flate lageret for bevisposter, nøklet på bevis-uuid. Dette er det ene stedet disse bevisene bor; alle bevisreferanser peker hit. Oppslagskart bygges fra postene ved dekoding. Målkrav, ikke implementert i Swift ennå.",
           "x-haven": {
             "keypath": "proofs.credentials",
             "sourceLine": 509,
-            "status": "registry-described",
+            "status": "decision-target-draft",
             "visibilityClass": "private",
             "storageDomain": "entity-anchor",
             "mutability": "read-write",
             "sourceOfTruthLabel": "EntityAnchorCell/VC flows",
-            "derived": false
+            "derived": false,
+            "runtimeImplemented": false
           },
           "additionalProperties": {
             "type": "object",
             "title": "Credential record",
-            "description": "One credential/proof record under a stable local credential id.",
+            "description": "Én bevispost under sin bevis-uuid. De seks beskrevne VCClaim-feltene er uuid, type, issuer, issuanceDate, credentialSubject og proof. supports er et tillegg i målskjemaet som ikke er implementert i Swift ennå; dette er ikke en komplett VCClaim-wire-kontrakt. Kartnøkkelen og uuid skal være like; likheten må kontrolleres utenfor JSON Schema. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
             "x-haven": {
               "keypath": "proofs.credentials.<credentialID>",
               "sourceLine": 510,
-              "status": "registry-described",
+              "status": "decision-target-draft",
               "visibilityClass": "private",
               "storageDomain": "entity-anchor",
               "mutability": "read-write",
               "sourceOfTruthLabel": "EntityAnchorCell/VC flows",
-              "derived": false
-            }
+              "derived": false,
+              "runtimeImplemented": false
+            },
+            "properties": {
+              "uuid": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "maxLength": 36,
+                "description": "Bevis-uuid, samme uuid som nøkkelen i proofs.credentials."
+              },
+              "type": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "VCClaim.type: liste over typer for påstanden."
+              },
+              "issuer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object"
+                  }
+                ],
+                "description": "VCClaim.issuer: referanse eller innebygd objekt (IssuerType). Ingen utstedertillit fastslås her."
+              },
+              "issuanceDate": {
+                "type": "string",
+                "format": "date-time",
+                "description": "VCClaim.issuanceDate: RFC3339-tidspunkt."
+              },
+              "credentialSubject": {
+                "type": "object",
+                "description": "VCClaim.credentialSubject: objekt med selve påstanden. Interne subject-stier er ikke eierens EntityData-nøkkelstier."
+              },
+              "proof": {
+                "type": "object",
+                "description": "VCClaim.proof: VCProof-objekt. Detaljfelter og kryptografisk verifikasjon spesifiseres ikke her."
+              },
+              "supports": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "entityRef",
+                  "keypaths"
+                ],
+                "description": "Påstand om hva beviset understøtter: hvilken entitet (entitets-uuid) og hvilke av eierens nøkkelstier. Ikke en gyldighetserklæring. Tillegg i målskjemaet, ikke implementert i Swift VCClaim ennå. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
+                "properties": {
+                  "entityRef": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                    "maxLength": 36,
+                    "description": "Entitets-uuid for entiteten beviset hevdes å gjelde, ikke bevis- eller identitets-uuid. Referanseoppløsning og identitetslikhet kontrolleres separat."
+                  },
+                  "keypaths": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Kanoniske, escaped nøkkelstier i eierens EntityData som beviset hevdes å understøtte. Dette er oppslagsordene for byKeypath, ikke stier inne i credentialSubject. Nøkkelstienes oppløsning og escaping må kontrolleres separat."
+                  }
+                }
+              }
+            },
+            "required": [
+              "uuid",
+              "type",
+              "issuer",
+              "issuanceDate",
+              "credentialSubject",
+              "proof",
+              "supports"
+            ],
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "maxLength": 36
           }
         },
         "index": {
           "type": "object",
           "title": "Proof indexes",
-          "description": "Derived or maintained indexes that map entity keypaths to proof references.",
+          "description": "Avledede oppslagskart som bygges i minnet ved dekoding fra proofs.credentials. Ikke persistert sannhet eller en andre kilde. Målkrav, ikke implementert i Swift ennå.",
           "x-haven": {
             "keypath": "proofs.index",
             "sourceLine": 511,
-            "status": "registry-described",
+            "status": "decision-target-draft",
             "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "EntityAnchorCell/VC flows",
-            "derived": false
+            "storageDomain": "memory",
+            "mutability": "read-only",
+            "sourceOfTruthLabel": "proofs.credentials",
+            "derived": true,
+            "persisted": false,
+            "runtimeImplemented": false
           },
           "properties": {
             "byKeypath": {
               "type": "object",
               "title": "Proofs by keypath",
-              "description": "Indeks fra kanonisk lagret nøkkelsti til bevisreferanser. For relasjoner peker stien inn i records/<id>/entityRepresentation. Indeksen finner bevis; den fastslår verken sannhet, gyldighet eller samtykke.",
+              "description": "Avledet oppslag fra kanonisk, escaped nøkkelsti til en liste av bevis-uuid-er i proofs.credentials. Bygges ved dekoding fra hver posts supports.keypaths, med supports.entityRef som entitetskontekst, slik entityRepresentationNameReferences bygges fordi name ligger på objektet selv. For relasjoner går stien inn i relations.records.<id>.entityRepresentation. Ikke persistert sannhet og ikke en andre kilde; formen beholdes her for å dokumentere oppslaget. Målkrav, ikke implementert i Swift ennå. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
               "x-haven": {
                 "keypath": "proofs.index.byKeypath",
                 "sourceLine": 512,
-                "status": "registry-described",
+                "status": "decision-target-draft",
                 "visibilityClass": "private",
-                "storageDomain": "entity-anchor",
-                "mutability": "read-write",
-                "sourceOfTruthLabel": "EntityAnchorCell/VC flows",
-                "derived": false
+                "storageDomain": "memory",
+                "mutability": "read-only",
+                "sourceOfTruthLabel": "proofs.credentials",
+                "derived": true,
+                "persisted": false,
+                "runtimeImplemented": false
               },
               "additionalProperties": {
                 "type": "array",
                 "title": "Proof refs for keypath",
-                "description": "List of proof refs for one escaped keypath such as person.addresses[label=\"home\"].street.name.",
+                "description": "Liste av bevis-uuid-er som peker inn i proofs.credentials for én escaped nøkkelsti, for eksempel person.addresses[label=\"home\"].street.name. Avledet i minnet ved dekoding fra supports.keypaths, ikke persistert. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "proofs.index.byKeypath.<escapedKeypath>",
                   "sourceLine": 513,
-                  "status": "registry-described",
+                  "status": "decision-target-draft",
                   "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell/VC flows",
-                  "derived": false
+                  "storageDomain": "memory",
+                  "mutability": "read-only",
+                  "sourceOfTruthLabel": "proofs.credentials",
+                  "derived": true,
+                  "persisted": false,
+                  "runtimeImplemented": false
                 }
               }
             }
@@ -1548,17 +1631,47 @@
           }
         }
       }
+    },
+    "groups": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "description": "Grupper nøkles på gruppe-uuid og er uvektede medlemslister over entiteter. Relasjoner bærer den vektede perspektivgrafen. Hvilke grupper en entitet tilhører bygges ved dekoding, i minnet; ingen medlemsbakkanter persisteres.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "members"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "description": "Entitets-uuid som refererer til relations.entities, aldri en relasjonsreferanse."
+            },
+            "description": "Flat liste med entitetsreferanser uten vekter eller kopier av entiteter. Samme entitet kan stå i flere grupper. Referanseoppløsning må kontrolleres separat."
+          }
+        }
+      }
     }
   },
   "x-keypath_aliases": {
     "identity.person": "person",
     "identity.proofs": "proofs"
   },
-  "$comment": "Historisk runtime-skjema er bevart i EntityData.review.schema.json. Ingen data er migrert. Se current-review.json og review-decisions-2026-09-16.json.",
+  "$comment": "Bygges av apply_decisions_2026_09_23.py etter 16.09- og 22.09-stegene. Runtime-grunnlaget EntityData.review.schema.json er urørt. Bevismønsteret er et målkrav; se current-review.json og beslutningens avsnitt Løst 23.09.2026.",
   "x-haven": {
     "status": "decision-target-draft",
-    "asOf": "2026-09-17",
-    "decisionsAsOf": "2026-09-16",
+    "asOf": "2026-09-23",
+    "decisionsAsOf": "2026-09-23",
     "reviewSource": "GJENNOMGANG_KJETIL_2026-09-16.md",
     "reviewSourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
     "runtimeBaseline": "EntityData.review.schema.json",
@@ -1579,7 +1692,13 @@
       "approvedWithoutComment": 203,
       "commented": 45,
       "untouched": 5
-    }
+    },
+    "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
+    "latestDecisionSourceSHA256": "abae5b92cd86e33130c45570046b1a993990e6faff0ad39c3051a0f7b3a7a2a6",
+    "deferredDecisions": {
+      "relations.bokprosjekt": "Urørt: mangler autoritativ kobling fra recipientID til entitets-uuid og fra eksisterende gruppe-id/label til gruppe-uuid i groups. Ingen bokprosjekt-data i repoeksempelet."
+    },
+    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema."
   },
   "$defs": {
     "WeightOfEntityRepresentation": {
@@ -2616,7 +2735,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Referanse til entitets-uuid i relations.entities, lagret bare fra relasjon til entitet. Motsatt retning, fra entitet til relasjoner, bygges ved dekoding, i minnet."
         },
         "perspectiveRef": {
           "anyOf": [
@@ -2647,7 +2767,7 @@
         "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
         "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
       },
-      "description": "Beholdt som mulig avledet sammendrag; skal vurderes ved bruk. Ikke en separat autoritativ kontaktprofil."
+      "description": "entityRef er den persisterte kanten til entiteten. Øvrige felt er beholdt som mulige avledede sammendrag, til vurdering; ingen separat autoritativ kontaktprofil."
     },
     "EntityRelationRecord": {
       "type": "object",
@@ -4424,7 +4544,7 @@
               "proofRefs": {
                 "type": "array",
                 "title": "Affiliation proof refs",
-                "description": "Refs to proofs.credentials or proof index records that support the affiliation claim.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte tilknytningen. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.affiliations[].proofRefs",
                   "sourceLine": 399,
@@ -4516,7 +4636,7 @@
               "evidenceRefs": {
                 "type": "array",
                 "title": "Skill evidence refs",
-                "description": "Refs to proofs.credentials, portfolio records or other evidence supporting this skill.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte ferdigheten. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.skills[].evidenceRefs",
                   "sourceLine": 405,
@@ -4807,7 +4927,7 @@
               "proofRefs": {
                 "type": "array",
                 "title": "Attribute proof refs",
-                "description": "Refs to proofs.credentials or proof index entries that support this provisional attribute.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte den foreløpige attributtpåstanden. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.attributes[].proofRefs",
                   "sourceLine": 424,

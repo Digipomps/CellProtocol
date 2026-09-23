@@ -41,9 +41,9 @@
   },
   "relations": {
     "records": {
-      "relation-demo": {
+      "40000000-0000-4000-8000-000000000001": {
         "schema": "review-only:entity-relation-record:2026-09-16",
-        "relationID": "relation-demo",
+        "relationID": "40000000-0000-4000-8000-000000000001",
         "entityRepresentation": {
           "name": "Fiktiv samarbeidspartner",
           "nodeIdentifier": "entity-collaborator-demo",
@@ -128,7 +128,7 @@
               "endpoints": [
                 {
                   "endpointId": "contact-endpoint-demo",
-                  "cellReference": "cell:///DemoContact/relation-demo/1",
+                  "cellReference": "cell:///DemoContact/40000000-0000-4000-8000-000000000001/1",
                   "label": "primary",
                   "purposes": [
                     "purpose://contact.communication",
@@ -142,7 +142,8 @@
         },
         "subject": {
           "displayName": "Fiktiv samarbeidspartner",
-          "validatedContactRef": "relations.validatedContacts.relation-demo"
+          "validatedContactRef": "relations.validatedContacts.40000000-0000-4000-8000-000000000001",
+          "entityRef": "10000000-0000-4000-8000-000000000001"
         },
         "origin": {
           "kind": "manual",
@@ -169,9 +170,9 @@
       }
     },
     "validatedContacts": {
-      "relation-demo": {
+      "40000000-0000-4000-8000-000000000001": {
         "schema": "haven.entity-validated-contact-record.v1",
-        "relationID": "relation-demo",
+        "relationID": "40000000-0000-4000-8000-000000000001",
         "displayName": "Fiktiv samarbeidspartner",
         "channels": {
           "email": "collaborator@example.org"
@@ -191,8 +192,65 @@
         },
         "status": "owner-accepted"
       }
+    },
+    "entities": {
+      "10000000-0000-4000-8000-000000000001": {
+        "identityRefs": [
+          "20000000-0000-4000-8000-000000000001"
+        ]
+      },
+      "10000000-0000-4000-8000-000000000002": {
+        "identityRefs": []
+      }
+    },
+    "identities": {
+      "20000000-0000-4000-8000-000000000001": {
+        "identityUUID": "20000000-0000-4000-8000-000000000001",
+        "domain": "example.org",
+        "proofRefs": [
+          "50000000-0000-4000-8000-000000000001"
+        ]
+      }
     }
   },
-  "proofs": {},
-  "chronicle": []
+  "proofs": {
+    "credentials": {
+      "50000000-0000-4000-8000-000000000001": {
+        "uuid": "50000000-0000-4000-8000-000000000001",
+        "type": [
+          "VerifiableCredential",
+          "FictionalIdentityDomainClaim"
+        ],
+        "issuer": "did:example:fictional-issuer",
+        "issuanceDate": "2026-09-23T09:00:00Z",
+        "credentialSubject": {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "domain": "example.org"
+        },
+        "proof": {},
+        "supports": {
+          "entityRef": "10000000-0000-4000-8000-000000000001",
+          "keypaths": [
+            "relations.identities.20000000-0000-4000-8000-000000000001.domain"
+          ]
+        }
+      }
+    }
+  },
+  "chronicle": [],
+  "groups": {
+    "30000000-0000-4000-8000-000000000001": {
+      "name": "Venner",
+      "members": [
+        "10000000-0000-4000-8000-000000000001",
+        "10000000-0000-4000-8000-000000000002"
+      ]
+    },
+    "30000000-0000-4000-8000-000000000002": {
+      "name": "Samarbeidspartnere",
+      "members": [
+        "10000000-0000-4000-8000-000000000001"
+      ]
+    }
+  }
 }

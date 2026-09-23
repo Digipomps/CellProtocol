@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:haven:entity-representation:review-decisions:2026-09-16",
-  "title": "EntityRepresentation – målmodell etter gjennomgangen",
+  "title": "EntityRepresentation – løpende målmodell etter beslutningene 23. september 2026",
   "$ref": "#/$defs/EntityRepresentation",
   "$defs": {
     "WeightOfEntityRepresentation": {
@@ -1038,7 +1038,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Referanse til entitets-uuid i relations.entities, lagret bare fra relasjon til entitet. Motsatt retning, fra entitet til relasjoner, bygges ved dekoding, i minnet."
         },
         "perspectiveRef": {
           "anyOf": [
@@ -1069,7 +1070,7 @@
         "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
         "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
       },
-      "description": "Beholdt som mulig avledet sammendrag; skal vurderes ved bruk. Ikke en separat autoritativ kontaktprofil."
+      "description": "entityRef er den persisterte kanten til entiteten. Øvrige felt er beholdt som mulige avledede sammendrag, til vurdering; ingen separat autoritativ kontaktprofil."
     },
     "EntityRelationRecord": {
       "type": "object",
@@ -2846,7 +2847,7 @@
               "proofRefs": {
                 "type": "array",
                 "title": "Affiliation proof refs",
-                "description": "Refs to proofs.credentials or proof index records that support the affiliation claim.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte tilknytningen. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.affiliations[].proofRefs",
                   "sourceLine": 399,
@@ -2938,7 +2939,7 @@
               "evidenceRefs": {
                 "type": "array",
                 "title": "Skill evidence refs",
-                "description": "Refs to proofs.credentials, portfolio records or other evidence supporting this skill.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte ferdigheten. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.skills[].evidenceRefs",
                   "sourceLine": 405,
@@ -3229,7 +3230,7 @@
               "proofRefs": {
                 "type": "array",
                 "title": "Attribute proof refs",
-                "description": "Refs to proofs.credentials or proof index entries that support this provisional attribute.",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte den foreløpige attributtpåstanden. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
                 "x-haven": {
                   "keypath": "person.attributes[].proofRefs",
                   "sourceLine": 424,
@@ -3342,8 +3343,8 @@
   },
   "x-haven": {
     "status": "decision-target-draft",
-    "asOf": "2026-09-17",
-    "decisionsAsOf": "2026-09-16",
+    "asOf": "2026-09-23",
+    "decisionsAsOf": "2026-09-23",
     "reviewSource": "GJENNOMGANG_KJETIL_2026-09-16.md",
     "reviewSourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
     "runtimeBaseline": "EntityData.review.schema.json",
@@ -3364,6 +3365,12 @@
       "approvedWithoutComment": 203,
       "commented": 45,
       "untouched": 5
-    }
+    },
+    "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
+    "latestDecisionSourceSHA256": "abae5b92cd86e33130c45570046b1a993990e6faff0ad39c3051a0f7b3a7a2a6",
+    "deferredDecisions": {
+      "relations.bokprosjekt": "Urørt: mangler autoritativ kobling fra recipientID til entitets-uuid og fra eksisterende gruppe-id/label til gruppe-uuid i groups. Ingen bokprosjekt-data i repoeksempelet."
+    },
+    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema."
   }
 }

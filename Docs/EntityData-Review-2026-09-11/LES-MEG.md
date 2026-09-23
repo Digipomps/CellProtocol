@@ -1,6 +1,8 @@
 # EntityData – gjennomgang med Vegar
 
-**Ny gjennomgang, 17. september:** Beslutningene fra 15.–16. september er nå innarbeidet i et [eget målskjema](EntityData.v2.schema.json). Les [oppdatert forklaring og åpne spørsmål](OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md) først. [current-review.json](current-review.json) peker til de gjeldende lokale filene. Teksten nedenfor og `EntityData.review.schema.json` er det historiske kodegrunnlaget fra 11. september og beskriver derfor også eldre former som er tatt ut av målmodellen.
+**Gjeldende målmodell, 23. september:** [EntityData.v2.schema.json](EntityData.v2.schema.json) er oppdatert i samme fil etter [22.09-beslutningene og bevisavklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret). Start med [målmodellens forklaring](V2-BESLUTTET-FORM.md) og [current-review.json](current-review.json). Bevispostenes nye `supports` og avledede oppslag er målkrav, ikke implementert i Swift. Teksten nedenfor og `EntityData.review.schema.json` er det urørte runtime-grunnlaget fra 11. september.
+
+23.09-steget håndhever også UUID-nøkler i `relations.records`. Eksempelets relasjons- og kontaktreferanser omskrives samlet med faste, fiktive UUID-er; validatorene kontrollerer at lokale referanser og bevisstier fortsatt kan følges.
 
 Datert 11. september 2026. Dette er et kildebasert diskusjonsgrunnlag, kontrollert mot de lokale arbeidsfilene i CellProtocol, Binding og CellScaffold. Oppdatert etter avklaringen om PerspectiveNode og med tilhørende lokale kodeendringer. Det fastsetter ingen ny protokollversjon. Eksemplene er fiktive.
 
