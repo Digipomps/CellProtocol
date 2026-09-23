@@ -1,8 +1,8 @@
 # Beslutning 22.09.2026: uuid-nøkling, grupper som egen rot, én source of truth
 
-Besluttet av Kjetil 22.09.2026. **Ikke implementert.** Skjemaet og koden følger den ennå ikke.
-Denne filen finnes for at beslutningen ikke skal bli liggende uutført, slik gjennomgangen
-16.09 ble.
+Besluttet av Kjetil 22.09.2026, videreført 23.09 med bevismønster og undergrupper.
+**Besluttet, ikke implementert i Swift.** Det løpende målskjemaet følger nå beslutningene;
+`EntityData.review.schema.json` viser fortsatt hva koden lagrer i dag.
 
 ## De fire beslutningene
 
@@ -19,7 +19,8 @@ sannsynligheten er forsvinnende. Alle andre steder refererer til den. Uuid-ene t
 eksponeres; hva som krysser wire er en egen kontrakt som skal skrives.
 
 **2. Relasjoner og grupper er to begreper, og begge trengs.** Relasjoner er vektet og bærer
-perspektivgrafen. Grupper er ikke vektet. En gruppe er en flat medlemsliste.
+perspektivgrafen. Grupper er ikke vektet. Hver gruppe har en flat medlemsliste over entiteter.
+Grupper kan inngå i et hierarki via `partOf`, som besluttet nedenfor.
 
 **3. `groups` er en egen rot**, ikke eierdefinerte navngitte lister under `relations`.
 
@@ -112,19 +113,40 @@ Svakheten i dag er nøkkelen den dedupliserer på. `PerspectiveNodeImpl.referenc
 Uuid-nøkling fjerner begge: `nodeIdentifier` er alltid satt, så `reference` aldri degenererer
 til navn. Nytt register per dokument; roten registreres først.
 
-## Eksisterende gruppe-implementasjon som skal avvikles
+## Undergrupper og avviklet bokprosjekt-form — besluttet 23.09.2026
 
-`relations.bokprosjekt.members[].relation.groupRefs` — «Stable group refs derived from Excel
-column Gruppe». Gruppemedlemskap finnes altså allerede, som refs inne i ett prosjekts undertre.
-Den skal erstattes av `groups`-roten, ikke leve ved siden av.
+Eieren har besluttet **`partOf` på barnet**. `groups.<gruppe-uuid>` har fortsatt
+påkrevd `name` og `members`, samt valgfri `partOf` med foreldregruppens uuid.
+En rotgruppe har ingen `partOf`. Barnelisten persisteres ikke: den bygges ved
+dekoding, som alle andre bakveier i modellen.
+
+`members` inneholder bare entitets-uuid-er til `relations.entities`. En gruppe-uuid
+skal avvises i `members`; undergrupper og entitetsmedlemskap blandes ikke i ett felt.
+JSON Schema kontrollerer UUID-syntaks, men kan ikke slå opp referansetypen i et
+annet dynamisk kart eller fange sykler i `partOf`. Dekoderen må avvise gruppe-uuid-er
+i `members`, ugyldige foreldre og sykler, også selvreferanser. En separat Python-
+kontroll i dokumentasjonsverktøyet tester disse kravene; Swift er ikke implementert.
+UUID-prefiksene i eksempelet er bare faste eksempelverdier, ingen typekoding.
+
+**`relations.bokprosjekt` er tatt ut av målskjemaet og avvises nå.** Undertreet
+hadde egne `members` og `groups`, blant annet `members[].relation.groupRefs`.
+Det erstattes av `groups`-roten: prosjektet er en rotgruppe, kapittelgrupper
+peker til prosjektet, og arbeidsgrupper peker til kapittelgruppen med `partOf`.
+`EntityData.review.schema.json` er urørt; koden lagrer fortsatt den gamle formen.
+Dette er ikke en migrering av eksisterende bokprosjektdata.
+
+Det nye steget `apply_decisions_2026_09_23_groups.py` følger etter 23.09-steget.
+Eksempelet bruker oppdiktede gruppenavn og faste uuid-er, med én prosjektrot,
+én kapittelgruppe og to arbeidsgrupper under samme kapittel. De eksisterende
+fiktive entitetene er medlemmer i hver sin arbeidsgruppe.
 
 ## Hva som gjenstår
 
-- skrive formen inn i skjemaet og eksempelet
-- `proofs.index.byKeypath`: besluttet bygget ved dekoding, men sperret på prerequisittet over
+- implementere målformen og dekodingskontrollene i Swift; skjema og eksempel er oppdatert
+- implementere `supports` og dekodingsbygget `proofs.index.byKeypath`; målkontrakten er beskrevet
 - eksponeringskontrakten for uuid: hva krysser wire
-- migrere `bokprosjekt`-gruppene til `groups`
-- tester mot funksjon og formål før noe går mot `main`
+- migrere eksisterende `bokprosjekt`-data til `groups` med autoritative entitetskoblinger
+- runtime-tester mot funksjon og formål før implementasjonen publiseres
 
 ## Meldt
 

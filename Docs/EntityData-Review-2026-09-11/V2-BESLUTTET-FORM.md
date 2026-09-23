@@ -3,7 +3,8 @@
 Oppdatert 23.09.2026. Målskjemaet er én fil som utvikler seg. Beslutningene fra
 [22.09 og avklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret)
 er lagt etter [16.09-gjennomgangen](GJENNOMGANG_KJETIL_2026-09-16.md).
-Åpne detaljer er fortsatt åpne.
+Undergruppesteget fra 23.09 følger deretter; det innfører `partOf` og tar ut
+`relations.bokprosjekt` fra målskjemaet. Åpne detaljer er fortsatt åpne.
 Dette er dokumentasjon og målstruktur; ingen Swift-implementasjon eller migrering er utført.
 
 | Fil | Rolle |
@@ -20,14 +21,16 @@ Ingen ny datamodellversjon eller wire-eksponeringskontrakt er vedtatt her.
 
 ## Beslutningene 22.09 i målskjemaet
 
-- `groups.<group-uuid>` har påkrevd `name` og `members`. Gruppen er en uvektet,
-  flat medlemsliste; relasjoner bærer den vektede perspektivgrafen. Gruppesobjektet
-  tillater bare disse to feltene. Medlemmer er entitets-UUID-er til
-  `relations.entities`, uten vekter eller innebygde kopier. Bakveien bygges ved
-  dekoding, i minnet. Som de andre røttene er `groups` valgfri i en delvis EntityData.
-- `relations` beholder alle ti reserverte nøkler fra 16.09-steget, inkludert
-  `validatedContacts` og det utsatte `bokprosjekt`-undertreet. Eierdefinerte
-  navngitte lister avvises med `additionalProperties: false`.
+- `groups.<group-uuid>` har påkrevd `name` og `members`, samt valgfri `partOf`
+  med foreldregruppens uuid. En rotgruppe har ingen forelder. Barnet peker oppover;
+  barnelisten persisteres ikke, men bygges ved dekoding som alle andre bakveier.
+  Gruppeobjektet tillater bare disse tre feltene. `members` er en flat, uvektet
+  liste med bare entitets-uuid-er til `relations.entities`. Gruppe-uuid-er i
+  `members` skal avvises. Som de andre røttene er `groups` valgfri.
+- `relations` beholder ni reserverte nøkler, inkludert `validatedContacts`.
+  `relations.bokprosjekt` er tatt ut og erstattet av `groups`-roten.
+  Den gamle formen og eierdefinerte navngitte lister avvises med
+  `additionalProperties: false`.
 - `relations.entities`, `relations.identities`, `relations.records` og `groups`
   krever UUID-nøkler gjennom `propertyNames.pattern`. 23.09-steget håndhever nå
   også kravet for `records`, med `maxLength: 36`. Det fiktive eksempelets
@@ -41,15 +44,22 @@ Ingen ny datamodellversjon eller wire-eksponeringskontrakt er vedtatt her.
   er fjernet og eksplisitt forbudt, også når postene ellers er åpne objekter.
   `relations.entities.*.identityRefs` og `relations.records.*.subject.entityRef`
   beholdes. Beskrivelsene sier at motsatt retning bygges ved dekoding, i minnet.
-- Eksempelet har to entiteter og to grupper: Venner inneholder begge, og
-  Samarbeidspartnere inneholder den ene. Den eksisterende relasjonsposten peker
-  på denne entiteten; entiteten peker på én identitet. Alle nye referanser
-  kontrolleres mot eksempelets kart.
+- Eksempelet beholder de to entitetene og gruppene Venner og Samarbeidspartnere. I tillegg
+  har det tre nivåer med fiktive navn: prosjektet «Bokverkstedet ved Månesjøen»,
+  kapittelet «Broer mellom ideer», og to arbeidsgrupper under samme kapittel.
+  Prosjekt-uuid ender på `0003`, kapittelet på `0004`, arbeidsgruppene på `0005`
+  og `0006`. Entitetene er medlemmer i hver sin arbeidsgruppe. Alle referanser
+  kontrolleres mot eksempelets kart; UUID-prefiksene er ingen typekontrakt.
 
 JSON Schema kontrollerer UUID-syntaks, ikke om en UUID finnes i et annet kart.
-Den nye validatoren har derfor en separat referansekontroll for det fiktive
-eksempelet og en negativ test der en relasjons-UUID feilaktig brukes som medlem.
-Dette er ingen implementasjon av generell referanseoppløsning eller identitetslikhet.
+Dokumentasjonsvalidatoren kjører derfor en separat kontroll som avviser gruppe-
+og relasjons-uuid-er i `members`, ukjente entiteter og ugyldige gruppeforeldre.
+JSON Schema kan heller ikke fange sykler i `partOf`; dekoderen må avvise sykler,
+inkludert selvreferanser. Negative prøver viser at skjemaet alene slipper gjennom
+disse semantiske feilene, mens referansekontrollen avviser dem. Dette er Python-
+kontroller av komplette lokale kart, ingen implementert Swift-dekoder.
+Se [Draft 2020-12, strukturell validering](https://json-schema.org/draft/2020-12/json-schema-validation#section-3)
+for skillet mellom skjemakontroll og dokumentets øvrige semantikk.
 
 ## Bevismønsteret 23.09 i målskjemaet
 
@@ -114,22 +124,17 @@ den implementerer ingen generell nøkkelstioppløser eller Swift-dekoder.
 
 ## Bevarte sperrer og uavklarte punkter
 
-**`relations.bokprosjekt` er helt urørt.** `members[].relation.groupRefs` og
-`group` er derfor fortsatt et synlig migreringsunntak. Repoeksemplet inneholder
-ikke bokprosjektmedlemmer. Runtime bruker `recipientID` og gruppe-ID/label samt
-`memberRecipientIDs` i et eget gruppeuttrekk; det mangler en autoritativ kobling
-fra hver mottaker til entitets-UUID og fra eksisterende grupper til gruppe-UUID
-og navn i den nye roten. Å finne på slike koblinger eller persistere enda en
-bakvei ville ikke gjennomføre beslutningen om én kilde til medlemskap.
-Se [leveranserapporten](../../../CellProtocolDocuments/Deliverables/ENTITYDATA_UUID_GRUPPER_2026-09-22.md)
-for konkrete kildebaner og hva som må foreligge før dette kan gjøres.
+**`relations.bokprosjekt` er fjernet fra målskjemaet.** Runtime-grunnlaget
+`EntityData.review.schema.json` og dagens kode beholder den gamle formen.
+Migrering av ekte data gjenstår: det trengs autoritative koblinger fra mottakere
+til entitets-uuid-er og fra gamle grupper til gruppe-uuid-er i `groups`.
+Det nye fiktive treet er ikke en migrering av brukernes bokprosjekter.
 
-Utover UUID-kravet i `relations.records`, bevislageret,
-indeksmetadata/-beskrivelser og de fire referansebeskrivelsene
-er 22.09-skjemaets datakontrakt uendret. De øvrige spesialiserte undertrærne i
-`proofs` er bevart; denne leveransen utfører ingen migrering av dem. Det samme
-gjelder åpne detaljer om endpoints, scaffold-tilstedeværelse, identitetslikhet
-og wire-eksponering.
+Utover `groups`, fjerningen av `relations.bokprosjekt` og tilhørende beskrivelser/
+metadata er bevisstegets datakontrakt uendret, inkludert alle delte `$defs`.
+De øvrige spesialiserte undertrærne i `proofs` er bevart.
+Åpne detaljer om endpoints, scaffold-tilstedeværelse, identitetslikhet
+og wire-eksponering er fortsatt uavklart.
 [16.09-notatet](OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md) beskriver det historiske
 mellomsteget; det er ikke en konkurrerende gjeldende målform.
 
@@ -138,42 +143,32 @@ mellomsteget; det er ikke en konkurrerende gjeldende målform.
 Fra denne mappen, med [requirements-target.txt](requirements-target.txt) installert:
 
 ```sh
-python -B apply_decisions_2026_09_23.py
-python -B validate_decisions_2026_09_23.py
+python -B -O apply_decisions_2026_09_23_groups.py
+python -B -O validate_decisions_2026_09_23_groups.py
 ```
 
-23.09-skriptet tar resultatet fra 22.09-skriptet videre. Hele kjeden
-16.09 → 22.09 → 23.09 bygges i minnet. Skjema, eksempel og manifest skrives først etter at
-forutsetningene og skjemavalideringen har passert. Manglende mål eller uventet
-inngangsform gir feil, også med `python -O`. En ny kjøring bygger fra runtime-
-grunnlaget og gir identiske byte; den anvender ikke samme steg to ganger på
-allerede transformerte data. Å kjøre **bare** 16.09- eller 22.09-skriptet skriver
-et historisk mellomsteg; bruk alltid 23.09-kommandoen for gjeldende målform.
-Det historiske `build_v2_schema.py` brukes ikke.
+Hele kjeden 16.09 → 22.09 → 23.09 → undergrupper bygges i minnet før noe
+skrives. Manglende mål, uventet inngangsform og gjentatt anvendelse gir feil,
+også med `python -O`. Ny bygging fra runtime-grunnlaget gir identiske byte.
+Ikke kjør et tidligere byggesteg alene mot gjeldende filer; det skriver en
+historisk mellomform. `build_v2_schema.py` brukes ikke.
 
-Python-biblioteket var utilgjengelig i arbeidsmiljøet. Den eksplisitte lokale
-Ajv-banen ble brukt til både bygging og kontroll:
+I dette miljøet brukes den eksisterende lokale Ajv-banen eksplisitt:
 
 ```sh
 export ENTITYDATA_AJV_MODULE=/usr/local/lib/node_modules/@nestjs/cli/node_modules/ajv
 export ENTITYDATA_AJV_FORMATS_MODULE=/usr/local/lib/node_modules/@nestjs/cli/node_modules/ajv-formats
-python3 -B -O apply_decisions_2026_09_23.py
-python3 -B -O validate_decisions_2026_09_23.py
+python3 -B -O apply_decisions_2026_09_23_groups.py
+python3 -B -O validate_decisions_2026_09_23_groups.py
 ```
 
-`target_validation.py` bruker Ajv bare når miljøvariablene er satt. Begge
-validatorbaner kontrollerer formater. Resultatet oppgir faktisk brukt motor.
-Se [TARGET-VALIDATION-2026-09-23.json](TARGET-VALIDATION-2026-09-23.json) og
-[leveranserapporten](../../../CellProtocolDocuments/Deliverables/ENTITYDATA_BEVIS_2026-09-23.md).
-22.09-validatoren kan også kjøres mot gjeldende 23.09-mål. Den kontrollerer
-fortsatt grupper og enveisrelasjoner, men forventer nå 23.09-bevisformen og
-håndhevede relasjonsnøkler. Resultatet angir `targetDecisionsAsOf`.
-22.09-rapportens opprinnelige målinger beskriver det historiske mellomsteget.
+Begge validatorbaner kontrollerer formater. Se faktisk motor, positive/negative
+kontroller og filsummer i [TARGET-VALIDATION-2026-09-23-GROUPS.json](TARGET-VALIDATION-2026-09-23-GROUPS.json)
+og [jobbrapporten](../../../CellProtocolDocuments/Deliverables/GRUPPER_PARTOF_2026-09-23.md).
+Den nye suiten kjører også de uendrede 22.09-/23.09-suitene på deres historiske
+målform i en midlertidig kopi. Gjeldende mål og historiske resultatfiler overskrives ikke.
 
-**Visualiseringssjekkene er ikke kjørt.** Den historiske suiten leser en mappe
-utenfor repoet med utdaterte 16.09/17.09-artefakter; ingen oppdaterte
-23.09-artefakter er levert. Ingen visualiseringsfiler er oppdatert. Den nye
-validatoren rapporterer dette som `ikke kjørt`, aldri som bestått. Før en ny
-visualiseringskontroll trengs oppdaterte artefakter og en suite som måler
-gjeldende målform. Swift/runtime, dekoding og ekte
-migrering er heller ikke testet i denne dokumentasjonsoppgaven.
+**Visualiseringssjekkene: ikke kjørt.** Den historiske suiten leser utdaterte
+16.09/17.09-artefakter utenfor repoet. Oppdaterte undergruppeartefakter og en
+oppdatert suite mangler. Swift/runtime, ekte dekoding og migrering er også
+**ikke kjørt**: denne oppgaven endrer dokumentasjon og målskjema.

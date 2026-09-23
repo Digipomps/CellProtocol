@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:haven:entity-data:review-decisions:2026-09-16",
   "title": "EntityData – løpende målmodell etter beslutningene 23. september 2026",
-  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås.",
+  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås. Undergrupper bruker partOf på barnet; relations.bokprosjekt er tatt ut av målskjemaet.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -26,7 +26,7 @@
     },
     "relations": {
       "type": "object",
-      "description": "Objekt med bare reserverte nøkler. Eierdefinerte navngitte lister er erstattet av groups. Relasjoner bærer den vektede perspektivgrafen; groups er uvektet medlemskap. records/<uuid>/entityRepresentation er den typede kontaktbanen. bokprosjekt er et bevart, uavklart migreringsunntak, ikke en ny eierdefinert liste.",
+      "description": "Objekt med bare reserverte nøkler. Eierdefinerte navngitte lister og det gamle relations.bokprosjekt-undertreet er erstattet av groups-roten. Relasjoner bærer den vektede perspektivgrafen; groups.members er uvektet entitetsmedlemskap og groups.partOf peker til foreldregruppen. records/<uuid>/entityRepresentation er den typede kontaktbanen. Den gamle formen avvises av målskjemaet; dagens Swift-lagring og runtime-grunnlaget er ikke endret.",
       "title": "Relations root",
       "x-haven": {
         "keypath": "relations",
@@ -336,197 +336,6 @@
               "mutability": "read-write",
               "sourceOfTruthLabel": "Workspace invitation runtimes",
               "derived": false
-            }
-          }
-        },
-        "bokprosjekt": {
-          "type": "object",
-          "title": "Bokprosjekt relation root",
-          "description": "Owner-local relation tree for bokprosjektet om innovasjonsledelse, materialized on staging and mountable by other scaffolds under the same keypath.",
-          "x-haven": {
-            "keypath": "relations.bokprosjekt",
-            "sourceLine": 492,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "QuestionnaireCampaign/EntityPresenceRegistry",
-            "derived": false
-          },
-          "properties": {
-            "members": {
-              "type": "array",
-              "title": "Bokprosjekt members",
-              "description": "List of imported bokprosjekt members represented as EntityRepresentation-compatible records with relation-edge metadata.",
-              "x-haven": {
-                "keypath": "relations.bokprosjekt.members",
-                "sourceLine": 493,
-                "status": "registry-described",
-                "visibilityClass": "private",
-                "storageDomain": "entity-anchor",
-                "mutability": "read-write",
-                "sourceOfTruthLabel": "QuestionnaireCampaign",
-                "derived": false
-              },
-              "items": {
-                "type": "object",
-                "properties": {
-                  "entityRepresentation": {
-                    "type": "object",
-                    "title": "Bokprosjekt member representation",
-                    "description": "Entity-shaped representation of one book project member using the same keypaths as Entity where data exists.",
-                    "x-haven": {
-                      "keypath": "relations.bokprosjekt.members[].entityRepresentation",
-                      "sourceLine": 494,
-                      "status": "registry-described",
-                      "visibilityClass": "private",
-                      "storageDomain": "entity-anchor",
-                      "mutability": "read-write",
-                      "sourceOfTruthLabel": "QuestionnaireCampaign",
-                      "derived": false
-                    },
-                    "properties": {
-                      "person": {
-                        "type": "object",
-                        "properties": {
-                          "displayName": {
-                            "type": "string",
-                            "title": "Bokprosjekt member display name",
-                            "description": "Display name imported from the participant spreadsheet.",
-                            "x-haven": {
-                              "keypath": "relations.bokprosjekt.members[].entityRepresentation.person.displayName",
-                              "sourceLine": 495,
-                              "status": "registry-described",
-                              "visibilityClass": "private",
-                              "storageDomain": "entity-anchor",
-                              "mutability": "read-write",
-                              "sourceOfTruthLabel": "QuestionnaireCampaign",
-                              "derived": false
-                            }
-                          },
-                          "work": {
-                            "type": "object",
-                            "properties": {
-                              "organizationName": {
-                                "type": "string",
-                                "title": "Bokprosjekt organization name",
-                                "description": "Organization/company name imported from the participant spreadsheet.",
-                                "x-haven": {
-                                  "keypath": "relations.bokprosjekt.members[].entityRepresentation.person.work.organizationName",
-                                  "sourceLine": 496,
-                                  "status": "registry-described",
-                                  "visibilityClass": "private",
-                                  "storageDomain": "entity-anchor",
-                                  "mutability": "read-write",
-                                  "sourceOfTruthLabel": "QuestionnaireCampaign",
-                                  "derived": false
-                                }
-                              },
-                              "title": {
-                                "type": "string",
-                                "title": "Bokprosjekt work title",
-                                "description": "Work title imported from the participant spreadsheet.",
-                                "x-haven": {
-                                  "keypath": "relations.bokprosjekt.members[].entityRepresentation.person.work.title",
-                                  "sourceLine": 497,
-                                  "status": "registry-described",
-                                  "visibilityClass": "private",
-                                  "storageDomain": "entity-anchor",
-                                  "mutability": "read-write",
-                                  "sourceOfTruthLabel": "QuestionnaireCampaign",
-                                  "derived": false
-                                }
-                              }
-                            }
-                          },
-                          "contact": {
-                            "type": "object",
-                            "properties": {
-                              "endpoints": {
-                                "type": "array",
-                                "title": "Bokprosjekt contact endpoint descriptors",
-                                "description": "Public-safe Cell/ContactEndpoint descriptors when real endpoints exist.",
-                                "x-haven": {
-                                  "keypath": "relations.bokprosjekt.members[].entityRepresentation.person.contact.endpoints",
-                                  "sourceLine": 498,
-                                  "status": "registry-described",
-                                  "visibilityClass": "private",
-                                  "storageDomain": "entity-anchor",
-                                  "mutability": "read-write",
-                                  "sourceOfTruthLabel": "ContactEndpointCell/QuestionnaireCampaign",
-                                  "derived": false
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  },
-                  "relation": {
-                    "type": "object",
-                    "title": "Bokprosjekt relation edge",
-                    "description": "Relation-specific membership metadata such as group, role in network, questionnaire status refs and purpose refs.",
-                    "x-haven": {
-                      "keypath": "relations.bokprosjekt.members[].relation",
-                      "sourceLine": 499,
-                      "status": "registry-described",
-                      "visibilityClass": "private",
-                      "storageDomain": "entity-anchor",
-                      "mutability": "read-write",
-                      "sourceOfTruthLabel": "QuestionnaireCampaign",
-                      "derived": false
-                    },
-                    "properties": {
-                      "group": {
-                        "type": "string",
-                        "title": "Bokprosjekt group label",
-                        "description": "Group value imported from Excel column Gruppe.",
-                        "x-haven": {
-                          "keypath": "relations.bokprosjekt.members[].relation.group",
-                          "sourceLine": 500,
-                          "status": "registry-described",
-                          "visibilityClass": "private",
-                          "storageDomain": "entity-anchor",
-                          "mutability": "read-write",
-                          "sourceOfTruthLabel": "QuestionnaireCampaign",
-                          "derived": false
-                        }
-                      },
-                      "groupRefs": {
-                        "type": "array",
-                        "title": "Bokprosjekt group refs",
-                        "description": "Stable group refs derived from Excel column Gruppe.",
-                        "x-haven": {
-                          "keypath": "relations.bokprosjekt.members[].relation.groupRefs",
-                          "sourceLine": 501,
-                          "status": "registry-described",
-                          "visibilityClass": "private",
-                          "storageDomain": "entity-anchor",
-                          "mutability": "read-write",
-                          "sourceOfTruthLabel": "QuestionnaireCampaign",
-                          "derived": false
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "groups": {
-              "type": "array",
-              "title": "Bokprosjekt groups",
-              "description": "Group summaries derived from Excel column Gruppe for messaging audiences and subgroup discovery.",
-              "x-haven": {
-                "keypath": "relations.bokprosjekt.groups",
-                "sourceLine": 502,
-                "status": "registry-described",
-                "visibilityClass": "private",
-                "storageDomain": "entity-anchor",
-                "mutability": "read-write",
-                "sourceOfTruthLabel": "QuestionnaireCampaign",
-                "derived": false
-              }
             }
           }
         },
@@ -1637,7 +1446,7 @@
       "propertyNames": {
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
       },
-      "description": "Grupper nøkles på gruppe-uuid og er uvektede medlemslister over entiteter. Relasjoner bærer den vektede perspektivgrafen. Hvilke grupper en entitet tilhører bygges ved dekoding, i minnet; ingen medlemsbakkanter persisteres.",
+      "description": "Grupper nøkles på gruppe-uuid og har uvektede medlemslister over entiteter. Undergrupper peker oppover med partOf; barnelisten persisteres ikke, men bygges ved dekoding som alle andre bakveier i modellen. Hvilke grupper en entitet tilhører bygges også ved dekoding. Relasjoner bærer den vektede perspektivgrafen. JSON Schema kan ikke oppdage sykler i partOf; dekoderen må avvise dem. Referansenes type og eksistens må kontrolleres separat. Målkrav, ikke implementert i Swift.",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
@@ -1655,9 +1464,15 @@
             "items": {
               "type": "string",
               "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-              "description": "Entitets-uuid som refererer til relations.entities, aldri en relasjonsreferanse."
+              "description": "Entitets-uuid til relations.entities. En gruppe-uuid eller relasjons-uuid skal avvises ved referansekontroll; JSON Schema kontrollerer bare UUID-syntaks."
             },
-            "description": "Flat liste med entitetsreferanser uten vekter eller kopier av entiteter. Samme entitet kan stå i flere grupper. Referanseoppløsning må kontrolleres separat."
+            "description": "Flat liste med bare entitets-uuid-er til relations.entities, uten vekter eller kopier. Samme entitet kan stå i flere grupper. Gruppe-uuid-er i members skal avvises; gruppemedlemskap og undergrupper blandes ikke i samme felt. Undergrupper bruker partOf. UUID-syntaks skiller ikke referansetypene; dekoderen må kontrollere type og eksistens."
+          },
+          "partOf": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "maxLength": 36,
+            "description": "Valgfri gruppe-uuid som peker fra barnet til foreldregruppen i groups. En rotgruppe har ikke partOf. Barnelisten persisteres ikke; den bygges ved dekoding, som alle andre bakveier i modellen. JSON Schema kontrollerer uuid-form, ikke at referansen peker på en gruppe eller at grafen er asyklisk. Dekoderen må avvise ukjente foreldre, entitetsreferanser og sykler, også selvreferanser. Målkrav, ikke implementert i Swift."
           }
         }
       }
@@ -1667,7 +1482,7 @@
     "identity.person": "person",
     "identity.proofs": "proofs"
   },
-  "$comment": "Bygges av apply_decisions_2026_09_23.py etter 16.09- og 22.09-stegene. Runtime-grunnlaget EntityData.review.schema.json er urørt. Bevismønsteret er et målkrav; se current-review.json og beslutningens avsnitt Løst 23.09.2026.",
+  "$comment": "Bygges av apply_decisions_2026_09_23_groups.py etter 16.09-, 22.09- og 23.09-stegene. EntityData.review.schema.json er urørt. Undergrupper og avviklet bokprosjekt-tre er besluttet, ikke implementert; se current-review.json og beslutningsdokumentet.",
   "x-haven": {
     "status": "decision-target-draft",
     "asOf": "2026-09-23",
@@ -1694,11 +1509,10 @@
       "untouched": 5
     },
     "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
-    "latestDecisionSourceSHA256": "abae5b92cd86e33130c45570046b1a993990e6faff0ad39c3051a0f7b3a7a2a6",
-    "deferredDecisions": {
-      "relations.bokprosjekt": "Urørt: mangler autoritativ kobling fra recipientID til entitets-uuid og fra eksisterende gruppe-id/label til gruppe-uuid i groups. Ingen bokprosjekt-data i repoeksempelet."
-    },
-    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema."
+    "latestDecisionSourceSHA256": "7662c7934b9365bbe33a5da383c23cd460664b4f5fc43933e6195c5af406cb17",
+    "deferredDecisions": {},
+    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema.",
+    "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår."
   },
   "$defs": {
     "WeightOfEntityRepresentation": {

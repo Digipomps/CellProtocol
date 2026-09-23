@@ -3367,10 +3367,9 @@
       "untouched": 5
     },
     "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
-    "latestDecisionSourceSHA256": "abae5b92cd86e33130c45570046b1a993990e6faff0ad39c3051a0f7b3a7a2a6",
-    "deferredDecisions": {
-      "relations.bokprosjekt": "Urørt: mangler autoritativ kobling fra recipientID til entitets-uuid og fra eksisterende gruppe-id/label til gruppe-uuid i groups. Ingen bokprosjekt-data i repoeksempelet."
-    },
-    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema."
+    "latestDecisionSourceSHA256": "7662c7934b9365bbe33a5da383c23cd460664b4f5fc43933e6195c5af406cb17",
+    "deferredDecisions": {},
+    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema.",
+    "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår."
   }
 }

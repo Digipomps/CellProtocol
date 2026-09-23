@@ -11,10 +11,11 @@
   "buildSteps": [
     "apply_decisions_2026_09_16.py",
     "apply_decisions_2026_09_22.py",
-    "apply_decisions_2026_09_23.py"
+    "apply_decisions_2026_09_23.py",
+    "apply_decisions_2026_09_23_groups.py"
   ],
-  "buildCommand": "python -B apply_decisions_2026_09_23.py",
-  "validationCommand": "python -B validate_decisions_2026_09_23.py",
+  "buildCommand": "python -B apply_decisions_2026_09_23_groups.py",
+  "validationCommand": "python -B validate_decisions_2026_09_23_groups.py",
   "runtimeBaseline": "EntityData.review.schema.json",
   "runtimeUpdated": false,
   "dataMigrated": false,
