@@ -35,6 +35,11 @@ final class DatabaseSecretContractTests: XCTestCase {
         let request = try await DatabaseServiceRequest.signed(record: record, filename: "graph.sqlite",
             purpose: "purpose://contract.test", audience: "trusted-runtime", runtime: owner, recipient: p)
         try request.validate()
+        let grant = try await DatabaseServiceGrant.approve(request, record: record, owner: owner,
+            unwrapper: RoundTripUnwrapper(key: primary), transport: RoundTripTransport(record: record, owner: owner))
+        let wire = try JSONDecoder().decode(DatabaseServiceGrant.self, from: JSONEncoder().encode(grant))
+        _ = try wire.open(privateKey: primary, owner: owner, record: record, expectedRequest: request)
+
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
         var scope = try XCTUnwrap(object["scope"] as? [String: Any]); scope["filename"] = "other.sqlite"; object["scope"] = scope
         let tampered = try JSONDecoder().decode(DatabaseServiceRequest.self, from: JSONSerialization.data(withJSONObject: object))
@@ -44,5 +49,21 @@ final class DatabaseSecretContractTests: XCTestCase {
         for value in ["http://example.com/secrets", "https://user:password@example.com/secrets", "https://example.com/secrets?key=x", "https://example.com/secrets#ref"] {
             XCTAssertThrowsError(try HTTPSSecretCredentialTransport(endpoint: XCTUnwrap(URL(string: value))))
         }
+    }
+}
+
+private struct RoundTripUnwrapper: SecretUnwrappingProvider, @unchecked Sendable {
+    let key: Curve25519.KeyAgreement.PrivateKey
+    func recipient() async throws -> SecretRecipient { try .init(publicKey: key.publicKey.rawRepresentation) }
+    func open(_ envelope: SealedDatabaseSecret.Envelope, context: DatabaseSecretContext) async throws -> SecretKeyMaterial {
+        try DatabaseSecretCrypto.open(envelope, context: context, privateKey: key)
+    }
+}
+private struct RoundTripTransport: SecretCredentialTransport, @unchecked Sendable {
+    let record: SealedDatabaseSecret
+    let owner: Identity
+    func exchange(_ request: SecretCredentialRequest) async throws -> SealedDatabaseSecret? {
+        try request.verify(owner: owner, audience: record.context.audience, domain: record.context.domain, now: Date())
+        return record
     }
 }

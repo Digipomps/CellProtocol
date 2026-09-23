@@ -3,23 +3,6 @@
 import Foundation
 import CellBase
 
-/// Private, typed interchange for the native owner workflow. No raw keys or generic Cell/Flow actions.
-public struct DatabaseOwnerApprovalPackage: Codable, Sendable {
-    public let record: SealedDatabaseSecret
-    public let request: DatabaseServiceRequest
-    public let secretEndpoint: URL
-    public init(record: SealedDatabaseSecret, request: DatabaseServiceRequest, secretEndpoint: URL) {
-        self.record = record; self.request = request; self.secretEndpoint = secretEndpoint
-    }
-    public func validate(owner: Identity, now: Date = Date()) throws {
-        try record.validate(owner: owner); try request.validate(now: now)
-        guard request.scope.context == record.context, try request.scope.recordDigest == record.digest(),
-              secretEndpoint.scheme == "https", secretEndpoint.user == nil, secretEndpoint.password == nil,
-              secretEndpoint.query == nil, secretEndpoint.fragment == nil,
-              secretEndpoint.path == "/cell-secrets/v1/\(record.context.audience)/exchange" else { throw SecretCredentialError.denied }
-    }
-}
-
 /// Public metadata only. An existing handle is always opened with its pinned recipient; never recreated.
 public struct AppleDatabaseSecretHandle: Codable, Sendable, Identifiable {
     public let id: String

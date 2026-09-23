@@ -72,8 +72,17 @@ public struct DatabaseServiceGrant: Codable, Sendable, CustomStringConvertible, 
     public var debugDescription: String { description }
     public var customMirror: Mirror { Mirror(self, children: [:]) }
     private func signingData() throws -> Data {
-        struct Body: Encodable { let format = "haven.database-service-grant.v1"; let request: DatabaseServiceRequest; let encapsulatedKey: Data; let ciphertext: Data }
-        return try CanonicalPayloadEncoder.data(for: Body(request: request, encapsulatedKey: encapsulatedKey, ciphertext: ciphertext))
+        // Identity's convenience Codable normalizes metadata on decode. Sign only immutable authority
+        // fields plus the runtime proof; request.validate separately verifies its pinned public key.
+        struct Body: Encodable {
+            let format = "haven.database-service-grant.v1"
+            let scope: DatabaseServiceRequest.Scope
+            let runtimeSignature: Data
+            let encapsulatedKey: Data
+            let ciphertext: Data
+        }
+        return try CanonicalPayloadEncoder.data(for: Body(scope: request.scope, runtimeSignature: request.signature,
+            encapsulatedKey: encapsulatedKey, ciphertext: ciphertext))
     }
     public func validate(owner: Identity, record: SealedDatabaseSecret, now: Date = Date()) throws {
         try request.validate(now: now); try record.validate(owner: owner)
@@ -132,5 +141,22 @@ public enum DatabaseFileKeyDerivation {
                 salt: Data(cellUUID.lowercased().utf8), info: Data(("haven.cell.database.sqlcipher.v1/" + filename).utf8), outputByteCount: 32)
             return try! SecretKeyMaterial(result.withUnsafeBytes { Data($0) })
         }
+    }
+}
+
+/// Private, typed interchange for the native owner workflow. No raw keys or generic Cell/Flow actions.
+public struct DatabaseOwnerApprovalPackage: Codable, Sendable {
+    public let record: SealedDatabaseSecret
+    public let request: DatabaseServiceRequest
+    public let secretEndpoint: URL
+    public init(record: SealedDatabaseSecret, request: DatabaseServiceRequest, secretEndpoint: URL) {
+        self.record = record; self.request = request; self.secretEndpoint = secretEndpoint
+    }
+    public func validate(owner: Identity, now: Date = Date()) throws {
+        try record.validate(owner: owner); try request.validate(now: now)
+        guard request.scope.context == record.context, try request.scope.recordDigest == record.digest(),
+              secretEndpoint.scheme == "https", secretEndpoint.user == nil, secretEndpoint.password == nil,
+              secretEndpoint.query == nil, secretEndpoint.fragment == nil,
+              secretEndpoint.path == "/cell-secrets/v1/\(record.context.audience)/exchange" else { throw SecretCredentialError.denied }
     }
 }
