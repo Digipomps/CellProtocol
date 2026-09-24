@@ -41,14 +41,38 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public var cellScope: CellUsageScope
     public var persistancy: Persistancy
     
-    public var uuid = UUID().uuidString
-    public var agreementTemplate: Agreement
-    public var identityDomain: String
+    // WebSocket response callbacks may overlap. Retain and replace description
+    // fields under one lock; locking only configure would still race readers.
+    private struct DescriptionState {
+        var uuid = UUID().uuidString
+        var agreementTemplate: Agreement
+        var identityDomain: String
+        var name: String?
+        var feedProperties: FeedProperties?
+    }
+    private let descriptionStateLock = NSLock()
+    private var descriptionState: DescriptionState
+
+    public var uuid: String {
+        get { withDescriptionStateLock { descriptionState.uuid } }
+        set { withDescriptionStateLock { descriptionState.uuid = newValue } }
+    }
+    public var agreementTemplate: Agreement {
+        get { withDescriptionStateLock { descriptionState.agreementTemplate } }
+        set { withDescriptionStateLock { descriptionState.agreementTemplate = newValue } }
+    }
+    public var identityDomain: String {
+        get { withDescriptionStateLock { descriptionState.identityDomain } }
+        set { withDescriptionStateLock { descriptionState.identityDomain = newValue } }
+    }
     
     var members: [Identity] = [Identity]()
     var experiences: [CellConfiguration]?
     var owner: Identity?
-    var name: String?
+    var name: String? {
+        get { withDescriptionStateLock { descriptionState.name } }
+        set { withDescriptionStateLock { descriptionState.name = newValue } }
+    }
     var publisherUuid: String?
     
     private var connectCancellable: AnyCancellable?
@@ -126,7 +150,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     let auditor = BridgeBaseAuditor()
     
     var feedEndpoint : URL?
-    var feedProperties: FeedProperties?
+    var feedProperties: FeedProperties? {
+        get { withDescriptionStateLock { descriptionState.feedProperties } }
+        set { withDescriptionStateLock { descriptionState.feedProperties = newValue } }
+    }
     var transport: BridgeTransportProtocol?
     var emitCellAtEndpoint: Emit?
     private var inboundEmitCellCache = [String: Emit]()
@@ -143,13 +170,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Bridge base init. identity.uuid: \(config.owner.uuid) identityDomain: \(config.identityDomain)")
         self.owner = config.owner
         
-        if config.agreementTemplate != nil {
-            agreementTemplate = config.agreementTemplate!
+        let initialAgreement: Agreement
+        if let configuredAgreement = config.agreementTemplate {
+            initialAgreement = configuredAgreement
         } else {
-            agreementTemplate = await Agreement()
+            initialAgreement = await Agreement()
         }
+        descriptionState = DescriptionState(
+            agreementTemplate: initialAgreement,
+            identityDomain: config.identityDomain
+        )
         feedEndpoint = URL(string: "https://localhost/")
-        identityDomain = config.identityDomain
         self.transport = config.transport
         self.inboundPublisherLookupIdentity = config.inboundPublisherLookupIdentity
         self.cellScope = .template // TODO: get from config's 
@@ -171,8 +202,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public required init(owner: Identity) {
         identityProofAuthorization = BridgeIdentityProofAuthorization(owner: owner)
         self.owner = owner
-        agreementTemplate = Agreement(owner: owner)
-        identityDomain = "bridge" // Must be changed to reflect remote side 
+        descriptionState = DescriptionState(
+            agreementTemplate: Agreement(owner: owner),
+            identityDomain: "bridge" // Replaced when the remote description arrives.
+        )
         cellScope = .template
         persistancy = .ephemeral
     }
@@ -184,6 +217,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private func withCallbackStateLock<T>(_ block: () throws -> T) rethrows -> T {
         callbackStateLock.lock()
         defer { callbackStateLock.unlock() }
+        return try block()
+    }
+
+    private func withDescriptionStateLock<T>(_ block: () throws -> T) rethrows -> T {
+        descriptionStateLock.lock()
+        defer { descriptionStateLock.unlock() }
         return try block()
     }
 
@@ -706,9 +745,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func advertise(for requester: Identity) async throws -> AnyCell {
         _ = requester
+        let description = withDescriptionStateLock { descriptionState }
         let publicOwner = self.owner?.publicIdentitySnapshot()
-        let publicAgreement = try self.agreementTemplate.publicDescriptorSnapshot()
-        return AnyCell(uuid: self.uuid, name: self.name ?? "CBCSP", contractTemplate: publicAgreement, owner: publicOwner, experiences: self.experiences, feedEndpoint: self.feedEndpoint, feedProperties: self.feedProperties, identityDomain: self.identityDomain)
+        let publicAgreement = try description.agreementTemplate.publicDescriptorSnapshot()
+        return AnyCell(uuid: description.uuid, name: description.name ?? "CBCSP", contractTemplate: publicAgreement, owner: publicOwner, experiences: self.experiences, feedEndpoint: self.feedEndpoint, feedProperties: description.feedProperties, identityDomain: description.identityDomain)
     }
     
     public func state(requester: Identity) async throws -> ValueType {
@@ -926,13 +966,18 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     
     private func configure(from description: AnyCell) {
-        identityProofAuthorization.discovered(domain: description.identityDomain, resource: description.uuid)
-            self.agreementTemplate = description.agreementTemplate
-            self.name = description.name
-            self.uuid = description.uuid
-            self.feedProperties = description.feedProperties
-            self.identityDomain = description.identityDomain
-        
+        withDescriptionStateLock {
+            identityProofAuthorization.discovered(domain: description.identityDomain, resource: description.uuid)
+            descriptionState = DescriptionState(
+                uuid: description.uuid,
+                agreementTemplate: description.agreementTemplate,
+                identityDomain: description.identityDomain,
+                name: description.name,
+                feedProperties: description.feedProperties
+            )
+        }
+        // Subscriber callbacks and async proof traffic must never run with the
+        // description lock held. No transport-wide serialization is introduced.
         self.sendSetValueState(for: ReservedKeypath.bridgesetup.rawValue, setValueState: .ok)
          //send a message that description is fetched
         self.descriptionFetchedPublisher.send(true)
