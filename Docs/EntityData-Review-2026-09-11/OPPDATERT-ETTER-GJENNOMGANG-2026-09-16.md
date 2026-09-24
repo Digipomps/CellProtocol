@@ -1,5 +1,7 @@
 # EntityData etter gjennomgangen 16. september
 
+**Historisk mellomsteg.** 22.09-beslutningene er nå innarbeidet i de samme målfilene. Les [gjeldende målmodell](V2-BESLUTTET-FORM.md) og [kontrollresultatet for 22.09](TARGET-VALIDATION-2026-09-22.json). Omtalen nedenfor av egne relasjonslister, gjensidige referanser og 13 røtter beskriver 16.09-steget og er ikke lenger gjeldende målform. Kontrollresultatet fra 17.09 er historisk.
+
 Oppdatert 17. september 2026. Beslutningene dine var **ikke** innarbeidet i skjemaet eller grafikken: de brukte fortsatt kodegrunnlaget fra 11. september. Dokumentpubliseringen 16. september hadde tatt med gjennomgangen, men hadde ikke omsatt den til et nytt skjema. Dette dokumentet og målskjemaet retter den mangelen.
 
 Start med [current-review.json](current-review.json), som peker til gjeldende lokale gjennomgang. [Målskjemaet](EntityData.v2.schema.json), [grafskjemaet](EntityRepresentation.v2.schema.json) og [eksempeldataene](EntityData.v2.example.json) bygger på [dine ordrette kommentarer](GJENNOMGANG_KJETIL_2026-09-16.md). [Beslutningsregisteret](review-decisions-2026-09-16.json) beholder alle 45 kommentarene med status. 203 elementer ble godkjent uten kommentar; fem ble ikke berørt. Uendrede deler er videreført fra det historiske skjemaet, ikke gjennomgått på nytt som nye vedtak.
