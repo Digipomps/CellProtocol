@@ -187,6 +187,7 @@ def main():
     manifest={'status':'decision-target-draft','updatedAt':'2026-09-17','decisionsAsOf':'2026-09-16','schema':TARGET,
       'graphSchema':'EntityRepresentation.v2.schema.json','example':'EntityData.v2.example.json',
       'documentation':'OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md','decisions':'review-decisions-2026-09-16.json',
+      'proposals':'proposals-2026-09-24.json',
       'runtimeBaseline':BASE.name,'runtimeUpdated':False,'dataMigrated':False,'published':False}
     for name,value in [(TARGET,s),(manifest['graphSchema'],schema_graph),(manifest['example'],data),('review-decisions-2026-09-16.json',{'source':REVIEW.name,'sourceSHA256':hashlib.sha256(REVIEW.read_bytes()).hexdigest(),'comments':decisions()}),('current-review.json',manifest)]:
         (OUT/name).write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n')

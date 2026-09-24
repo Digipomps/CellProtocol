@@ -1,0 +1,71 @@
+{
+  "source": "Scenariodiskusjon Vegar/Claude 21.–24. september 2026: deling av konferanseagenda med kontakter som også er deltakere",
+  "createdAt": "2026-09-24",
+  "status": "open-to-kjetil",
+  "appliedToTargetSchema": false,
+  "documentation": "OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md#forslag-etter-scenariodiskusjon",
+  "scenario": {
+    "summary": "Person A deltar på konferanse B. A vil dele egen agenda med et utvalg av egne kontakter (undergruppe A, f.eks. kollegaer), men bare med dem som også er deltakere på B, samt med nye relasjoner som oppstår på B underveis.",
+    "audience": "B ∩ (A ∪ {b_1, b_2, …}) — deltaker på B, og enten medlem av undergruppe A eller relasjon oppstått på B.",
+    "ownerPremises": [
+      {
+        "statedAt": "2026-09-21",
+        "text": "Konferansen B uttrykkes som en EntityRepresentation og refereres til fra andre deler av datastrukturen."
+      },
+      {
+        "statedAt": "2026-09-21",
+        "text": "Hver deltaker får utstedt én eller flere celler på konferansen som deltakeren selv eier. Deltakeren sender listen over kontakter som skal kontrolleres til cellen; cellen henter deltakeroversikt fra konferanse-entiteten, matcher internt og returnerer resultatet til eieren."
+      }
+    ]
+  },
+  "proposals": [
+    {
+      "id": "p2026-09-24-01",
+      "path": "conference",
+      "title": "conference nøkles per konferanse-entitet",
+      "proposal": "conference blir et objekt nøklet på relationID for konferansens relasjonspost: conference.<relationID>.{registration, agenda, …}. Dagens ene skive kolliderer når eieren deltar på flere konferanser og har ingen referanse til hvilken entitet den gjelder.",
+      "dependsOn": "Konferansen er en vanlig relasjonspost i relations.records med entityRepresentation (type konferanse/gruppe). Ingen ny rot for organisasjoner eller grupper.",
+      "decisionNeeded": "Én referanseregel: relationID for posten er lik nodeIdentifier for rotnoden i dens entityRepresentation, slik at origin.context, roles[].group, conference-nøkkelen og grafreferanser bruker samme ID.",
+      "status": "proposed"
+    },
+    {
+      "id": "p2026-09-24-02",
+      "path": "conference.<relationID>.cells[]",
+      "title": "Utstedte celler registreres på konferanseskiven",
+      "proposal": "Liste over celler konferansen har utstedt til eieren: cellReference, issuedBy (konferansens relationID), utstedt/utløpt. Matchecellen er første bruk. Dette er strukturmetadata, ikke tilgang.",
+      "openQuestion": "Forholdet til scaffoldPresence.mounts og bindings: samme informasjon skal ikke føres to steder.",
+      "status": "proposed"
+    },
+    {
+      "id": "p2026-09-24-03",
+      "path": "conference.<relationID>.matchConsent",
+      "title": "Eksplisitt samtykke til matching, med identitetsliste",
+      "proposal": "Eieren oppgir per konferanse hvilke egne identiteter som kan matches mot andres kontaktlister, og for hvilke formål. Korrelasjon på tvers av identitetsdomener blir dermed et valg eieren tar, ikke noe A eller B regner seg fram til.",
+      "relatedTo": "conference.consentRecords (ikke autoritativt samtykke, per Kjetil 16.09) og det åpne spørsmålet om når to identiteter er samme entitet (Kjetil 16.09, relations.people[].ownerUUID).",
+      "privacyNote": "Konferanse-entiteten bør bare levere deltakere som har gitt dette samtykket, og bør levere hashede identitetsnøkler, ikke profiler. Da lærer matchecellen og eieren bare snittet. PSI er neste trinn hvis dette ikke er nok.",
+      "status": "proposed"
+    },
+    {
+      "id": "p2026-09-24-04",
+      "path": "signedAgreementEntity / grant-betingelser",
+      "title": "Grant-betingelse «inclusion proof for entitet X»",
+      "proposal": "Avtalekontrakten trenger en betingelsesform som krever at innehaver har et gyldig proofs.entityInclusion for en gitt entitet, kombinerbar med en relasjonsregel (medlem av navngitt liste, eller origin.context = X). Grant-en på conference.<X>.agenda kan da bære publikumsregelen uten å materialisere en mottakerliste, og forblir riktig når nye relasjoner oppstår.",
+      "notInInterestCondition": "InterestCondition (always, purposeSolvedWithin, metadataFreshness, all/any/not) beskriver kunnskap i grafen, ikke autorisasjon. Betingelsen hører hjemme i avtale-/grant-kontrakten som resolveren håndhever.",
+      "status": "proposed"
+    }
+  ],
+  "noSchemaChangeNeeded": [
+    {
+      "path": "proofs.entityInclusion + proofs.index.byKeypath",
+      "note": "Resultatet av matchingen lagres som inclusion proofs utstedt av konferanse-entiteten, indeksert mot kanten relations.records.<C>.entityRepresentation.partOf[<konferanse>]. Medlemskap blir dermed en vektet kant med bevis, ikke en separat liste. Krever dokumentasjon, ikke ny struktur."
+    },
+    {
+      "path": "relations.records.<id>.origin.context",
+      "note": "Nye relasjoner som oppstår på konferansen får origin.context = konferansens relationID. Det er grunnlaget for {b_i}-leddet i publikumsregelen."
+    },
+    {
+      "path": "relations.<navngitt liste>",
+      "note": "Undergruppe A er en eierdefinert navngitt liste (vedtatt 16.09) eller partOf-kanter til en gruppe-node. Elementformen i navngitte lister er fortsatt åpen."
+    }
+  ]
+}

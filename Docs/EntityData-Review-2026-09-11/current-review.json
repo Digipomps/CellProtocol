@@ -7,6 +7,7 @@
   "example": "EntityData.v2.example.json",
   "documentation": "OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md",
   "decisions": "review-decisions-2026-09-16.json",
+  "proposals": "proposals-2026-09-24.json",
   "runtimeBaseline": "EntityData.review.schema.json",
   "runtimeUpdated": false,
   "dataMigrated": false,
