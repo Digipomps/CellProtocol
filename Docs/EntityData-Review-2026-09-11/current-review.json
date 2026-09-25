@@ -1,7 +1,7 @@
 {
   "status": "decision-target-draft",
-  "updatedAt": "2026-09-23",
-  "decisionsAsOf": "2026-09-23",
+  "updatedAt": "2026-09-25",
+  "decisionsAsOf": "2026-09-25",
   "schema": "EntityData.v2.schema.json",
   "graphSchema": "EntityRepresentation.v2.schema.json",
   "example": "EntityData.v2.example.json",
@@ -12,10 +12,11 @@
     "apply_decisions_2026_09_16.py",
     "apply_decisions_2026_09_22.py",
     "apply_decisions_2026_09_23.py",
-    "apply_decisions_2026_09_23_groups.py"
+    "apply_decisions_2026_09_23_groups.py",
+    "apply_decisions_2026_09_25_skills.py"
   ],
-  "buildCommand": "python -B apply_decisions_2026_09_23_groups.py",
-  "validationCommand": "python -B validate_decisions_2026_09_23_groups.py",
+  "buildCommand": "python -B apply_decisions_2026_09_25_skills.py",
+  "validationCommand": "python -B validate_decisions_2026_09_25_skills.py",
   "runtimeBaseline": "EntityData.review.schema.json",
   "runtimeUpdated": false,
   "dataMigrated": false,

@@ -1,6 +1,7 @@
 # Beslutning 22.09.2026: uuid-nøkling, grupper som egen rot, én source of truth
 
-Besluttet av Kjetil 22.09.2026, videreført 23.09 med bevismønster og undergrupper.
+Besluttet av Kjetil 22.09.2026, videreført 23.09 med bevismønster og undergrupper
+og 25.09 med skills som formål.
 **Besluttet, ikke implementert i Swift.** Det løpende målskjemaet følger nå beslutningene;
 `EntityData.review.schema.json` viser fortsatt hva koden lagrer i dag.
 
@@ -140,10 +141,64 @@ Eksempelet bruker oppdiktede gruppenavn og faste uuid-er, med én prosjektrot,
 én kapittelgruppe og to arbeidsgrupper under samme kapittel. De eksisterende
 fiktive entitetene er medlemmer i hver sin arbeidsgruppe.
 
+## Avklart 25.09.2026: konteksten bor i PerspectiveCell
+
+Kjetil: aktiv kontekst holdes i `PerspectiveCell`. Der legges spor etter alt brukeren foretar
+seg i forhold til formål, interesser, endring av entiteter og relevante CellConfigurations.
+**Skills er bare formål.**
+
+`person.skills[]` utgår helt, også som avledet visning i målskjemaet. En skill er et
+formål brukeren hevder å kunne oppfylle, med samme nodeform som ethvert annet formål.
+Grafen er det ene stedet skills bor. Det innføres ingen egen `SearchPurpose` eller
+`Skill`-type. Et utvalg kan annonseres etter kontekst; det gir ikke en andre lagret liste.
+Sporets form, grovhet og levetid er fortsatt åpne; denne jobben implementerer ikke sporene.
+
+**Friksjonen er villet:** `Purpose.goal` er påkrevd. En skill må derfor si hva oppfyllelse
+er. En skill uten et målbart resultat kan ikke uttrykkes i denne formen. JSON Schema
+krever målkonfigurasjonen, men kan ikke bevise at den faktisk måler resultatet.
+Eksempelet sier at den fiktive eieren kan levere en nettside med nøyaktig tre sider,
+alle tilgjengelige, og null brutte interne lenker. Ingen målecelle er implementert.
+
+`apply_decisions_2026_09_25_skills.py` følger etter undergruppesteget fra 23.09.
+Det fjerner hele `$defs.PersonProfile.skills`, inkludert `label`, `level`, `taxonomyRef`
+og `evidenceRefs`. Fordi `PersonProfile` ellers er åpent, avvises nøkkelen eksplisitt
+med `not: {required: [skills]}`. Den er ikke beholdt i `properties` som en visningsliste.
+Den delte definisjonen oppdateres også i grafskjemaet. Besluttet, ikke implementert i Swift.
+
+### Åpen sperre 25.09: bevis til en bestemt skill-node
+
+`evidenceRefs` forsvinner sammen med skill-listen. Beviset må kunne knyttes til
+formålsnoden fra det eksisterende lageret `proofs.credentials`. Undersøkelsen viser:
+
+- `supports.keypaths` krever minst én unik, ikke-tom streng. Skjemaet verifiserer
+  ikke at strengen løses til en node; `supports.entityRef` identifiserer entiteten,
+  ikke formålsnoden.
+- `EntityRepresentation.purposes` er en liste av `WeightOfPurpose`, med innebygd
+  `value` eller `reference`. `Purpose.nodeIdentifier` finnes, men en kanonisk,
+  stabil nøkkelsti som velger noden via denne identiteten er ikke kontraktfestet.
+  Roten `purposes` har dessuten fortsatt uavklart lagringsorganisering.
+- Dagens `resolve_fixture_keypath` i `apply_decisions_2026_09_23.py` og
+  `fixture_errors` i `validate_decisions_2026_09_23.py` løser bare objektstier.
+  Den nye kontrollen viser at både en forsøkt indekssti og en forsøkt selektorsti
+  godtas som skjemastrenger, men ikke kan løses av dagens verktøy. En sti bare til
+  hele `entityRepresentation.purposes` løses til listen, ikke til den bestemte noden.
+- Selv en fremtidig indekssti vil være ustabil ved omordning. En kontrakt må også
+  avklare hvordan bevis følger noden når kanten serialiseres som `reference` i
+  stedet for `value`. Et nytt bevisfelt eller en ny selektorsyntaks er ikke vedtatt her.
+
+**Sperren er derfor åpen:** dagens form kan lagre en påstått nøkkelsti, men vi kan
+ikke hevde en stabil, verifisert beviskobling til én skill-node. `proofs.credentials`
+og `supports.keypaths` beholdes byte-/strukturmessig uendret; ingen erstatning for
+`evidenceRefs` oppfinnes, og eksempelet har ikke en påstått løst skill-beviskobling.
+Den tidligere fiktive identitetsbeviskoblingen er bevart og kontrolleres fortsatt.
+Dette er en sperre for nodeadresseringen i målkontrakten, i tillegg til at `supports`
+og bevisoppslaget ennå ikke er implementert i Swift.
+
 ## Hva som gjenstår
 
 - implementere målformen og dekodingskontrollene i Swift; skjema og eksempel er oppdatert
 - implementere `supports` og dekodingsbygget `proofs.index.byKeypath`; målkontrakten er beskrevet
+- avklare stabil bevissti til en formålsnode gjennom grafens lister og referanser
 - eksponeringskontrakten for uuid: hva krysser wire
 - migrere eksisterende `bokprosjekt`-data til `groups` med autoritative entitetskoblinger
 - runtime-tester mot funksjon og formål før implementasjonen publiseres

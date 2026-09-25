@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:haven:entity-data:review-decisions:2026-09-16",
-  "title": "EntityData – løpende målmodell etter beslutningene 23. september 2026",
-  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås. Undergrupper bruker partOf på barnet; relations.bokprosjekt er tatt ut av målskjemaet.",
+  "title": "EntityData – løpende målmodell etter beslutningene 25. september 2026",
+  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås. Undergrupper bruker partOf på barnet; relations.bokprosjekt er tatt ut av målskjemaet. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -11,7 +11,7 @@
     },
     "purposes": {
       "type": "object",
-      "description": "Administreres av PerspectiveCell. Den lagrede rotens organisering og den typede bibliotekadapteren er fortsatt ikke ferdig kontraktfestet.",
+      "description": "Administreres av PerspectiveCell. Den lagrede rotens organisering og den typede bibliotekadapteren er fortsatt ikke ferdig kontraktfestet. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift.",
       "title": "Purposes root",
       "x-haven": {
         "keypath": "purposes",
@@ -749,7 +749,7 @@
     },
     "entityRepresentation": {
       "type": "object",
-      "description": "Registerets eldre, delvise representasjonsrot. Feltene er valgfrie her for kompatibilitet; en komplett Codable-node finnes i $defs.EntityRepresentation og relations.records.<id>.entityRepresentation. representationPolicy/representationOf er registermetadata, ikke implementerte PerspectiveNode-felt.",
+      "description": "Registerets eldre, delvise representasjonsrot. Feltene er valgfrie her for kompatibilitet; en komplett Codable-node finnes i $defs.EntityRepresentation og relations.records.<id>.entityRepresentation. representationPolicy/representationOf er registermetadata, ikke implementerte PerspectiveNode-felt. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift.",
       "title": "Entity representation",
       "x-haven": {
         "keypath": "entityRepresentation",
@@ -1482,11 +1482,11 @@
     "identity.person": "person",
     "identity.proofs": "proofs"
   },
-  "$comment": "Bygges av apply_decisions_2026_09_23_groups.py etter 16.09-, 22.09- og 23.09-stegene. EntityData.review.schema.json er urørt. Undergrupper og avviklet bokprosjekt-tre er besluttet, ikke implementert; se current-review.json og beslutningsdokumentet.",
+  "$comment": "Bygges av apply_decisions_2026_09_25_skills.py etter 16.09-, 22.09-, 23.09- og undergruppestegene. Skills er bare formål. Runtime-grunnlaget er urørt; se beslutningsdokumentet for åpen sperre om bevis til formålsnoder.",
   "x-haven": {
     "status": "decision-target-draft",
-    "asOf": "2026-09-23",
-    "decisionsAsOf": "2026-09-23",
+    "asOf": "2026-09-25",
+    "decisionsAsOf": "2026-09-25",
     "reviewSource": "GJENNOMGANG_KJETIL_2026-09-16.md",
     "reviewSourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
     "runtimeBaseline": "EntityData.review.schema.json",
@@ -1509,8 +1509,10 @@
       "untouched": 5
     },
     "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
-    "latestDecisionSourceSHA256": "7662c7934b9365bbe33a5da383c23cd460664b4f5fc43933e6195c5af406cb17",
-    "deferredDecisions": {},
+    "latestDecisionSourceSHA256": "c4f5357f2892ee81c8b1a48a92d9a14935812cefbcbf24180df06a75fb67da26",
+    "deferredDecisions": {
+      "skills.proofNodeAddressing": "person.skills[].evidenceRefs er fjernet sammen med listen. proofs.credentials og supports.keypaths er uendret. keypaths tillater en ikke-tom streng, men en stabil sti til en Purpose-node gjennom WeightOfPurpose-lister og value/reference er ikke kontraktfestet eller verifisert. Dagens fixture-oppløser støtter bare objektstier. Åpen sperre: bevis kan ikke hevdes koblet til en bestemt skill-node før nodeadressering og referanseoppløsning er avklart. Ingen nye bevisfelt innføres."
+    },
     "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema.",
     "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår."
   },
@@ -1647,7 +1649,7 @@
         "status": "decision-target; private-person-shape-alignment",
         "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/EntityRepresentation.swift"
       },
-      "description": "Kontakt er en node i min graf: min representasjon av hva jeg vet om en annen entitet. Persondata bruker den samme profil- og endpoint-strukturen. Lagring gir ingen delingsrett."
+      "description": "Kontakt er en node i min graf: min representasjon av hva jeg vet om en annen entitet. Persondata bruker den samme profil- og endpoint-strukturen. Lagring gir ingen delingsrett. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift."
     },
     "WeightOfInterest": {
       "type": "object",
@@ -1924,7 +1926,7 @@
         "status": "decided-target; runtime-goal-still-optional",
         "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/Purpose.swift"
       },
-      "description": "Node med label og relasjoner, i tillegg et påkrevd målbart mål. Samme Purpose brukes for egne og søkte formål. Dette er målinvarianten fra gjennomgangen; Swift tillater fortsatt nil. Skjemaet krever en konfigurasjon, men kan ikke bevise at den måler noe."
+      "description": "Node med label og relasjoner, i tillegg et påkrevd målbart mål. Samme Purpose brukes for egne og søkte formål. Dette er målinvarianten fra gjennomgangen; Swift tillater fortsatt nil. Skjemaet krever en konfigurasjon, men kan ikke bevise at den måler noe. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift."
     },
     "AgreementReference": {
       "type": "object",
@@ -3370,7 +3372,7 @@
     },
     "PersonProfile": {
       "type": "object",
-      "description": "Owner-controlled person/profile data root.",
+      "description": "Owner-controlled person/profile data root. person.skills er forbudt; skills er formålsnoder i grafen, ikke egne poster eller en avledet liste.",
       "additionalProperties": true,
       "properties": {
         "name": {
@@ -4373,98 +4375,6 @@
             }
           }
         },
-        "skills": {
-          "type": "array",
-          "description": "Owner-claimed skills or competencies for matching, profile and invite contexts.",
-          "title": "Skills",
-          "x-haven": {
-            "keypath": "person.skills",
-            "sourceLine": 400,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
-            "derived": false
-          },
-          "items": {
-            "type": "object",
-            "title": "Skill record",
-            "description": "One skill record with label, level, taxonomy ref and optional evidence refs.",
-            "x-haven": {
-              "keypath": "person.skills[]",
-              "sourceLine": 401,
-              "status": "registry-described",
-              "visibilityClass": "private",
-              "storageDomain": "entity-anchor",
-              "mutability": "read-write",
-              "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
-              "derived": false
-            },
-            "properties": {
-              "label": {
-                "type": "string",
-                "title": "Skill label",
-                "description": "Human-readable skill name.",
-                "x-haven": {
-                  "keypath": "person.skills[].label",
-                  "sourceLine": 402,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
-                  "derived": false
-                }
-              },
-              "level": {
-                "type": "string",
-                "title": "Skill level",
-                "description": "Owner-provided level or confidence label for the skill.",
-                "x-haven": {
-                  "keypath": "person.skills[].level",
-                  "sourceLine": 403,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
-                  "derived": false
-                }
-              },
-              "taxonomyRef": {
-                "type": "string",
-                "title": "Skill taxonomy ref",
-                "description": "Reference to a controlled vocabulary or taxonomy term for the skill.",
-                "x-haven": {
-                  "keypath": "person.skills[].taxonomyRef",
-                  "sourceLine": 404,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "Perspective/TaxonomyCell",
-                  "derived": false
-                }
-              },
-              "evidenceRefs": {
-                "type": "array",
-                "title": "Skill evidence refs",
-                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte ferdigheten. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
-                "x-haven": {
-                  "keypath": "person.skills[].evidenceRefs",
-                  "sourceLine": 405,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell/Proofs",
-                  "derived": false
-                }
-              }
-            }
-          }
-        },
         "preferences": {
           "type": "object",
           "description": "Owner preferences for UI, locale, communication and default visibility.",
@@ -4849,7 +4759,12 @@
             ]
           }
         }
-      ]
+      ],
+      "not": {
+        "required": [
+          "skills"
+        ]
+      }
     }
   }
 }
