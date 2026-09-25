@@ -24,7 +24,7 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
         }
     }
 
-    private static func description() -> AnyCell {
+    private static func makeDescriptionFixture() -> AnyCell {
         let identifier = UUID().uuidString
         let peer = Identity(UUID().uuidString, displayName: identifier, identityVault: nil)
         let agreement = Agreement(owner: peer)
@@ -63,7 +63,7 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
     func testOverlappingDescriptionResponsesAndAdvertisementsRetainCoherentSnapshots() async throws {
         let owner = Identity(UUID().uuidString, displayName: "local owner", identityVault: nil)
         let bridge = BridgeBase(owner: owner)
-        try await Self.deliver(.description(Self.description()), to: bridge)
+        try await Self.deliver(.description(Self.makeDescriptionFixture()), to: bridge)
         let workers = 8
         let iterations = 128
         let gate = StartGate(participants: workers * 2)
@@ -73,7 +73,7 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
                 group.addTask {
                     await gate.arrive()
                     for _ in 0..<iterations {
-                        try await Self.deliver(.description(Self.description()), to: bridge)
+                        try await Self.deliver(.description(Self.makeDescriptionFixture()), to: bridge)
                     }
                 }
                 group.addTask {
@@ -108,7 +108,7 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
     func testUnexpectedDescriptionPayloadDoesNotReplaceTheLastAcceptedSnapshot() async throws {
         let owner = Identity(UUID().uuidString, displayName: "local owner", identityVault: nil)
         let bridge = BridgeBase(owner: owner)
-        let first = Self.description()
+        let first = Self.makeDescriptionFixture()
         try await Self.deliver(.description(first), to: bridge)
         let retained = try await bridge.advertise(for: owner)
         try await Self.deliver(.string("not a description"), to: bridge)
@@ -116,7 +116,7 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
         XCTAssertEqual(afterInvalid.uuid, first.uuid)
         Self.assertCoherent(afterInvalid)
 
-        let replacement = Self.description()
+        let replacement = Self.makeDescriptionFixture()
         try await Self.deliver(.description(replacement), to: bridge)
         let afterReplacement = try await bridge.advertise(for: owner)
         XCTAssertEqual(afterReplacement.uuid, replacement.uuid)
