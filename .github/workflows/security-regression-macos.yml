@@ -30,6 +30,20 @@ jobs:
           swift --version
           swift test --disable-automatic-resolution --jobs 4
           git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
+      - name: Verify concurrent bridge descriptions with Thread Sanitizer
+        shell: bash
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          # Each invocation starts a fresh test process. The first rebuilds the
+          # pinned package with instrumentation; later invocations reuse it.
+          for attempt in 1 2 3; do
+            echo "Bridge description Thread Sanitizer pass ${attempt}/3"
+            swift test --disable-automatic-resolution --jobs 2 \
+              --sanitize thread --filter BridgeDescriptionConcurrencyTests
+          done
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
       - name: Reject a vulnerable downstream transport pin
         shell: bash
         run: bash Scripts/verify-transport-security-floor.sh
