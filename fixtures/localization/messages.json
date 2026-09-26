@@ -1,0 +1,489 @@
+{
+  "configuration": {
+    "version": 1,
+    "sourceLocale": "nb-NO",
+    "catalogs": [
+      {
+        "namespace": "demo",
+        "revision": "1"
+      }
+    ],
+    "resources": [
+      {
+        "schema": "haven.localization-catalog.v1",
+        "namespace": "demo",
+        "revision": "1",
+        "source_locale": "nb-NO",
+        "messages": {
+          "title": {
+            "format": "literal",
+            "arguments": {},
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "Music studio",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "Musikkstudio",
+                "state": "approved"
+              }
+            }
+          },
+          "count": {
+            "format": "icu-mf1",
+            "arguments": {
+              "count": "integer"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{count, plural, =0 {No tracks} one {# track} other {# tracks}}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{count, plural, =0 {Ingen spor} one {# spor} other {# spor}}",
+                "state": "approved"
+              },
+              "pl": {
+                "value": "{count, plural, one {# utwór} few {# utwory} many {# utworów} other {# utworu}}",
+                "state": "approved"
+              }
+            }
+          },
+          "selection": {
+            "format": "icu-mf1",
+            "arguments": {
+              "kind": "string"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{kind, select, public {Public} private {Private} other {Unknown}}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{kind, select, public {Offentlig} private {Privat} other {Ukjent}}",
+                "state": "approved"
+              }
+            }
+          },
+          "number": {
+            "format": "icu-mf1",
+            "arguments": {
+              "n": "number"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{n, number}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{n, number}",
+                "state": "approved"
+              }
+            }
+          },
+          "integer": {
+            "format": "icu-mf1",
+            "arguments": {
+              "n": "number"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{n, number, integer}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{n, number, integer}",
+                "state": "approved"
+              }
+            }
+          },
+          "percent": {
+            "format": "icu-mf1",
+            "arguments": {
+              "n": "number"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{n, number, percent}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{n, number, percent}",
+                "state": "approved"
+              }
+            }
+          },
+          "currency": {
+            "format": "icu-mf1",
+            "arguments": {
+              "n": "number"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{n, number, ::currency/USD}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{n, number, ::currency/USD}",
+                "state": "approved"
+              }
+            }
+          },
+          "date": {
+            "format": "icu-mf1",
+            "arguments": {
+              "when": "date"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{when, date, short}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{when, date, short}",
+                "state": "approved"
+              }
+            }
+          },
+          "time": {
+            "format": "icu-mf1",
+            "arguments": {
+              "when": "date"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{when, time, short}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{when, time, short}",
+                "state": "approved"
+              }
+            }
+          },
+          "quoted": {
+            "format": "icu-mf1",
+            "arguments": {},
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "'{count}' isn't substituted",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "'{count}' isn't substituted",
+                "state": "approved"
+              }
+            }
+          },
+          "nested": {
+            "format": "icu-mf1",
+            "arguments": {
+              "kind": "string",
+              "count": "integer"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "{kind, select, public {{count, plural, one {# public track} other {# public tracks}}} other {Private collection}}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "{kind, select, public {{count, plural, one {# public track} other {# public tracks}}} other {Private collection}}",
+                "state": "approved"
+              }
+            }
+          },
+          "unicode": {
+            "format": "icu-mf1",
+            "arguments": {
+              "name": "string"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "Hei {name} 👋",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "Hei {name} 👋",
+                "state": "approved"
+              }
+            }
+          },
+          "greeting": {
+            "format": "icu-mf1",
+            "arguments": {
+              "name": "string"
+            },
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "Hello {name}",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "Hei {name}",
+                "state": "approved"
+              }
+            }
+          },
+          "placeholder": {
+            "format": "literal",
+            "arguments": {},
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "Track title",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "Sportittel",
+                "state": "approved"
+              }
+            }
+          },
+          "save": {
+            "format": "literal",
+            "arguments": {},
+            "context": "Shared Skeleton localization acceptance fixture",
+            "translations": {
+              "en-US": {
+                "value": "Save",
+                "state": "approved"
+              },
+              "nb-NO": {
+                "value": "Lagre",
+                "state": "approved"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "literal-en",
+      "locale": "en-US",
+      "key": "title",
+      "arguments": {},
+      "expected": "Music studio",
+      "fallbackReason": null
+    },
+    {
+      "id": "literal-nb",
+      "locale": "nb-NO",
+      "key": "title",
+      "arguments": {},
+      "expected": "Musikkstudio",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-zero",
+      "locale": "en-US",
+      "key": "count",
+      "arguments": {
+        "count": 0
+      },
+      "expected": "No tracks",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-one",
+      "locale": "en-US",
+      "key": "count",
+      "arguments": {
+        "count": 1
+      },
+      "expected": "1 track",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-many",
+      "locale": "en-US",
+      "key": "count",
+      "arguments": {
+        "count": 12
+      },
+      "expected": "12 tracks",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-nb",
+      "locale": "nb-NO",
+      "key": "count",
+      "arguments": {
+        "count": 2
+      },
+      "expected": "2 spor",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-pl-few",
+      "locale": "pl",
+      "key": "count",
+      "arguments": {
+        "count": 2
+      },
+      "expected": "2 utwory",
+      "fallbackReason": null
+    },
+    {
+      "id": "plural-pl-many",
+      "locale": "pl",
+      "key": "count",
+      "arguments": {
+        "count": 5
+      },
+      "expected": "5 utworów",
+      "fallbackReason": null
+    },
+    {
+      "id": "select",
+      "locale": "en-US",
+      "key": "selection",
+      "arguments": {
+        "kind": "public"
+      },
+      "expected": "Public",
+      "fallbackReason": null
+    },
+    {
+      "id": "select-other",
+      "locale": "en-US",
+      "key": "selection",
+      "arguments": {
+        "kind": "closed"
+      },
+      "expected": "Unknown",
+      "fallbackReason": null
+    },
+    {
+      "id": "number",
+      "locale": "en-US",
+      "key": "number",
+      "arguments": {
+        "n": 1234.5
+      },
+      "expected": "1,234.5",
+      "fallbackReason": null
+    },
+    {
+      "id": "integer",
+      "locale": "en-US",
+      "key": "integer",
+      "arguments": {
+        "n": 1234.6
+      },
+      "expected": "1,235",
+      "fallbackReason": null
+    },
+    {
+      "id": "percent",
+      "locale": "en-US",
+      "key": "percent",
+      "arguments": {
+        "n": 0.25
+      },
+      "expected": "25%",
+      "fallbackReason": null
+    },
+    {
+      "id": "currency",
+      "locale": "en-US",
+      "key": "currency",
+      "arguments": {
+        "n": 12.5
+      },
+      "expected": "$12.50",
+      "fallbackReason": null
+    },
+    {
+      "id": "date",
+      "locale": "en-US",
+      "key": "date",
+      "arguments": {
+        "when": 0
+      },
+      "expected": "1/1/70",
+      "fallbackReason": null
+    },
+    {
+      "id": "time",
+      "locale": "en-US",
+      "key": "time",
+      "arguments": {
+        "when": 0
+      },
+      "expected": "12:00 AM",
+      "fallbackReason": null
+    },
+    {
+      "id": "quoted",
+      "locale": "en-US",
+      "key": "quoted",
+      "arguments": {},
+      "expected": "{count} isn't substituted",
+      "fallbackReason": null
+    },
+    {
+      "id": "nested",
+      "locale": "en-US",
+      "key": "nested",
+      "arguments": {
+        "kind": "public",
+        "count": 2
+      },
+      "expected": "2 public tracks",
+      "fallbackReason": null
+    },
+    {
+      "id": "unicode",
+      "locale": "en-US",
+      "key": "unicode",
+      "arguments": {
+        "name": "Åse"
+      },
+      "expected": "Hei Åse 👋",
+      "fallbackReason": null
+    },
+    {
+      "id": "untrusted-argument",
+      "locale": "en-US",
+      "key": "greeting",
+      "arguments": {
+        "name": "<script>alert(1)</script>"
+      },
+      "expected": "Hello <script>alert(1)</script>",
+      "fallbackReason": null
+    },
+    {
+      "id": "typed-argument-rejection",
+      "locale": "en-US",
+      "key": "count",
+      "arguments": {
+        "count": "2"
+      },
+      "expected": "Legacy",
+      "fallbackReason": "invalid_argument"
+    },
+    {
+      "id": "missing-message",
+      "locale": "en-US",
+      "key": "not-here",
+      "arguments": {},
+      "expected": "Legacy",
+      "fallbackReason": "missing_message"
+    }
+  ]
+}

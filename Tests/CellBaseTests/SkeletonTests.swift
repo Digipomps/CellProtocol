@@ -1583,3 +1583,394 @@ private extension SkeletonElement {
         return try visualization.spec?.jsonString()
     }
 }
+
+// WP-R1 / T-F1. Portable fixtures are also available to WP-R2 and WP-R3.
+extension SkeletonTests {
+    private func wpR1Fixture(_ name: String) throws -> Data {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        return try Data(contentsOf: root.appendingPathComponent("fixtures/skeleton-wp-r1/\(name).json"))
+    }
+
+    private func wpR1JSON(_ value: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    }
+
+    private func wpR1UnsupportedReasons(_ element: SkeletonElement) -> [String] {
+        // Audit descends all children, including row/header/footer contexts.
+        SkeletonReachabilityAudit.audit(element).filter { $0.kind == .unsupportedElement }.map(\.detail)
+    }
+
+    private func wpR1AssertRoundTrip(_ data: Data, file: StaticString = #filePath, line: UInt = #line) throws {
+        let element = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        XCTAssertTrue(wpR1UnsupportedReasons(element).isEmpty, "Unexpected Unsupported", file: file, line: line)
+        let encoded = try JSONEncoder().encode(element)
+        XCTAssertEqual(try wpR1JSON(JSONSerialization.jsonObject(with: encoded)),
+                       try wpR1JSON(JSONSerialization.jsonObject(with: data)),
+                       "Lost or changed fields", file: file, line: line)
+        let again = try JSONDecoder().decode(SkeletonElement.self, from: encoded)
+        XCTAssertTrue(wpR1UnsupportedReasons(again).isEmpty, file: file, line: line)
+    }
+
+    func testWPR1TreeAndEveryModifierRoundTripWithoutUnsupportedOrFieldLoss() throws {
+        try wpR1AssertRoundTrip(wpR1Fixture("tree"))
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: wpR1Fixture("tree"))
+        guard case .Tree(let tree) = decoded else { return XCTFail("Expected Tree") }
+        XCTAssertEqual(tree.rowSkeleton.elements.count, 2)
+        XCTAssertEqual(tree.selectionActionKeypath, "tree.select")
+        XCTAssertEqual(tree.expansionActionKeypath, "tree.expand")
+        XCTAssertEqual(tree.leadingInsetKeypath, "leadingInset")
+        XCTAssertEqual(tree.levelKeypath, "level")
+        XCTAssertEqual(tree.modifiers?.lineHeightMultiple, 15.0 / 11.0)
+    }
+
+    func testWPR1ComponentRoundTripAndIndependentInstanceIdentity() throws {
+        try wpR1AssertRoundTrip(wpR1Fixture("component"))
+        let first = try JSONDecoder().decode(SkeletonComponentSurface.self, from: wpR1Fixture("component"))
+        var second = first
+        second.instanceID = "mount-program-b"
+        second.variant = .inline
+        let data = try JSONEncoder().encode(SkeletonElement.VStack(.init(elements: [.ComponentSurface(first), .ComponentSurface(second)])))
+        guard case .VStack(let stack) = try JSONDecoder().decode(SkeletonElement.self, from: data),
+              case .ComponentSurface(let a) = stack.elements[0], case .ComponentSurface(let b) = stack.elements[1] else {
+            return XCTFail("Instances lost during round-trip")
+        }
+        XCTAssertEqual(a.sourceKeypath, b.sourceKeypath)
+        XCTAssertNotEqual(a.instanceID, b.instanceID)
+        XCTAssertEqual(a.instanceID, first.instanceID)
+        XCTAssertEqual(b.instanceID, second.instanceID)
+        XCTAssertEqual(b.variant, .inline)
+    }
+
+    private struct MountFixture: Decodable {
+        struct Root: Decodable {
+            let title: String
+            let subtitle: String
+            let mounts: [String: SkeletonComponentMount]
+        }
+        struct Update: Decodable { let sourceKeypath: String; let value: SkeletonComponentMount }
+        struct Expected: Decodable {
+            struct Display: Decodable, Equatable { let title: String; let subtitle: String }
+            struct Action: Decodable {
+                struct Trigger: Decodable { let instanceID: String; let keypath: String }
+                struct Dispatch: Decodable {
+                    let sourceCellEndpoint: String
+                    let keypath: String
+                    let payload: ValueType
+                    let mount: [String: String]
+                }
+                let trigger: Trigger
+                let dispatch: Dispatch
+            }
+            let initial: [String: Display]
+            let actions: [Action]
+            let afterUpdates: [String: Display]
+            let unchangedInstanceIDs: [String]
+            let remountedInstanceIDs: [String]
+            let unchangedMounts: [String]
+            let unchangedDefinition: Bool
+        }
+        let hostCellEndpoint: String
+        let skeleton: SkeletonElement
+        let initialRoot: Root
+        let sourceUpdates: [Update]
+        let expected: Expected
+    }
+
+    private func wpR1MountFixture() throws -> MountFixture {
+        try JSONDecoder().decode(MountFixture.self, from: wpR1Fixture("component-mount-two-instances"))
+    }
+
+    private func wpR1Encoded<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
+
+    func testWPR1ComponentMountRoundTripPreservesEveryField() throws {
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Fixture("component-mount-two-instances")) as? [String: Any])
+        let root = try XCTUnwrap(json["initialRoot"] as? [String: Any])
+        let mounts = try XCTUnwrap(root["mounts"] as? [String: Any])
+        let updates = try XCTUnwrap(json["sourceUpdates"] as? [[String: Any]])
+        for raw in Array(mounts.values) + updates.compactMap({ $0["value"] }) {
+            let data = try wpR1JSON(raw)
+            let mount = try JSONDecoder().decode(SkeletonComponentMount.self, from: data)
+            XCTAssertTrue(wpR1UnsupportedReasons(mount.skeleton).isEmpty)
+            XCTAssertEqual(try wpR1JSON(JSONSerialization.jsonObject(with: wpR1Encoded(mount))), data)
+            let again = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+            XCTAssertEqual(try wpR1Encoded(again), try wpR1Encoded(mount))
+        }
+    }
+
+    func testWPR1ComponentMountDefinitionsAreByteIdenticalAcrossInstancesAndItemUpdate() throws {
+        let fixture = try wpR1MountFixture()
+        let a = try XCTUnwrap(fixture.initialRoot.mounts["A"])
+        let b = try XCTUnwrap(fixture.initialRoot.mounts["B"])
+        let update = try XCTUnwrap(fixture.sourceUpdates.first)
+        for mount in [b, update.value] {
+            XCTAssertEqual(mount.componentID, a.componentID)
+            XCTAssertEqual(mount.revision, a.revision)
+            // Compare actual serialized bytes, including every nested field.
+            XCTAssertEqual(try wpR1Encoded(mount.skeleton), try wpR1Encoded(a.skeleton))
+        }
+        XCTAssertNotEqual(try wpR1Encoded(a.item), try wpR1Encoded(b.item))
+        XCTAssertNotEqual(try wpR1Encoded(a.item), try wpR1Encoded(update.value.item))
+        guard case .VStack(let definition) = a.skeleton,
+              case .Text(let title) = definition.elements[0],
+              case .Text(let subtitle) = definition.elements[1],
+              case .Button(let button) = definition.elements[2] else { return XCTFail("Definition lost") }
+        XCTAssertEqual(title.keypath, "title")
+        XCTAssertEqual(subtitle.keypath, "subtitle")
+        XCTAssertEqual(button.keypath, "actions.refresh", "Never rewrite keypaths per instance")
+    }
+
+    func testWPR1ComponentMountSharedRendererOracleHasConsistentBindingsActionsAndUpdate() throws {
+        // Validate the shared oracle; actual reads, dispatch and identity retention
+        // must still be executed by both renderers in T-F3.
+        let fixture = try wpR1MountFixture()
+        guard case .VStack(let surface) = fixture.skeleton else { return XCTFail("Expected two surfaces") }
+        XCTAssertEqual(surface.elements.count, 2)
+        var ids: [String] = []
+        for element in surface.elements {
+            guard case .ComponentSurface(let mountSurface) = element else { return XCTFail("Missing surface") }
+            let instanceID = try XCTUnwrap(mountSurface.instanceID)
+            ids.append(instanceID)
+            XCTAssertEqual(mountSurface.sourceKeypath, "mounts.\(instanceID)")
+            let mount = try XCTUnwrap(fixture.initialRoot.mounts[instanceID])
+            let expected = try XCTUnwrap(fixture.expected.initial[instanceID])
+            XCTAssertEqual(try wpR1Encoded(mount.item), try wpR1Encoded(["title": expected.title]))
+            XCTAssertEqual(expected.subtitle, fixture.initialRoot.subtitle)
+            XCTAssertNotEqual(expected.title, fixture.initialRoot.title)
+        }
+        XCTAssertEqual(ids, ["A", "B"])
+        XCTAssertEqual(fixture.expected.initial["A"]?.title, "Program")
+        XCTAssertEqual(fixture.expected.initial["B"]?.title, "Sesjoner")
+        XCTAssertEqual(fixture.expected.unchangedInstanceIDs, ids)
+        XCTAssertTrue(fixture.expected.remountedInstanceIDs.isEmpty)
+        XCTAssertEqual(fixture.expected.unchangedMounts, ["B"])
+        XCTAssertTrue(fixture.expected.unchangedDefinition)
+        XCTAssertEqual(fixture.sourceUpdates.count, 1)
+        let update = try XCTUnwrap(fixture.sourceUpdates.first)
+        XCTAssertEqual(update.sourceKeypath, "mounts.A")
+        XCTAssertEqual(try wpR1Encoded(update.value.item), try wpR1Encoded(["title": "Program oppdatert"]))
+        XCTAssertEqual(fixture.expected.afterUpdates["A"]?.title, "Program oppdatert")
+        XCTAssertEqual(fixture.expected.afterUpdates["A"]?.subtitle, fixture.initialRoot.subtitle)
+        XCTAssertEqual(fixture.expected.afterUpdates["B"], fixture.expected.initial["B"])
+        XCTAssertEqual(fixture.expected.actions.count, 1)
+        let action = try XCTUnwrap(fixture.expected.actions.first)
+        XCTAssertEqual(action.trigger.instanceID, "A")
+        let a = try XCTUnwrap(fixture.initialRoot.mounts[action.trigger.instanceID])
+        guard case .VStack(let definition) = a.skeleton,
+              case .Button(let button)? = definition.elements.last else { return XCTFail("Missing action") }
+        XCTAssertEqual(action.trigger.keypath, button.keypath)
+        XCTAssertEqual(action.dispatch.keypath, button.keypath)
+        XCTAssertEqual(action.dispatch.sourceCellEndpoint, a.sourceCellEndpoint)
+        XCTAssertNotEqual(action.dispatch.sourceCellEndpoint, fixture.hostCellEndpoint)
+        XCTAssertEqual(action.dispatch.mount, ["instanceID": "A", "componentID": a.componentID, "revision": a.revision])
+        XCTAssertEqual(try wpR1Encoded(action.dispatch.payload), try wpR1Encoded(button.payload))
+        XCTAssertEqual(try wpR1Encoded(action.dispatch.payload),
+                       try wpR1Encoded(["reason": "manual", "instanceID": "user-payload"]))
+    }
+
+    func testWPR1ComponentMountNegativeFixturesRejectWithFieldName() throws {
+        struct Fixture: Decodable { let name: String; let field: String; let mount: ValueType }
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: wpR1Fixture("negative-component-mounts"))
+        XCTAssertEqual(fixtures.count, 35)
+        for fixture in fixtures {
+            XCTAssertThrowsError(try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(fixture.mount)), fixture.name) {
+                XCTAssertTrue(String(describing: $0).contains(fixture.field), "\(fixture.name): \($0)")
+            }
+        }
+    }
+
+    func testWPR1ComponentMountOptionalItemAndProgrammaticValidation() throws {
+        var mount = try XCTUnwrap(wpR1MountFixture().initialRoot.mounts["A"])
+        mount.item = nil
+        let missing = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+        XCTAssertNil(missing.item)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Encoded(mount)) as? [String: Any])
+        json["item"] = NSNull()
+        XCTAssertNil(try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1JSON(json)).item)
+        // ValueType? is not restricted to object items.
+        for item in [ValueType.string("value"), .integer(3), .bool(false), .list([.string("row")])] {
+            mount.item = item
+            let again = try JSONDecoder().decode(SkeletonComponentMount.self, from: wpR1Encoded(mount))
+            XCTAssertEqual(try wpR1Encoded(again.item), try wpR1Encoded(item))
+        }
+        for field in ["componentID", "revision", "sourceCellEndpoint", "skeleton"] {
+            var invalid = mount
+            switch field {
+            case "componentID": invalid.componentID = " \n"
+            case "revision": invalid.revision = ""
+            case "sourceCellEndpoint": invalid.sourceCellEndpoint = "\t"
+            default: invalid.skeleton = .Unsupported(.init(elementType: "Broken", reason: "invalid definition"))
+            }
+            XCTAssertThrowsError(try wpR1Encoded(invalid)) {
+                XCTAssertTrue(String(describing: $0).contains(field))
+            }
+        }
+    }
+
+    func testWPR1NewModifierDefaultsAndPerEdgePaddingFallback() throws {
+        let modifiers = try JSONDecoder().decode(SkeletonModifiers.self, from: Data("{}".utf8))
+        // All 23 new optional fields stay absent; nil means the documented base behavior.
+        XCTAssertEqual(try JSONEncoder().encode(modifiers), Data("{}".utf8))
+        XCTAssertNil(modifiers.numericVariant)
+        XCTAssertNil(modifiers.interactionStyles)
+        XCTAssertNil(modifiers.layoutVariants)
+        let partial = try JSONDecoder().decode(SkeletonInsets.self, from: Data(#"{"leading":0,"trailing":13}"#.utf8))
+        XCTAssertEqual(partial.resolved(padding: 11), SkeletonInsets(top: 11, leading: 0, bottom: 11, trailing: 13))
+        XCTAssertEqual(SkeletonInsets().resolved(), SkeletonInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        XCTAssertNil(SkeletonInteractionStyles().dragStyle(isSource: false, isActive: true))
+        let emptyVariant = try JSONDecoder().decode(SkeletonLayoutVariant.self, from: Data("{}".utf8))
+        XCTAssertTrue(emptyVariant.matches(try SkeletonLayoutContext()))
+        let treeObject = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Fixture("tree")) as? [String: Any])
+        var tree = try XCTUnwrap(treeObject["Tree"] as? [String: Any])
+        for key in ["modifiers", "rowModifiers", "disclosureModifiers"] { tree.removeValue(forKey: key) }
+        let decoded = try JSONDecoder().decode(SkeletonTree.self, from: wpR1JSON(["Tree": tree]))
+        XCTAssertNil(decoded.modifiers)
+        XCTAssertNil(decoded.rowModifiers)
+        XCTAssertNil(decoded.disclosureModifiers)
+    }
+
+    func testWPR1AllNamedNegativeModifierFixturesRejectDirectlyAndInElement() throws {
+        struct Fixture: Decodable { let name: String; let field: String; let modifiers: ValueType }
+        let cases = try JSONDecoder().decode([Fixture].self, from: wpR1Fixture("negative-modifiers"))
+        for fixture in cases {
+            let data = try JSONEncoder().encode(fixture.modifiers)
+            XCTAssertThrowsError(try JSONDecoder().decode(SkeletonModifiers.self, from: data), fixture.name) { error in
+                XCTAssertTrue(String(describing: error).contains(fixture.field), "\(fixture.name): \(error)")
+            }
+            let json: [String: Any] = ["Text": ["text": "Must reject", "modifiers": try JSONSerialization.jsonObject(with: data)]]
+            let element = try JSONDecoder().decode(SkeletonElement.self, from: wpR1JSON(json))
+            let reasons = wpR1UnsupportedReasons(element)
+            XCTAssertTrue(reasons.contains { $0.contains(fixture.field) }, "\(fixture.name) silently accepted")
+        }
+    }
+
+    func testWPR1NonfiniteNumbersRejectEvenWithPermissiveJSONNumberStrategy() throws {
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "Infinity", negativeInfinity: "-Infinity", nan: "NaN")
+        for field in ["lineHeightMultiple", "letterSpacing", "itemSpacing", "minHeight", "maxHeight", "minWidth", "flexGrow", "shadowSpread", "textRotationDegrees"] {
+            for value in ["Infinity", "-Infinity", "NaN"] {
+                XCTAssertThrowsError(try decoder.decode(SkeletonModifiers.self, from: wpR1JSON([field: value])), field) { error in
+                    XCTAssertTrue(String(describing: error).contains(field))
+                }
+            }
+        }
+        let nested: [(String, [String: Any])] = [
+            ("top", ["paddingInsets": ["top": "Infinity"]]),
+            ("opacity", ["interactionStyles": ["dragSource": ["opacity": "NaN"]]]),
+            ("maxAvailableWidth", ["layoutVariants": [["maxAvailableWidth": "Infinity"]]]),
+            ("columns", ["layoutVariants": [["columns": [["type": "fixed", "value": "Infinity"]]]]])
+        ]
+        for (name, object) in nested {
+            XCTAssertThrowsError(try decoder.decode(SkeletonModifiers.self, from: wpR1JSON(object))) { error in
+                XCTAssertTrue(String(describing: error).contains(name))
+            }
+        }
+        XCTAssertThrowsError(try SkeletonLayoutContext(availableWidth: .infinity))
+        XCTAssertThrowsError(try SkeletonLayoutContext(availableHeight: .nan))
+        XCTAssertThrowsError(try SkeletonLayoutContext(availableWidth: -1))
+        XCTAssertThrowsError(try SkeletonLayoutContext(availableWidth: 200).narrowed(availableWidth: .nan))
+    }
+
+    func testWPR1RequiredTreeAndComponentFieldsCannotDisappear() throws {
+        for (fixture, tag, required) in [
+            ("tree", "Tree", ["keypath", "idKeypath", "parentIDKeypath", "levelKeypath", "leadingInsetKeypath", "hasChildrenKeypath", "expandedKeypath", "selectedIDStateKeypath", "selectionActionKeypath", "expansionActionKeypath", "rowSkeleton"]),
+            ("component", "ComponentSurface", ["sourceKeypath", "instanceID", "variant"])
+        ] {
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Fixture(fixture)) as? [String: Any])
+            let base = try XCTUnwrap(json[tag] as? [String: Any])
+            for field in required {
+                for invalid in [nil, NSNull(), 12, " "] as [Any?] {
+                    var object = base
+                    object[field] = invalid
+                    let element = try JSONDecoder().decode(SkeletonElement.self, from: wpR1JSON([tag: object]))
+                    guard case .Unsupported(let failure) = element else {
+                        XCTFail("\(tag).\(field) silently accepted \(String(describing: invalid))"); continue
+                    }
+                    XCTAssertTrue(failure.reason?.contains(field) == true, failure.reason ?? "No named error")
+                }
+            }
+        }
+    }
+
+    func testWPR1TreeRowRequiresVStackAndPreservesNestedDecodeFailures() throws {
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: wpR1Fixture("tree")) as? [String: Any])
+        let base = try XCTUnwrap(json["Tree"] as? [String: Any])
+        for row in [["Text": ["text": "wrong"]], ["VStack": 42], ["VStack": ["elements": 42]]] as [[String: Any]] {
+            var object = base; object["rowSkeleton"] = row
+            let element = try JSONDecoder().decode(SkeletonElement.self, from: wpR1JSON(["Tree": object]))
+            guard case .Unsupported = element else { XCTFail("Invalid row accepted"); continue }
+        }
+        var object = base
+        object["rowSkeleton"] = ["VStack": [["Text": ["modifiers": ["numericVariant": "normal"]]]]]
+        let element = try JSONDecoder().decode(SkeletonElement.self, from: wpR1JSON(["Tree": object]))
+        XCTAssertTrue(wpR1UnsupportedReasons(element).contains { $0.contains("numericVariant") })
+    }
+
+    func testWPR1NumericVariantsAndDragSourcePrecedence() throws {
+        for value in ["proportional", "tabular"] {
+            let data = try wpR1JSON(["numericVariant": value])
+            let modifiers = try JSONDecoder().decode(SkeletonModifiers.self, from: data)
+            XCTAssertEqual(modifiers.numericVariant?.rawValue, value)
+            XCTAssertEqual(try wpR1JSON(JSONSerialization.jsonObject(with: JSONEncoder().encode(modifiers))), data)
+        }
+        let styles = SkeletonInteractionStyles(dragSource: .init(opacity: 0.42), dragActive: .init(background: "#ffffff", opacity: 0.82))
+        XCTAssertNil(styles.dragStyle(isSource: false, isActive: false))
+        XCTAssertEqual(styles.dragStyle(isSource: false, isActive: true)?.opacity, 0.82)
+        XCTAssertEqual(styles.dragStyle(isSource: true, isActive: true)?.opacity, 0.42)
+        XCTAssertEqual(styles.dragStyle(isSource: true, isActive: false)?.opacity, 0.42)
+        XCTAssertEqual(styles.dragStyle(isSource: true, isActive: true)?.background, "#ffffff")
+    }
+
+    func testWPR1LayoutFirstMatchThresholdsConditionsAndCapabilities() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.layoutVariants = [
+            SkeletonLayoutVariant(when: SkeletonCondition(scope: .item, keypath: "full", equals: .bool(true)), minAvailableWidth: 500, requiresCapability: [.pointer, .hover], spacing: 8),
+            SkeletonLayoutVariant(minAvailableWidth: 500, maxAvailableWidth: 800, spacing: 4),
+            SkeletonLayoutVariant(minAvailableWidth: 500, spacing: 2)
+        ]
+        let rich = try SkeletonLayoutContext(availableWidth: 500, capabilities: [.pointer, .hover])
+        for _ in 0..<10 {
+            XCTAssertEqual(modifiers.layoutVariant(in: rich, item: .object(["full": .bool(true)]))?.spacing, 8)
+        }
+        XCTAssertEqual(modifiers.layoutVariant(in: rich, item: .object(["full": .bool(false)]))?.spacing, 4)
+        XCTAssertEqual(modifiers.layoutVariant(in: try SkeletonLayoutContext(availableWidth: 800))?.spacing, 4)
+        XCTAssertEqual(modifiers.layoutVariant(in: try SkeletonLayoutContext(availableWidth: 801))?.spacing, 2)
+        XCTAssertNil(modifiers.layoutVariant(in: try SkeletonLayoutContext(availableWidth: 499)))
+        XCTAssertNil(modifiers.layoutVariant(in: try SkeletonLayoutContext()))
+        let missingHover = try SkeletonLayoutContext(availableWidth: 500, capabilities: [.pointer])
+        XCTAssertEqual(modifiers.layoutVariant(in: missingHover, item: .object(["full": .bool(true)]))?.spacing, 4)
+        let height = SkeletonLayoutVariant(minAvailableHeight: 300, maxAvailableHeight: 500)
+        XCTAssertTrue(height.matches(try SkeletonLayoutContext(availableHeight: 300)))
+        XCTAssertTrue(height.matches(try SkeletonLayoutContext(availableHeight: 500)))
+        XCTAssertFalse(height.matches(try SkeletonLayoutContext(availableHeight: 501)))
+        XCTAssertFalse(height.matches(try SkeletonLayoutContext()))
+    }
+
+    func testWPR1NarrowColumnCannotInheritWholeSurfaceWidth() throws {
+        let root = try SkeletonLayoutContext(availableWidth: 1580, availableHeight: 1170, capabilities: [.keyboard, .drag])
+        let column = try root.narrowed(availableWidth: 236)
+        let widget = try column.narrowed()
+        XCTAssertEqual(widget.availableWidth, 236)
+        XCTAssertEqual(widget.availableHeight, 1170)
+        XCTAssertEqual(widget.capabilities, root.capabilities)
+        XCTAssertEqual(try root.narrowed(), root, "No declaration means inheritance, not measurement")
+        XCTAssertEqual(try column.narrowed(availableWidth: 1000).availableWidth, 236)
+        XCTAssertEqual(try SkeletonLayoutContext().narrowed(availableWidth: 236).availableWidth, 236)
+        var modifiers = SkeletonModifiers()
+        modifiers.layoutVariants = [SkeletonLayoutVariant(minAvailableWidth: 500, spacing: 8), SkeletonLayoutVariant(maxAvailableWidth: 236, spacing: 2)]
+        XCTAssertEqual(modifiers.layoutVariant(in: root)?.spacing, 8)
+        XCTAssertEqual(modifiers.layoutVariant(in: widget)?.spacing, 2)
+    }
+
+    func testWPR1LegacyPaddingRemainsLossyAndExcludedFieldsAreNotEncoded() throws {
+        let modifiers = try JSONDecoder().decode(SkeletonModifiers.self,
+            from: Data(#"{"padding":"invalid","clipsToBounds":true,"textTransform":"uppercase","paddingLeadingKeypath":"inset"}"#.utf8))
+        XCTAssertNil(modifiers.padding)
+        XCTAssertNil(modifiers.contentClip)
+        XCTAssertEqual(try JSONEncoder().encode(modifiers), Data("{}".utf8))
+    }
+}

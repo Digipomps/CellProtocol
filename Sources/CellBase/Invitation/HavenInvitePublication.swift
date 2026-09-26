@@ -259,6 +259,35 @@ public enum HavenInviteLifecycle: String, Codable, Sendable {
     }
 }
 
+/// What the *sender* gets to see. Four states, not six: "opened" is not one
+/// of them, and "declined" reads as "Besvart — ikke nå". Whether the invitee
+/// looked, hesitated or said no is theirs
+/// (purpose://candidate.invite.decline-without-account, §6.5).
+public enum HavenInviteSenderView: String, Codable, Equatable, Sendable {
+    case published
+    case answered
+    case expired
+    case revoked
+
+    public init(_ lifecycle: HavenInviteLifecycle) {
+        switch lifecycle {
+        case .published, .opened: self = .published
+        case .accepted, .declined: self = .answered
+        case .expired: self = .expired
+        case .revoked: self = .revoked
+        }
+    }
+
+    public var displayText: String {
+        switch self {
+        case .published: return "Sendt"
+        case .answered: return "Besvart"
+        case .expired: return "Utløpt"
+        case .revoked: return "Trukket tilbake"
+        }
+    }
+}
+
 /// What the scaffold knows about one ticket. This is the first real signal in
 /// the funnel — before publication, every status was self-reported.
 public struct HavenInviteStatusReport: Codable, Equatable, Sendable {
@@ -294,6 +323,60 @@ public struct HavenInviteStatusReport: Codable, Equatable, Sendable {
         self.contactRequestCount = contactRequestCount
         self.resultingEntityRef = resultingEntityRef
     }
+
+    /// The projection the sender's app shows. Open counts and first-open
+    /// times are for the scaffold's own bookkeeping and never reach the sender.
+    public var senderView: HavenInviteSenderView { HavenInviteSenderView(state) }
+
+    /// The report the scaffold serves on the sender's status route. The
+    /// fuller form never leaves the scaffold.
+    public func projectedForSender() -> HavenInviteSenderReport {
+        HavenInviteSenderReport(
+            ticketID: ticketID,
+            view: senderView,
+            respondedAt: senderView == .answered ? respondedAt : nil,
+            contactRequestCount: contactRequestCount,
+            resultingEntityRef: resultingEntityRef
+        )
+    }
+}
+
+/// Status as the sender sees it: no open count, no first-open time, no
+/// difference between "ble med" and "takket nei" until a contact request
+/// actually arrives.
+public struct HavenInviteSenderReport: Codable, Equatable, Sendable {
+
+    public static let schema = "haven.invite.senderStatus.v1"
+
+    public var schema: String
+    public var ticketID: String
+    public var view: HavenInviteSenderView
+    public var respondedAt: Int?
+    public var contactRequestCount: Int
+    public var resultingEntityRef: String?
+
+    public init(
+        schema: String = HavenInviteSenderReport.schema,
+        ticketID: String,
+        view: HavenInviteSenderView,
+        respondedAt: Int? = nil,
+        contactRequestCount: Int = 0,
+        resultingEntityRef: String? = nil
+    ) {
+        self.schema = schema
+        self.ticketID = ticketID
+        self.view = view
+        self.respondedAt = respondedAt
+        self.contactRequestCount = contactRequestCount
+        self.resultingEntityRef = resultingEntityRef
+    }
+
+    public var displayText: String {
+        switch view {
+        case .answered where contactRequestCount == 0: return "Besvart — ikke nå"
+        default: return view.displayText
+        }
+    }
 }
 
 // MARK: - Contact request
@@ -320,6 +403,11 @@ public struct HavenInviteContactRequest: Codable, Equatable, Sendable, Canonical
     /// Optional, and only what the sender chose to reveal.
     public var senderEndpoint: String?
     public var message: String?
+    /// The sender's public key-agreement key (compressed), so the issuer can
+    /// seal chat messages to the invitee from the first message
+    /// (purpose://candidate.invite.acceptance-carries-the-key-to-seal-to). Absent on requests
+    /// from apps older than 2026-09-26.
+    public var senderKeyAgreementKey: Data?
     public var createdAt: Int
     public var expiresAt: Int
     public var nonce: Data
@@ -335,6 +423,7 @@ public struct HavenInviteContactRequest: Codable, Equatable, Sendable, Canonical
         senderEntityRef: String? = nil,
         senderEndpoint: String? = nil,
         message: String? = nil,
+        senderKeyAgreementKey: Data? = nil,
         createdAt: Int,
         expiresAt: Int,
         nonce: Data,
@@ -349,6 +438,7 @@ public struct HavenInviteContactRequest: Codable, Equatable, Sendable, Canonical
         self.senderEntityRef = senderEntityRef
         self.senderEndpoint = senderEndpoint
         self.message = message
+        self.senderKeyAgreementKey = senderKeyAgreementKey
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.nonce = nonce
@@ -373,6 +463,9 @@ public struct HavenInviteContactRequest: Codable, Equatable, Sendable, Canonical
         ]
         if let senderEntityRef { payload["introEntityRef"] = .string(senderEntityRef) }
         if let message { payload["introMessage"] = .string(message) }
+        if let senderKeyAgreementKey, !senderKeyAgreementKey.isEmpty {
+            payload["introKeyAgreementKey"] = .string(senderKeyAgreementKey.base64EncodedString())
+        }
 
         return [
             "schema": .string("cellprotocol.contact.request.v1"),
@@ -398,6 +491,12 @@ public enum HavenInvitePublicationVerifier {
         case badSignature
         case ticketMismatch(String)
         case expired
+        /// The ticket the envelope refers to has itself run out.
+        case ticketExpired
+        /// The ticket does not verify, with the verifier's own code.
+        case ticketInvalid(String)
+        /// A reply of the wrong kind for what is being checked.
+        case wrongDecision
 
         public var code: String {
             switch self {
@@ -406,6 +505,9 @@ public enum HavenInvitePublicationVerifier {
             case .badSignature: return "bad_signature"
             case .ticketMismatch: return "ticket_mismatch"
             case .expired: return "expired"
+            case .ticketExpired: return "ticket_expired"
+            case .ticketInvalid(let code): return "ticket_invalid:\(code)"
+            case .wrongDecision: return "wrong_decision"
             }
         }
 
@@ -416,6 +518,9 @@ public enum HavenInvitePublicationVerifier {
             case .badSignature: return "Signaturen stemmer ikke."
             case .ticketMismatch(let detail): return "Meldingen passer ikke billetten: \(detail)."
             case .expired: return "Meldingen er utløpt."
+            case .ticketExpired: return "Invitasjonen meldingen viser til er utløpt."
+            case .ticketInvalid(let code): return "Invitasjonen meldingen viser til gjelder ikke (\(code))."
+            case .wrongDecision: return "Svaret er av feil slag for dette."
             }
         }
     }
@@ -434,6 +539,14 @@ public enum HavenInvitePublicationVerifier {
 
         let verdict = HavenInviteVerifier.verify(ticket: ticket, now: now)
         guard verdict.signatureValid else { throw Failure.badSignature }
+        // A publication of an expired ticket, or of one that claims more life
+        // than the maximum, is refused at the door
+        // (purpose://candidate.invite.expires-by-itself).
+        if ticket.isExpired(at: now) { throw Failure.ticketExpired }
+        if ticket.claimsTooLongALife { throw Failure.ticketInvalid("ttl_too_long") }
+        guard publication.expiresAt == ticket.expiresAt else {
+            throw Failure.ticketMismatch("expiresAt")
+        }
 
         guard ticket.ticketID == publication.ticketID else {
             throw Failure.ticketMismatch("ticketID")
@@ -473,10 +586,28 @@ public enum HavenInvitePublicationVerifier {
             throw Failure.ticketMismatch("issuerEndpointID")
         }
         guard !request.isExpired(at: now) else { throw Failure.expired }
+        // The invitation has run out: no new contact request rides on it, even
+        // a well-signed one (purpose://candidate.invite.expires-by-itself).
+        guard !ticket.isExpired(at: now) else { throw Failure.ticketExpired }
         guard request.sender.uuid != ticket.issuer.uuid else {
             throw Failure.issuerMismatch
         }
         try verifyEnvelope(request, signedBy: request.sender)
+    }
+
+    /// The invitee's answer — yes, not now, or never. Signed by the replier,
+    /// bound to the ticket and to the audience the ticket was made for, and
+    /// refused once the ticket has run out.
+    public static func verifyReply(
+        _ reply: HavenInviteReply,
+        forTicket ticket: HavenInviteTicket,
+        now: Date = Date()
+    ) throws {
+        guard reply.ticketID == ticket.ticketID else { throw Failure.ticketMismatch("ticketID") }
+        guard reply.audienceToken == ticket.audienceToken else { throw Failure.ticketMismatch("audienceToken") }
+        guard !ticket.isExpired(at: now) else { throw Failure.ticketExpired }
+        guard reply.replier.uuid != ticket.issuer.uuid else { throw Failure.issuerMismatch }
+        try verifyEnvelope(reply, signedBy: reply.replier)
     }
 
     private static func verifyEnvelope(
@@ -501,6 +632,7 @@ public enum HavenInvitePublicationVerifier {
         if let publication = envelope as? HavenInvitePublication { return publication.proof }
         if let notice = envelope as? HavenInviteRevocationNotice { return notice.proof }
         if let request = envelope as? HavenInviteContactRequest { return request.proof }
+        if let reply = envelope as? HavenInviteReply { return reply.proof }
         return nil
     }
 }

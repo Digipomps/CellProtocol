@@ -938,14 +938,96 @@ public class CellResolver: CellResolverProtocol {
         }
         
         if let references = cellConfiguration.cellReferences {
+            // Fase 1: start oppkoblingen mot alle eksterne referanser samtidig.
+            // Rundturen — WebSocket-oppkobling, handshake, proxy-representasjon —
+            // er uavhengig per endepunkt og er det som dominerer lastetiden. En
+            // flate med N eksterne referanser betalte tidligere summen av N
+            // rundturer; nå betaler den den lengste.
+            let prefetched = prefetchRemoteReferenceCells(references, requester: requester)
+            defer {
+                // Ingen oppkobling skal overleve at lastingen avbrytes eller feiler.
+                for task in prefetched.values { task.cancel() }
+            }
+
+            // Fase 2: koble dem inn i deklarert rekkefølge. Dette leddet muterer
+            // den delte source-cellen, og setKeysAndValues er sist-vinner, så
+            // rekkefølgen bærer semantikk og skal fortsatt være sekvensiell.
             for currentReference in references {
-                try await loadCell(from: currentReference, into: sourceCellClient, using: facilitator, requester: requester)
+                try await loadCell(
+                    from: currentReference,
+                    into: sourceCellClient,
+                    using: facilitator,
+                    requester: requester,
+                    preresolved: prefetched[Self.prefetchKey(for: currentReference.endpoint)]
+                )
             }
         }
 //        print("Auditor state2   : \(await auditor.auditorState())")
         return await facilitator.all
     }
    
+    // MARK: - Parallell oppkobling av referanser
+
+    /// Endepunkter som koster en nettverksrundtur. Lokale celler resolveres
+    /// i prosessen og har ingenting å overlappe; de holdes utenfor også fordi
+    /// den lokale resolvestien rører delt resolver-tilstand som ikke er ment
+    /// for samtidighet.
+    static func isRemoteReferenceEndpoint(_ endpoint: String) -> Bool {
+        guard let components = URLComponents(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = components.scheme?.lowercased() else {
+            return false
+        }
+        if scheme == "ws" || scheme == "wss" {
+            return true
+        }
+        guard scheme == "cell",
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              host.isEmpty == false,
+              host.lowercased() != "localhost" else {
+            return false
+        }
+        return true
+    }
+
+    static func prefetchKey(for endpoint: String) -> String {
+        endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Settes for å tvinge den gamle sekvensielle stien. Finnes for måling og
+    /// som nødbrems hvis en vert ikke tåler samtidige oppkoblinger.
+    static var sequentialReferenceLoadingForced: Bool {
+        let raw = ProcessInfo.processInfo.environment["CELLPROTOCOL_SEQUENTIAL_REFERENCE_LOAD"] ?? ""
+        return ["1", "true", "yes"].contains(raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    /// Starter oppkoblingen mot hvert distinkte eksterne endepunkt med én gang.
+    /// Feiler én, avbrytes ikke de andre — feilen bæres videre og kastes først
+    /// når fase 2 kommer til den referansen, slik at feilrekkefølgen og
+    /// detach-oppførselen er nøyaktig som før.
+    private func prefetchRemoteReferenceCells(
+        _ references: [CellReference],
+        requester: Identity
+    ) -> [String: Task<Emit, Error>] {
+        guard Self.sequentialReferenceLoadingForced == false else { return [:] }
+
+        var tasks = [String: Task<Emit, Error>]()
+        for reference in references {
+            let endpoint = Self.prefetchKey(for: reference.endpoint)
+            guard Self.isRemoteReferenceEndpoint(endpoint), tasks[endpoint] == nil else { continue }
+            tasks[endpoint] = Task { [weak self] in
+                guard let self else { throw CellResolverError.bridgeSetupError }
+                return try await self.cellAtEndpoint(endpoint: endpoint, requester: requester)
+            }
+        }
+        if tasks.count > 1 {
+            CellBase.diagnosticLog(
+                "reference_prefetch_started count=\(tasks.count)",
+                domain: .resolver
+            )
+        }
+        return tasks
+    }
+
     func identity(for requester: Identity?, or identityDomain: String) async -> Identity {
         if requester == nil {
             if let tmpIdentity = await CellBase.defaultIdentityVault?.identity(for: identityDomain, makeNewIfNotFound: true) {
@@ -955,9 +1037,23 @@ public class CellResolver: CellResolverProtocol {
         return requester!
     }
     
-    func loadCell(from reference: CellReference, into source: Absorb, using facilitator: CellClusterFacilitator, requester: Identity) async throws {
+    func loadCell(
+        from reference: CellReference,
+        into source: Absorb,
+        using facilitator: CellClusterFacilitator,
+        requester: Identity,
+        preresolved: Task<Emit, Error>? = nil
+    ) async throws {
         do {
-            let target = try await self.cellAtEndpoint(endpoint: reference.endpoint, requester: requester)
+            // En ferdigstartet oppkobling brukes som den er. Feilet den, kastes
+            // den samme feilen her — vi prøver bevisst ikke på nytt, fordi en
+            // retry uten aktiv infrastrukturfeil skjuler en deterministisk bug.
+            let target: Emit
+            if let preresolved {
+                target = try await preresolved.value
+            } else {
+                target = try await self.cellAtEndpoint(endpoint: reference.endpoint, requester: requester)
+            }
             CellBase.diagnosticLog("Loaded cell at endpoint \(reference.endpoint)", domain: .resolver)
             try await connectToLoadedCell(target: target, into: source, reference: reference, facilitator: facilitator, requester: requester)
         } catch {
@@ -2020,7 +2116,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(endpoint) at create and register personal cell")
             throw CellResolverError.cellNotFound
         }
-        guard await requesterProvesSigningControl(identity) else {
+        guard await requesterProvesSigningControl(identity, domain: resolve.identityDomain, resource: endpoint) else {
             throw CellSetupError.ownerAuthorityUnavailable
         }
         await ensurePersistedCellMasterKeyLoaded()
@@ -2691,7 +2787,7 @@ public class CellResolver: CellResolverProtocol {
                     for: emitCell
                 )
         }
-        return await requesterProvesSigningControl(requester)
+        return await requesterProvesSigningControl(requester, domain: emitCell.identityDomain, resource: emitCell.uuid)
             ? .valid
             : identityUniqueOwnerAuthorityUnproven(
                 .requesterSigningControlFailed,
@@ -2733,27 +2829,43 @@ public class CellResolver: CellResolverProtocol {
         return await generalCell.hasVerifiedAuthorizationContract(for: requester)
     }
 
-    private func requesterProvesSigningControl(_ requester: Identity) async -> Bool {
+    /// Use the same scoped identity-origin envelope as GeneralCell. Bridge
+    /// vaults deliberately reject arbitrary signing data. Generate the nonce
+    /// locally and verify against the public key, never a requester-vault verdict.
+    private func requesterProvesSigningControl(
+        _ requester: Identity,
+        domain: String,
+        resource: String
+    ) async -> Bool {
         guard let vault = requester.identityVault,
-              let challenge = await vault.randomBytes64(),
-              !challenge.isEmpty else {
+              let nonce = randomData(count: 64) else {
             return false
         }
         do {
+            let challenge = try IdentitySigningChallenge.signingData(
+                for: requester,
+                trustedIdentity: requester,
+                domain: domain,
+                resource: resource,
+                action: "checkIdentityOrigin",
+                audience: "GeneralCell",
+                nonce: nonce
+            )
+            try IdentitySigningChallenge.validateSigningData(challenge, for: requester)
             let signature = try await vault.signMessageForIdentity(
                 messageData: challenge,
                 identity: requester
             )
-            return try await vault.verifySignature(
+            return IdentityPublicKeySignatureVerifier.verify(
                 signature: signature,
                 messageData: challenge,
-                for: requester
+                identity: requester
             )
         } catch {
             return false
         }
     }
-    
+
     public func loadTypedEmitCell(by name: String) async throws -> Emit? {
         
         
@@ -2946,7 +3058,7 @@ public class CellResolver: CellResolverProtocol {
         _ namedCells: [String: String],
         requester: Identity
     ) async throws {
-        guard await requesterProvesSigningControl(requester) else {
+        guard await requesterProvesSigningControl(requester, domain: "CellResolver", resource: "identity-mappings:\(requester.uuid)") else {
             CellBase.diagnosticLog(
                 "Refusing identity mapping replacement without requester key proof identity=\(requester.uuid)",
                 domain: .resolver
@@ -2962,7 +3074,7 @@ public class CellResolver: CellResolverProtocol {
         requester: Identity,
         authorization: CellResolverRecoveryAuthorization
     ) async throws -> [String: [String: String]] {
-        guard await requesterProvesSigningControl(requester) else {
+        guard await requesterProvesSigningControl(requester, domain: "CellResolver", resource: "identity-mappings:\(requester.uuid)") else {
             CellBase.diagnosticLog(
                 "Refusing identity mapping recovery without requester key proof identity=\(requester.uuid)",
                 domain: .resolver

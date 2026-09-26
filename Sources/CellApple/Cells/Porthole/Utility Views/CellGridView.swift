@@ -65,6 +65,9 @@ struct CellGridView: View {
     let userInfoValue: ValueType?
     var skeletonGrid: SkeletonGrid
     @State private var valueTypeList: ValueTypeList = ValueTypeList()
+    @Environment(\.skeletonNativeActionScope) private var actionScope
+    @Environment(\.skeletonRenderData) private var renderData
+    @Environment(\.skeletonLayoutContext) private var layoutContext
     @EnvironmentObject var viewModel: PortholeViewModel
 
     init(skeletonGrid: SkeletonGrid, userInfoValue: ValueType? = nil) {
@@ -73,7 +76,21 @@ struct CellGridView: View {
     }
 
     private var resolvedColumns: [GridItem] {
-        gridItemsLocal(from: skeletonGrid.columns)
+        let widths = trackWidths
+        if !widths.isEmpty && widths.allSatisfy({ $0 != nil }) {
+            return widths.map { GridItem(.fixed($0!), spacing: skeletonGrid.spacing ?? 10) }
+        }
+        return gridItemsLocal(from: skeletonGrid.columns)
+    }
+
+    private var trackWidths: [Double?] {
+        SkeletonNativeLayout.gridWidths(skeletonGrid.columns, width: layoutContext.availableWidth,
+            spacing: skeletonGrid.spacing ?? 10, count: hasDynamicSource ? valueTypeList.count : skeletonGrid.elements.count)
+    }
+    private func childLayout(_ index: Int) -> SkeletonLayoutContext {
+        let widths = trackWidths
+        guard !widths.isEmpty else { return layoutContext }
+        return (try? layoutContext.narrowed(availableWidth: widths[index % widths.count])) ?? layoutContext
     }
 
     private var hasDynamicSource: Bool {
@@ -81,14 +98,15 @@ struct CellGridView: View {
     }
 
     var body: some View {
-        LazyVGrid(columns: resolvedColumns, spacing: CGFloat(skeletonGrid.spacing ?? 8)) {
+        LazyVGrid(columns: resolvedColumns, spacing: CGFloat(skeletonGrid.spacing ?? 10)) {
             if hasDynamicSource {
-                ForEach(Array(valueTypeList.enumerated()), id: \.offset) { _, value in
-                    gridItemView(for: value)
+                ForEach(Array(valueTypeList.enumerated()), id: \.offset) { index, value in
+                    gridItemView(for: value).environment(\.skeletonLayoutContext, childLayout(index))
                 }
             } else {
-                ForEach(skeletonGrid.elements, id: \.id) { element in
-                    SkeletonView(element: element, userInfoValue: userInfoValue)
+                ForEach(SkeletonNativeChild.children(skeletonGrid.elements)) { child in
+                    SkeletonView(element: child.element, userInfoValue: userInfoValue, renderData: renderData)
+                        .environment(\.skeletonLayoutContext, childLayout(child.index))
                         .environmentObject(viewModel)
                 }
             }
@@ -97,7 +115,11 @@ struct CellGridView: View {
             guard hasDynamicSource else {
                 return
             }
-            if let items = try? await skeletonGrid.getItems() {
+            if let value = renderData?.resolve(skeletonGrid.keypath) {
+                if case .list(let items) = value { valueTypeList = items } else { valueTypeList = [] }
+                return
+            }
+            if actionScope == nil, let items = try? await skeletonGrid.getItems() {
                 valueTypeList = items
             }
         }
@@ -106,7 +128,7 @@ struct CellGridView: View {
     private func refreshTaskID() -> String {
         let keypath = skeletonGrid.keypath ?? "__static__"
         let revision = hasDynamicSource ? String(viewModel.localMutationVersion) : "static"
-        return "\(keypath)::\(revision)"
+        return "\(keypath)::\(revision)::\(renderData?.signature ?? "nil")"
     }
 
     @ViewBuilder
@@ -114,7 +136,8 @@ struct CellGridView: View {
         if let itemSkeleton = skeletonGrid.itemSkeleton {
             SkeletonView(
                 element: itemSkeleton,
-                userInfoValue: gridResolvedUserInfoValue(from: value)
+                userInfoValue: gridResolvedUserInfoValue(from: value),
+                renderData: (renderData ?? SkeletonRenderDataContext(root: userInfoValue)).row(gridResolvedUserInfoValue(from: value))
             )
             .environmentObject(viewModel)
         } else {

@@ -1,0 +1,3290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:haven:entity-representation:review-decisions:2026-09-16",
+  "title": "EntityRepresentation – løpende målmodell etter beslutningene 25. september 2026",
+  "$ref": "#/$defs/EntityRepresentation",
+  "$defs": {
+    "WeightOfEntityRepresentation": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/EntityRepresentation"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<EntityRepresentation>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "EntityRepresentation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "person": {
+          "$ref": "#/$defs/PersonProfile"
+        },
+        "projectionSource": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agreementRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgreementReference"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "decision-target; private-person-shape-alignment",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/EntityRepresentation.swift"
+      },
+      "description": "Kontakt er en node i min graf: min representasjon av hva jeg vet om en annen entitet. Persondata bruker den samme profil- og endpoint-strukturen. Lagring gir ingen delingsrett. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift."
+    },
+    "WeightOfInterest": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/Interest"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<Interest>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "Interest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "constraint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InterestCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/Interest.swift"
+      },
+      "description": "En node med gjenkjennelig label, definert av relasjonene til andre noder. Wire-feltet constraint inneholder InterestCondition; Swift-egenskapen heter condition."
+    },
+    "WeightOfPurpose": {
+      "type": "object",
+      "properties": {
+        "weight": {
+          "type": "number"
+        },
+        "value": {
+          "$ref": "#/$defs/Purpose"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "weight"
+      ],
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "reference"
+          ]
+        }
+      ],
+      "description": "Weight<Purpose>. Inline value eller referanse til en eksisterende node av samme type. Encoder velger én. Ved gjentakelse/sirkel bruker Codable samme typede ID-register via userInfo og skriver referansen. Ett registersett per dokument. Referanseoppløsning kontrolleres av runtime; vekt er ikke en sannsynlighet eller et Grant."
+    },
+    "Purpose": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "nodeIdentifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "subTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "partOf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "interests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfPurpose"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfEntityRepresentation"
+          }
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WeightOfInterest"
+          }
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "goal": {
+          "$ref": "#/$defs/CellConfiguration"
+        },
+        "helperCells": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CellConfiguration"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "composition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PurposeComposition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "types",
+        "subTypes",
+        "parts",
+        "partOf",
+        "interests",
+        "purposes",
+        "entities",
+        "states",
+        "goal"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "baseType": "PerspectiveNodeImpl",
+        "status": "decided-target; runtime-goal-still-optional",
+        "source": "CellProtocol/Sources/CellBase/PurposeAndInterest/Purpose.swift"
+      },
+      "description": "Node med label og relasjoner, i tillegg et påkrevd målbart mål. Samme Purpose brukes for egne og søkte formål. Dette er målinvarianten fra gjennomgangen; Swift tillater fortsatt nil. Skjemaet krever en konfigurasjon, men kan ikke bevise at den måler noe. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift."
+    },
+    "AgreementReference": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "counterparty": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataPointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "savedAtText": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordKeypath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceEntityKeypath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "savedAt": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordState": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": true,
+      "description": "Referansemetadata; recordState og selve avtalen må valideres mot avtalekontrakten."
+    },
+    "CellConfiguration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "uuid": {
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cellReferences": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skeleton": {}
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": true,
+      "x-haven": {
+        "status": "partial-contract",
+        "source": "CellProtocol/Sources/CellBase/CellConfiguration/CellConfiguration.swift",
+        "limitation": "Dette skjemaet ekspanderer ikke Skeleton, CellReference, discovery eller localization. Runtime kreves."
+      }
+    },
+    "PurposeComposition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "purpose"
+            },
+            "purposeRef": {
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "purposeRef"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "allOf",
+                "anyOf",
+                "sequence"
+              ]
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PurposeComposition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "children"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "atLeast"
+            },
+            "requiredCount": {
+              "type": "integer"
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PurposeComposition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "requiredCount",
+            "children"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "InterestCondition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "always"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "purposeSolvedWithin"
+            },
+            "purposeRef": {
+              "type": "string"
+            },
+            "maxAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "status": {
+              "enum": [
+                "started",
+                "succeeded",
+                "failed"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "purposeRef",
+            "maxAgeSeconds"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "metadataFreshness"
+            },
+            "key": {
+              "type": "string"
+            },
+            "maxAgeSeconds": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "maxAgeSeconds"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "all",
+                "any"
+              ]
+            },
+            "conditions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InterestCondition"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "conditions"
+          ],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "not"
+            },
+            "condition": {
+              "$ref": "#/$defs/InterestCondition"
+            }
+          },
+          "required": [
+            "type",
+            "condition"
+          ],
+          "additionalProperties": true
+        }
+      ]
+    },
+    "EntityRelationOriginKind": {
+      "type": "string",
+      "enum": [
+        "file-import",
+        "address-book",
+        "nearby",
+        "invite-sent",
+        "invite-received",
+        "correspondence",
+        "conference",
+        "introduction",
+        "manual"
+      ]
+    },
+    "EntityRelationChannelKind": {
+      "type": "string",
+      "enum": [
+        "haven-correspondence",
+        "haven-chat",
+        "email",
+        "sms",
+        "phone",
+        "nearby",
+        "conference",
+        "web"
+      ]
+    },
+    "EntityRelationDirection": {
+      "type": "string",
+      "enum": [
+        "inbound",
+        "outbound"
+      ]
+    },
+    "EntityRelationInteractionKind": {
+      "type": "string",
+      "enum": [
+        "invite.prepared",
+        "invite.sent",
+        "invite.opened",
+        "invite.joined",
+        "message.sent",
+        "message.received",
+        "message.acknowledged",
+        "chat.started",
+        "nearby.met",
+        "vc.presented",
+        "vc.issued",
+        "contact-request.received",
+        "note.added"
+      ]
+    },
+    "EntityRelationInteractionPolicyMode": {
+      "type": "string",
+      "enum": [
+        "off",
+        "metadata",
+        "full"
+      ]
+    },
+    "EntityRelationOrigin": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EntityRelationOriginKind"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceLabel": {
+          "type": "string"
+        },
+        "batchID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "introducedByRelationID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "at",
+        "sourceLabel"
+      ],
+      "x-haven": {
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+        "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
+      }
+    },
+    "EntityRelationRole": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "context"
+      ],
+      "x-haven": {
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+        "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
+      }
+    },
+    "EntityRelationInteractionSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "firstAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byChannel": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "byKind": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "lastKind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastChannel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastChronicleRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "count",
+        "byChannel",
+        "byKind"
+      ],
+      "x-haven": {
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+        "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
+      },
+      "description": "Beholdt som mulig sammendrag; skal vurderes ved bruk."
+    },
+    "EntityRelationSubject": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "givenName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "familyName": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "organization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jobTitle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entityRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Referanse til entitets-uuid i relations.entities, lagret bare fra relasjon til entitet. Motsatt retning, fra entitet til relasjoner, bygges ved dekoding, i minnet."
+        },
+        "perspectiveRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validatedContactRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "displayName"
+      ],
+      "x-haven": {
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+        "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
+      },
+      "description": "entityRef er den persisterte kanten til entiteten. Øvrige felt er beholdt som mulige avledede sammendrag, til vurdering; ingen separat autoritativ kontaktprofil."
+    },
+    "EntityRelationRecord": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": {
+          "type": "string",
+          "description": "Målformen har ennå ingen vedtatt wire-versjon. Demoen bruker review-only:-prefiks. Må ikke sendes til dagens v1/v2-validator som om dette var samme kontrakt."
+        },
+        "relationID": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/EntityRelationSubject"
+        },
+        "origin": {
+          "$ref": "#/$defs/EntityRelationOrigin"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EntityRelationRole"
+          }
+        },
+        "interactions": {
+          "$ref": "#/$defs/EntityRelationInteractionSummary"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "entityRepresentation": {
+          "$ref": "#/$defs/EntityRepresentation"
+        }
+      },
+      "required": [
+        "schema",
+        "relationID",
+        "subject",
+        "origin",
+        "roles",
+        "interactions",
+        "tags",
+        "createdAt",
+        "updatedAt",
+        "revision",
+        "entityRepresentation"
+      ],
+      "x-haven": {
+        "status": "decided-target-with-open-migration",
+        "runtimeSource": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift"
+      },
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "interests"
+                ]
+              },
+              {
+                "required": [
+                  "purposeRefs"
+                ]
+              },
+              {
+                "required": [
+                  "channels"
+                ]
+              },
+              {
+                "required": [
+                  "standing"
+                ]
+              },
+              {
+                "required": [
+                  "evidence"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Metadata rundt kontaktens EntityRepresentation. Interest/Purpose bæres av grafen; kontaktkanaler ligger i person.contact.endpoints; bevis indekseres under proofs. Formålsoppfyllelse må måles, og er ikke bevist av kantvekten alene. Blokkering, invitasjoner og kilde/proveniens krever en bevart, eksplisitt kontrakt før migrering."
+    },
+    "EntityRelationInteractionEvent": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "schema": {
+          "const": "haven.relation-interaction-event.v1"
+        },
+        "relationID": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EntityRelationInteractionKind"
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "channel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRelationChannelKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntityRelationDirection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentMode": {
+          "$ref": "#/$defs/EntityRelationInteractionPolicyMode"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidenceID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "purposeRef": {
+          "type": "string"
+        },
+        "sourceCell": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "schema",
+        "relationID",
+        "kind",
+        "at",
+        "contentMode",
+        "purposeRef",
+        "sourceCell"
+      ],
+      "x-haven": {
+        "status": "runtime-model",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+        "validationBoundary": "Codable structure plus selected constraints; runtime validation is still required."
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "contentMode": {
+                "enum": [
+                  "off",
+                  "metadata"
+                ]
+              }
+            },
+            "required": [
+              "contentMode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "summary": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Eksisterende relasjonshendelse bevart som beskrevet underkontrakt. Interaction skal forstås generelt. Ny generell hendelseskontrakt og plassering er ikke avgjort; historiske schema-verdier er ikke omdøpt."
+    },
+    "ValidatedContact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "haven.entity-validated-contact-record.v1"
+        },
+        "relationID": {
+          "type": "string",
+          "minLength": 1,
+          "x-maxUTF8Bytes": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "x-maxUTF8Bytes": 256
+        },
+        "channels": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 254,
+              "pattern": "^[\\x21-\\x3f\\x41-\\x7e]{1,64}@(?!\\.)(?![^@]*\\.\\.)(?![^@]*\\.$)[\\x21-\\x3f\\x41-\\x7e]*\\.[\\x21-\\x3f\\x41-\\x7e]+$",
+              "description": "Avspeiler den avgrensede ASCII-kontrollen i runtime; dette er ikke bevis på at adressen kan motta e-post."
+            },
+            "phoneE164": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{7,14}$"
+            }
+          },
+          "minProperties": 1
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sourceKind": {
+              "type": "string",
+              "enum": [
+                "macos-contacts",
+                "recipient-confirmed",
+                "user-supplied"
+              ]
+            },
+            "sourceLabel": {
+              "type": "string",
+              "minLength": 1,
+              "x-maxUTF8Bytes": 256
+            },
+            "observedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "sourceKind",
+            "sourceLabel",
+            "observedAt"
+          ]
+        },
+        "purposeRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "purpose://access.audit.privacy",
+              "purpose://contact.communication",
+              "purpose://contact.introduction"
+            ]
+          },
+          "uniqueItems": true,
+          "allOf": [
+            {
+              "contains": {
+                "const": "purpose://access.audit.privacy"
+              }
+            },
+            {
+              "contains": {
+                "const": "purpose://contact.communication"
+              }
+            }
+          ]
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "storageAuthorized": {
+              "const": true
+            },
+            "disclosureAuthorized": {
+              "const": false
+            }
+          },
+          "required": [
+            "storageAuthorized",
+            "disclosureAuthorized"
+          ]
+        },
+        "status": {
+          "const": "owner-accepted"
+        }
+      },
+      "required": [
+        "schema",
+        "relationID",
+        "displayName",
+        "channels",
+        "provenance",
+        "purposeRefs",
+        "retention",
+        "status"
+      ],
+      "x-haven": {
+        "status": "runtime-validated-subset",
+        "source": "CellProtocol/Sources/CellBase/PersistingCells/EntityValidatedContactRecordV1.swift",
+        "runtimeChecksStillRequired": [
+          "trimmed strings and UTF-8 byte limits",
+          "Unicode alphanumeric relationID",
+          "metadata/keypath/relationID equality",
+          "owner-signed commit",
+          "authorization"
+        ]
+      }
+    },
+    "CommittedAgreementRecord": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "recordState": {
+          "const": "signed"
+        },
+        "signatureValidationState": {
+          "const": "verified"
+        },
+        "signingSemantics": {
+          "type": "string"
+        },
+        "counterpartySignatureState": {
+          "const": "not_present"
+        },
+        "immutable": {
+          "const": true
+        },
+        "contractHash": {
+          "type": "string"
+        },
+        "immutableContentHash": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "credentialReceipts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "committedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "recordState",
+        "signatureValidationState",
+        "signingSemantics",
+        "counterpartySignatureState",
+        "immutable",
+        "contractHash",
+        "immutableContentHash",
+        "contract",
+        "metadata",
+        "credentialReceipts",
+        "committedAt"
+      ],
+      "description": "Formen fra SignedAgreementEntitySupport.recordObject. Contract og credentialReceipts har egne delkontrakter som ikke er fullstendig ekspandert her. Signaturverifisering utføres av runtime."
+    },
+    "ContactEndpoint": {
+      "type": "object",
+      "properties": {
+        "endpointId": {
+          "type": "string",
+          "title": "Contact endpoint id",
+          "description": "Opaque endpoint id for a public-safe ContactEndpoint descriptor.",
+          "x-haven": {
+            "keypath": "person.contact.endpoints[].endpointId",
+            "sourceLine": 346,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "ContactEndpointCell",
+            "derived": false
+          }
+        },
+        "purposes": {
+          "type": "array",
+          "title": "Contact endpoint purposes",
+          "description": "Purpose refs accepted by the contact endpoint descriptor.",
+          "x-haven": {
+            "keypath": "person.contact.endpoints[].purposes",
+            "sourceLine": 348,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "ContactEndpointCell/ContactRegistryCell",
+            "derived": false
+          }
+        },
+        "cellReference": {
+          "type": "string",
+          "title": "Contact endpoint cell",
+          "description": "Foreslått navn fra gjennomgangen; detaljformen er fortsatt åpen. Eksemplet bruker en cell://-referanse, ikke hele Codable CellReference-kontrakten.",
+          "x-haven": {
+            "status": "name-and-shape-proposal",
+            "replaces": "endpointCell"
+          }
+        },
+        "label": {
+          "type": "string",
+          "description": "Brukslabel, eksempelvis primary eller work."
+        }
+      },
+      "description": "Felles endpoint-deskriptor for egen profil og kontaktens persondata. Retningen omfatter telefon, e-post, sosiale navn, URL og cellereferanser. Råverdi-, rute-, status- og bevisskjemaene for alle disse er ennå ikke fastlagt; ingen nye enum-varianter er oppfunnet her.",
+      "x-haven": {
+        "status": "partial-target-contract",
+        "openDetails": [
+          "raw address variants",
+          "routing and confirmation",
+          "final cellReference shape"
+        ]
+      },
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "endpointCell"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "PersonContact": {
+      "type": "object",
+      "description": "Felles kontaktstruktur. Endpoints er hovedretningen; de kommenterte emails[]/phones[] beholdes inntil deres forhold til den generelle endpoint-formen er avklart. Status er en påstand, ikke et bevis.",
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "title": "Contact endpoints",
+          "description": "Owner-controlled public-safe contact endpoint references for receiving purpose-bound invitations or requests.",
+          "x-haven": {
+            "keypath": "person.contact.endpoints",
+            "sourceLine": 345,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "ContactEndpointCell/ContactRegistryCell",
+            "derived": false
+          },
+          "items": {
+            "$ref": "#/$defs/ContactEndpoint"
+          }
+        },
+        "emails": {
+          "type": "array",
+          "title": "Email records",
+          "description": "Multi-value email records with stable local ids and labels. Keep person.contact.email as the primary compatibility leaf.",
+          "x-haven": {
+            "keypath": "person.contact.emails",
+            "sourceLine": 350,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Email record",
+            "description": "One email contact record with id, label, value, status and optional purpose refs.",
+            "x-haven": {
+              "keypath": "person.contact.emails[]",
+              "sourceLine": 351,
+              "status": "registry-described",
+              "visibilityClass": "consent",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "id": {
+                "type": "string",
+                "title": "Email id",
+                "description": "Stable owner-local id for an email record.",
+                "x-haven": {
+                  "keypath": "person.contact.emails[].id",
+                  "sourceLine": 352,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "label": {
+                "type": "string",
+                "title": "Email label",
+                "description": "Owner-local label such as work, personal or billing.",
+                "x-haven": {
+                  "keypath": "person.contact.emails[].label",
+                  "sourceLine": 353,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "value": {
+                "type": "string",
+                "title": "Email value",
+                "description": "Email address value for a contact record.",
+                "x-haven": {
+                  "keypath": "person.contact.emails[].value",
+                  "sourceLine": 354,
+                  "status": "registry-described",
+                  "visibilityClass": "consent",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "status": {
+                "type": "string",
+                "title": "Email status",
+                "description": "Owner-local verification/readiness status such as unverified, verified or retired.",
+                "x-haven": {
+                  "keypath": "person.contact.emails[].status",
+                  "sourceLine": 355,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "purposes": {
+                "type": "array",
+                "title": "Email purposes",
+                "description": "Purpose refs for which this email may be used.",
+                "x-haven": {
+                  "keypath": "person.contact.emails[].purposes",
+                  "sourceLine": 356,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "phones": {
+          "type": "array",
+          "title": "Phone records",
+          "description": "Multi-value phone records with stable local ids and labels. Keep person.contact.phone as the primary compatibility leaf.",
+          "x-haven": {
+            "keypath": "person.contact.phones",
+            "sourceLine": 357,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Phone record",
+            "description": "One phone contact record with id, label, value, status and optional purpose refs.",
+            "x-haven": {
+              "keypath": "person.contact.phones[]",
+              "sourceLine": 358,
+              "status": "registry-described",
+              "visibilityClass": "consent",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "id": {
+                "type": "string",
+                "title": "Phone id",
+                "description": "Stable owner-local id for a phone record.",
+                "x-haven": {
+                  "keypath": "person.contact.phones[].id",
+                  "sourceLine": 359,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "label": {
+                "type": "string",
+                "title": "Phone label",
+                "description": "Label skiller telefonenes bruk; primary erstatter behovet for et separat phone-felt.",
+                "x-haven": {
+                  "keypath": "person.contact.phones[].label",
+                  "sourceLine": 360,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "value": {
+                "type": "string",
+                "title": "Phone value",
+                "description": "Phone number value for a contact record.",
+                "x-haven": {
+                  "keypath": "person.contact.phones[].value",
+                  "sourceLine": 361,
+                  "status": "registry-described",
+                  "visibilityClass": "consent",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "status": {
+                "type": "string",
+                "title": "Phone status",
+                "description": "Owner-local verification/readiness status such as unverified, verified or retired.",
+                "x-haven": {
+                  "keypath": "person.contact.phones[].status",
+                  "sourceLine": 362,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "purposes": {
+                "type": "array",
+                "title": "Phone purposes",
+                "description": "Purpose refs for which this phone number may be used.",
+                "x-haven": {
+                  "keypath": "person.contact.phones[].purposes",
+                  "sourceLine": 363,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "preferredChannel": {
+          "type": "string",
+          "title": "Preferred contact channel",
+          "description": "Owner-selected default contact channel for UI suggestions such as endpoint, email, phone or chat.",
+          "x-haven": {
+            "keypath": "person.contact.preferredChannel",
+            "sourceLine": 364,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        },
+        "availabilitySummary": {
+          "type": "string",
+          "title": "Availability summary",
+          "description": "Owner-authored coarse availability note for contact or scheduling UI.",
+          "x-haven": {
+            "keypath": "person.contact.availabilitySummary",
+            "sourceLine": 365,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        },
+        "timezone": {
+          "type": "string",
+          "title": "Contact timezone",
+          "description": "Timezone hint used for respectful contact timing.",
+          "x-haven": {
+            "keypath": "person.contact.timezone",
+            "sourceLine": 366,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "email"
+                ]
+              },
+              {
+                "required": [
+                  "phone"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "PersonProfile": {
+      "type": "object",
+      "description": "Owner-controlled person/profile data root. person.skills er forbudt; skills er formålsnoder i grafen, ikke egne poster eller en avledet liste.",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "object",
+          "description": "Structured personal name value object. Use this for keypath-addressable names; use person.displayName for presentation labels.",
+          "title": "Structured name",
+          "x-haven": {
+            "keypath": "person.name",
+            "sourceLine": 311,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "properties": {
+            "first": {
+              "type": "string",
+              "title": "First name",
+              "description": "Given/first name leaf in the owner's structured person name.",
+              "x-haven": {
+                "keypath": "person.name.first",
+                "sourceLine": 312,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "middle": {
+              "type": "array",
+              "title": "Middle names",
+              "description": "Ordered middle-name leaves in the owner's structured person name.",
+              "x-haven": {
+                "keypath": "person.name.middle",
+                "sourceLine": 313,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "last": {
+              "type": "string",
+              "title": "Last name",
+              "description": "Family/last name leaf in the owner's structured person name.",
+              "x-haven": {
+                "keypath": "person.name.last",
+                "sourceLine": 314,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "prefix": {
+              "type": "string",
+              "title": "Name prefix",
+              "description": "Honorific or name prefix such as Dr or Prof when the owner wants it keypath-addressable.",
+              "x-haven": {
+                "keypath": "person.name.prefix",
+                "sourceLine": 315,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "suffix": {
+              "type": "string",
+              "title": "Name suffix",
+              "description": "Honorific, credential or generational suffix kept separate from the family name.",
+              "x-haven": {
+                "keypath": "person.name.suffix",
+                "sourceLine": 316,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "pronunciation": {
+              "type": "string",
+              "title": "Name pronunciation",
+              "description": "Owner-provided pronunciation hint for spoken UI or introductions.",
+              "x-haven": {
+                "keypath": "person.name.pronunciation",
+                "sourceLine": 317,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            }
+          }
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Beholdes som eierens foretrukne profilnavn. Kontekstspesifikke visningsnavn kan ha mindre scope, blant annet i Perspective.",
+          "title": "Display name",
+          "x-haven": {
+            "keypath": "person.displayName",
+            "sourceLine": 318,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        },
+        "legalName": {
+          "type": "string",
+          "description": "Legal or billing name when a domain explicitly needs it.",
+          "title": "Legal name",
+          "x-haven": {
+            "keypath": "person.legalName",
+            "sourceLine": 322,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        },
+        "profile": {
+          "type": "object",
+          "description": "Human-facing profile object for fields a user may selectively grant to UI, directory or invite flows.",
+          "title": "Profile",
+          "x-haven": {
+            "keypath": "person.profile",
+            "sourceLine": 323,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "properties": {
+            "headline": {
+              "type": "string",
+              "title": "Profile headline",
+              "description": "Short owner-authored profile line for cards, suggestions and chat invite previews.",
+              "x-haven": {
+                "keypath": "person.profile.headline",
+                "sourceLine": 324,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "bio": {
+              "type": "string",
+              "title": "Profile bio",
+              "description": "Owner-authored profile paragraph or summary.",
+              "x-haven": {
+                "keypath": "person.profile.bio",
+                "sourceLine": 325,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "avatarRef": {
+              "type": "string",
+              "title": "Avatar ref",
+              "description": "Reference to the selected avatar/image asset rather than an embedded image blob.",
+              "x-haven": {
+                "keypath": "person.profile.avatarRef",
+                "sourceLine": 326,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "MediaCell/EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "imageRefs": {
+              "type": "array",
+              "title": "Profile image refs",
+              "description": "List of media refs for profile images selected by the owner.",
+              "x-haven": {
+                "keypath": "person.profile.imageRefs",
+                "sourceLine": 327,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "MediaCell/EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "websiteURLs": {
+              "type": "array",
+              "title": "Website URLs",
+              "description": "Owner-approved website URLs for profile presentation.",
+              "x-haven": {
+                "keypath": "person.profile.websiteURLs",
+                "sourceLine": 328,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "sameAsRefs": {
+              "type": "array",
+              "title": "Same-as refs",
+              "description": "Owner-approved refs or URLs to public profiles that are intended to describe the same person.",
+              "x-haven": {
+                "keypath": "person.profile.sameAsRefs",
+                "sourceLine": 329,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell/Proofs",
+                "derived": false
+              }
+            },
+            "interestTags": {
+              "type": "array",
+              "title": "Profile interest tags",
+              "description": "Forenklede etiketter for gjenkjenning/annonsering, eksempelvis Nearby userInfo. Kan avledes; erstatter ikke Interest/Purpose-grafen.",
+              "x-haven": {
+                "keypath": "person.profile.interestTags",
+                "sourceLine": 330,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell/Perspective",
+                "derived": false
+              }
+            },
+            "visibility": {
+              "type": "object",
+              "title": "Profile visibility policy",
+              "description": "Field-level policy hints for which profile leaves may be shown in owner-approved contexts.",
+              "x-haven": {
+                "keypath": "person.profile.visibility",
+                "sourceLine": 331,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            }
+          }
+        },
+        "nicknames": {
+          "type": "array",
+          "description": "Owner-controlled alternate names, aliases or nicknames.",
+          "title": "Nicknames",
+          "x-haven": {
+            "keypath": "person.nicknames",
+            "sourceLine": 320,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "string",
+            "title": "Nickname",
+            "description": "One alternate name or nickname string.",
+            "x-haven": {
+              "keypath": "person.nicknames[]",
+              "sourceLine": 321,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            }
+          }
+        },
+        "addresses": {
+          "type": "array",
+          "description": "Owner-local address records selected by id or label, such as person.addresses[label=\"home\"].street.name.",
+          "title": "Addresses",
+          "x-haven": {
+            "keypath": "person.addresses",
+            "sourceLine": 332,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Address record",
+            "description": "One address record with stable id, label and structured address leaves.",
+            "x-haven": {
+              "keypath": "person.addresses[]",
+              "sourceLine": 333,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "id": {
+                "type": "string",
+                "title": "Address id",
+                "description": "Stable owner-local address id for references and updates.",
+                "x-haven": {
+                  "keypath": "person.addresses[].id",
+                  "sourceLine": 334,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "label": {
+                "type": "string",
+                "title": "Address label",
+                "description": "Owner-local address label such as home, work or billing. Enables selectors like addresses[label=\"home\"].",
+                "x-haven": {
+                  "keypath": "person.addresses[].label",
+                  "sourceLine": 335,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "street": {
+                "type": "object",
+                "title": "Street object",
+                "description": "Structured street object under an address record.",
+                "x-haven": {
+                  "keypath": "person.addresses[].street",
+                  "sourceLine": 336,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                },
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Street name",
+                    "description": "Street name leaf for an address record.",
+                    "x-haven": {
+                      "keypath": "person.addresses[].street.name",
+                      "sourceLine": 337,
+                      "status": "registry-described",
+                      "visibilityClass": "private",
+                      "storageDomain": "entity-anchor",
+                      "mutability": "read-write",
+                      "sourceOfTruthLabel": "EntityAnchorCell",
+                      "derived": false
+                    }
+                  },
+                  "number": {
+                    "type": "string",
+                    "title": "Street number",
+                    "description": "Street number leaf for an address record.",
+                    "x-haven": {
+                      "keypath": "person.addresses[].street.number",
+                      "sourceLine": 338,
+                      "status": "registry-described",
+                      "visibilityClass": "private",
+                      "storageDomain": "entity-anchor",
+                      "mutability": "read-write",
+                      "sourceOfTruthLabel": "EntityAnchorCell",
+                      "derived": false
+                    }
+                  },
+                  "letter": {
+                    "type": "string",
+                    "title": "Street letter",
+                    "description": "Street letter/suffix leaf for an address record.",
+                    "x-haven": {
+                      "keypath": "person.addresses[].street.letter",
+                      "sourceLine": 339,
+                      "status": "registry-described",
+                      "visibilityClass": "private",
+                      "storageDomain": "entity-anchor",
+                      "mutability": "read-write",
+                      "sourceOfTruthLabel": "EntityAnchorCell",
+                      "derived": false
+                    }
+                  }
+                }
+              },
+              "city": {
+                "type": "string",
+                "title": "Address city",
+                "description": "City/place leaf for an address record.",
+                "x-haven": {
+                  "keypath": "person.addresses[].city",
+                  "sourceLine": 340,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "postalCode": {
+                "type": "string",
+                "title": "Postal code",
+                "description": "Postal code leaf for an address record.",
+                "x-haven": {
+                  "keypath": "person.addresses[].postalCode",
+                  "sourceLine": 341,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "region": {
+                "type": "string",
+                "title": "Address region",
+                "description": "Region/state/county leaf for an address record.",
+                "x-haven": {
+                  "keypath": "person.addresses[].region",
+                  "sourceLine": 342,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "countryCode": {
+                "type": "string",
+                "title": "Country code",
+                "description": "ISO-like country code leaf for an address record.",
+                "x-haven": {
+                  "keypath": "person.addresses[].countryCode",
+                  "sourceLine": 343,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "contact": {
+          "$ref": "#/$defs/PersonContact"
+        },
+        "location": {
+          "type": "object",
+          "description": "Coarse location leaves such as city, region, country, countryCode, timezone and optional geoRef.",
+          "properties": {
+            "city": {
+              "type": "string",
+              "title": "City",
+              "description": "Coarse location field for public or consent-based profile contexts.",
+              "x-haven": {
+                "keypath": "person.location.city",
+                "sourceLine": 367,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "country": {
+              "type": "string",
+              "title": "Country",
+              "description": "Country field for public or consent-based profile contexts.",
+              "x-haven": {
+                "keypath": "person.location.country",
+                "sourceLine": 368,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "region": {
+              "type": "string",
+              "title": "Location region",
+              "description": "Coarse region, county or state for profile contexts.",
+              "x-haven": {
+                "keypath": "person.location.region",
+                "sourceLine": 369,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "countryCode": {
+              "type": "string",
+              "title": "Location country code",
+              "description": "Stable country code for coarse profile location.",
+              "x-haven": {
+                "keypath": "person.location.countryCode",
+                "sourceLine": 370,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "timezone": {
+              "type": "string",
+              "title": "Location timezone",
+              "description": "Timezone associated with the owner's coarse profile location.",
+              "x-haven": {
+                "keypath": "person.location.timezone",
+                "sourceLine": 371,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "geoRef": {
+              "type": "string",
+              "title": "Location geo ref",
+              "description": "Optional ref to a precise or geocoded location record instead of storing coordinates under person.",
+              "x-haven": {
+                "keypath": "person.location.geoRef",
+                "sourceLine": 372,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "Geo/LocationCell",
+                "derived": false
+              }
+            }
+          }
+        },
+        "languages": {
+          "type": "array",
+          "description": "Language records the owner wants tools to know about for UI, contact or profile contexts.",
+          "title": "Languages",
+          "x-haven": {
+            "keypath": "person.languages",
+            "sourceLine": 373,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Language record",
+            "description": "One language record with tag, label, proficiency and optional communication preference.",
+            "x-haven": {
+              "keypath": "person.languages[]",
+              "sourceLine": 374,
+              "status": "registry-described",
+              "visibilityClass": "consent",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "tag": {
+                "type": "string",
+                "title": "Language tag",
+                "description": "BCP 47-style language tag such as nb, en or en-US.",
+                "x-haven": {
+                  "keypath": "person.languages[].tag",
+                  "sourceLine": 375,
+                  "status": "registry-described",
+                  "visibilityClass": "consent",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "label": {
+                "type": "string",
+                "title": "Language label",
+                "description": "Human-readable language label shown in UI.",
+                "x-haven": {
+                  "keypath": "person.languages[].label",
+                  "sourceLine": 376,
+                  "status": "registry-described",
+                  "visibilityClass": "consent",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "proficiency": {
+                "type": "string",
+                "title": "Language proficiency",
+                "description": "Owner-provided proficiency label or level for this language.",
+                "x-haven": {
+                  "keypath": "person.languages[].proficiency",
+                  "sourceLine": 377,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "preferredForCommunication": {
+                "type": "boolean",
+                "title": "Preferred for communication",
+                "description": "Boolean hint that this language may be used for direct communication.",
+                "x-haven": {
+                  "keypath": "person.languages[].preferredForCommunication",
+                  "sourceLine": 378,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "demographics": {
+          "type": "object",
+          "description": "Private som utgangspunkt. Lagring av sensitive kategorier om andre i EntityRepresentation er et åpent vurderingspunkt.",
+          "title": "Demographics",
+          "x-haven": {
+            "keypath": "person.demographics",
+            "sourceLine": 379,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "properties": {
+            "birthDate": {
+              "type": "string",
+              "title": "Birth date",
+              "description": "Owner-provided birth date when a domain explicitly needs it.",
+              "x-haven": {
+                "keypath": "person.demographics.birthDate",
+                "sourceLine": 380,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "ageBand": {
+              "type": "string",
+              "title": "Age band",
+              "description": "Coarse age band such as adult, under-18 or 30-39 when exact birth date is unnecessary.",
+              "x-haven": {
+                "keypath": "person.demographics.ageBand",
+                "sourceLine": 381,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "pronouns": {
+              "type": "string",
+              "title": "Pronouns",
+              "description": "Owner-authored pronouns string for profile or respectful UI.",
+              "x-haven": {
+                "keypath": "person.demographics.pronouns",
+                "sourceLine": 382,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "genderIdentity": {
+              "type": "string",
+              "title": "Gender identity",
+              "description": "Self-described gender identity when the owner chooses to store it.",
+              "x-haven": {
+                "keypath": "person.demographics.genderIdentity",
+                "sourceLine": 383,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "nationalities": {
+              "type": "array",
+              "title": "Nationalities",
+              "description": "Owner-provided nationality records or country codes.",
+              "x-haven": {
+                "keypath": "person.demographics.nationalities",
+                "sourceLine": 384,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              },
+              "items": {
+                "type": "string",
+                "title": "Nationality",
+                "description": "One nationality country code or record.",
+                "x-haven": {
+                  "keypath": "person.demographics.nationalities[]",
+                  "sourceLine": 385,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "work": {
+          "type": "object",
+          "description": "Current work-facing profile object for title, role and organization refs.",
+          "title": "Work profile",
+          "x-haven": {
+            "keypath": "person.work",
+            "sourceLine": 386,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "properties": {
+            "title": {
+              "type": "string",
+              "title": "Work title",
+              "description": "Owner-provided job or role title for profile contexts.",
+              "x-haven": {
+                "keypath": "person.work.title",
+                "sourceLine": 387,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "role": {
+              "type": "string",
+              "title": "Work role",
+              "description": "Functional role or responsibility label separate from title.",
+              "x-haven": {
+                "keypath": "person.work.role",
+                "sourceLine": 388,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "organizationName": {
+              "type": "string",
+              "title": "Work organization name",
+              "description": "Display name of the current organization when the owner wants a direct leaf for UI.",
+              "x-haven": {
+                "keypath": "person.work.organizationName",
+                "sourceLine": 389,
+                "status": "registry-described",
+                "visibilityClass": "consent",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "organizationRef": {
+              "type": "string",
+              "title": "Work organization ref",
+              "description": "Reference to the organization/entity record behind the current work affiliation.",
+              "x-haven": {
+                "keypath": "person.work.organizationRef",
+                "sourceLine": 390,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell/OrganizationCell",
+                "derived": false
+              }
+            },
+            "department": {
+              "type": "string",
+              "title": "Work department",
+              "description": "Owner-provided department/team label for work profile contexts.",
+              "x-haven": {
+                "keypath": "person.work.department",
+                "sourceLine": 391,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "workLocationRef": {
+              "type": "string",
+              "title": "Work location ref",
+              "description": "Reference to a work location record instead of duplicating precise location data.",
+              "x-haven": {
+                "keypath": "person.work.workLocationRef",
+                "sourceLine": 392,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell/LocationCell",
+                "derived": false
+              }
+            }
+          }
+        },
+        "affiliations": {
+          "type": "array",
+          "description": "Owner-provided organization, program or community affiliations.",
+          "title": "Affiliations",
+          "x-haven": {
+            "keypath": "person.affiliations",
+            "sourceLine": 393,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Affiliation record",
+            "description": "One affiliation record with local id, label, role, organization ref and optional proof refs.",
+            "x-haven": {
+              "keypath": "person.affiliations[]",
+              "sourceLine": 394,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "id": {
+                "type": "string",
+                "title": "Affiliation id",
+                "description": "Stable owner-local id for an affiliation record.",
+                "x-haven": {
+                  "keypath": "person.affiliations[].id",
+                  "sourceLine": 395,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "label": {
+                "type": "string",
+                "title": "Affiliation label",
+                "description": "Human-readable affiliation label for UI.",
+                "x-haven": {
+                  "keypath": "person.affiliations[].label",
+                  "sourceLine": 396,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "role": {
+                "type": "string",
+                "title": "Affiliation role",
+                "description": "Role or relationship within the affiliation.",
+                "x-haven": {
+                  "keypath": "person.affiliations[].role",
+                  "sourceLine": 397,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "organizationRef": {
+                "type": "string",
+                "title": "Affiliation organization ref",
+                "description": "Reference to the organization/entity record for this affiliation.",
+                "x-haven": {
+                  "keypath": "person.affiliations[].organizationRef",
+                  "sourceLine": 398,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell/OrganizationCell",
+                  "derived": false
+                }
+              },
+              "proofRefs": {
+                "type": "array",
+                "title": "Affiliation proof refs",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte tilknytningen. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
+                "x-haven": {
+                  "keypath": "person.affiliations[].proofRefs",
+                  "sourceLine": 399,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell/Proofs",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "preferences": {
+          "type": "object",
+          "description": "Owner preferences for UI, locale, communication and default visibility.",
+          "title": "Person preferences",
+          "x-haven": {
+            "keypath": "person.preferences",
+            "sourceLine": 406,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "properties": {
+            "locale": {
+              "type": "string",
+              "title": "Preferred locale",
+              "description": "Owner-preferred UI locale tag.",
+              "x-haven": {
+                "keypath": "person.preferences.locale",
+                "sourceLine": 407,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "timezone": {
+              "type": "string",
+              "title": "Preferred timezone",
+              "description": "Owner-preferred timezone for scheduling and notification timing.",
+              "x-haven": {
+                "keypath": "person.preferences.timezone",
+                "sourceLine": 408,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "languageTags": {
+              "type": "array",
+              "title": "Preferred language tags",
+              "description": "Ordered BCP 47-style language tags for UI and communication preference.",
+              "x-haven": {
+                "keypath": "person.preferences.languageTags",
+                "sourceLine": 409,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              }
+            },
+            "communication": {
+              "type": "object",
+              "title": "Communication preferences",
+              "description": "Owner preferences for how tools should suggest or initiate communication.",
+              "x-haven": {
+                "keypath": "person.preferences.communication",
+                "sourceLine": 410,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              },
+              "properties": {
+                "quietHours": {
+                  "type": "object",
+                  "title": "Quiet hours",
+                  "description": "Coarse quiet-hours policy for respectful contact timing.",
+                  "x-haven": {
+                    "keypath": "person.preferences.communication.quietHours",
+                    "sourceLine": 412,
+                    "status": "registry-described",
+                    "visibilityClass": "private",
+                    "storageDomain": "entity-anchor",
+                    "mutability": "read-write",
+                    "sourceOfTruthLabel": "EntityAnchorCell",
+                    "derived": false
+                  }
+                }
+              },
+              "allOf": [
+                {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "preferredChannel"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "privacy": {
+              "type": "object",
+              "title": "Privacy preferences",
+              "description": "Owner preferences for profile and lookup visibility.",
+              "x-haven": {
+                "keypath": "person.preferences.privacy",
+                "sourceLine": 413,
+                "status": "registry-described",
+                "visibilityClass": "private",
+                "storageDomain": "entity-anchor",
+                "mutability": "read-write",
+                "sourceOfTruthLabel": "EntityAnchorCell",
+                "derived": false
+              },
+              "properties": {
+                "defaultVisibility": {
+                  "type": "string",
+                  "title": "Default visibility",
+                  "description": "Private er standard etter gjennomgangen. JSON Schema default fyller ikke inn data og håndhever ikke tilgang; dette krever runtime.",
+                  "x-haven": {
+                    "keypath": "person.preferences.privacy.defaultVisibility",
+                    "sourceLine": 414,
+                    "status": "registry-described",
+                    "visibilityClass": "private",
+                    "storageDomain": "entity-anchor",
+                    "mutability": "read-write",
+                    "sourceOfTruthLabel": "EntityAnchorCell",
+                    "derived": false
+                  },
+                  "default": "private"
+                }
+              }
+            }
+          }
+        },
+        "attributes": {
+          "type": "array",
+          "description": "Namespaced attribute records for person facts that are useful to test but not stable enough for canonical keypaths.",
+          "title": "Provisional attributes",
+          "x-haven": {
+            "keypath": "person.attributes",
+            "sourceLine": 415,
+            "status": "registry-described",
+            "visibilityClass": "private",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          },
+          "items": {
+            "type": "object",
+            "title": "Provisional attribute record",
+            "description": "One dynamic attribute record with key, value, namespace, source, confidence, proof refs and lifecycle status.",
+            "x-haven": {
+              "keypath": "person.attributes[]",
+              "sourceLine": 416,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell",
+              "derived": false
+            },
+            "properties": {
+              "namespace": {
+                "type": "string",
+                "title": "Attribute namespace",
+                "description": "Namespace that owns the provisional attribute key, such as haven, schema.org or app-specific.",
+                "x-haven": {
+                  "keypath": "person.attributes[].namespace",
+                  "sourceLine": 417,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "key": {
+                "type": "string",
+                "title": "Attribute key",
+                "description": "Stable key within the namespace for the provisional attribute.",
+                "x-haven": {
+                  "keypath": "person.attributes[].key",
+                  "sourceLine": 418,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "value": {
+                "title": "Attribute value",
+                "description": "JSON value for the provisional attribute.",
+                "x-haven": {
+                  "keypath": "person.attributes[].value",
+                  "sourceLine": 419,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "valueType": {
+                "type": "string",
+                "title": "Attribute value type",
+                "description": "Declared JSON value type or domain type for the provisional value.",
+                "x-haven": {
+                  "keypath": "person.attributes[].valueType",
+                  "sourceLine": 420,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "source": {
+                "type": "string",
+                "title": "Attribute source",
+                "description": "Owner-local source label or ref explaining where the attribute came from.",
+                "x-haven": {
+                  "keypath": "person.attributes[].source",
+                  "sourceLine": 421,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "observedAt": {
+                "type": "string",
+                "title": "Attribute observed timestamp",
+                "description": "Timestamp for when the attribute was observed, imported or owner-confirmed.",
+                "x-haven": {
+                  "keypath": "person.attributes[].observedAt",
+                  "sourceLine": 422,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "confidence": {
+                "type": "number",
+                "title": "Attribute confidence",
+                "description": "Owner- or system-assigned confidence score or label for provisional attributes.",
+                "x-haven": {
+                  "keypath": "person.attributes[].confidence",
+                  "sourceLine": 423,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "proofRefs": {
+                "type": "array",
+                "title": "Attribute proof refs",
+                "description": "Bevis-uuid-er som peker inn i proofs.credentials og hevdes å understøtte den foreløpige attributtpåstanden. Oppslag fastslår ikke sannhet, gyldighet, utstedertillit eller samtykke.",
+                "x-haven": {
+                  "keypath": "person.attributes[].proofRefs",
+                  "sourceLine": 424,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell/Proofs",
+                  "derived": false
+                }
+              },
+              "status": {
+                "type": "string",
+                "title": "Attribute status",
+                "description": "Lifecycle status such as proposed, active, promoted or deprecated.",
+                "x-haven": {
+                  "keypath": "person.attributes[].status",
+                  "sourceLine": 425,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              },
+              "promotedTo": {
+                "type": "string",
+                "title": "Attribute promoted-to path",
+                "description": "Canonical keypath this provisional attribute was promoted to, when applicable.",
+                "x-haven": {
+                  "keypath": "person.attributes[].promotedTo",
+                  "sourceLine": 426,
+                  "status": "registry-described",
+                  "visibilityClass": "private",
+                  "storageDomain": "entity-anchor",
+                  "mutability": "read-write",
+                  "sourceOfTruthLabel": "EntityAnchorCell",
+                  "derived": false
+                }
+              }
+            }
+          }
+        },
+        "preferredName": {
+          "type": "string",
+          "title": "Preferred name",
+          "description": "Name the owner prefers in conversational UI when it differs from structured or legal name.",
+          "x-haven": {
+            "keypath": "person.preferredName",
+            "sourceLine": 319,
+            "status": "registry-described",
+            "visibilityClass": "consent",
+            "storageDomain": "entity-anchor",
+            "mutability": "read-write",
+            "sourceOfTruthLabel": "EntityAnchorCell",
+            "derived": false
+          }
+        },
+        "relations": {
+          "type": "object",
+          "properties": {
+            "interactionPolicy": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "mode": {
+                  "$ref": "#/$defs/EntityRelationInteractionPolicyMode"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fullContentWarningAccepted": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          }
+        }
+      },
+      "title": "Person root",
+      "x-haven": {
+        "keypath": "person",
+        "sourceLine": 310,
+        "status": "registry-described",
+        "visibilityClass": "private",
+        "storageDomain": "entity-anchor",
+        "mutability": "read-write",
+        "sourceOfTruthLabel": "EntityAnchorCell",
+        "derived": false
+      },
+      "allOf": [
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "conference"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "not": {
+        "required": [
+          "skills"
+        ]
+      }
+    }
+  },
+  "x-haven": {
+    "status": "decision-target-draft",
+    "asOf": "2026-09-25",
+    "decisionsAsOf": "2026-09-25",
+    "reviewSource": "GJENNOMGANG_KJETIL_2026-09-16.md",
+    "reviewSourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
+    "runtimeBaseline": "EntityData.review.schema.json",
+    "runtimeBaselineSHA256": "c62ca8f329d229101775158c61fdfce0b0874b0e00211820bea6fb10500c5e2f",
+    "runtimeCompatibility": "not-claimed; migration and caller changes required",
+    "validates": "target-structural-shape-only",
+    "doesNotValidate": [
+      "measurability-of-goal",
+      "signature",
+      "authorization",
+      "reference-resolution",
+      "identity-equivalence",
+      "migration",
+      "replication"
+    ],
+    "reviewCounts": {
+      "elements": 253,
+      "approvedWithoutComment": 203,
+      "commented": 45,
+      "untouched": 5
+    },
+    "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
+    "latestDecisionSourceSHA256": "c4f5357f2892ee81c8b1a48a92d9a14935812cefbcbf24180df06a75fb67da26",
+    "deferredDecisions": {
+      "skills.proofNodeAddressing": "person.skills[].evidenceRefs er fjernet sammen med listen. proofs.credentials og supports.keypaths er uendret. keypaths tillater en ikke-tom streng, men en stabil sti til en Purpose-node gjennom WeightOfPurpose-lister og value/reference er ikke kontraktfestet eller verifisert. Dagens fixture-oppløser støtter bare objektstier. Åpen sperre: bevis kan ikke hevdes koblet til en bestemt skill-node før nodeadressering og referanseoppløsning er avklart. Ingen nye bevisfelt innføres."
+    },
+    "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema.",
+    "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår."
+  }
+}

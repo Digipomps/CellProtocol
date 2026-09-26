@@ -30,6 +30,9 @@ struct CellListView: View {
     var skeletonList: SkeletonList
     @State var valueTypeList: ValueTypeList = ValueTypeList()
     @State private var selectedIndices = Set<Int>()
+    @Environment(\.skeletonRenderData) private var renderData
+    @Environment(\.skeletonNativeActionScope) private var actionScope
+    @Environment(\.skeletonNativeActionHandler) private var actionHandler
     @EnvironmentObject var viewModel: PortholeViewModel
 
     init(skeletonList: SkeletonList, userInfoValue: ValueType? = nil) {
@@ -161,6 +164,21 @@ struct CellListView: View {
         return resolvedRows
     }
 
+    private struct IdentifiedRow: Identifiable {
+        let id: String
+        let index: Int
+        let row: RowData
+    }
+    private var identifiedRows: [IdentifiedRow] {
+        var occurrences: [String: Int] = [:]
+        return rows.enumerated().map { index, row in
+            let key = rowIdentifier(for: row) ?? "index:\(index)"
+            let occurrence = occurrences[key, default: 0]
+            occurrences[key] = occurrence + 1
+            return IdentifiedRow(id: key + ":\(occurrence)", index: index, row: row)
+        }
+    }
+
     private var selectionMode: SkeletonListSelectionMode {
         skeletonList.selectionMode ?? .none
     }
@@ -172,22 +190,22 @@ struct CellListView: View {
     var body: some View {
         ScrollView(.vertical) {
             if wrapsRows {
-                FlowLayout(spacing: 8) {
-                    ForEach(Array(rows.indices), id: \.self) { index in
-                        rowView(for: rows[index], index: index)
+                FlowLayout(spacing: skeletonList.modifiers?.itemSpacing ?? 8) {
+                    ForEach(identifiedRows) { identified in
+                        rowView(for: identified.row, index: identified.index)
                     }
-                }
+                }.background(SkeletonScrollState())
             } else {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(rows.indices), id: \.self) { index in
-                        rowView(for: rows[index], index: index)
+                LazyVStack(alignment: .leading, spacing: skeletonList.modifiers?.itemSpacing ?? 8) {
+                    ForEach(identifiedRows) { identified in
+                        rowView(for: identified.row, index: identified.index)
                     }
-                }
+                }.background(SkeletonScrollState())
             }
         }
         .scrollIndicators(.visible)
         .task(id: refreshTaskID()) {
-            if let elementsList = try? await skeletonList.getElements() {
+            if let elementsList = try? await skeletonList.getElements(in: renderData ?? SkeletonRenderDataContext(root: userInfoValue), allowCellFallback: actionScope == nil) {
                 valueTypeList = elementsList
             }
         }
@@ -197,7 +215,7 @@ struct CellListView: View {
         let topic = skeletonList.topic ?? "__no_topic__"
         let keypath = skeletonList.keypath ?? "__no_keypath__"
         let revision = skeletonList.topic == nil ? String(viewModel.localMutationVersion) : "shared"
-        return "\(topic)::\(keypath)::\(revision)"
+        return "\(topic)::\(keypath)::\(revision)::\(renderData?.signature ?? "nil")"
     }
 
     @ViewBuilder
@@ -232,11 +250,10 @@ struct CellListView: View {
         }
         .contentShape(Rectangle())
         .frame(maxWidth: wrapsRows ? nil : .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding((skeletonList.modifiers?.rowInsets?.resolved() ?? SkeletonInsets(top: 6, leading: 8, bottom: 6, trailing: 8)).nativeInsets)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+                .fill(isSelected && skeletonList.modifiers?.rowDecoration != SkeletonRowDecoration.none ? Color.accentColor.opacity(0.16) : Color.clear)
         )
         .onTapGesture {
             Task {
@@ -250,7 +267,8 @@ struct CellListView: View {
         if let skeletonVStack = skeletonList.flowElementSkeleton {
             SkeletonView(
                 element: .VStack(skeletonVStack),
-                userInfoValue: row.selectionValue
+                userInfoValue: row.selectionValue,
+                renderData: (renderData ?? SkeletonRenderDataContext(root: userInfoValue)).row(row.selectionValue)
             )
                 .environmentObject(viewModel)
         } else {
@@ -362,6 +380,10 @@ struct CellListView: View {
     }
 
     private func submit(payload: ValueType, to actionKeypath: String) async throws {
+        if actionScope != nil || actionHandler != nil {
+            _ = try await skeletonNativeSend(keypath: actionKeypath, payload: payload, scope: actionScope, handler: actionHandler, viewModel: viewModel)
+            return
+        }
         guard let _ = CellBase.defaultCellResolver,
               let vault = CellBase.defaultIdentityVault,
               let requester = await vault.identity(for: "private", makeNewIfNotFound: true) else {

@@ -255,6 +255,63 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
     }
 
+    /// Measures one invariant: **the surface a cell answers on is the surface
+    /// Explore declares.**
+    ///
+    /// Two ways to break it, and both are reported:
+    ///
+    /// - `declaredOnly` — Explore promises a keypath that has no handler
+    ///   wired. A caller who trusts the contract gets `KeyValueErrors.notFound`
+    ///   at request time, which surfaces as a 500 far from the cause. A cell
+    ///   that promises a keypath and does not deliver it is disqualified.
+    /// - `interceptOnly` — a keypath answers but is undeclared. It works, but
+    ///   no agent reading Explore can discover it, so it is not part of the
+    ///   protocol in any useful sense.
+    ///
+    /// This measures; it does not enforce. Nothing here changes registration,
+    /// authorization or state, and no handler is invoked — the audit compares
+    /// two sets of names. Scope is the keypath dictionaries only, matching
+    /// what `get` and `set` actually look up.
+    public func registeredKeypathAudit() async -> ValueType {
+        let registered = await intercepts.registeredKeypaths()
+        var declared: Set<String> = []
+        var declaredGet: Set<String> = []
+        var declaredSet: Set<String> = []
+        for (key, methods) in operationSchemaDict {
+            for method in methods.keys {
+                declared.insert(key)
+                switch method {
+                case .get: declaredGet.insert(key)
+                case .set: declaredSet.insert(key)
+                }
+            }
+        }
+        let interceptGet = Set(registered.get)
+        let interceptSet = Set(registered.set)
+
+        func rows(_ keys: Set<String>, _ method: ExploreContractMethod) -> [ValueType] {
+            keys.sorted().map { key in
+                .object(["key": .string(key), "method": .string(method.rawValue)])
+            }
+        }
+
+        let declaredOnly = rows(declaredGet.subtracting(interceptGet), .get)
+            + rows(declaredSet.subtracting(interceptSet), .set)
+        let interceptOnly = rows(interceptGet.subtracting(declaredGet), .get)
+            + rows(interceptSet.subtracting(declaredSet), .set)
+        let consistent = declaredGet.intersection(interceptGet).count
+            + declaredSet.intersection(interceptSet).count
+
+        var value: Object = [:]
+        value["cell"] = .string(String(String(describing: type(of: self)).split(separator: ".").last ?? "GeneralCell"))
+        value["uuid"] = .string(uuid)
+        value["ok"] = .bool(declaredOnly.isEmpty && interceptOnly.isEmpty)
+        value["consistent"] = .integer(consistent)
+        value["declaredOnly"] = .list(declaredOnly)
+        value["interceptOnly"] = .list(interceptOnly)
+        return .object(value)
+    }
+
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
         try await ensureRuntimeReady()
         guard let description = schemaDescriptionDict[key] else {

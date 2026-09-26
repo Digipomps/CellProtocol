@@ -1,0 +1,138 @@
+{
+  "asOf": "2026-09-11",
+  "basis": "local-working-tree-files; not deployment verification",
+  "sources": [
+    {
+      "path": "CellScaffold/Sources/App/Support/EntityAnchorDataV1Contract.swift",
+      "sha256": "7e7164c4269fe11b1201bded06c6e6703d74096dbf44ab83f4865341146b0cd9"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationRecordV1.swift",
+      "sha256": "eaa6b6836fae7f7545a54b35b49c7fab9d8f5fe151046a1727dc0cfe5d15dbc4"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/PerspectiveNode.swift",
+      "sha256": "7281be133e7e820859f1fc1ef147fa4984a6100598294c972c19cf1245ad1468"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/EntityRepresentation.swift",
+      "sha256": "2e9554bf0250eba1dd40803b74bcfad15bc72a113be76059410651b4d6a24244"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/EntityRepresentationDataCodec.swift",
+      "sha256": "42aafeda61abd6e036c823a6bf16ab0c3b56552c740aca381696fdde0f808d64"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/Interest.swift",
+      "sha256": "1991d7b246b74490e1c889a33e4e32b554b0127618d527a9b08aa3e60a76dbb7"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/Purpose.swift",
+      "sha256": "76993b3af53b9b6659ce4f9c0b396041e24d0d0465a51d1464026a3c30af2492"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/Weight.swift",
+      "sha256": "6d649d76ed2457c97bb64e0dd6fdeca35f7f61c9c7787300f04557fa2e2b8d9a"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/Perspective.swift",
+      "sha256": "3cc6ca8424beb7ac5ef10b6dd7a60f21869a507ba85ddf0c4dd8e6df1d988112"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/WeightedGraphRuntime.swift",
+      "sha256": "1e24360b8a29498aad75473c9d65d95ca743f28f84a295f6e0e569328d8cccde"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/Constraint.swift",
+      "sha256": "bc20651332625d4e58649c5577fb48d2f77ed99e92ab5003a798188f4dbe6c20"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PurposeAndInterest/PurposeComposition.swift",
+      "sha256": "36d5a0c292fe18688f3b1b30532734da1e894a555f8723f2ab0c02e55c919e97"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/EntityRelationPerspective.swift",
+      "sha256": "585266b02d8585721159a00a13dd0ea66d14db175e13fd5ffe2e6a2fd72ae33c"
+    },
+    {
+      "path": "Binding/Cells/RelationsCell.swift",
+      "sha256": "7b9909c8cc7eb6c9eff63463795433f353fe99e6fb236e898f2e73b210e8515c"
+    },
+    {
+      "path": "Binding/Cells/RelationEntityStore.swift",
+      "sha256": "263f49e92ca557af6d79f7e50eb5f324d153ee11921db18532b42def8a85e278"
+    },
+    {
+      "path": "Binding/Cells/HavenRelationKit.swift",
+      "sha256": "0c0ae37f8ced2c92d4164cf6fb074faef90cb5e0a49573e5a7452ba21bb81961"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/ValueTypes/Types/Object.swift",
+      "sha256": "6b9ab1ff9f7d9a2405843f6e50ada25b0fbd38bac855d3694f348eeabfd02817"
+    },
+    {
+      "path": "CellProtocol/Sources/CellVapor/Cells/EntityAnchorCell.swift",
+      "sha256": "b14b018384489ba11c70aa7e4842b884922fedc5927c199391a79674143b98e7"
+    },
+    {
+      "path": "CellProtocol/Sources/CellApple/Cells/EntityAnchorCell.swift",
+      "sha256": "832a810ad1a4d6473cc8c0f87b1a7c1ad301a76545f1ce53d63b0ff3b9dd87a4"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/EntityValidatedContactRecordV1.swift",
+      "sha256": "e753179e7a14be9a052ae6f57f6fd56b9ec9cf2b88e1f5e61a30ec1668f8bd51"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/Agreement/SignedAgreementEntity.swift",
+      "sha256": "38b55a578d8a67b50a1531992c95a0d8ca8f8ac1b25736d078d2365eb0f09622"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/Agreement/SignedAgreementEntityCommit.swift",
+      "sha256": "5e165ec899c1bbc3b7d518182ccb28a48f7cf8cf495c3210ed0f1f0a063fb292"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/EntityAuthorityCommit.swift",
+      "sha256": "0bf3f4cb0f89e36f72d10254f916acb1552f0a8f618cbc14cc2b5da6dc1ab9a8"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/EntityAuthorityReplicaStore.swift",
+      "sha256": "9e3ac109cffdbdce5c9cb96561bf06b3d4deeba669f573a21d52a1aa94506adb"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/PersistingCells/UserDataInventoryContracts.swift",
+      "sha256": "8964e61530ac9a677ef1b7f30bfbb57986bf8d929600e9d5268742d1bdff6a6f"
+    },
+    {
+      "path": "CellProtocol/Sources/CellBase/Identity/IdentityLinkingModels.swift",
+      "sha256": "dd2fd700b370938fefa9a2e8a9bbb2b3d7e8096b78dc6a4dbd5d49ca63f38299"
+    },
+    {
+      "path": "CellProtocolDocuments/Book/03_Identity_Model.md",
+      "sha256": "9bc4a9f1544e396c39e421b00a6df6ef3ee0dc234543d7cd27a4ff73ec1c4b1b"
+    },
+    {
+      "path": "CellProtocolDocuments/Book/07_Scaffold_Runtime.md",
+      "sha256": "5c1bc6619998f159ea618d04b065338af971ed90e049d1683470b8331893a9c6"
+    },
+    {
+      "path": "CellProtocolDocuments/Deliverables/PDD_entitetsdata-egen-kontroll_2026-09-08/FORMAALSSPEC.md",
+      "sha256": "d3d6e493fa8c571cad8dd12821576bbfd294d9f2e5c24a163030b9584b3ba73e"
+    },
+    {
+      "path": "CellProtocolDocuments/Deliverables/PDD_entitetsdata-egen-kontroll_2026-09-08/STATUS.md",
+      "sha256": "bfa569de14fcb82294eef035750f755b38f58c517e766d4b40cd123357781ebf"
+    }
+  ],
+  "discussionContext": [
+    {
+      "title": "Design sikker Entitetssammenslåing",
+      "threadID": "01a08bdf-7a94-74a3-985d-cb1d59869d50",
+      "usedFor": "Conceptual distinction between linking identities and merging populated entities; implementation claims were not taken from the conversation."
+    }
+  ],
+  "architectureReference": "/Users/kjetil/.codex/skills/cellprotocol-distributed-entity-data/references/entity-data-contract.md",
+  "externalReferences": [
+    "https://json-schema.org/draft/2020-12/json-schema-core",
+    "https://json-schema.org/draft/2020-12/json-schema-validation"
+  ]
+}

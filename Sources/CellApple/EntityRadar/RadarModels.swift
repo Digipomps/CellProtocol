@@ -382,3 +382,170 @@ private enum RadarStableHash {
         return hash
     }
 }
+
+// MARK: - Ledger: the entities as the scanner currently sees them
+
+/// Folds scanner flow events into a current picture of who is nearby. Pure
+/// value semantics, so the view model on a screen and the cell that emits
+/// the events keep the same picture — and the cell can hand it to a skeleton
+/// as a radar spec without a view model in between.
+public struct RadarEntityLedger: Equatable {
+    public private(set) var entitiesById: [String: NearbyEntity] = [:]
+    public private(set) var connectedDevices: [String] = []
+    public private(set) var scannerStatus: String = "idle"
+    public private(set) var selectedRemoteUUID: String?
+
+    /// Metres at the outer ring. Everything beyond is clamped to the edge.
+    public var rangeMeters: Double = 8.0
+    /// How long a silent entity stays before it is dropped.
+    public var staleAfter: TimeInterval = 20.0
+
+    public init() {}
+
+    public var entities: [NearbyEntity] {
+        entitiesById.values.sorted { lhs, rhs in
+            if lhs.connected != rhs.connected { return lhs.connected && !rhs.connected }
+            let lhsDistance = lhs.distanceMeters ?? .greatestFiniteMagnitude
+            let rhsDistance = rhs.distanceMeters ?? .greatestFiniteMagnitude
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    public mutating func consume(_ flowElement: FlowElement) {
+        guard let event = RadarEventParser.parse(flowElement) else { return }
+        consume(event)
+    }
+
+    public mutating func consume(_ event: RadarScannerEvent) {
+        switch event {
+        case let .found(update):
+            upsert(update, fallbackStatus: "found")
+        case var .connected(update):
+            if let devices = update.connectedDevices { connectedDevices = devices }
+            if update.remoteUUID != nil, update.connected == nil { update.connected = true }
+            upsert(update, fallbackStatus: "connected")
+        case let .lost(update):
+            guard let remoteUUID = Self.normalizedRemoteUUID(update.remoteUUID),
+                  var entity = entitiesById[remoteUUID] else { return }
+            var lostUpdate = update
+            lostUpdate.remoteUUID = remoteUUID
+            if lostUpdate.status == nil { lostUpdate.status = "lost" }
+            lostUpdate.connected = false
+            entity.merge(update: lostUpdate, defaultStatus: "lost")
+            entitiesById[remoteUUID] = entity
+        case let .proximity(update):
+            upsert(update, fallbackStatus: "nearby")
+        case let .status(update):
+            if let status = update.status, !status.isEmpty { scannerStatus = status }
+            upsert(update, fallbackStatus: scannerStatus)
+        }
+    }
+
+    public mutating func select(_ remoteUUID: String?) {
+        selectedRemoteUUID = remoteUUID.flatMap(Self.normalizedRemoteUUID)
+    }
+
+    public mutating func clear() {
+        entitiesById.removeAll()
+        connectedDevices.removeAll()
+        selectedRemoteUUID = nil
+    }
+
+    public mutating func remove(_ remoteUUID: String) {
+        entitiesById.removeValue(forKey: remoteUUID)
+        if selectedRemoteUUID == remoteUUID { selectedRemoteUUID = nil }
+    }
+
+    /// Drops what has not been heard from. Returns the ids that went.
+    @discardableResult
+    public mutating func prune(now: Date = Date(), visibleRemoteUUIDs: Set<String> = []) -> [String] {
+        let cutoff = now.addingTimeInterval(-staleAfter)
+        let stale = entitiesById.filter { $0.value.lastSeenAt < cutoff && !$0.value.connected && !visibleRemoteUUIDs.contains($0.key) }.map(\.key)
+        for id in stale { entitiesById.removeValue(forKey: id) }
+        if let selected = selectedRemoteUUID, stale.contains(selected) { selectedRemoteUUID = nil }
+        return stale
+    }
+
+    private mutating func upsert(_ update: RadarEntityUpdate, fallbackStatus: String) {
+        guard let remoteUUID = Self.normalizedRemoteUUID(update.remoteUUID) else { return }
+        var normalized = update
+        normalized.remoteUUID = remoteUUID
+        if normalized.status?.isEmpty ?? true { normalized.status = fallbackStatus }
+        if var entity = entitiesById[remoteUUID] {
+            entity.merge(update: normalized, defaultStatus: fallbackStatus)
+            entitiesById[remoteUUID] = entity
+        } else {
+            entitiesById[remoteUUID] = NearbyEntity(update: normalized, defaultStatus: fallbackStatus)
+        }
+    }
+
+    static func normalizedRemoteUUID(_ remoteUUID: String?) -> String? {
+        let trimmed = remoteUUID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: Radar spec
+
+    /// What a `Visualization(kind: "radar")` draws. Positions are normalized
+    /// to the unit disc (x right, y down, bearing 0 straight up); distance
+    /// and recency travel alongside so the view can size and fade blips
+    /// without knowing the scanner.
+    public func radarSpec(now: Date = Date()) -> Object {
+        let currentEntities = entities
+        let validDistances = currentEntities.compactMap(\.distanceMeters).filter { $0.isFinite && $0 >= 0 && $0 <= 100_000 }
+        let largest = validDistances.max() ?? 0
+        let scale = max(rangeMeters.isFinite && rangeMeters > 0 ? rangeMeters : 8, ceil(largest / 5) * 5)
+        let blips: [ValueType] = currentEntities.map { entity in
+            let age = max(0, now.timeIntervalSince(entity.lastSeenAt))
+            let validDistance = entity.distanceMeters.flatMap { $0.isFinite && $0 >= 0 && $0 <= 100_000 ? $0 : nil }
+            let radius = min((validDistance ?? 0) / scale, 0.97)
+            let measured = entity.direction != nil && validDistance != nil && entity.status != "lost" && age <= staleAfter && entity.radarAngleRadians.isFinite
+            let angle = entity.radarAngleRadians
+            var blip: Object = [
+                "id": .string(entity.remoteUUID),
+                "label": .string(entity.displayName),
+                "status": .string(entity.status),
+                "connected": .bool(entity.connected),
+                "x": measured ? .float(sin(angle) * radius) : .null,
+                "y": measured ? .float(-cos(angle) * radius) : .null,
+                "bearingDegrees": measured ? .float((angle * 180.0 / .pi).truncatingRemainder(dividingBy: 360)) : .null,
+                "hasDirection": .bool(measured),
+                "ageSeconds": .float(age),
+                "strength": .float(max(0.15, 1.0 - min(age, staleAfter) / staleAfter)),
+                "matchScore": .float(entity.matchScore ?? 0),
+                "beaconOverlapCount": .integer(entity.beaconOverlapCount),
+                "kind": .string(entity.kind?.rawValue ?? "")
+            ]
+            if let distance = validDistance {
+                blip["distanceMeters"] = .float(distance)
+                blip["distanceText"] = .string(String(format: distance < 10 ? "%.1f m" : "%.0f m", distance))
+            } else {
+                blip["distanceText"] = .string("—")
+            }
+            return .object(blip)
+        }
+        let nearest = validDistances.min()
+        var spec: Object = [
+            "kind": .string("radar"),
+            "status": .string(scannerStatus),
+            "rangeMeters": .float(scale),
+            "rings": .list([0.25, 0.5, 0.75, 1.0].map { .float($0) }),
+            "ringLabels": .list([0.25, 0.5, 0.75, 1.0].map { .string(String(format: "%.0f m", scale * $0)) }),
+            "sweep": .bool(scannerStatus != "stopped" && scannerStatus != "idle"),
+            "blipCount": .integer(currentEntities.count),
+            "connectedCount": .integer(connectedDevices.count),
+            "blips": .list(blips),
+            "updatedAt": .float(now.timeIntervalSince1970)
+        ]
+        spec["nearestMeters"] = nearest.map { .float($0) } ?? .null
+        spec["nearestText"] = .string(nearest.map { String(format: $0 < 10 ? "%.1f" : "%.0f", $0) } ?? "--.-")
+        spec["selectedID"] = selectedRemoteUUID.map { .string($0) } ?? .null
+        return spec
+    }
+
+    func normalizedRadius(for distanceMeters: Double?) -> Double {
+        guard let distanceMeters else { return 0.72 }
+        return min(max(distanceMeters / rangeMeters, 0.08), 0.97)
+    }
+}

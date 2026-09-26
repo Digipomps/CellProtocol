@@ -1,0 +1,24 @@
+{
+  "status": "decision-target-draft",
+  "updatedAt": "2026-09-25",
+  "decisionsAsOf": "2026-09-25",
+  "schema": "EntityData.v2.schema.json",
+  "graphSchema": "EntityRepresentation.v2.schema.json",
+  "example": "EntityData.v2.example.json",
+  "documentation": "V2-BESLUTTET-FORM.md",
+  "decisions": "review-decisions-2026-09-16.json",
+  "latestDecisions": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
+  "buildSteps": [
+    "apply_decisions_2026_09_16.py",
+    "apply_decisions_2026_09_22.py",
+    "apply_decisions_2026_09_23.py",
+    "apply_decisions_2026_09_23_groups.py",
+    "apply_decisions_2026_09_25_skills.py"
+  ],
+  "buildCommand": "python -B apply_decisions_2026_09_25_skills.py",
+  "validationCommand": "python -B validate_decisions_2026_09_25_skills.py",
+  "runtimeBaseline": "EntityData.review.schema.json",
+  "runtimeUpdated": false,
+  "dataMigrated": false,
+  "published": false
+}
