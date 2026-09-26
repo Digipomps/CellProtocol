@@ -103,16 +103,10 @@ final class EntityAnchorGenesisTests: XCTestCase {
         XCTAssertEqual(seal["anchorID"], .string(anchor.uuid))
     }
 
-    // testFirstPersistSealsAnchorToOwner is deliberately NOT here.
-    //
-    // The batch-persist path is a feed intercept: it only runs when this cell
-    // absorbs another cell's flow through the auditor, which is the harness
-    // BindingPersonalChatChronicle builds and no CellBase test builds today.
-    // `GeneralCell.intercepts` is private, so the intercept cannot be invoked
-    // directly either. Sealing on first persist is four lines in
-    // persistBatchEnvelope; it stays UNTESTED until round 2 builds the flow
-    // harness that WP3–WP5 need anyway. TESTRESULT.md must say "blocked", not
-    // omit it.
+    // The first-persist half lives in EntityAnchorAccessBoundaryTests
+    // (testFirstPersistSealsAnchorToOwner), which drives the batch-persist
+    // path through the owner's feed the way BindingPersonalChatChronicle does.
+    // Round 1 left it blocked; round 2 built the harness.
 
     // MARK: no-refounding
 
