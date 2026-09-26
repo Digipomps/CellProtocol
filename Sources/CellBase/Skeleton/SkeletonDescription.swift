@@ -2045,6 +2045,12 @@ public struct SkeletonTextField: Codable, Identifiable {
     public var sourceKeypath: String?
     public var targetKeypath: String?
     public var placeholder: String?
+    /// Keypath som gir plassholderteksten. Ikke-tom tekst vinner over `placeholder`; ellers brukes `placeholder`.
+    public var placeholderKeypath: String?
+    /// Skjuler inndata (web: `type=password`, native: `SecureField`). Kan ikke slås av med data.
+    public var secure: Bool?
+    /// Keypath som slår skjult inndata på per tilstand (for eksempel ett onboarding-steg). Sann verdi → skjult.
+    public var secureKeypath: String?
     public var autocomplete: SkeletonAutocomplete?
     public var modifiers: SkeletonModifiers?
 
@@ -2053,6 +2059,9 @@ public struct SkeletonTextField: Codable, Identifiable {
         case sourceKeypath
         case targetKeypath
         case placeholder
+        case placeholderKeypath
+        case secure
+        case secureKeypath
         case autocomplete
         case modifiers
     }
@@ -2064,12 +2073,18 @@ public struct SkeletonTextField: Codable, Identifiable {
         targetKeypath: String? = nil,
         placeholder: String? = nil,
         autocomplete: SkeletonAutocomplete? = nil,
-        modifiers: SkeletonModifiers? = nil
+        modifiers: SkeletonModifiers? = nil,
+        placeholderKeypath: String? = nil,
+        secure: Bool? = nil,
+        secureKeypath: String? = nil
     ) {
         self.text = text
         self.sourceKeypath = sourceKeypath
         self.targetKeypath = targetKeypath
         self.placeholder = placeholder
+        self.placeholderKeypath = placeholderKeypath
+        self.secure = secure
+        self.secureKeypath = secureKeypath
         self.autocomplete = autocomplete
         self.modifiers = modifiers
     }
@@ -2080,6 +2095,9 @@ public struct SkeletonTextField: Codable, Identifiable {
         self.sourceKeypath = try container.decodeIfPresent(String.self, forKey: .sourceKeypath)
         self.targetKeypath = try container.decodeIfPresent(String.self, forKey: .targetKeypath)
         self.placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+        self.placeholderKeypath = try container.decodeIfPresent(String.self, forKey: .placeholderKeypath)
+        self.secure = try container.decodeIfPresent(Bool.self, forKey: .secure)
+        self.secureKeypath = try container.decodeIfPresent(String.self, forKey: .secureKeypath)
         self.autocomplete = try container.decodeIfPresent(SkeletonAutocomplete.self, forKey: .autocomplete)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
     }
@@ -2091,6 +2109,9 @@ public struct SkeletonTextField: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.sourceKeypath, forKey: .sourceKeypath)
         try elementContainer.encodeIfPresent(self.targetKeypath, forKey: .targetKeypath)
         try elementContainer.encodeIfPresent(self.placeholder, forKey: .placeholder)
+        try elementContainer.encodeIfPresent(self.placeholderKeypath, forKey: .placeholderKeypath)
+        try elementContainer.encodeIfPresent(self.secure, forKey: .secure)
+        try elementContainer.encodeIfPresent(self.secureKeypath, forKey: .secureKeypath)
         try elementContainer.encodeIfPresent(self.autocomplete, forKey: .autocomplete)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
@@ -2124,6 +2145,66 @@ public struct SkeletonTextField: Codable, Identifiable {
     }
 }
 
+/// Felles regler for plassholder og skjult inndata på `TextField` og `TextArea`.
+/// Web-rendereren (CellScaffold `skeleton-runtime.js`) speiler disse reglene; paritetstesten
+/// `SkeletonTextInputPresentationTests` og `skeleton-textinput-placeholder-secure.spec.js` kjører
+/// samme fixture (`skeleton-textinput-parity.v1.json`).
+public enum SkeletonTextInputPresentation {
+    /// Plassholderen som skal vises: ikke-tom tekst ved `placeholderKeypath` vinner, ellers `fallback`
+    /// (den statiske, eventuelt lokaliserte `placeholder`).
+    public static func placeholder(
+        fallback: String?,
+        placeholderKeypath: String?,
+        resolve: (String) -> ValueType?
+    ) -> String {
+        if let keypath = placeholderKeypath?.trimmingCharacters(in: .whitespacesAndNewlines), !keypath.isEmpty,
+           case let .string(dynamic)? = resolve(keypath) {
+            let trimmed = dynamic.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return fallback ?? ""
+    }
+
+    /// Skjult inndata: `secure == true` gjelder alltid (data kan ikke slå det av); ellers avgjør en
+    /// sann verdi ved `secureKeypath` (`true`, `1`, `"true"`).
+    public static func isSecure(
+        secure: Bool?,
+        secureKeypath: String?,
+        resolve: (String) -> ValueType?
+    ) -> Bool {
+        if secure == true { return true }
+        guard let keypath = secureKeypath?.trimmingCharacters(in: .whitespacesAndNewlines), !keypath.isEmpty else {
+            return false
+        }
+        switch resolve(keypath) {
+        case .bool(let value)?: return value
+        case .integer(let value)?, .number(let value)?: return value != 0
+        case .string(let value)?: return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true"
+        default: return false
+        }
+    }
+}
+
+extension SkeletonTextField {
+    public func effectivePlaceholder(fallback: String? = nil, resolve: (String) -> ValueType?) -> String {
+        SkeletonTextInputPresentation.placeholder(fallback: fallback ?? placeholder, placeholderKeypath: placeholderKeypath, resolve: resolve)
+    }
+
+    public func isSecureInput(resolve: (String) -> ValueType?) -> Bool {
+        SkeletonTextInputPresentation.isSecure(secure: secure, secureKeypath: secureKeypath, resolve: resolve)
+    }
+}
+
+extension SkeletonTextArea {
+    public func effectivePlaceholder(fallback: String? = nil, resolve: (String) -> ValueType?) -> String {
+        SkeletonTextInputPresentation.placeholder(fallback: fallback ?? placeholder, placeholderKeypath: placeholderKeypath, resolve: resolve)
+    }
+
+    public func isSecureInput(resolve: (String) -> ValueType?) -> Bool {
+        SkeletonTextInputPresentation.isSecure(secure: secure, secureKeypath: secureKeypath, resolve: resolve)
+    }
+}
+
 public enum SkeletonTextAreaEditorMode: String, Codable {
     case plain
     case richMarkdown
@@ -2135,6 +2216,12 @@ public struct SkeletonTextArea: Codable, Identifiable {
     public var sourceKeypath: String?
     public var targetKeypath: String?
     public var placeholder: String?
+    /// Keypath som gir plassholderteksten. Ikke-tom tekst vinner over `placeholder`; ellers brukes `placeholder`.
+    public var placeholderKeypath: String?
+    /// Skjuler inndata. En skjult TextArea rendres som ett linjefelt (flerlinjet skjult inndata gir ikke mening).
+    public var secure: Bool?
+    /// Keypath som slår skjult inndata på per tilstand. Sann verdi → skjult.
+    public var secureKeypath: String?
     public var minLines: Int?
     public var maxLines: Int?
     public var submitOnEnter: Bool?
@@ -2147,6 +2234,9 @@ public struct SkeletonTextArea: Codable, Identifiable {
         case sourceKeypath
         case targetKeypath
         case placeholder
+        case placeholderKeypath
+        case secure
+        case secureKeypath
         case minLines
         case maxLines
         case submitOnEnter
@@ -2166,12 +2256,18 @@ public struct SkeletonTextArea: Codable, Identifiable {
         submitOnEnter: Bool? = nil,
         submitActionKeypath: String? = nil,
         editorMode: SkeletonTextAreaEditorMode? = nil,
-        modifiers: SkeletonModifiers? = nil
+        modifiers: SkeletonModifiers? = nil,
+        placeholderKeypath: String? = nil,
+        secure: Bool? = nil,
+        secureKeypath: String? = nil
     ) {
         self.text = text
         self.sourceKeypath = sourceKeypath
         self.targetKeypath = targetKeypath
         self.placeholder = placeholder
+        self.placeholderKeypath = placeholderKeypath
+        self.secure = secure
+        self.secureKeypath = secureKeypath
         self.minLines = minLines
         self.maxLines = maxLines
         self.submitOnEnter = submitOnEnter
@@ -2186,6 +2282,9 @@ public struct SkeletonTextArea: Codable, Identifiable {
         self.sourceKeypath = try container.decodeIfPresent(String.self, forKey: .sourceKeypath)
         self.targetKeypath = try container.decodeIfPresent(String.self, forKey: .targetKeypath)
         self.placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
+        self.placeholderKeypath = try container.decodeIfPresent(String.self, forKey: .placeholderKeypath)
+        self.secure = try container.decodeIfPresent(Bool.self, forKey: .secure)
+        self.secureKeypath = try container.decodeIfPresent(String.self, forKey: .secureKeypath)
         self.minLines = try container.decodeIfPresent(Int.self, forKey: .minLines)
         self.maxLines = try container.decodeIfPresent(Int.self, forKey: .maxLines)
         self.submitOnEnter = try container.decodeIfPresent(Bool.self, forKey: .submitOnEnter)
@@ -2201,6 +2300,9 @@ public struct SkeletonTextArea: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.sourceKeypath, forKey: .sourceKeypath)
         try elementContainer.encodeIfPresent(self.targetKeypath, forKey: .targetKeypath)
         try elementContainer.encodeIfPresent(self.placeholder, forKey: .placeholder)
+        try elementContainer.encodeIfPresent(self.placeholderKeypath, forKey: .placeholderKeypath)
+        try elementContainer.encodeIfPresent(self.secure, forKey: .secure)
+        try elementContainer.encodeIfPresent(self.secureKeypath, forKey: .secureKeypath)
         try elementContainer.encodeIfPresent(self.minLines, forKey: .minLines)
         try elementContainer.encodeIfPresent(self.maxLines, forKey: .maxLines)
         try elementContainer.encodeIfPresent(self.submitOnEnter, forKey: .submitOnEnter)
