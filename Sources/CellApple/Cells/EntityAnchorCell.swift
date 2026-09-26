@@ -77,6 +77,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
         self.agreementTemplate.ensureGrant("r--s", for: "dataInventory")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
+        self.agreementTemplate.ensureGrant("r---", for: "trace")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
@@ -129,6 +130,36 @@ public class EntityAnchorCell: GeneralCell {
                 return try self.identityLinksValue(for: "identityLinks.state")
             }
             throw KeypathStorageErrors.denied
+        })
+
+        await addInterceptForGet(requester: owner, key: "trace", getValueIntercept: {
+            keypath, requester in
+            if await self.validateAccess("r---", at: "trace", for: requester) {
+                do {
+                    return try self.storage.get(keypath: keypath)
+                } catch {
+                    if keypath == EntityChangeTrace.rootKeypath { return .list([]) }
+                    throw error
+                }
+            } else {
+                throw KeypathStorageErrors.denied
+            }
+        })
+
+        await addInterceptForGet(requester: owner, key: "agreements", getValueIntercept: {
+            keypath, requester in
+            if await self.validateAccess("r---", at: "agreements", for: requester) {
+                do {
+                    return try self.storage.get(keypath: keypath)
+                } catch {
+                    // Anchors created before 2026-09-26 carry the stub under a
+                    // misspelt key ("agremments"); an empty root reads as empty.
+                    if keypath == "agreements" { return .object(Object()) }
+                    throw error
+                }
+            } else {
+                throw KeypathStorageErrors.denied
+            }
         })
 
         await addInterceptForGet(requester: owner, key: "chronicle", getValueIntercept: {
@@ -390,7 +421,13 @@ public class EntityAnchorCell: GeneralCell {
                 throw SetValueError.noParamValue("value")
             }
 
-            try await self.set(keypath: keypath, value: value)
+            // purpose://candidate.entitetsdata.no-write-without-owner-proof
+            // A direct keypath write outside the batch path is still a write
+            // into entity data. Nobody but a proven owner gets it.
+            guard await self.requesterProvesOwnership(identity) else {
+                throw EntityChangeTraceError.directWriteRequiresOwnerProof
+            }
+            try await self.set(keypath: keypath, value: value, tracedFor: identity)
             
             var payloadObject:Object = [
                 "keypath" : .string(keypath),
@@ -468,6 +505,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "proofs", method: .get, input: .null, returns: storedValue, permissions: [], required: false, description: .string("Reads owner-only proof data."))
         await registerExploreContract(requester: requester, key: "relations", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity relation data."))
         await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
+        await registerExploreContract(requester: requester, key: "trace", method: .get, input: .null, returns: ExploreContract.schema(type: "array"), permissions: ["r---"], required: false, description: .string("Reads the owner entity change trace: one entry per accepted batchPersist or direct write — signer, keypaths, purpose, model, receipt."))
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
         await registerExploreContract(requester: requester, key: "entityContactSchema", method: .get, input: .null, returns: EntityValidatedContactRecordV1.schemaExploreReturn(), permissions: ["r---"], required: true, description: .string("Reads the value-free, fail-closed schema for owner-signed validated contact persistence."))
@@ -671,7 +709,7 @@ public class EntityAnchorCell: GeneralCell {
             }
         } catch {
             if Self.isMissingFile(error) {
-                let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "dataInventory" : .object(Object()), "agremments" : .object(Object()),  "chronicle" : .object(Object())]
+                let stubsEntity: Object = ["person" : .object(Object()), "relations" : .object(Object()), "proofs" : .object(Object()), "identityLinks" : .object(Object()), "dataInventory" : .object(Object()), "agreements" : .object(Object()),  "chronicle" : .object(Object())]
                 do {
                     let existingJournal = try await self.loadAuthorityJournalIfPresent()
                     try existingJournal.validateStructure()
@@ -816,14 +854,24 @@ public class EntityAnchorCell: GeneralCell {
     }
 
     func set(keypath: String, value: ValueType) async throws {
+        try await set(keypath: keypath, value: value, tracedFor: nil)
+    }
+
+    /// Direct write. With a proven owner, the change and its trace land in
+    /// the same snapshot (purpose://candidate.entitetsdata.change-leaves-a-trace).
+    func set(keypath: String, value: ValueType, tracedFor signer: Identity?) async throws {
         // Validate
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
         try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
 
         // write to storage
-        try self.storage.set(keypath: keypath, setValue: value)
-        try await saveKeypathStorage(entity: self.storage)
+        var updated = self.storage
+        try updated.set(keypath: keypath, setValue: value)
+        if let signer {
+            try EntityChangeTrace.append(EntityChangeTrace.entry(keypath: keypath, signedBy: signer), to: &updated)
+        }
+        try await saveKeypathStorage(entity: updated)
         
         // Check whether we should post a storage saved notification? (Flow Element)
         
@@ -850,6 +898,8 @@ public class EntityAnchorCell: GeneralCell {
             guard await requesterProvesOwnership(requester) else {
                 throw EntityAuthorityCommitError.requesterMismatch
             }
+            // purpose://prompt.unknown fails closed (lesson.purpose-never-grants-rights).
+            try EntityChangeTrace.requireKnownPurpose(envelope)
             try EntityValidatedContactRecordV1.validatePersistenceEnvelope(envelope)
             let relationPolicy = EntityRelationRecordV1.interactionPolicy(
                 from: try? storage.get(keypath: EntityRelationRecordV1.interactionPolicyKeypath)
@@ -876,6 +926,11 @@ public class EntityAnchorCell: GeneralCell {
                 for mutation in envelope.mutations {
                     try updatedStorage.set(keypath: mutation.keypath, setValue: mutation.value)
                 }
+                // One batch, one trace entry — in the same snapshot as the change.
+                try EntityChangeTrace.append(
+                    EntityChangeTrace.entry(for: envelope, signedBy: requester, receipt: nil),
+                    to: &updatedStorage
+                )
                 try await writeKeypathStorage(entity: updatedStorage)
                 self.storage = updatedStorage
                 result = EntityAnchorBatchPersistResult(
@@ -893,9 +948,18 @@ public class EntityAnchorCell: GeneralCell {
                     committedAtEpochMilliseconds: Int(Date().timeIntervalSince1970 * 1_000)
                 )
                 try await writeAuthorityJournal(outcome.journal)
+                var tracedSnapshot = outcome.snapshot
+                if outcome.idempotentReplay == false {
+                    // One batch, one trace entry. A replayed batch is the same change,
+                    // so it gets no second entry.
+                    try EntityChangeTrace.append(
+                        EntityChangeTrace.entry(for: envelope, signedBy: requester, receipt: outcome.receipt),
+                        to: &tracedSnapshot
+                    )
+                }
                 self.authorityJournal = outcome.journal
-                self.storage = outcome.snapshot
-                try await writeKeypathStorage(entity: outcome.snapshot)
+                self.storage = tracedSnapshot
+                try await writeKeypathStorage(entity: tracedSnapshot)
                 result = EntityAnchorBatchPersistResult(
                     persistedPaths: envelope.mutations.map(\.keypath),
                     receipt: outcome.receipt,
