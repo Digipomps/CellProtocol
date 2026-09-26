@@ -100,7 +100,7 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
 
             let b = await SimulatedEntity.make("B")
             let claimant = SimulatedEntity.keylessClaimant(of: owner)
-            for keypath in ["person", "relations", "proofs", "agreements", "identityLinks", "chronicle"] {
+            for keypath in ["person", "relations", "proofs", "agreements", "identityLinks", "chronicle", "trace"] {
                 // The owner reads. (identityLinks and chronicle are the ones the spec names first.)
                 do {
                     _ = try await anchor.get(keypath: keypath, requester: owner)
@@ -157,7 +157,7 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
             _ = try await anchor.set(keypath: "person.nickname", value: .string("Ada"), requester: a.owner)
 
             // Read: every entity keypath.
-            for keypath in ["person", "relations", "proofs", "agreements", "identityLinks", "identityLinks.state", "chronicle", "entityAuthority", "dataInventory"] {
+            for keypath in ["person", "relations", "proofs", "agreements", "identityLinks", "identityLinks.state", "chronicle", "trace", "entityAuthority", "dataInventory"] {
                 await XCTAssertThrowsAsync(try await anchor.get(keypath: keypath, requester: admin), "\(tag) read \(keypath)")
             }
             // Write.
@@ -262,7 +262,7 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
             XCTAssertEqual(response["errorCode"], .string("request_signature_invalid"), tag)
             let absent7 = await read(anchor, "person.headline", as: a.owner)
             XCTAssertNil(absent7, "\(tag) forged write landed")
-            let chronicle8 = try await anchor.get(keypath: "chronicle", requester: a.owner)
+            let chronicle8 = try await anchor.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner)
             XCTAssertTrue(EntityChangeTrace.entries(in: chronicle8).isEmpty, "\(tag) a refused change left a trace")
         }
     }
@@ -277,7 +277,7 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
                 requester: a.owner, purposeRef: EntityChangeTrace.unknownPurposeRef)
             let response = try await harness.send(envelope)
             XCTAssertEqual(response["status"], .string("failed"), "\(tag) \(response)")
-            XCTAssertTrue((try? response["error"]?.stringValue())??.contains("prompt.unknown") == true, "\(tag) \(response)")
+            XCTAssertTrue((try? response["error"]?.stringValue())??.contains("unknownPurpose") == true, "\(tag) \(response)")
             let absent9 = await read(anchor, "person.headline", as: a.owner)
             XCTAssertNil(absent9, tag)
 
@@ -309,7 +309,7 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
             XCTAssertEqual(response["status"], .string("persisted"), "\(tag) \(response)")
             let got11 = try await anchor.get(keypath: "person.headline", requester: a.owner)
             XCTAssertEqual(got11, .string("direct"), tag)
-            let entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: "chronicle", requester: a.owner))
+            let entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner))
             XCTAssertEqual(entries.count, 1, "\(tag) direct owner write should leave exactly one trace entry")
             XCTAssertEqual(entries.first?["kind"], .string(EntityChangeTrace.Kind.keypathSet.rawValue), tag)
             XCTAssertEqual(entries.first?["signedBy"], .string(a.owner.uuid), tag)
@@ -332,13 +332,14 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
             XCTAssertEqual(firstResponse["status"], .string("authority_committed"), "\(tag) \(firstResponse)")
             let firstReceipt = try EntityAuthorityCommitReceipt(value: try XCTUnwrap(firstResponse["commitReceipt"]))
 
-            var entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: "chronicle", requester: a.owner))
+            var entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner))
             XCTAssertEqual(entries.count, 1, "\(tag) one batch, one entry — not one per field")
             let entry = try XCTUnwrap(entries.first)
             XCTAssertEqual(entry["kind"], .string(EntityChangeTrace.Kind.batchPersist.rawValue), tag)
             XCTAssertEqual(entry["signedBy"], .string(a.owner.uuid), tag)
             XCTAssertEqual(entry["signingKeyFingerprint"], .string(a.owner.signingPublicKeyFingerprint ?? "?"), tag)
-            XCTAssertEqual(entry["keypaths"], .list([.string("person.headline"), .string("person.nickname")]), tag)
+            // ValueType == is not reliable on composite values (lesson.valuetype-equality-false-for-objects); compare strings.
+            XCTAssertEqual(Self.strings(entry["keypaths"]), ["person.headline", "person.nickname"], tag)
             XCTAssertEqual(entry["purposeRef"], .string("purpose://access.audit.privacy"), tag)
             XCTAssertEqual(entry["modelRef"], .string("model://local/apple-intelligence"), tag)
             guard case let .object(receipt)? = entry["receipt"] else { return XCTFail("\(tag) trace has no receipt") }
@@ -353,24 +354,29 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
                 requester: a.owner, purposeRef: "purpose://access.audit.privacy")
             let sent12 = try await harness.send(second)
             XCTAssertEqual(sent12["status"], .string("authority_committed"), tag)
-            entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: "chronicle", requester: a.owner))
+            entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner))
             XCTAssertEqual(entries.count, 2, tag)
             XCTAssertEqual(entries.last?["modelRef"], .null, "\(tag) no model, no model ref")
 
             // The same batch again is the same change: idempotent, and no third entry.
             let replay = try await harness.send(second)
             XCTAssertEqual(replay["idempotentReplay"], .bool(true), "\(tag) \(replay)")
-            entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: "chronicle", requester: a.owner))
+            entries = EntityChangeTrace.entries(in: try await anchor.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner))
             XCTAssertEqual(entries.count, 2, "\(tag) a replayed batch must not add a trace entry")
 
             // The trace survives a restart from disk.
             let restarted = try scaffold.restart(anchor)
-            let restartedEntries = EntityChangeTrace.entries(in: try await restarted.get(keypath: "chronicle", requester: a.owner))
+            let restartedEntries = EntityChangeTrace.entries(in: try await restarted.get(keypath: EntityChangeTrace.rootKeypath, requester: a.owner))
             XCTAssertEqual(restartedEntries.map { $0["id"] }, entries.map { $0["id"] }, "\(tag) trace after restart")
         }
     }
 
     // MARK: - Helpers
+
+    private static func strings(_ value: ValueType?) -> [String] {
+        guard case let .list(items)? = value else { return [] }
+        return items.compactMap { if case let .string(s) = $0 { return s } else { return nil } }
+    }
 
     /// A value, or nil when the keypath is absent or refused. For "nothing changed".
     private func read(_ anchor: GeneralCell, _ keypath: String, as requester: Identity) async -> ValueType? {

@@ -7,11 +7,17 @@ import Foundation
 // purpose://candidate.entitetsdata.no-write-without-owner-proof
 //
 // Every accepted change to entity data leaves exactly one entry in the
-// entity's own chronicle: who signed, which keypaths changed, which purpose
+// entity's own trace: who signed, which keypaths changed, which purpose
 // the change served, and which model proposed it when one did. One batch,
 // one entry — not one per field. The entry is written in the same snapshot
 // as the change, so there is no state where the change exists and the
 // trace does not.
+//
+// The trace lives at its own root keypath, `trace`, next to `chronicle` —
+// not inside it. The chronicle list is a wire-level contract that hosts
+// compare entry for entry (EntityRelationHostParityTests); the trace is the
+// anchor's own record of what it accepted, and must never change what a
+// batch wrote.
 //
 // The same file holds the one purpose rule the anchor enforces itself:
 // `purpose://prompt.unknown` fails closed. A change that cannot say what it
@@ -41,7 +47,8 @@ public enum EntityChangeTraceError: Error, Equatable, LocalizedError {
 public enum EntityChangeTrace {
     public static let unknownPurposeRef = "purpose://prompt.unknown"
     public static let entryIDPrefix = "trace-"
-    public static let chronicleAppendKeypath = "chronicle[+]"
+    public static let rootKeypath = "trace"
+    public static let appendKeypath = "trace[+]"
 
     public enum Kind: String, Codable, Sendable {
         case batchPersist = "entity.batchPersist"
@@ -79,7 +86,7 @@ public enum EntityChangeTrace {
         }
     }
 
-    /// One chronicle entry for one accepted batch.
+    /// One trace entry for one accepted batch.
     public static func entry(
         for envelope: EntityBatchPersistEnvelope,
         signedBy requester: Identity,
@@ -113,7 +120,7 @@ public enum EntityChangeTrace {
         return .object(object)
     }
 
-    /// One chronicle entry for one direct keypath write by a proven owner.
+    /// One trace entry for one direct keypath write by a proven owner.
     public static func entry(
         keypath: String,
         signedBy requester: Identity,
@@ -132,17 +139,16 @@ public enum EntityChangeTrace {
         ])
     }
 
-    /// Appends the entry to the entity's chronicle list. `chronicle[+]` turns
-    /// the empty stub object into a list on first use, which is how the
-    /// relation chronicle already treats it.
+    /// Appends the entry to the entity's trace list. `trace[+]` creates the
+    /// list on first use.
     public static func append(_ entry: ValueType, to entity: inout Entity) throws {
-        try entity.set(keypath: chronicleAppendKeypath, setValue: entry)
+        try entity.set(keypath: appendKeypath, setValue: entry)
     }
 
-    /// The trace entries in a chronicle value, oldest first. Tolerates the
-    /// pre-trace stub object and relation events living in the same list.
-    public static func entries(in chronicle: ValueType?) -> [Object] {
-        guard case let .list(items)? = chronicle else { return [] }
+    /// The trace entries in a trace value, oldest first. Tolerates an absent
+    /// or empty root.
+    public static func entries(in trace: ValueType?) -> [Object] {
+        guard case let .list(items)? = trace else { return [] }
         return items.compactMap { item -> Object? in
             guard case let .object(object) = item,
                   case let .string(id)? = object["id"],

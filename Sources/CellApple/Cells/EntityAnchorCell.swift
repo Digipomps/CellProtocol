@@ -77,6 +77,7 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("rw--", for: "entityRepresentation")
         self.agreementTemplate.ensureGrant("r--s", for: "dataInventory")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
+        self.agreementTemplate.ensureGrant("r---", for: "trace")
         self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
@@ -129,6 +130,20 @@ public class EntityAnchorCell: GeneralCell {
                 return try self.identityLinksValue(for: "identityLinks.state")
             }
             throw KeypathStorageErrors.denied
+        })
+
+        await addInterceptForGet(requester: owner, key: "trace", getValueIntercept: {
+            keypath, requester in
+            if await self.validateAccess("r---", at: "trace", for: requester) {
+                do {
+                    return try self.storage.get(keypath: keypath)
+                } catch {
+                    if keypath == EntityChangeTrace.rootKeypath { return .list([]) }
+                    throw error
+                }
+            } else {
+                throw KeypathStorageErrors.denied
+            }
         })
 
         await addInterceptForGet(requester: owner, key: "agreements", getValueIntercept: {
@@ -490,6 +505,7 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "proofs", method: .get, input: .null, returns: storedValue, permissions: [], required: false, description: .string("Reads owner-only proof data."))
         await registerExploreContract(requester: requester, key: "relations", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity relation data."))
         await registerExploreContract(requester: requester, key: "relations", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity relation data."))
+        await registerExploreContract(requester: requester, key: "trace", method: .get, input: .null, returns: ExploreContract.schema(type: "array"), permissions: ["r---"], required: false, description: .string("Reads the owner entity change trace: one entry per accepted batchPersist or direct write — signer, keypaths, purpose, model, receipt."))
         await registerExploreContract(requester: requester, key: "chronicle", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads the owner entity chronicle."))
         await registerExploreContract(requester: requester, key: "entityAuthority", method: .get, input: .null, returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false, description: .string("Reads the signed Entity authority epoch, revision, head hash, and declared durability boundary."))
         await registerExploreContract(requester: requester, key: "entityContactSchema", method: .get, input: .null, returns: EntityValidatedContactRecordV1.schemaExploreReturn(), permissions: ["r---"], required: true, description: .string("Reads the value-free, fail-closed schema for owner-signed validated contact persistence."))
