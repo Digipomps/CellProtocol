@@ -133,6 +133,11 @@ public struct ChatInvitationAcceptance: Codable, Equatable, Sendable, CanonicalP
     public var chatCellUUID: String
     public var inviterIdentityUUID: String
     public var inviteeIdentity: IdentityPublicKeyDescriptor
+    /// The invitee's public key-agreement key (compressed). Without it the
+    /// chat cell knows the invitee only by signing key and cannot seal a
+    /// message to them (purpose://candidate.invite.acceptance-carries-the-key-to-seal-to).
+    /// Optional, so acceptances from older apps still decode and verify.
+    public var inviteeKeyAgreementKey: Data?
     public var createdAt: String
     public var nonce: Data
     public var proof: ChatInvitationAcceptanceProof?
@@ -146,6 +151,7 @@ public struct ChatInvitationAcceptance: Codable, Equatable, Sendable, CanonicalP
         chatCellUUID: String,
         inviterIdentityUUID: String,
         inviteeIdentity: IdentityPublicKeyDescriptor,
+        inviteeKeyAgreementKey: Data? = nil,
         createdAt: String,
         nonce: Data,
         proof: ChatInvitationAcceptanceProof? = nil
@@ -158,6 +164,7 @@ public struct ChatInvitationAcceptance: Codable, Equatable, Sendable, CanonicalP
         self.chatCellUUID = chatCellUUID
         self.inviterIdentityUUID = inviterIdentityUUID
         self.inviteeIdentity = inviteeIdentity
+        self.inviteeKeyAgreementKey = inviteeKeyAgreementKey
         self.createdAt = createdAt
         self.nonce = nonce
         self.proof = proof
@@ -188,7 +195,11 @@ public enum ChatInvitationProofUtility {
         )
     }
 
-    public static func identity(from descriptor: IdentityPublicKeyDescriptor, identityVault: IdentityVaultProtocol? = nil) -> Identity {
+    public static func identity(
+        from descriptor: IdentityPublicKeyDescriptor,
+        keyAgreementKey: Data? = nil,
+        identityVault: IdentityVaultProtocol? = nil
+    ) -> Identity {
         let identity = Identity(
             descriptor.uuid,
             displayName: descriptor.displayName ?? descriptor.uuid,
@@ -205,7 +216,26 @@ public enum ChatInvitationProofUtility {
             y: nil,
             compressedKey: descriptor.publicKey
         )
+        if let keyAgreementKey, !keyAgreementKey.isEmpty {
+            identity.publicKeyAgreementSecureKey = keyAgreementSecureKey(keyAgreementKey)
+        }
         return identity
+    }
+
+    /// The public half of an X25519 key-agreement key, as the chat envelope
+    /// expects to find it on a recipient.
+    public static func keyAgreementSecureKey(_ compressedKey: Data) -> SecureKey {
+        SecureKey(
+            date: Date(),
+            privateKey: false,
+            use: .keyAgreement,
+            algorithm: .X25519,
+            size: compressedKey.count * 8,
+            curveType: .Curve25519,
+            x: nil,
+            y: nil,
+            compressedKey: compressedKey
+        )
     }
 
     public static func generateInvitationArtifact(
@@ -332,6 +362,9 @@ public enum ChatInvitationProofUtility {
             chatCellUUID: artifact.chatCellUUID,
             inviterIdentityUUID: artifact.inviterIdentity.uuid,
             inviteeIdentity: inviteeDescriptor,
+            // Carry the key the inviter needs to seal to us. Signed with the
+            // rest, so nobody can swap it on the way.
+            inviteeKeyAgreementKey: invitee.publicKeyAgreementSecureKey?.compressedKey,
             createdAt: createdAt,
             nonce: acceptanceNonce,
             proof: ChatInvitationAcceptanceProof(
