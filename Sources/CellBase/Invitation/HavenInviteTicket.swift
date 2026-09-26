@@ -64,6 +64,52 @@ public struct HavenSignatureProof: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Basis
+
+/// One field the issuer holds about the invitee and shows them in the
+/// invitation — exactly the field, with where it came from
+/// (purpose://candidate.invite.recipient-sees-what-is-held). Never a private
+/// note: those have no path into a ticket
+/// (purpose://candidate.invite.private-notes-never-leave).
+public struct HavenInviteBasisField: Codable, Equatable, Sendable {
+    public var key: String
+    public var value: String
+    /// Human-readable origin, e.g. "Boklisten, 12. sep." — not a file path.
+    public var origin: String?
+
+    public init(key: String, value: String, origin: String? = nil) {
+        self.key = key
+        self.value = value
+        self.origin = origin
+    }
+
+    public enum CodingKeys: String, CodingKey {
+        case key = "k"
+        case value = "v"
+        case origin = "o"
+    }
+}
+
+/// Signs a canonical payload with an identity's own vault key and returns the
+/// proof the invitation types carry. One helper, so the app, the landing page
+/// and the tests all sign the same way.
+public enum HavenInviteSigning {
+    public static func proof(over payload: Data, by identity: Identity) async throws -> HavenSignatureProof {
+        guard let descriptor = IdentityPublicKeySignatureVerifier.descriptor(for: identity) else {
+            throw IdentityVaultError.signingFailed
+        }
+        guard let signature = try await identity.sign(data: payload), signature.isEmpty == false else {
+            throw IdentityVaultError.signingFailed
+        }
+        return HavenSignatureProof(
+            byIdentityUUID: descriptor.uuid,
+            algorithm: descriptor.algorithm,
+            curveType: descriptor.curveType,
+            signature: signature
+        )
+    }
+}
+
 // MARK: - Ticket
 
 public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadSignable {
@@ -74,6 +120,11 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         "create_own_entity",
         "send_contact_request_to_issuer"
     ]
+    /// purpose://candidate.invite.expires-by-itself: 14 days unless the issuer
+    /// says otherwise, and never more than 90. A ticket that claims more is
+    /// not a ticket the verifier accepts.
+    public static let defaultTimeToLive: Int = 14 * 86_400
+    public static let maximumTimeToLive: Int = 90 * 86_400
 
     public var version: Int
     public var ticketID: String
@@ -97,6 +148,13 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
     /// First name only, so the landing page can greet without holding a record.
     public var greetingName: String?
     public var note: String?
+    /// The identityDomain the issuer sent this from — the domain the relation
+    /// will live in (purpose://candidate.invite.sender-is-the-domain-identity).
+    /// Absent on tickets issued before 2026-09-26.
+    public var identityDomain: String?
+    /// What the issuer holds about the invitee, shown to them before they
+    /// answer. Empty on older tickets.
+    public var basis: [HavenInviteBasisField]
     /// Epoch seconds. Ints rather than ISO strings: same meaning, ~40 fewer
     /// characters in a link that is already too long.
     public var createdAt: Int
@@ -117,6 +175,8 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         humanCode: String,
         greetingName: String? = nil,
         note: String? = nil,
+        identityDomain: String? = nil,
+        basis: [HavenInviteBasisField] = [],
         createdAt: Int,
         expiresAt: Int,
         nonce: Data,
@@ -134,6 +194,8 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         self.humanCode = humanCode
         self.greetingName = greetingName
         self.note = note
+        self.identityDomain = identityDomain
+        self.basis = basis
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.nonce = nonce
@@ -153,6 +215,8 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         case humanCode = "hc"
         case greetingName = "gn"
         case note = "no"
+        case identityDomain = "id"
+        case basis = "bs"
         case createdAt = "ca"
         case expiresAt = "ea"
         case nonce = "nc"
@@ -173,6 +237,8 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         humanCode = try container.decode(String.self, forKey: .humanCode)
         greetingName = try container.decodeIfPresent(String.self, forKey: .greetingName)
         note = try container.decodeIfPresent(String.self, forKey: .note)
+        identityDomain = try container.decodeIfPresent(String.self, forKey: .identityDomain)
+        basis = try container.decodeIfPresent([HavenInviteBasisField].self, forKey: .basis) ?? []
         createdAt = try container.decode(Int.self, forKey: .createdAt)
         expiresAt = try container.decode(Int.self, forKey: .expiresAt)
         nonce = try container.decodeIfPresent(Data.self, forKey: .nonce) ?? Data()
@@ -196,6 +262,8 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
         try container.encode(humanCode, forKey: .humanCode)
         try container.encodeIfPresent(greetingName, forKey: .greetingName)
         try container.encodeIfPresent(note, forKey: .note)
+        try container.encodeIfPresent(identityDomain, forKey: .identityDomain)
+        if !basis.isEmpty { try container.encode(basis, forKey: .basis) }
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(expiresAt, forKey: .expiresAt)
         if !nonce.isEmpty { try container.encode(nonce, forKey: .nonce) }
@@ -216,6 +284,12 @@ public struct HavenInviteTicket: Codable, Equatable, Sendable, CanonicalPayloadS
     public func isExpired(at moment: Date = Date()) -> Bool {
         moment.timeIntervalSince1970 > TimeInterval(expiresAt)
     }
+
+    public var timeToLive: Int { expiresAt - createdAt }
+
+    /// A ticket that claims to live longer than the maximum is refused
+    /// outright — the issuer's app clips input, the verifier holds the line.
+    public var claimsTooLongALife: Bool { timeToLive > HavenInviteTicket.maximumTimeToLive }
 
     /// True when the ticket promises a reply channel that actually exists.
     /// A capability with no receiver is a lie, and the composer must not
@@ -466,6 +540,10 @@ public enum HavenInviteVerifier {
         if !signatureValid {
             return verdict(false, false, "bad_signature",
                            "Signaturen stemmer ikke. Invitasjonen kan være endret underveis.", audienceMatches)
+        }
+        if ticket.claimsTooLongALife {
+            return verdict(false, true, "ttl_too_long",
+                           "Invitasjonen påstår å gjelde lenger enn \(HavenInviteTicket.maximumTimeToLive / 86_400) dager.", audienceMatches)
         }
         if revoked {
             return verdict(false, true, "revoked",
