@@ -275,5 +275,38 @@
         "10000000-0000-4000-8000-000000000002"
       ]
     }
+  },
+  "entityRepresentation": {
+    "name": "Den fiktive eierens representasjon",
+    "nodeIdentifier": "60000000-0000-4000-8000-000000000002",
+    "types": [],
+    "subTypes": [],
+    "parts": [],
+    "partOf": [],
+    "interests": [],
+    "purposes": [
+      {
+        "weight": 1,
+        "value": {
+          "name": "Levere en liten nettside (fiktiv skill)",
+          "nodeIdentifier": "60000000-0000-4000-8000-000000000001",
+          "types": [],
+          "subTypes": [],
+          "parts": [],
+          "partOf": [],
+          "interests": [],
+          "purposes": [],
+          "entities": [],
+          "states": [],
+          "description": "Den oppdiktede eieren hevder å kunne oppfylle dette formålet. Dette er en skill i vanlig Purpose-form, uten separat skill-post.",
+          "goal": {
+            "name": "FiktivNettsideLeveranse",
+            "description": "Oppfylt når én levert nettside har nøyaktig tre sider (forside, om og kontakt), alle tre kan åpnes, og en kontroll av samtlige interne lenker finner null brutte lenker. Fiktiv målkonfigurasjon med målbare kriterier; ingen målecelle er implementert eller kjørt."
+          }
+        }
+      }
+    ],
+    "entities": [],
+    "states": []
   }
 }

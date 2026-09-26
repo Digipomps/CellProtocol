@@ -37,6 +37,31 @@ public struct InterestPurposeMatch: Sendable, Equatable {
     }
 }
 
+/// The outcome of one weighted-sum match.
+///
+/// `complete` is false when at least one interest's traversal reached its
+/// deadline before it finished. The scores in `matches` are then computed from
+/// a partial search. They are returned anyway, so the caller can decide what a
+/// partial answer is worth — but the caller has to go through this type to get
+/// them, and so cannot miss that the answer is incomplete.
+///
+/// Before this flag existed the function returned the matches directly, and an
+/// expired traversal was indistinguishable from a complete one. Of the four
+/// matchers in HAVEN on 2026-09-24, only PalazzoSignalGraphMatcher told the two
+/// apart.
+public struct InterestPurposeWeightedSumResult: Sendable, Equatable {
+    public var matches: [InterestPurposeMatch]
+    public var complete: Bool
+    /// Interests whose traversal expired, sorted. Empty exactly when `complete`.
+    public var incompleteInterestIDs: [String]
+
+    public init(matches: [InterestPurposeMatch], complete: Bool, incompleteInterestIDs: [String]) {
+        self.matches = matches
+        self.complete = complete
+        self.incompleteInterestIDs = incompleteInterestIDs
+    }
+}
+
 /// The flat weighted-sum match: join a requester's interests against candidates
 /// that advertise the same interests, score each candidate by the sum of
 /// `requesterWeight × candidateWeight` over the interests they share, and rank.
@@ -62,14 +87,15 @@ public enum InterestPurposeWeightedSum {
     ///   - localVariables: carried into the signal and the traversal configuration.
     ///   - ttl: traversal deadline per interest.
     /// - Returns: every candidate, scored, ranked by descending score with
-    ///   `matchPurposeID` as the tie-break.
+    ///   `matchPurposeID` as the tie-break, together with whether every
+    ///   interest's traversal finished before its deadline.
     public static func match(
         requesterInterestWeights: [String: Double],
         candidates: [InterestPurposeCandidate],
         tokenPrefix: String,
         localVariables: Object = [:],
         ttl: TimeInterval = 5.0
-    ) async throws -> [InterestPurposeMatch] {
+    ) async throws -> InterestPurposeWeightedSumResult {
         let purposeNodes = purposeNodesByMatchID(candidates)
         let edgesByInterest = edgesByInterest(
             candidates: candidates,
@@ -78,8 +104,7 @@ public enum InterestPurposeWeightedSum {
         )
 
         let runtime = WeightedGraphRuntime()
-        var scoresByMatchID = [String: Double]()
-        var matchedInterestsByMatchID = [String: Set<String>]()
+        var traversals = [InterestTraversal]()
 
         for (interestID, requesterWeight) in requesterInterestWeights.sorted(by: { $0.key < $1.key }) {
             let interest = Interest(
@@ -112,16 +137,49 @@ public enum InterestPurposeWeightedSum {
                 configuration: configuration
             )
 
-            for hit in result.hits.sorted(by: { $0.ref < $1.ref }) where hit.node.kind == .purpose {
+            traversals.append(
+                InterestTraversal(interestID: interestID, requesterWeight: requesterWeight, result: result)
+            )
+        }
+
+        return aggregate(candidates: candidates, traversals: traversals)
+    }
+
+    /// One interest's traversal, kept whole so the aggregation can see whether it finished.
+    struct InterestTraversal {
+        let interestID: String
+        let requesterWeight: Double
+        let result: MatchResult
+    }
+
+    /// Sums scores and decides completeness. Separate from the traversal so the
+    /// flag can be tested with a constructed, expired `MatchResult` instead of a
+    /// test that hopes the clock has moved past a zero deadline.
+    ///
+    /// Traversals must arrive in sorted interest order; summation follows that
+    /// order, which keeps the floating-point sum reproducible.
+    static func aggregate(
+        candidates: [InterestPurposeCandidate],
+        traversals: [InterestTraversal]
+    ) -> InterestPurposeWeightedSumResult {
+        var scoresByMatchID = [String: Double]()
+        var matchedInterestsByMatchID = [String: Set<String>]()
+        var incompleteInterestIDs = Set<String>()
+
+        for traversal in traversals {
+            if traversal.result.expired {
+                incompleteInterestIDs.insert(traversal.interestID)
+            }
+            for hit in traversal.result.hits.sorted(by: { $0.ref < $1.ref }) where hit.node.kind == .purpose {
                 let candidateWeight = hit.evidence
                     .last(where: { $0.relationship == .purposes })?
                     .edgeWeight ?? 0.0
-                scoresByMatchID[hit.ref, default: 0.0] += requesterWeight * candidateWeight
-                matchedInterestsByMatchID[hit.ref, default: []].insert(interestID)
+                scoresByMatchID[hit.ref, default: 0.0] += traversal.requesterWeight * candidateWeight
+                matchedInterestsByMatchID[hit.ref, default: []].insert(traversal.interestID)
             }
         }
 
-        return candidates
+        let matches = candidates
             .map { candidate in
                 InterestPurposeMatch(
                     matchPurposeID: candidate.matchPurposeID,
@@ -137,6 +195,12 @@ public enum InterestPurposeWeightedSum {
                 }
                 return $0.score > $1.score
             }
+
+        return InterestPurposeWeightedSumResult(
+            matches: matches,
+            complete: incompleteInterestIDs.isEmpty,
+            incompleteInterestIDs: incompleteInterestIDs.sorted()
+        )
     }
 
     private static func purposeNodesByMatchID(

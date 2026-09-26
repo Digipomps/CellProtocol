@@ -395,11 +395,14 @@ public extension PerspectiveMatchingScenarioSupport {
         }
         let matches: [InterestPurposeMatch]
         do {
-            matches = try await InterestPurposeWeightedSum.match(
+            let result = try await InterestPurposeWeightedSum.match(
                 requesterInterestWeights: userProfile.interestWeights,
                 candidates: candidates,
                 tokenPrefix: "restaurant.\(userProfile.purposeID)"
             )
+            // A partial search is not a ranking. Treat it like the error path:
+            // no recommendation is better than one nobody finished checking.
+            matches = result.complete ? result.matches : []
         } catch {
             matches = []
         }

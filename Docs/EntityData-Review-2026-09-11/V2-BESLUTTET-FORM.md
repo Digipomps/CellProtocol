@@ -1,10 +1,10 @@
 # EntityData v2 — løpende målmodell
 
-Oppdatert 23.09.2026. Målskjemaet er én fil som utvikler seg. Beslutningene fra
+Oppdatert 25.09.2026. Målskjemaet er én fil som utvikler seg. Beslutningene fra
 [22.09 og avklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret)
 er lagt etter [16.09-gjennomgangen](GJENNOMGANG_KJETIL_2026-09-16.md).
 Undergruppesteget fra 23.09 følger deretter; det innfører `partOf` og tar ut
-`relations.bokprosjekt` fra målskjemaet. Åpne detaljer er fortsatt åpne.
+`relations.bokprosjekt` fra målskjemaet. Deretter fjerner 25.09-steget `person.skills`: skills er bare formål. Åpne detaljer er fortsatt åpne.
 Dette er dokumentasjon og målstruktur; ingen Swift-implementasjon eller migrering er utført.
 
 | Fil | Rolle |
@@ -114,13 +114,33 @@ eksempelet. `index`, `byKeypath` og listene under er merket `derived: true`,
 JSON Schema håndhever ikke lagringsatferd. Dekodingsmønsteret for bevis er
 **ikke implementert i Swift ennå**.
 
-Alle fire `proofRefs`/`evidenceRefs`-beskrivelser sier nå at referansene er
-bevis-uuid-er inn i `proofs.credentials`: identitet, tilknytning, ferdighet og
-foreløpig attributt. Listeformene er uendret, også den historisk åpne formen
-på listeelementene. Referanseoppløsning, likhet mellom kartnøkkel og postens
+De tre gjenværende `proofRefs`-beskrivelsene peker til bevis-uuid-er i
+`proofs.credentials`: identitet, tilknytning og foreløpig attributt. Deres
+listeformer er uendret, også den historisk åpne formen på listeelementene.
+Ferdighetens `evidenceRefs` er fjernet sammen med `person.skills` 25.09. Referanseoppløsning, likhet mellom kartnøkkel og postens
 `uuid`, samt nøkkelstiers eksistens og escaping krever separate kontroller.
 Validatoren kontrollerer bare det fiktive eksempelets referanser og enkle stier;
 den implementerer ingen generell nøkkelstioppløser eller Swift-dekoder.
+
+## Skills er formål — 25.09
+
+En skill er et formål brukeren hevder å kunne oppfylle, i den vanlige `Purpose`-formen.
+Grafen er eneste lagring; det finnes ingen egen `Skill`-type eller `SearchPurpose`.
+Hele `$defs.PersonProfile.skills` er fjernet, inkludert `evidenceRefs`. Et eksplisitt
+`not: {required: [skills]}` avviser nøkkelen selv om profilen ellers er åpen.
+Listen beholdes heller ikke som avledet visning i skjemaet.
+
+`Purpose.goal` er fortsatt påkrevd. En skill uten et målbart resultat kan ikke
+uttrykkes i denne formen, og det er med vilje. Eksempelets eier hevder å kunne
+levere en nettside med nøyaktig tre tilgjengelige sider og null brutte interne
+lenker. Noden ligger i `entityRepresentation.purposes`, med vanlig vekt og `value`.
+Målkonfigurasjonen beskriver kriteriene; ingen målecelle er implementert eller kjørt.
+
+**Åpen sperre:** `supports.keypaths` kan bære en streng, men en stabil sti til én
+formålsnode gjennom vektede lister og `value`/`reference` er ikke kontraktfestet
+eller løst av dagens fixture-oppløser. En sti til hele listen er ikke en kobling til
+én node. Bevislager og `supports` er uendret; ingen erstatningsfelt er innført.
+Se [beslutningens bevis-sperre](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#åpen-sperre-2509-bevis-til-en-bestemt-skill-node).
 
 ## Bevarte sperrer og uavklarte punkter
 
@@ -130,8 +150,9 @@ Migrering av ekte data gjenstår: det trengs autoritative koblinger fra mottaker
 til entitets-uuid-er og fra gamle grupper til gruppe-uuid-er i `groups`.
 Det nye fiktive treet er ikke en migrering av brukernes bokprosjekter.
 
-Utover `groups`, fjerningen av `relations.bokprosjekt` og tilhørende beskrivelser/
-metadata er bevisstegets datakontrakt uendret, inkludert alle delte `$defs`.
+25.09 endrer bare skill-feltet, det eksplisitte forbudet, beskrivelser og metadata.
+Beviskontrakten, `Purpose.goal`, vekter, relasjoner og grupper er uendret fra
+undergruppesteget. De delte `$defs` er identiske i de to gjeldende skjemaene.
 De øvrige spesialiserte undertrærne i `proofs` er bevart.
 Åpne detaljer om endpoints, scaffold-tilstedeværelse, identitetslikhet
 og wire-eksponering er fortsatt uavklart.
@@ -143,11 +164,11 @@ mellomsteget; det er ikke en konkurrerende gjeldende målform.
 Fra denne mappen, med [requirements-target.txt](requirements-target.txt) installert:
 
 ```sh
-python -B -O apply_decisions_2026_09_23_groups.py
-python -B -O validate_decisions_2026_09_23_groups.py
+python -B -O apply_decisions_2026_09_25_skills.py
+python -B -O validate_decisions_2026_09_25_skills.py
 ```
 
-Hele kjeden 16.09 → 22.09 → 23.09 → undergrupper bygges i minnet før noe
+Hele kjeden 16.09 → 22.09 → 23.09 → undergrupper → skills som formål bygges i minnet før noe
 skrives. Manglende mål, uventet inngangsform og gjentatt anvendelse gir feil,
 også med `python -O`. Ny bygging fra runtime-grunnlaget gir identiske byte.
 Ikke kjør et tidligere byggesteg alene mot gjeldende filer; det skriver en
@@ -158,17 +179,17 @@ I dette miljøet brukes den eksisterende lokale Ajv-banen eksplisitt:
 ```sh
 export ENTITYDATA_AJV_MODULE=/usr/local/lib/node_modules/@nestjs/cli/node_modules/ajv
 export ENTITYDATA_AJV_FORMATS_MODULE=/usr/local/lib/node_modules/@nestjs/cli/node_modules/ajv-formats
-python3 -B -O apply_decisions_2026_09_23_groups.py
-python3 -B -O validate_decisions_2026_09_23_groups.py
+python3 -B -O apply_decisions_2026_09_25_skills.py
+python3 -B -O validate_decisions_2026_09_25_skills.py
 ```
 
 Begge validatorbaner kontrollerer formater. Se faktisk motor, positive/negative
-kontroller og filsummer i [TARGET-VALIDATION-2026-09-23-GROUPS.json](TARGET-VALIDATION-2026-09-23-GROUPS.json)
-og [jobbrapporten](../../../CellProtocolDocuments/Deliverables/GRUPPER_PARTOF_2026-09-23.md).
-Den nye suiten kjører også de uendrede 22.09-/23.09-suitene på deres historiske
+kontroller og filsummer i [TARGET-VALIDATION-2026-09-25-SKILLS.json](TARGET-VALIDATION-2026-09-25-SKILLS.json)
+og [jobbrapporten](../../../CellProtocolDocuments/Deliverables/SKILLS_SOM_FORMAAL_2026-09-25.md).
+Den nye suiten kjører også de uendrede 22.09-/23.09- og undergruppesuitene på deres historiske
 målform i en midlertidig kopi. Gjeldende mål og historiske resultatfiler overskrives ikke.
 
 **Visualiseringssjekkene: ikke kjørt.** Den historiske suiten leser utdaterte
-16.09/17.09-artefakter utenfor repoet. Oppdaterte undergruppeartefakter og en
+16.09/17.09-artefakter utenfor repoet. Oppdaterte 25.09-artefakter og en
 oppdatert suite mangler. Swift/runtime, ekte dekoding og migrering er også
 **ikke kjørt**: denne oppgaven endrer dokumentasjon og målskjema.

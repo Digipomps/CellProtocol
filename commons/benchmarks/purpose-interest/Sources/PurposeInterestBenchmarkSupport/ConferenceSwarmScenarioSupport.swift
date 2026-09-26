@@ -898,6 +898,9 @@ public extension PerspectiveMatchingScenarioSupport {
 
 public enum ConferenceSwarmError: Error {
     case missingRequester(String)
+    /// The weighted-sum traversal ran out of time for these interests, so the
+    /// ranking would rest on a partial search.
+    case incompleteTraversal(interestIDs: [String])
 }
 
 private struct ConferenceSwarmRawRanking {
@@ -933,14 +936,17 @@ private extension PerspectiveMatchingScenarioSupport {
                 interestWeights: opportunity.interestWeights
             )
         }
-        let matches = try await InterestPurposeWeightedSum.match(
+        let result = try await InterestPurposeWeightedSum.match(
             requesterInterestWeights: requester.interestWeights,
             candidates: candidates,
             tokenPrefix: "conference.swarm.\(requester.entityRef)",
             localVariables: object(from: carriedLocalVariables)
         )
+        guard result.complete else {
+            throw ConferenceSwarmError.incompleteTraversal(interestIDs: result.incompleteInterestIDs)
+        }
         let matchesByID = Dictionary(
-            uniqueKeysWithValues: matches.map { ($0.matchPurposeID, $0) }
+            uniqueKeysWithValues: result.matches.map { ($0.matchPurposeID, $0) }
         )
 
         return conferenceSwarmOpportunities.map { opportunity in
