@@ -1,11 +1,18 @@
 # EntityData – gjennomgang med Vegar
 
-**Gjeldende målmodell, 23. september:** [EntityData.v2.schema.json](EntityData.v2.schema.json) er oppdatert i samme fil etter [22.09-beslutningene og bevisavklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret). Start med [målmodellens forklaring](V2-BESLUTTET-FORM.md) og [current-review.json](current-review.json). Bevispostenes nye `supports` og avledede oppslag er målkrav, ikke implementert i Swift. Teksten nedenfor og `EntityData.review.schema.json` er det urørte runtime-grunnlaget fra 11. september.
+**Gjeldende målmodell, 25. september:** [EntityData.v2.schema.json](EntityData.v2.schema.json) er oppdatert i samme fil etter [22.09-beslutningene og bevisavklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret). Start med [målmodellens forklaring](V2-BESLUTTET-FORM.md) og [current-review.json](current-review.json). Bevispostenes nye `supports` og avledede oppslag er målkrav, ikke implementert i Swift. Teksten nedenfor og `EntityData.review.schema.json` er det urørte runtime-grunnlaget fra 11. september.
 
-Siste byggesteg er nå `apply_decisions_2026_09_23_groups.py`: valgfri `partOf` på
+Undergruppesteget `apply_decisions_2026_09_23_groups.py` innfører: valgfri `partOf` på
 barnet, ingen persistert barneliste, og `relations.bokprosjekt` tatt ut av målskjemaet.
 Dekoderen må kontrollere referansetyper og avvise sykler. Dette er besluttet, ikke
 implementert i Swift.
+
+Siste byggesteg er `apply_decisions_2026_09_25_skills.py`: `person.skills` er fjernet
+og eksplisitt avvist. Skills er vanlige formålsnoder med påkrevd, målbart `goal`;
+ingen egen type eller avledet skill-liste. `evidenceRefs` følger listen ut.
+Stabil beviskobling til én formålsnode er en [åpen sperre](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#åpen-sperre-2509-bevis-til-en-bestemt-skill-node).
+Se [kontrollresultatet](TARGET-VALIDATION-2026-09-25-SKILLS.json). Visualiseringssjekkene
+ble ikke kjørt fordi de leser utdaterte eksterne artefakter fra 16.09/17.09.
 
 23.09-steget håndhever også UUID-nøkler i `relations.records`. Eksempelets relasjons- og kontaktreferanser omskrives samlet med faste, fiktive UUID-er; validatorene kontrollerer at lokale referanser og bevisstier fortsatt kan følges.
 
