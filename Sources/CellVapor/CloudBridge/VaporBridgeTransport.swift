@@ -91,6 +91,13 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     public static func new() -> BridgeTransportProtocol {
         return VaporBridgeTransport()
     }
+
+    deinit {
+        if let group = outgoingGroup {
+            Task { try? await group.shutdownGracefully() }
+        }
+    }
+
     
     var feedEndpoint : URL?
     private var websocketEndpointURL = URL(string: "ws://127.0.0.1:8081/bridgehead/123456")
@@ -129,7 +136,11 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
             outgoingGroup = group; connectionGeneration = generation; setupWaiter = waiter
             return true
         }
-        guard accepted else { try? await group.shutdownGracefully(); throw TransportError.TransportNotFound }
+        guard accepted else {
+            waiter.complete(.failure(TransportError.TransportNotFound))
+            try? await group.shutdownGracefully()
+            throw TransportError.TransportNotFound
+        }
         let timeout = loop.scheduleTask(in: .seconds(10)) { waiter.complete(.failure(TransportError.TransportNotFound)) }
         defer { timeout.cancel() }
         let snapshot = VaporBridgeIdentitySnapshot(identity)

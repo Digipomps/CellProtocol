@@ -24,6 +24,10 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let pending = Task { try await transport.setup(URL(string: "ws://127.0.0.1:\(port)/stall")!, identity: Identity()) }
             await fulfillment(of: [entered], timeout: 3)
+            do {
+                try await transport.setup(URL(string: "ws://127.0.0.1:\(port)/stall")!, identity: Identity())
+                XCTFail("A second setup cannot replace a pending socket")
+            } catch {}
             let began = ProcessInfo.processInfo.systemUptime
             await transport.close()
             do { try await pending.value; XCTFail("Unfinished upgrade must fail on close") } catch {}
