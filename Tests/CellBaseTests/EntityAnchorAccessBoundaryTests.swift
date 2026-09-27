@@ -246,6 +246,60 @@ final class EntityAnchorAccessBoundaryTests: XCTestCase {
         }
     }
 
+
+    /// F1/F2: real firstPersist, empty runtime registry, disk restore, and owner proof.
+    func testF1F2FirstPersistGenesisRestoresOutsideEnrollments() async throws {
+        try await forEachScaffold { scaffold, anchor, entity in
+            let tag = "[\(scaffold.rawValue)] F1/F2"
+            let harness = try await FlowHarness(anchor: anchor, owner: entity.owner)
+            let envelope = try await Self.signedEnvelope(
+                mutations: [.init(keypath: "person.headline", value: .string("genesis contract"))],
+                mutationID: "genesis-contract", revision: 0, previousHash: nil,
+                requester: entity.owner, purposeRef: "purpose://access.audit.privacy")
+            let response = try await harness.send(envelope)
+            XCTAssertEqual(response["status"], .string("authority_committed"), tag)
+            let originalState = try await state(anchor, requester: entity.owner)
+            let originalGenesis = try XCTUnwrap(originalState["genesis"])
+            let seal = try JSONDecoder().decode(EntityGenesisSeal.self, from: JSONEncoder().encode(originalGenesis))
+            XCTAssertEqual(seal.trigger, .firstPersist, tag)
+            let before = await IdentityLinkRegistry.shared.sameEntityLink(
+                ownerUUID: entity.owner.uuid, requesterUUID: entity.owner.uuid,
+                requesterSigningKey: entity.owner.publicSecureKey?.compressedKey, domain: anchor.identityDomain)
+            let record = try XCTUnwrap(before, tag)
+            XCTAssertEqual(record.linkID, seal.linkID, tag)
+            XCTAssertNoThrow(try EntityGenesisService.verify(seal: seal, record: record), tag)
+            let enrollmentBefore = await IdentityLinkRegistry.shared.activeLinks(ownerUUID: entity.owner.uuid)
+            XCTAssertTrue(enrollmentBefore.isEmpty, tag)
+
+            await IdentityLinkRegistry.shared.clear(ownerUUID: entity.owner.uuid)
+            let cleared = await IdentityLinkRegistry.shared.sameEntityLink(
+                ownerUUID: entity.owner.uuid, requesterUUID: entity.owner.uuid,
+                requesterSigningKey: entity.owner.publicSecureKey?.compressedKey, domain: anchor.identityDomain)
+            XCTAssertNil(cleared, tag)
+            let restored = try scaffold.restart(anchor)
+            try await restored.installCellRuntimeBindingsForAccess()
+            let restoredState = try await state(restored, requester: entity.owner)
+            let restoredGenesis = try XCTUnwrap(restoredState["genesis"])
+            XCTAssertEqual(try CanonicalPayloadEncoder.data(for: restoredGenesis),
+                           try CanonicalPayloadEncoder.data(for: originalGenesis), tag)
+            let after = await IdentityLinkRegistry.shared.sameEntityLink(
+                ownerUUID: entity.owner.uuid, requesterUUID: entity.owner.uuid,
+                requesterSigningKey: entity.owner.publicSecureKey?.compressedKey, domain: restored.identityDomain)
+            XCTAssertEqual(after, record, tag)
+            let enrollmentAfter = await IdentityLinkRegistry.shared.activeLinks(ownerUUID: entity.owner.uuid)
+            XCTAssertTrue(enrollmentAfter.isEmpty, tag)
+            let decision = await restored.authorizationDecision(requestedAccess: "r---", at: "person", for: entity.owner)
+            XCTAssertTrue(decision.allowed, "\(tag): \(decision.reason)")
+            XCTAssertEqual(decision.path, .ownerProof, tag)
+            let headline = try await restored.get(keypath: "person.headline", requester: entity.owner)
+            XCTAssertEqual(headline, .string("genesis contract"), tag)
+            let claimant = SimulatedEntity.keylessClaimant(of: entity.owner)
+            let denied = await restored.authorizationDecision(requestedAccess: "r---", at: "person", for: claimant)
+            XCTAssertFalse(denied.allowed, tag)
+            await IdentityLinkRegistry.shared.clear(ownerUUID: entity.owner.uuid)
+        }
+    }
+
     func testUnsignedProposalIsRefused() async throws {
         try await forEachScaffold { scaffold, anchor, a in
             let tag = "[\(scaffold.rawValue)]"

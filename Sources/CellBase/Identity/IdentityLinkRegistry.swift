@@ -46,6 +46,10 @@ public actor IdentityLinkRegistry {
     public static let shared = IdentityLinkRegistry()
 
     private var linksByOwner: [String: [String: IdentityLinkRecord]] = [:]
+    // Derived from a verified seal/record pair, never from a link ID convention
+    // or from the linked identity being its own issuer. Keep the record in
+    // linksByOwner: sameEntityLink is also the genesis authorization lookup.
+    private var verifiedGenesisByOwner: [String: IdentityLinkRecord] = [:]
 
     public init() {}
 
@@ -53,13 +57,21 @@ public actor IdentityLinkRegistry {
         linksByOwner[ownerUUID, default: [:]][completion.record.linkID] = completion.record
     }
 
-    /// Gjenoppretting fra EntityAnchor sitt persisterte `identityLinks.records`. Erstatter alt for eieren.
-    public func restore(ownerUUID: String, records: [IdentityLinkRecord]) {
+    /// Gjenoppretting fra EntityAnchor sitt validerte lager. Erstatter alt for eieren.
+    /// Et seal klassifiserer bare den eksakte recorden det verifiserer som genesis.
+    /// Kalleren er fortsatt ansvarlig for å avvise ugyldige records før restore.
+    public func restore(ownerUUID: String, records: [IdentityLinkRecord], genesisSeal: EntityGenesisSeal? = nil) {
         var byLinkID: [String: IdentityLinkRecord] = [:]
         for record in records {
             byLinkID[record.linkID] = record
         }
         linksByOwner[ownerUUID] = byLinkID
+        verifiedGenesisByOwner[ownerUUID] = nil
+        if let seal = genesisSeal,
+           let record = byLinkID[seal.linkID],
+           (try? EntityGenesisService.verify(seal: seal, record: record)) != nil {
+            verifiedGenesisByOwner[ownerUUID] = record
+        }
     }
 
     public func revoke(ownerUUID: String, linkID: String, revokedAt: String) {
@@ -71,10 +83,16 @@ public actor IdentityLinkRegistry {
 
     public func clear(ownerUUID: String) {
         linksByOwner[ownerUUID] = nil
+        verifiedGenesisByOwner[ownerUUID] = nil
     }
 
+    /// Aktive innmeldingslenker. Verifisert genesis-eierskap er ikke en innmelding,
+    /// men forblir tilgjengelig for autorisasjon gjennom `sameEntityLink`.
     public func activeLinks(ownerUUID: String) -> [IdentityLinkRecord] {
-        (linksByOwner[ownerUUID] ?? [:]).values.filter { $0.status == .active }.sorted { $0.linkedAt < $1.linkedAt }
+        let genesis = verifiedGenesisByOwner[ownerUUID]
+        return (linksByOwner[ownerUUID] ?? [:]).values
+            .filter { $0.status == .active && $0 != genesis }
+            .sorted { $0.linkedAt < $1.linkedAt }
     }
 
     /// Feiler lukket: status må være aktiv, UUID *og* signeringsnøkkel må matche den lenkede
