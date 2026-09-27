@@ -18,9 +18,11 @@ actor BridgeBaseAuditor {
 
     private var commandRegistry = [Int: RegisteredCommand]()
     private var commandId = 0
+    private let maximumPendingCommands: Int
     private let commandRetentionSeconds: TimeInterval
 
-    init(commandRetentionSeconds: TimeInterval = 300) {
+    init(commandRetentionSeconds: TimeInterval = 300, maximumPendingCommands: Int = 256) {
+        self.maximumPendingCommands = max(1, maximumPendingCommands)
         self.commandRetentionSeconds = max(1, commandRetentionSeconds)
     }
     
@@ -29,13 +31,16 @@ actor BridgeBaseAuditor {
         return commandId
     }
     
-    func storeBridgeCommand(_ command: BridgeCommand?, for commandId: Int, now: Date = Date()) {
+    @discardableResult
+    func storeBridgeCommand(_ command: BridgeCommand?, for commandId: Int, now: Date = Date()) -> Bool {
         purgeExpired(now: now)
         guard let command else {
             commandRegistry[commandId] = nil
-            return
+            return true
         }
+        guard commandRegistry[commandId] != nil || commandRegistry.count < maximumPendingCommands else { return false }
         commandRegistry[commandId] = RegisteredCommand(command: command, storedAt: now)
+        return true
     }
     
     func loadBridgeCommandForCommandId(_ commandId: Int, now: Date = Date()) -> BridgeCommand? {
@@ -58,6 +63,8 @@ actor BridgeBaseAuditor {
         purgeExpired(now: now)
         return commandRegistry.count
     }
+
+    func clear() { commandRegistry.removeAll() }
 
     private func purgeExpired(now: Date) {
         let cutoff = now.addingTimeInterval(-commandRetentionSeconds)

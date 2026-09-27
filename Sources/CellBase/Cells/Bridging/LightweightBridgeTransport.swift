@@ -792,6 +792,15 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
         }
     }
 
+    public func close() async {
+        cancelReconnectLoop()
+        keepAliveTask?.cancel(); keepAliveTask = nil
+        await reconnectCoordinator.clear()
+        let closing = connection
+        clearActiveConnection()
+        try? await closing?.disconnect()
+    }
+
     public func sendData(_ data: Data) async throws {
         guard let connection else {
             throw LightweightBridgeTransportError.notConnected
@@ -924,6 +933,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     private func handleIncomingData(_ data: Data) async {
         do {
             try BridgeInboundPayloadValidator().validate(data)
+            try delegate?.validateInboundPayload(data)
         } catch let error as BridgeInboundPayloadError {
             await CellBase.recordSecurityEvent(.bridgePayloadRejected(
                 transportIdentifier: "lightweight-websocket",

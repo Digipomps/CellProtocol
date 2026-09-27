@@ -131,8 +131,10 @@ final class AppleBridgeTransportTests: XCTestCase {
         let transport = AppleBridgeTransport()
         transport.setDelegate(RecordingAppleBridgeDelegate(uuid: "missing-socket-delegate"))
 
-        try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
-        try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
+        for _ in 0..<2 {
+            do { try await transport.sendData(Data("{}".utf8)); XCTFail("Missing socket must throw") }
+            catch { XCTAssertTrue(error is TransportError) }
+        }
 
         XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), ["missing-socket-delegate"])
     }

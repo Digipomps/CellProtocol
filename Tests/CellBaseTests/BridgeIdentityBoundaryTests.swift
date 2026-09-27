@@ -207,7 +207,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             outgoing.peer = server
             incoming.peer = client
             for endpoint in [client, server] {
-                try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+                try await authenticateBridgeFixture(endpoint, principal: guest)
             }
             await client.sendCommand(command: .get, identity: guest, payload: .string("guest.configuration"))
             let reply = try XCTUnwrap(incoming.snapshot().last { $0.command == .response })
@@ -246,7 +246,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             connection: .inbound(publisherUuid: publisher)))
         try await server.setTransport(transport, connection: .inbound(publisherUuid: publisher))
         transport.setDelegate(server)
-        try await server.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+        try await authenticateBridgeFixture(server, principal: requester)
         try await server.consumeCommand(command: BridgeCommand(cmd: "get", identity: requester,
             payload: .string("guest.configuration"), cid: 801))
         return (try XCTUnwrap(transport.snapshot().last { $0.command == .response && $0.cid == 801 }),
@@ -273,7 +273,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             connection: .inbound(publisherUuid: "SetTarget"), inboundPublisherLookupIdentity: owner))
         try await server.setTransport(transport, connection: .inbound(publisherUuid: "SetTarget"))
         transport.setDelegate(server)
-        try await server.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+        try await authenticateBridgeFixture(server, principal: owner)
         for (index, key) in ["writable", "unknownKey", ""].enumerated() {
             let cid = 800 + index
             try await server.consumeCommand(command: BridgeCommand(cmd: "set", identity: owner,
@@ -317,7 +317,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         clientTransport.peer = server
         serverTransport.peer = client
         for endpoint in [client, server] {
-            try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+            try await authenticateBridgeFixture(endpoint, principal: owner)
         }
         await client.sendCommand(command: .get, identity: owner, payload: .string("secret"))
         let reply = try XCTUnwrap(serverTransport.snapshot().last(where: { $0.command == .response }))
@@ -384,7 +384,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             outgoing.peer = server
             incoming.peer = client
             for endpoint in [client, server] {
-                try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+                try await authenticateBridgeFixture(endpoint, principal: identity)
             }
             let stream: AnyPublisher<FlowElement, Error>
             do { stream = try await client.flow(requester: identity) }
@@ -432,7 +432,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             inboundPublisherLookupIdentity: owner
         ))
         try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Protected"))
-        try await bridge.consumeCommand(command: BridgeCommand(cmd: Command.ready.rawValue, payload: nil, cid: 0))
+        try await authenticateBridgeFixture(bridge, principal: owner)
 
         let command = try JSONDecoder().decode(BridgeCommand.self, from: JSONEncoder().encode(BridgeCommand(
             cmd: Command.get.rawValue, identity: owner.publicIdentitySnapshot(), payload: .string("secret"), cid: 17

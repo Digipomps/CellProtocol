@@ -55,13 +55,17 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private var delegate: BridgeDelegateProtocol?
     private var webSocket: WebSocket?
     private var closeCleanupCompleted = false
+    private var closeUnderlyingChannel: (@Sendable () async -> Void)?
     
 
     var identityDomain:String
     var delegateSource: (() async throws -> BridgeDelegateProtocol?)?
     
-    public init(webSocket: WebSocket? = nil) {
+    /// Public ingress hosts must pass their owned NIO Channel close operation;
+    /// a WebSocket close frame alone cannot force an uncooperative peer to leave.
+    public init(webSocket: WebSocket? = nil, closeUnderlyingChannel: (@Sendable () async -> Void)? = nil) {
         self.webSocket = webSocket
+        self.closeUnderlyingChannel = closeUnderlyingChannel
         self.identityDomain = "private" // May not be needed?
         if let webSocket {
             self.setupWebSocketCallbacks(on: webSocket)
@@ -133,15 +137,30 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         }
     }
 
+    public func close() async {
+        let socket = withStateLock { () -> WebSocket? in
+            let socket = webSocket; webSocket = nil; return socket
+        }
+        let hardClose = withStateLock { () -> (@Sendable () async -> Void)? in
+            let callback = closeUnderlyingChannel; closeUnderlyingChannel = nil; return callback
+        }
+        // Do not await peer acknowledgement before closing the host-owned socket.
+        if let socket { socket.close(code: .policyViolation, promise: nil) }
+        await hardClose?()
+        await cleanupClosedWebSocketRegistration()
+    }
+
     private func setupWebSocketCallbacks(on webSocket: WebSocket) {
         webSocket.onText{[weak self] ws, text in
             if let incomingData = text.data(using: .utf8) {
-                try? await self?.extractCommand(incomingData)
+                do { try await self?.extractCommand(incomingData) }
+                catch { await self?.currentDelegate()?.pushError(errorMessage: "bridge_payload_rejected", error: error) }
             }
         }
         webSocket.onBinary{ [weak self] ws, buf in
             if let incomingData = buf.getData(at: 0, length: buf.readableBytes) {
-                try? await self?.extractCommand(incomingData)
+                do { try await self?.extractCommand(incomingData) }
+                catch { await self?.currentDelegate()?.pushError(errorMessage: "bridge_payload_rejected", error: error) }
             }
         }
         webSocket.onClose.whenComplete { [weak self] result in
@@ -162,12 +181,16 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         guard let delegate = markCloseCleanupStartedAndGetDelegate() else {
             return
         }
+        if delegate is BridgeChannelTransport {
+            await delegate.pushError(errorMessage: "bridge_transport_closed", error: TransportError.TransportNotFound)
+        }
         await CellBase.defaultCellResolver?.unregisterEmitCell(uuid: delegate.uuid)
     }
     
     func extractCommand(_ incomingData: Data) async throws {
         do {
             try BridgeInboundPayloadValidator().validate(incomingData)
+            try currentDelegate()?.validateInboundPayload(incomingData)
         } catch let error as BridgeInboundPayloadError {
             await CellBase.recordSecurityEvent(.bridgePayloadRejected(
                 transportIdentifier: "vapor-websocket",
@@ -200,6 +223,9 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
+        if let authenticated = currentDelegate() as? BridgeChannelTransport {
+            return await authenticated.identityVault(for: identity)
+        }
         let bridge = currentDelegate() as? BridgeProtocol
         if let identity, bridge != nil {
             let identitySnapshot = VaporBridgeIdentitySnapshot(identity)

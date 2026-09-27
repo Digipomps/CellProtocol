@@ -61,6 +61,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class ServerRecordingTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         private weak var delegate: BridgeDelegateProtocol?
         private let stateLock = NSLock()
         private var frames: [BridgeCommand] = []
@@ -83,6 +84,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class FailFirstChannelOpenedTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         enum SendFailure: Error {
             case channelOpened
         }
@@ -145,6 +147,7 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         private weak var delegate: BridgeDelegateProtocol?
         private let instanceLock = NSLock()
+        private let handshake = ResolverHandshakeFixture()
         private var targets: [String: String] = [:]
 
         init() {
@@ -172,11 +175,13 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
             _ = identity
+            try handshake.configure(endpointURL)
             Self.stateLock.withLock { Self.setupURLs.append(endpointURL) }
         }
 
         func sendData(_ data: Data) async throws {
             let command = try JSONDecoder().decode(BridgeCommand.self, from: data)
+            if try await handshake.consume(command, delegate: delegate) { return }
             guard let channelID = command.channelID else {
                 throw BridgeMultiplexError.invalidChannel
             }
@@ -234,6 +239,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class MultiplexPhysicalTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         private weak var delegate: BridgeDelegateProtocol?
         private let stateLock = NSLock()
         private let vault: IdentityVaultProtocol
@@ -256,7 +262,7 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
             _ = endpointURL
-            _ = identity
+            channelSession = try await authenticatedSessionFixture(principal: identity)
             stateLock.withLock { setupInvocations += 1 }
         }
 
@@ -478,6 +484,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "server-sequence-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let delegate = PassiveBridgeDelegate()
         var logicalTransport: BridgeTransportProtocol?
         let server = BridgeMultiplexServerSession(physicalTransport: physical) { _, _, transport in
@@ -564,6 +571,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "rejected-route-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let sink = InMemoryCellSecurityEventSink()
         CellBase.securityEventSink = sink
         var factoryCalls = 0
@@ -599,6 +607,7 @@ final class BridgeMultiplexingTests: XCTestCase {
             return PassiveBridgeDelegate()
         }
 
+        do {
         try await server.consumeCommand(command: BridgeCommand(
             cmd: Command.openChannel.rawValue,
             identity: identity,
@@ -608,12 +617,14 @@ final class BridgeMultiplexingTests: XCTestCase {
             channelID: "uuid-only-channel",
             targetEndpoint: "PrivateCell"
         ))
+            XCTFail("A raw unauthenticated multiplex session must reject all dispatch")
+        } catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .unavailable) }
+
 
         XCTAssertEqual(factoryCalls, 0)
-        XCTAssertEqual(physical.snapshot().last?.command, .channelRejected)
+        XCTAssertTrue(physical.snapshot().isEmpty)
         let events = await sink.snapshot()
-        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.identityPublicKeyMismatch)
-        XCTAssertEqual(events.last?.requiredAction, "retry_with_key_bound_identity")
+        XCTAssertTrue(events.isEmpty, "Reject before dispatch or descriptor-based logging")
     }
 
     func testServerSessionEnforcesChannelCapacityWithStableEvent() async throws {
@@ -621,6 +632,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "capacity-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let sink = InMemoryCellSecurityEventSink()
         CellBase.securityEventSink = sink
         var factoryCalls = 0
@@ -657,6 +669,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "send-failure-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = FailFirstChannelOpenedTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         var factoryCalls = 0
         let server = BridgeMultiplexServerSession(physicalTransport: physical) { _, _, _ in
             factoryCalls += 1
