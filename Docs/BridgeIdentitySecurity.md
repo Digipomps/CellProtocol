@@ -102,6 +102,8 @@ Retain the admission object for the connection. For multiplex, the factory retur
 `BridgeMultiplexServerSession(physicalTransport: admittedTransport, bridgeOwner: …)`;
 its logical transports inherit the same verified session. Closing one logical
 channel cancels its work and releases its quota without revoking sibling channels.
+This also holds if close arrives while the host channel factory is suspended;
+the canceled opening sends no stale acknowledgement or rejection.
 The factory receives the minimal proven principal, not wire-supplied metadata.
 The service identity is
 only an explicit local publisher lookup identity, never a replacement requester.

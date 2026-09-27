@@ -149,6 +149,45 @@ final class BridgeChannelTransportTests: XCTestCase {
         await client.close(); await server.close()
     }
 
+    func testClosingPendingMultiplexOpenPreservesAuthenticatedSibling() async throws {
+        let owner = await identity(), endpoint = try endpoint()
+        let entered = expectation(description: "pending logical factory")
+        let barrier = ChannelPolicyBarrier()
+        let clientWire = ChannelWire(), serverWire = ChannelWire()
+        clientWire.peer = serverWire; serverWire.peer = clientWire
+        let server = try BridgeChannelTransport(underlying: serverWire, endpoint: endpoint, limits: BridgeChannelLimits(), source: "one") { transport, _ in
+            BridgeMultiplexServerSession(physicalTransport: transport) { target, _, channelTransport in
+                if target == "Slow" { entered.fulfill(); await barrier.wait() }
+                let bridge = try await BridgeBase(.init(owner: owner.publicIdentitySnapshot(), transport: channelTransport,
+                    connection: .inbound(publisherUuid: target)))
+                try await bridge.setTransport(channelTransport, connection: .inbound(publisherUuid: target))
+                try bridge.activateAuthenticatedChannel()
+                return bridge
+            }
+        }
+        let client = try BridgeChannelTransport(underlying: clientWire, endpoint: endpoint)
+        let multiplex = BridgeMultiplexSession(physicalTransport: client)
+        let sibling = try multiplex.channelTransport(targetEndpoint: "Protected")
+        let siblingBridge = try await BridgeBase(.init(owner: owner, transport: sibling, connection: .outbound))
+        try await siblingBridge.setTransport(sibling, connection: .outbound)
+        try await sibling.setup(URL(string: endpoint.audience)!, identity: owner)
+        let pendingID = UUID().uuidString
+        let opening = Task {
+            try await server.consumeCommand(command: .init(cmd: "openChannel", identity: owner.publicIdentitySnapshot(), payload: nil,
+                cid: 100, protocolVersion: 2, channelID: pendingID, targetEndpoint: "Slow"))
+        }
+        await fulfillment(of: [entered], timeout: 2)
+        try await server.consumeCommand(command: .init(cmd: "closeChannel", identity: owner.publicIdentitySnapshot(), payload: nil,
+            cid: 101, protocolVersion: 2, channelID: pendingID))
+        await barrier.resume()
+        try await opening.value
+        XCTAssertEqual(server.session.state, .authenticated)
+        XCTAssertTrue(siblingBridge.hasAuthenticatedChannel)
+        XCTAssertFalse(serverWire.isClosed)
+        XCTAssertFalse(serverWire.snapshot.contains { $0.channelID == pendingID }, "Cancelled opens must not emit stale acknowledgements")
+        await client.close(); await server.close()
+    }
+
     func testAuthenticatedTransportPreservesCellGetSetFeedScopePurposeAndRevocation() async throws {
         let serverVault = MockIdentityVault(), clientVault = MockIdentityVault()
         var owner = Identity(UUID().uuidString, displayName: "owner", identityVault: serverVault)
@@ -346,8 +385,12 @@ private final class ChannelCounter: @unchecked Sendable {
 }
 private actor ChannelPolicyBarrier {
     private var continuation: CheckedContinuation<Void, Never>?
-    func wait() async { await withCheckedContinuation { continuation = $0 } }
-    func resume() { continuation?.resume(); continuation = nil }
+    private var released = false
+    func wait() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func resume() { released = true; continuation?.resume(); continuation = nil }
 }
 private final class ChannelWire: BridgeTransportProtocol, @unchecked Sendable {
     private let lock = NSLock()

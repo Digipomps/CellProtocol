@@ -1009,8 +1009,11 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             }
             guard inserted else {
                 if quotaReserved { channelSession?.release(.channel); quotaReserved = false }
-                await delegate.pushError(errorMessage: "bridge_channel_cancelled", error: BridgeChannelAuthentication.Failure.closed)
-                try await reject(command)
+                // A concurrent close already retired the logical request. Do not
+                // close its physical session or send a late rejection to a client
+                // that has removed the opening continuation.
+                if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+                else { await delegate.pushError(errorMessage: "bridge_channel_cancelled", error: BridgeChannelAuthentication.Failure.closed) }
                 return
             }
             try await sendSessionFrame(BridgeCommand(

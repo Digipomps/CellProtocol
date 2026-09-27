@@ -104,6 +104,8 @@ jobs:
             Tests/CellBaseTests/TestSupport/TestFixtures.swift \
             Tests/CellBaseTests/TestSupport/MockIdentityVault.swift \
             Tests/CellBaseTests/TestSupport/SimulatedEntity.swift \
+            Tests/CellBaseTests/TestSupport/MockBridgeTransport.swift \
+            Tests/CellBaseTests/TestSupport/AuthenticatedBridgeFixture.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"
