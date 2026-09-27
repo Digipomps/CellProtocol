@@ -100,6 +100,26 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertNil(fresh.bridge)
     }
 
+    func testScannerReconnectSamePeerIDsCompletesFreshMutualProof() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start())
+        await pair.pa.gate.close(); await pair.pb.gate.close()
+        let endpoint = try pair.a.makeInvitation(remoteUUID: pair.b.mySessionUUID)
+        pair.b.receiveInvitation(from: pair.aPeer, endpoint: endpoint) { _, _ in }
+        XCTAssertTrue(pair.b.respondToInvitation(remoteUUID: pair.a.mySessionUUID, accept: true))
+        let a = try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer)
+        let b = try pair.b.prepareBridge(remoteUUID: pair.a.mySessionUUID, peerID: pair.aPeer)
+        let at = Task { try await a.gate.startPeer() }, bt = Task { try await b.gate.startPeer() }
+        for _ in 0..<4 { try await pair.deliverNext() }
+        try await at.value; try await bt.value
+        XCTAssertNotEqual(a.channelSession?.generation, pair.pa.channelSession?.generation)
+        XCTAssertNotEqual(b.channelSession?.generation, pair.pb.channelSession?.generation)
+        XCTAssertEqual(a.channelSession?.publicIdentity, try A.PublicIdentity(pair.b.owner))
+        XCTAssertEqual(b.channelSession?.publicIdentity, try A.PublicIdentity(pair.a.owner))
+        await pair.pa.close(); await pair.pb.close()
+        try a.channelSession?.check(); try b.channelSession?.check()
+    }
+
     func testScannerRevocationClosesOnlyAffectedPeerAndReclaimsQuota() async throws {
         let limits = BridgeChannelLimits()
         let pair = try await ScannerPair(limits: limits), sibling = try await ScannerPair(limits: limits)
