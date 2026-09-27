@@ -1,6 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, 196b910ed64540d753a4f90b87e29e40db60cca6.
+Last verified against code: 2026-09-27, 5232688fdfda08d36e00227df15acfdfd0e8eeef.
 
 ## Admission precedes every Cell operation
 
@@ -33,6 +33,9 @@ for CellResolver), then starts `BridgeChannelClientOperation`. Its hello contain
 only profile, a random 32-byte client nonce and `PublicIdentity` (UUID, signing
 algorithm, curve, public signing key). It does **not** encode `Identity`, properties,
 grants, vault references, display names, private keys or key-agreement keys.
+Normal outgoing command identities also use public snapshots, excluding private
+properties and vault references. The separate local proof lease keeps its local
+vault reference only in process; serializing a public descriptor does not broaden it.
 
 The server issues a fresh 32-byte CSPRNG nonce, session ID, generation, issued time
 and absolute channel expiry. The signed `IdentitySigningChallenge` keeps its
