@@ -158,31 +158,10 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     }
     
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
-        if let identity {
-            let localState = withStateLock {
-                (uuid: localIdentityUUID, vault: localIdentityVault)
-            }
-            if identity.uuid == localState.uuid,
-               let vault = localState.vault,
-               await vault.identityExistInVault(identity) {
-                return vault
-            }
-            if let vault = localState.vault,
-               await vault.identityExistInVault(identity) {
-                return vault
-            }
-            if identity.uuid == currentLocalIdentityUUID(),
-               await IdentityVault.shared.identityExistInVault(identity) {
-                return IdentityVault.shared
-            }
-            if await IdentityVault.shared.identityExistInVault(identity) {
-                return IdentityVault.shared
-            }
-        }
-        if let bridgeProtocol = currentDelegate() as? BridgeProtocol {
-            return BridgeIdentityVault(cloudBridge: bridgeProtocol)
-        }
-        return IdentityVault.shared
+        // This API resolves incoming wire descriptors, never local signing authority.
+        // Even an exact public-key match must prove origin back at the peer.
+        // A missing delegate yields a proxy that fails closed.
+        return BridgeIdentityVault(cloudBridge: currentDelegate() as? BridgeProtocol)
     }
 
     func cleanupClosedWebSocketRegistration() async {

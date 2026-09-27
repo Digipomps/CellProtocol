@@ -113,39 +113,23 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         }
     }
     
-    public func sendData(_ data: Data) async {
-        guard let webSocket = currentWebSocket() else {
-            CellBase.diagnosticLog("No websocket; bridge target is not reachable.", domain: .bridge)
+    public func sendData(_ data: Data) async throws {
+        guard let webSocket = currentWebSocket(), !webSocket.isClosed else {
             await cleanupClosedWebSocketRegistration()
-            return
+            throw TransportError.TransportNotFound
         }
-
-        if CellBase.sendDataAsText {
-            do {
-                if let textData = String(data: data, encoding: .utf8) {
-                    _ = try await webSocket.send(textData)
+        do {
+            if CellBase.sendDataAsText {
+                guard let text = String(data: data, encoding: .utf8) else {
+                    throw TransportError.DataToStringError
                 }
-            } catch {
-                CellBase.diagnosticLog("WebSocket text send failed with error: \(error)", domain: .bridge)
-                
-                //TODO: We need a better error handling here. 
-//                if error == ChannelError.ioOnClosedChannel {
-//                    if let delegate = self.delegate {
-//                        await delegate.unregisterEmitCell(uuid: delegate.uuid)
-//                    }
-//                }
+                try await webSocket.send(text)
+            } else {
+                try await webSocket.send([UInt8](data))
             }
-        } else {
-            var byteBuffer: [UInt8] = []
-            
-            data.withUnsafeBytes {
-                byteBuffer.append(contentsOf: $0) // Could this be optimised?
-            }
-            do {
-                _ = try await webSocket.send(byteBuffer)
-            } catch {
-                CellBase.diagnosticLog("WebSocket binary send failed with error: \(error)", domain: .bridge)
-            }
+        } catch {
+            await currentDelegate()?.pushError(errorMessage: "bridge_send_failed", error: error)
+            throw error
         }
     }
 

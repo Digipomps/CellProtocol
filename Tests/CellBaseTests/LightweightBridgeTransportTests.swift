@@ -215,7 +215,7 @@ final class LightweightBridgeTransportTests: XCTestCase {
         XCTAssertEqual(events.last?.resource.identifier, "lightweight-websocket")
     }
 
-    func testIdentityVaultFallsBackToDefaultIdentityVault() async throws {
+    func testDescriptorNeverFallsBackToDefaultIdentityVault() async throws {
         let socket = MockLightweightWebSocketClient()
         let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
         let delegate = RecordingBridgeDelegate()
@@ -225,7 +225,7 @@ final class LightweightBridgeTransportTests: XCTestCase {
         try await transport.setup(URL(string: "wss://bridge.example/cell")!, identity: identity)
 
         let returnedVault = await transport.identityVault(for: identity)
-        XCTAssertTrue(returnedVault is MockIdentityVault)
+        XCTAssertTrue(returnedVault is BridgeIdentityVault)
     }
 
     func testVisitingIdentityUsesBridgeIdentityVaultWhenDelegateIsBridge() async throws {
@@ -256,7 +256,7 @@ final class LightweightBridgeTransportTests: XCTestCase {
         XCTAssertTrue(returnedVault is BridgeIdentityVault)
     }
 
-    func testKnownLocalVisitingIdentityUsesDefaultVaultWhenDelegateIsBridge() async throws {
+    func testKnownLocalDescriptorKeepsBridgeVault() async throws {
         let socket = MockLightweightWebSocketClient()
         let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
         let bridgeOwner = TestFixtures.makeIdentity(displayName: "bridge-owner")
@@ -285,7 +285,7 @@ final class LightweightBridgeTransportTests: XCTestCase {
 
         let returnedVault = await transport.identityVault(for: knownLocalIdentity)
 
-        XCTAssertTrue(returnedVault is MockIdentityVault)
+        XCTAssertTrue(returnedVault is BridgeIdentityVault)
     }
 
     func testSameUUIDDifferentKeyDoesNotUseLocalVault() async throws {

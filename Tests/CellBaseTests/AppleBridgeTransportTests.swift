@@ -173,13 +173,13 @@ final class AppleBridgeTransportTests: XCTestCase {
         XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), ["failed-send-delegate"])
     }
 
-    func testIdentityVaultFallsBackToAppleVaultWithoutBridgeDelegate() async {
+    func testMissingDelegateNeverFallsBackToAppleVault() async {
         let transport = AppleBridgeTransport(webSocketConnection: MockAppleWebSocketConnection())
         let visitingIdentity = TestFixtures.makeIdentity(displayName: "visiting", uuid: UUID())
 
         let returnedVault = await transport.identityVault(for: visitingIdentity)
 
-        XCTAssertTrue(returnedVault is IdentityVault)
+        XCTAssertTrue(returnedVault is BridgeIdentityVault)
     }
 
     func testVisitingIdentityUsesBridgeIdentityVaultWhenDelegateIsBridge() async throws {

@@ -819,30 +819,10 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
-        if let identity {
-            if let localIdentityUUID,
-               identity.uuid == localIdentityUUID,
-               let localIdentityVault,
-               await localIdentityVault.identityExistInVault(identity) {
-                return localIdentityVault
-            }
-            if let defaultVault = CellBase.defaultIdentityVault {
-                if await defaultVault.identityExistInVault(identity) {
-                    return defaultVault
-                }
-            }
-            if let localIdentityVault,
-               await localIdentityVault.identityExistInVault(identity) {
-                return localIdentityVault
-            }
-        }
-        if let bridge = delegate as? BridgeProtocol {
-            return BridgeIdentityVault(cloudBridge: bridge)
-        }
-        if let defaultVault = CellBase.defaultIdentityVault {
-            return defaultVault
-        }
-        return BridgeIdentityVault()
+        // This API resolves incoming wire descriptors, never local signing authority.
+        // Even an exact public-key match must prove origin back at the peer.
+        // A missing delegate yields a proxy that fails closed.
+        return BridgeIdentityVault(cloudBridge: delegate as? BridgeProtocol)
     }
 
     func clientDidConnect(_ client: any LightweightWebSocketClient) async {
