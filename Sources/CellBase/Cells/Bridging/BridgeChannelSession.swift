@@ -374,10 +374,12 @@ final class BridgeChannelResourceLease: @unchecked Sendable {
     private let session: BridgeChannelSession
     private let resource: BridgeChannelLimits.Resource
     private let lock = NSLock()
-    private var released = false
+    private var released = true
     init(session: BridgeChannelSession, resource: BridgeChannelLimits.Resource) throws {
         self.session = session; self.resource = resource
         try session.acquire(resource)
+        // A throwing initializer also runs deinit: ownership starts only here.
+        released = false
     }
     func release() {
         let shouldRelease = lock.withLock { if released { return false }; released = true; return true }

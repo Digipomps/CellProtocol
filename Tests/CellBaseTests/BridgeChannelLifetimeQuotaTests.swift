@@ -38,6 +38,67 @@ final class BridgeChannelLifetimeQuotaTests: XCTestCase {
         try await server.consumeCommand(command: .init(cmd: "get", identity: identity, payload: .string("value"), cid: 1))
     }
 
+    func testRejectedLeaseNeverReleasesExistingOwnerForFeedAndChannelPerKeyAndGlobal() async throws {
+        for resource in [BridgeChannelLimits.Resource.feed, .channel] {
+            for global in [false, true] {
+                var config = BridgeChannelLimits.Configuration()
+                config.maximumFeeds = global ? 1 : 8; config.maximumChannels = global ? 1 : 8
+                config.maximumFeedsPerKey = global ? 8 : 1; config.maximumChannelsPerKey = global ? 8 : 1
+                let limits = BridgeChannelLimits(configuration: config)
+                let cell = await QuotaCell(owner: owner())
+                let pair = try await ready(limits, cell: cell)
+                let first = try BridgeChannelResourceLease(session: pair.0.session, resource: resource)
+                for _ in 0..<5 {
+                    XCTAssertThrowsError(try BridgeChannelResourceLease(session: pair.0.session, resource: resource)) {
+                        XCTAssertEqual($0 as? A.Failure, .capacity)
+                    }
+                }
+                first.release()
+                let replacement = try BridgeChannelResourceLease(session: pair.0.session, resource: resource)
+                first.release() // A late completion from the old owner cannot release its successor.
+                XCTAssertThrowsError(try BridgeChannelResourceLease(session: pair.0.session, resource: resource))
+                await pair.0.close()
+                XCTAssertEqual(limits.retainedConnectionCount, 1)
+                XCTAssertThrowsError(try BridgeChannelResourceLease(session: pair.0.session, resource: resource))
+                XCTAssertEqual(limits.retainedConnectionCount, 1)
+                replacement.release(); replacement.release()
+                XCTAssertEqual(limits.retainedConnectionCount, 0)
+            }
+        }
+    }
+
+    func testMuxOpenRejectOpenKeepsExistingChannelReservationUntilOwnerCloses() async throws {
+        for global in [false, true] {
+            var config = BridgeChannelLimits.Configuration()
+            config.maximumChannels = global ? 1 : 8; config.maximumChannelsPerKey = global ? 8 : 1
+            let limits = BridgeChannelLimits(configuration: config), identity = await owner(), wire = QuotaWire()
+            let factories = QuotaCount()
+            let gate = try BridgeChannelTransport(underlying: wire, endpoint: endpoint(), limits: limits, source: "mux") { transport, _ in
+                BridgeMultiplexServerSession(physicalTransport: transport) { _, _, _ in
+                    factories.increment()
+                    return BridgeBase(owner: identity)
+                }
+            }
+            try await gate.consumeCommand(command: proof(gate, owner: identity))
+            func command(_ name: String, _ id: String) -> BridgeCommand {
+                .init(cmd: name, identity: identity, payload: nil, cid: 1, protocolVersion: 2, channelID: id, targetEndpoint: "Quota")
+            }
+            try await gate.consumeCommand(command: command("openChannel", "owner"))
+            XCTAssertEqual(wire.commands.last?.cmd, "channelOpened")
+            for index in 0..<5 {
+                try await gate.consumeCommand(command: command("openChannel", "rejected-\(index)"))
+                XCTAssertEqual(wire.commands.last?.cmd, "channelRejected")
+                XCTAssertEqual(factories.value, 1)
+            }
+            try await gate.consumeCommand(command: command("closeChannel", "owner"))
+            try await gate.consumeCommand(command: command("openChannel", "replacement"))
+            XCTAssertEqual(wire.commands.last?.cmd, "channelOpened")
+            XCTAssertEqual(factories.value, 2)
+            await gate.close()
+            XCTAssertEqual(limits.retainedConnectionCount, 0)
+        }
+    }
+
     func testDisconnectRetainsPolicyAndFactoryAdmissionUntilNoncooperativeWorkReturns() async throws {
         for stage in ["policy", "factory"] {
             var config = BridgeChannelLimits.Configuration(); config.maximumPending = 2
@@ -234,10 +295,16 @@ private final class QuotaCell: GeneralCell {
 private final class QuotaWire: BridgeTransportProtocol, @unchecked Sendable {
     var beforeSend: (@Sendable (Data) async -> Void)?
     var beforeClose: (@Sendable () async -> Void)?
+    private let lock = NSLock()
+    private var sent: [BridgeCommand] = []
+    var commands: [BridgeCommand] { lock.withLock { sent } }
     static func new() -> BridgeTransportProtocol { QuotaWire() }
     func setDelegate(_ delegate: BridgeDelegateProtocol) {}
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
-    func sendData(_ data: Data) async throws { await beforeSend?(data) }
+    func sendData(_ data: Data) async throws {
+        if let command = try? JSONDecoder().decode(BridgeCommand.self, from: data) { lock.withLock { sent.append(command) } }
+        await beforeSend?(data)
+    }
     func close() async { await beforeClose?() }
     func identityVault(for identity: Identity?) async -> IdentityVaultProtocol { BridgeIdentityVault() }
 }
