@@ -777,7 +777,7 @@ public class EntityAnchorCell: GeneralCell {
                 guard let seal else { return false }
                 return (try? EntityGenesisService.verify(seal: seal, record: record)) != nil
             }
-        await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: records)
+        await IdentityLinkRegistry.shared.restore(ownerUUID: storedOwnerIdentity.uuid, records: records, genesisSeal: seal)
     }
     
     public override func encode(to encoder: Encoder) throws {
