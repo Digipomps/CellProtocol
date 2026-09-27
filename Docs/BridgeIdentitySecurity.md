@@ -1,6 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, 229a15b18692b36d4cb6a9eafadf562c4feefbc5.
+Last verified against code: 2026-09-27, f1e150795e0fc0b881811240a51043008d07b939.
 
 ## Admission precedes every Cell operation
 
