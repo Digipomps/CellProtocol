@@ -781,15 +781,39 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         _ channelTransport: BridgeTransportProtocol
     ) async throws -> BridgeDelegateProtocol
 
-    private final class ChannelRecord {
+    private final class ChannelRecord: @unchecked Sendable {
         let delegate: BridgeDelegateProtocol
         let transport: ServerChannelTransport
         let quota: BridgeChannelResourceLease
+        private let lock = NSLock()
+        private var retired = false
+        private var tasks: [UUID: Task<Void, Error>] = [:]
 
         init(delegate: BridgeDelegateProtocol, transport: ServerChannelTransport, quota: BridgeChannelResourceLease) {
             self.quota = quota
             self.delegate = delegate
             self.transport = transport
+        }
+        func dispatch(_ command: BridgeCommand, response: Bool = false) async throws {
+            let id = UUID()
+            let task = try lock.withLock { () throws -> Task<Void, Error> in
+                guard !retired else { throw BridgeMultiplexError.channelNotFound }
+                guard tasks.count < 64 else { throw BridgeMultiplexError.resourceLimitExceeded }
+                let task = Task { [delegate] in
+                    try Task.checkCancellation()
+                    if response { try await delegate.consumeResponse(command: command) }
+                    else { try await delegate.consumeCommand(command: command) }
+                }
+                tasks[id] = task
+                return task
+            }
+            defer { _ = lock.withLock { tasks.removeValue(forKey: id) } }
+            try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+        }
+        func retire() async {
+            lock.withLock { retired = true; tasks.values.forEach { $0.cancel() } }
+            if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+            else { await delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
         }
     }
 
@@ -916,8 +940,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 return removed
             }
             defer { withExtendedLifetime(removed) {} }
-            if let bridge = removed?.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
-            else { await removed?.delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
+            await removed?.retire()
         default:
             guard command.protocolVersion == protocolVersion,
                   let channelID = command.channelID,
@@ -925,7 +948,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 throw BridgeMultiplexError.channelNotFound
             }
             defer { withExtendedLifetime(record) {} }
-            try await record.delegate.consumeCommand(command: command)
+            try await record.dispatch(command)
         }
     }
 
@@ -938,7 +961,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             throw BridgeMultiplexError.channelNotFound
         }
         defer { withExtendedLifetime(record) {} }
-        try await record.delegate.consumeResponse(command: command)
+        try await record.dispatch(command, response: true)
     }
 
     private func open(_ command: BridgeCommand) async throws {
@@ -1119,8 +1142,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         }
         guard let retired else { return }
         for record in retired {
-            if let bridge = record.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
-            else { await record.delegate.pushError(errorMessage: "bridge_channel_closed", error: BridgeChannelAuthentication.Failure.closed) }
+            await record.retire()
         }
         await physicalTransport.close()
         withExtendedLifetime(retired) {}

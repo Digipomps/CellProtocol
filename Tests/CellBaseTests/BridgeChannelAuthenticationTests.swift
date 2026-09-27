@@ -52,7 +52,7 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
         server.close(); clientSession.close()
     }
 
-    func testReplayWrongConnectionRouteDomainGenerationAndParallelConsume() async throws {
+    func testReplayWrongConnectionGenerationAndParallelConsume() async throws {
         let identity = await owner()
         let (server, _, _, proof) = try await handshake(identity)
         let another = try BridgeChannelSession(endpoint: endpoint())
@@ -120,7 +120,7 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
         XCTAssertEqual(revoked.state, .revoked)
     }
 
-    func testAbsoluteAndMonotonicChannelExpiry() async throws {
+    func testMonotonicChannelExpiryWithStationaryWallClock() async throws {
         let clock = ChannelTestClock()
         let identity = await owner(), target = try endpoint()
         let server = try BridgeChannelSession(endpoint: target, wallClock: { clock.now }, monotonic: { clock.uptime })
@@ -133,7 +133,7 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
         server.close()
     }
 
-    func testClientRejectsWrongScopeFutureTimeAndChangedTranscriptBeforeSigning() async throws {
+    func testClientRejectsNoncanonicalTranscriptMutationsBeforeSigning() async throws {
         let identity = await owner(), target = try endpoint()
         for key in ["profile", "endpoint", "clientNonce", "serverNonce", "direction", "channelExpiresAtMilliseconds", "issuedAtMilliseconds"] {
             let client = try BridgeChannelClientOperation(owner: identity, endpoint: target)
@@ -150,6 +150,113 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
             object["transcript"] = transcript
             let changed = try JSONDecoder().decode(A.Challenge.self, from: JSONSerialization.data(withJSONObject: object))
             do { _ = try await client.sign(changed); XCTFail("Signed changed \(key)") } catch {}
+            server.close()
+        }
+    }
+
+    func testSelfConsistentWrongPublisherBridgeIDHostEnvironmentAndDomainAreRejected() async throws {
+        let identity = await owner(), expected = try endpoint()
+        for (url, domain) in [
+            ("wss://bridge.example/bridgehead/Other/connection", "bridge"),
+            ("wss://bridge.example/bridgehead/Protected/other", "bridge"),
+            ("wss://other.example/bridgehead/Protected/connection", "bridge"),
+            ("wss://staging.bridge.example/bridgehead/Protected/connection", "bridge"),
+            (expected.audience, "other-domain")
+        ] {
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: expected)
+            let other = try A.Endpoint(url: URL(string: url)!, domain: domain)
+            let server = try BridgeChannelSession(endpoint: other)
+            let challenge = try server.issueChallenge(client.hello)
+            XCTAssertEqual(challenge.signingData, try A.signingData(challenge.transcript))
+            do { _ = try await client.sign(challenge); XCTFail("Signed wrong scope \(url) \(domain)") } catch {}
+            server.close()
+        }
+    }
+
+    func testProofFromOtherInstanceOrBeforeRestartNeverMatchesNewPendingState() async throws {
+        let identity = await owner(), target = try endpoint()
+        let client = try BridgeChannelClientOperation(owner: identity, endpoint: target)
+        let original = try BridgeChannelSession(endpoint: target)
+        let challenge = try original.issueChallenge(client.hello), proof = try await client.sign(challenge)
+        for restart in [false, true] {
+            if restart { original.close() }
+            let independent = try BridgeChannelSession(endpoint: target)
+            let fresh = try independent.issueChallenge(client.hello)
+            XCTAssertEqual(fresh.signingData, try A.signingData(fresh.transcript))
+            XCTAssertNotEqual(fresh.transcript.sessionID, challenge.transcript.sessionID)
+            XCTAssertThrowsError(try independent.reserveOpen(proof))
+            XCTAssertEqual(independent.state, .challengeIssued)
+            independent.close()
+        }
+    }
+
+    func testSelfConsistentClockSkewBoundariesAndExcessiveValidity() async throws {
+        let identity = await owner(), target = try endpoint()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        for (offset, allowed) in [(5.0, true), (5.001, false), (-29.999, true), (-30.0, false), (-30.001, false)] {
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: target, wallClock: { now })
+            let server = try BridgeChannelSession(endpoint: target, wallClock: { now.addingTimeInterval(offset) })
+            let challenge = try server.issueChallenge(client.hello)
+            do { _ = try await client.sign(challenge); XCTAssertTrue(allowed, "offset \(offset)") }
+            catch { XCTAssertFalse(allowed, "offset \(offset): \(error)") }
+            server.close()
+        }
+        for excessive in [false, true] {
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: target, wallClock: { now })
+            let server = try BridgeChannelSession(endpoint: target, wallClock: { now })
+            let original = try server.issueChallenge(client.hello)
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: A.encode(original.transcript)) as? [String: Any])
+            if excessive { object["channelExpiresAtMilliseconds"] = original.transcript.channelExpiresAtMilliseconds + 1 }
+            else {
+                object["issuedAtMilliseconds"] = A.milliseconds(now) - 31_000
+                object["channelExpiresAtMilliseconds"] = A.milliseconds(now) - 31_000 + 300_000
+            }
+            let transcript = try JSONDecoder().decode(A.Transcript.self, from: JSONSerialization.data(withJSONObject: object))
+            let challenge = A.Challenge(transcript: transcript, signingData: try A.signingData(transcript))
+            do { _ = try await client.sign(challenge); XCTFail("Self-consistent expired/excessive challenge") } catch {}
+            server.close()
+        }
+    }
+
+    func testWallClockExpiryAndBackwardSkewCannotExtendMonotonicLease() async throws {
+        for wallOnly in [true, false] {
+            let clock = ChannelTestClock(), identity = await owner(), target = try endpoint()
+            let server = try BridgeChannelSession(endpoint: target, wallClock: { clock.now }, monotonic: { clock.uptime })
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: target, wallClock: { clock.now }, monotonic: { clock.uptime })
+            try server.reserveOpen(try await client.sign(server.issueChallenge(client.hello)))
+            _ = try server.activate()
+            if wallOnly { clock.moveWall(301) }
+            else { clock.moveWall(-3600); clock.advance(301, advanceWall: false) }
+            XCTAssertThrowsError(try server.check())
+            server.close()
+        }
+        let clock = ChannelTestClock(), identity = await owner(), target = try endpoint()
+        let server = try BridgeChannelSession(endpoint: target, wallClock: { clock.now }, monotonic: { clock.uptime })
+        let client = try BridgeChannelClientOperation(owner: identity, endpoint: target, wallClock: { clock.now })
+        try server.reserveOpen(try await client.sign(server.issueChallenge(client.hello)))
+        clock.moveWall(31)
+        XCTAssertThrowsError(try server.recheckBeforeActivation())
+        XCTAssertThrowsError(try server.activate())
+        server.close()
+    }
+
+    func testSuspendedLocalSignerCannotReturnProofAfterCancelOrClockExpiry() async throws {
+        for action in ["cancel", "wall", "monotonic"] {
+            let vault = SuspendingChannelVault(), identity = await owner(), clock = ChannelTestClock(), target = try endpoint()
+            vault.underlying = identity.identityVault
+            identity.identityVault = vault
+            let entered = expectation(description: action)
+            vault.entered = { entered.fulfill() }
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: target, wallClock: { clock.now }, monotonic: { clock.uptime })
+            let server = try BridgeChannelSession(endpoint: target, wallClock: { clock.now })
+            let challenge = try server.issueChallenge(client.hello)
+            let signing = Task { try await client.sign(challenge) }
+            await fulfillment(of: [entered], timeout: 2)
+            if action == "cancel" { await client.cancel() }
+            if action == "wall" { clock.moveWall(31) }
+            if action == "monotonic" { clock.advance(11, advanceWall: false) }
+            await vault.resume()
+            do { _ = try await signing.value; XCTFail("Late proof after \(action)") } catch {}
             server.close()
         }
     }
@@ -312,6 +419,7 @@ private final class ChannelTestClock: @unchecked Sendable {
     private var time: TimeInterval = 100
     var now: Date { lock.withLock { date } }
     var uptime: TimeInterval { lock.withLock { time } }
+    func moveWall(_ seconds: TimeInterval) { lock.withLock { date.addTimeInterval(seconds) } }
     func advance(_ seconds: TimeInterval, advanceWall: Bool = true) {
         lock.withLock { time += seconds; if advanceWall { date.addTimeInterval(seconds) } }
     }
@@ -331,4 +439,29 @@ actor SigningTrapVault: IdentityVaultProtocol {
     func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool { false }
     func randomBytes64() async -> Data? { nil }
     func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) { throw BridgeChannelAuthentication.Failure.unavailable }
+}
+
+private final class SuspendingChannelVault: IdentityVaultProtocol, @unchecked Sendable {
+    var underlying: IdentityVaultProtocol?
+    var entered: (() -> Void)?
+    private let barrier = SigningBarrier()
+    func resume() async { await barrier.resume() }
+    func initialize() async -> IdentityVaultProtocol { self }
+    func addIdentity(identity: inout Identity, for identityContext: String) async {}
+    func saveIdentity(_ identity: Identity) async {}
+    func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? { nil }
+    func identityExistInVault(_ identity: Identity) async -> Bool { await underlying?.identityExistInVault(identity) ?? false }
+    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        entered?(); await barrier.wait()
+        return try await underlying!.signMessageForIdentity(messageData: messageData, identity: identity)
+    }
+    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool { false }
+    func randomBytes64() async -> Data? { nil }
+    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) { throw BridgeChannelAuthentication.Failure.unavailable }
+}
+private actor SigningBarrier {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func wait() async { if !released { await withCheckedContinuation { continuation = $0 } } }
+    func resume() { released = true; continuation?.resume(); continuation = nil }
 }

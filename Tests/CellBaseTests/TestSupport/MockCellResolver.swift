@@ -26,7 +26,12 @@ final class MockCellResolver: CellResolverProtocol {
     private var resolveSnapshots: [String: CellResolverResolveSnapshot] = [:]
     private var unregisteredUUIDs: [String] = []
 
+    private let lookupLock = NSLock()
+    private var lookupCount = 0
+    func lookupCountSnapshot() -> Int { lookupLock.withLock { lookupCount } }
+
     func cellAtEndpoint(endpoint: String, requester: Identity) async throws -> Emit {
+        lookupLock.withLock { lookupCount += 1 }
         let normalized = endpoint.hasPrefix("cell:///") ? String(endpoint.dropFirst("cell:///".count)) : endpoint
         if let uuid = namedCellsByIdentity[requester.uuid]?[normalized],
            let emit = emitByUUID[uuid] {

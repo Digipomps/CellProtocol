@@ -1,6 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, 4132c45a372c217e9a770bd7bd6b1b5639b9d50e.
+Updated: 2026-09-27 for PR #53 R1/R2/R4. Exact-head build, test and CI evidence is in the PDD `CP53-RETTINGER.md` handoff.
 
 ## Admission precedes every Cell operation
 
@@ -65,7 +65,10 @@ Consumption precedes verification, so at most one concurrent proof can win.
 
 The server has a local monotonic 10-second pre-auth deadline. The challenge has a
 30-second signing lifetime and the channel expires after at most five minutes.
-Both monotonic and absolute checks are repeated at activation and dispatch. A
+Both monotonic and absolute checks are repeated at activation and dispatch.
+The client accepts issuance at exactly +5 seconds, rejects issuance at −30 seconds,
+and rechecks the challenge after the awaited local signer. Server activation also
+rechecks the original challenge's wall-clock expiry after awaited policy. A
 restarted process, another connection or another generation has no matching pending
 state, so an old proof cannot resume a channel.
 
@@ -101,7 +104,8 @@ let admission = try BridgeChannelTransport(
 Retain the admission object for the connection. For multiplex, the factory returns
 `BridgeMultiplexServerSession(physicalTransport: admittedTransport, bridgeOwner: …)`;
 its logical transports inherit the same verified session. Closing one logical
-channel cancels its work and releases its quota without revoking sibling channels.
+channel retires its transport without revoking sibling channels. Its quota is
+released only when the channel record and already-started work have finished.
 This also holds if close arrives while the host channel factory is suspended;
 the canceled opening sends no stale acknowledgement or rejection.
 The factory receives the minimal proven principal, not wire-supplied metadata.
@@ -147,6 +151,20 @@ attempts globally, 60 per trusted source and 12 verified handshakes per proven k
 Rate buckets are bounded (4096); unknown sources cannot evict unexpired buckets.
 Unproved UUIDs never consume a victim's key-specific bucket. These are configurable
 starting values, not measured production capacity.
+
+Closed socket records remain in the bounded accounting table while any operation,
+feed, logical channel, pending admission/factory, send bytes or physical close is
+still outstanding. Admission counts these retained records. Cancellation is
+requested for tracked transport work; a cancellation request does not release its
+reservation. Non-cooperative awaited code keeps its reservation until it returns.
+Global defaults additionally cap Cell operations at 256, feeds at 128, logical
+channels at 256 and tracked work at 512 (64 per connection). Completed work removes
+its closed record; there is no ever-growing retired-ID set. Feed delivery tasks
+reserve operation capacity before they are enqueued. Feed and logical-channel
+leases release exactly once, including after replacement or natural completion.
+An exhausted global budget denies new work; these limits do not promise service
+under unlimited Sybil load. Tests demonstrate independent service while capacity
+remains and recovery after the retained work completes.
 Pre-auth wire envelopes are limited to 16 KiB; ordinary bridge payload
 limits still apply. The host must also bound WebSocket frames, accumulated fragments
 and ingress task/CPU scheduling **before** JSON decoding. Transport-side limits do
@@ -161,7 +179,7 @@ transport loss and replacement invalidate the session and local proof leases and
 cancel feeds and fail pending callbacks. Suspended old replies retain their old
 transport; a late close callback cannot invalidate a replacement generation.
 Concurrent feed admissions are bounded, and closure is rechecked after awaiting
-the Cell's stream. The physical transport is released on close.
+the Cell's stream. The physical transport reservation remains until its close actually returns.
 
 `sharedLimits.revoke` invalidates currently admitted leases; it is not a durable
 revoked-key database. The host must supply authoritative current key/link policy in
@@ -172,8 +190,17 @@ propagation or host-policy freshness guarantee is inferred from local invalidati
 physical connection and fresh proof. `using:` may supply a fresh configured physical
 adapter; it must not reuse an adapter still owned by another connection. It ends
 the old streams and pending work;
-subscriptions and writes are not automatically replayed. Expired resolver cache
+subscriptions and writes are not automatically replayed. Logical server sends
+compare the original transport object with the active channel record, so reuse of
+a wire channel ID cannot admit an old response. Sign denials capture the original
+transport before awaiting auditing, just like successful replies. Bytes already
+accepted by an underlying socket cannot be recalled; neither close nor revocation
+rolls back a Cell mutation that already occurred. Expired resolver cache
 entries and multiplex pool sessions are replaced on a new client resolution.
+The security-bound pool shares live unauthenticated/verifying setup as well as
+active sessions. Closed, revoked and expired sessions cannot be reused; replacement
+retires the previous pool entry. A shared setup failure reaches all waiters, and a
+later resolution starts a fresh session.
 A failed send is surfaced; an already-issued write may have an unknown outcome.
 The caller must reconcile it, not retry blindly. Application heartbeat/drain,
 revocation-source freshness and measured ≤30-second recovery are integration checks
@@ -222,3 +249,36 @@ remain host integration obligations.
 
 Actual proxy hardening, real client WSS paths, staging recovery and release readiness are separate AP5–AP9
 integration evidence. See the PDD handoff for exact test/CI results and open findings.
+
+## AP9a regression evidence and explicit limits
+
+The R1/R2/R4 suites include same-channel-ID/cid reuse during suspended get/set/sign
+rejection, actual dedicated renewal with an old sign rejection, retained quotas
+across non-cooperative policy/factory/Cell/feed/send/close, multiple independent
+signing keys, and parallel **CellResolver** resolutions sharing a suspended real
+client auth wrapper. Command admission enumerates all 29 `Command` cases in both
+directions, plus independent response entry and well-formed authentication order
+failures. Lookup instrumentation counts actual `cellAtEndpoint` calls separately
+from unregister/cleanup. Scope tests regenerate canonical signing bytes for each
+changed publisher/bridge ID/host/environment/domain. Clock tests separate wall and
+monotonic motion, and check exact skew boundaries.
+
+`BridgeChannelProcessTests` starts a separate macOS XCTest server process and uses
+real loopback WebSockets. It receives only the public client descriptor, has an
+instrumented signer trap, performs a protected owner read using the client's
+scoped signer, and inspects wire/persisted/log artifacts for a synthetic private
+marker. The public SecureKey discriminator `privateKey:false` is valid; actual
+private-key values are rejected by the artifact check. This test is macOS-only;
+its worker test runs only as a child of the parent test.
+
+The action-parity test executes a Cell action requiring `--x-` and calls actual
+`GeneralCell.attach` through a protected Cell action. It checks wrong permissions,
+keypath, domain, expired/revoked contracts and purpose. It does **not** certify the
+legacy `BridgeBase.attach` → `connectEmitter` wire API: the existing receiver has no
+`connectEmitter` handler. That separate generic attach capability remains
+unsupported; no new reverse-bridge authority was added to make this test pass.
+
+ScannerService still requires Kjetil's explicit peer-profile migration or support
+withdrawal decision (R3); Binding's custom transport is consumer work (N05).
+Neither is certified by these WS-adapter tests. Host ingress fragment/CPU limits,
+drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evidence.

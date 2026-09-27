@@ -54,7 +54,7 @@ private final class MockLightweightWebSocketClient: LightweightWebSocketClient, 
     }
 
     func emit(command: BridgeCommand) async throws {
-        let data = try JSONEncoder().encode(command)
+        let data = try command.cmd.hasPrefix("channelAuth") ? BridgeChannelAuthentication.encode(command) : JSONEncoder().encode(command)
         await delegate?.client(self, didReceive: data)
     }
 }
@@ -162,6 +162,60 @@ final class LightweightBridgeTransportTests: XCTestCase {
             catch {}
         }
         await transport.close()
+    }
+
+    func testCopiedLocalKeyWithoutDelegateStillCannotObtainSigner() async throws {
+        let vault = MockIdentityVault(); CellBase.defaultIdentityVault = vault
+        let local = await vault.identity(for: "local", makeNewIfNotFound: true)!
+        let socket = MockLightweightWebSocketClient(), transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
+        try await transport.setup(URL(string: "wss://bridge.example/cell")!, identity: local)
+        for name in ["get", "response"] {
+            try await socket.emit(command: .init(cmd: name, identity: local.publicIdentitySnapshot(), payload: nil, cid: 1))
+        }
+        let remote = await transport.identityVault(for: local.publicIdentitySnapshot())
+        XCTAssertTrue(remote is BridgeIdentityVault)
+        let challenge = try IdentitySigningChallenge.signingData(for: local, trustedIdentity: local, domain: "bridge", resource: "probe", action: "checkIdentityOrigin", audience: "GeneralCell", nonce: Data(repeating: 8, count: 32))
+        do { _ = try await remote.signMessageForIdentity(messageData: challenge, identity: local); XCTFail("Borrowed signer without delegate") } catch {}
+        await transport.close()
+    }
+
+    func testMultiplexDecodedCommandAndResponseHaveProxyVaultBeforeBridgeBase() async throws {
+        typealias A = BridgeChannelAuthentication
+        let vault = MockIdentityVault(); CellBase.defaultIdentityVault = vault
+        let local = await vault.identity(for: "local", makeNewIfNotFound: true)!
+        let socket = MockLightweightWebSocketClient(), physical = LightweightBridgeTransport(connectionFactory: { _ in socket })
+        let target = try A.Endpoint(url: URL(string: "wss://bridge.example/cell")!, domain: "bridge")
+        let observed = RecordingBridgeDelegate()
+        let gate = try BridgeChannelTransport(underlying: physical, endpoint: target, limits: BridgeChannelLimits(), source: "one") { transport, _ in
+            BridgeMultiplexServerSession(physicalTransport: transport) { _, _, _ in observed }
+        }
+        try await physical.setup(URL(string: target.audience)!, identity: local)
+        let client = try BridgeChannelClientOperation(owner: local, endpoint: target)
+        func auth(_ name: String, _ value: some Encodable) throws -> BridgeCommand {
+            .init(cmd: name, payload: .string(String(decoding: try A.encode(value), as: UTF8.self)), cid: 0)
+        }
+        try await socket.emit(command: auth("channelAuthHello", client.hello))
+        let challengeFrame = try JSONDecoder().decode(BridgeCommand.self, from: XCTUnwrap(socket.sentData.last))
+        guard case let .string(challengeText) = challengeFrame.payload else { return XCTFail("Missing challenge") }
+        let challenge = try A.decode(A.Challenge.self, from: Data(challengeText.utf8))
+        try await socket.emit(command: auth("channelAuthProof", await client.sign(challenge)))
+        XCTAssertEqual(gate.session.state, .authenticated)
+        let channel = UUID().uuidString
+        try await socket.emit(command: .init(cmd: "openChannel", identity: local.publicIdentitySnapshot(), payload: nil, cid: 1,
+                                            protocolVersion: 2, channelID: channel, targetEndpoint: "Protected"))
+        for name in ["get", "response"] {
+            try await socket.emit(command: .init(cmd: name, identity: local.publicIdentitySnapshot(), payload: .string("value"), cid: 2,
+                                                protocolVersion: 2, channelID: channel))
+        }
+        let commands = await observed.consumedCommands, responses = await observed.consumedResponses
+        XCTAssertEqual(commands.count, 1); XCTAssertEqual(responses.count, 1)
+        for command in commands + responses {
+            let identity = try XCTUnwrap(command.identity)
+            XCTAssertEqual(identity.signingPublicKeyFingerprint, local.signingPublicKeyFingerprint)
+            XCTAssertTrue(identity.identityVault is BridgeIdentityVault, "Observed at mux delegate, before any BridgeBase sanitization")
+            do { _ = try await identity.identityVault!.signMessageForIdentity(messageData: challenge.signingData, identity: identity); XCTFail("Borrowed local key") } catch {}
+        }
+        await gate.close()
     }
 
     func testSendDataUsesBinaryFramesByDefaultAndPerformsInitialPing() async throws {

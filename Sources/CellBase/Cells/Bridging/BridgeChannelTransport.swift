@@ -31,10 +31,12 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     public init(underlying: BridgeTransportProtocol, endpoint: Auth.Endpoint,
                 limits: BridgeChannelLimits, source: String,
                 recheckPolicy: @escaping @Sendable (Auth.PublicIdentity) async throws -> Void = { _ in },
+                wallClock: @escaping @Sendable () -> Date = { Date() },
+                monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                 factory: @escaping ServerFactory) throws {
         self.underlying = underlying
         self.newPhysicalTransport = { [transportType = type(of: underlying)] in transportType.new() }
-        self.session = try BridgeChannelSession(endpoint: endpoint, limits: limits, source: source)
+        self.session = try BridgeChannelSession(endpoint: endpoint, limits: limits, source: source, wallClock: wallClock, monotonic: monotonic)
         self.factory = factory; self.recheckPolicy = recheckPolicy; isServer = true
         install()
     }
@@ -44,6 +46,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         install()
     }
     private func install() {
+        session.retainTransport()
         session.onClose { [weak self] in
             guard let self else { return }
             Task { await self.close() }
@@ -51,7 +54,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         underlying?.setDelegate(self)
         scheduleExpiry(seconds: 10)
     }
-    deinit { timer?.cancel(); session.close() }
+    deinit { timer?.cancel(); session.close(); session.releaseTransport() }
 
     public static func new() -> BridgeTransportProtocol {
         // A configured origin and physical transport are mandatory.
@@ -227,6 +230,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             return result
         }
         guard let cleanup else { return }
+        defer { session.releaseTransport() }
         session.close()
         await cleanup.1?.cancel()
         if let bridge = cleanup.0 as? BridgeBase {

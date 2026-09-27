@@ -3,7 +3,7 @@
 
 import Foundation
 
-public enum Command: String {
+public enum Command: String, CaseIterable {
     case ready
     case description // = "&description"
     

@@ -34,8 +34,9 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         var closed = false
         var work = 0
         var admissions = 0
+        var transportRetained = false
         var retainsPending: Bool { !active || admissions > 0 }
-        var hasResources: Bool { operations > 0 || feeds > 0 || channels > 0 || sendBytes > 0 || work > 0 }
+        var hasResources: Bool { operations > 0 || feeds > 0 || channels > 0 || sendBytes > 0 || work > 0 || transportRetained }
         var operations = 0
         var feeds = 0
         var channels = 0
@@ -160,6 +161,12 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             storeOrRemove(entry, id: id)
         }
     }
+    func retainTransport(_ id: String) {
+        lock.withLock { if var entry = entries[id] { entry.transportRetained = true; entries[id] = entry } }
+    }
+    func releaseTransport(_ id: String) {
+        lock.withLock { if var entry = entries[id] { entry.transportRetained = false; storeOrRemove(entry, id: id) } }
+    }
     func acquireWork(_ id: String, admission: Bool) throws {
         try lock.withLock {
             guard var entry = entries[id], !entry.closed else { throw BridgeChannelAuthentication.Failure.closed }
@@ -210,6 +217,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
     private var identityValue: Auth.PublicIdentity?
     private var authValue: Auth.Authenticated?
     private var absoluteExpiry: Date?
+    private var handshakeExpiry: Date?
     private var deadline: TimeInterval
     private let monotonic: @Sendable () -> TimeInterval
     private let wallClock: @Sendable () -> Date
@@ -238,6 +246,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
             guard monotonic() < deadline else { throw Auth.Failure.expired }
             let challenge = try Auth.challenge(hello: hello, endpoint: endpoint, generation: generation, now: wallClock())
             pending = challenge
+            handshakeExpiry = Date(timeIntervalSince1970: Double(challenge.transcript.issuedAtMilliseconds) / 1000 + Auth.challengeLifetime)
             stateValue = .challengeIssued
             return challenge
         }
@@ -277,13 +286,15 @@ public final class BridgeChannelSession: @unchecked Sendable {
     public func recheckBeforeActivation() throws {
         try lock.withLock {
             guard stateValue == .verifying, identityValue != nil, monotonic() < deadline,
-                  let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+                  let expiry = absoluteExpiry, wallClock() < expiry,
+                  let handshakeExpiry, wallClock() < handshakeExpiry else { throw Auth.Failure.expired }
         }
     }
     public func activate() throws -> Auth.Authenticated {
         try lock.withLock {
             guard stateValue == .verifying, monotonic() < deadline, let authValue,
-                  let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+                  let expiry = absoluteExpiry, wallClock() < expiry,
+                  let handshakeExpiry, wallClock() < handshakeExpiry else { throw Auth.Failure.expired }
             try limits?.activate(generation)
             deadline = monotonic() + min(Auth.channelLifetime, expiry.timeIntervalSince(wallClock()))
             stateValue = .authenticated
@@ -323,6 +334,8 @@ public final class BridgeChannelSession: @unchecked Sendable {
             return absoluteExpiry.map { wallClock() < $0 } ?? true
         }
     }
+    func retainTransport() { limits?.retainTransport(generation) }
+    func releaseTransport() { limits?.releaseTransport(generation) }
     func acquireWork(admission: Bool) throws { try limits?.acquireWork(generation, admission: admission) }
     func releaseWork(admission: Bool) { limits?.releaseWork(generation, admission: admission) }
     func acquireSend(bytes: Int, authenticating: Bool = false) throws {
