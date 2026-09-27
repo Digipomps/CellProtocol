@@ -3,7 +3,12 @@
 
 import Foundation
 import XCTest
-@testable import CellBase
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
+@_spi(HAVENRuntime) @testable import CellBase
 
 final class BridgeChannelTransportTests: XCTestCase {
     typealias A = BridgeChannelAuthentication
@@ -47,7 +52,7 @@ final class BridgeChannelTransportTests: XCTestCase {
     func testRealTwoEndpointHandshakeAndOwnerProofThenPrincipalSwapAndRevocation() async throws {
         let owner = await identity()
         let serverOwner = await identity("server")
-        let serverVault = MockIdentityVault()
+        let serverVault = SigningTrapVault()
         CellBase.defaultIdentityVault = serverVault
         let hasClientKey = await serverVault.identityExistInVault(owner)
         XCTAssertFalse(hasClientKey)
@@ -120,6 +125,14 @@ final class BridgeChannelTransportTests: XCTestCase {
         try await channel.setup(URL(string: endpoint.audience)!, identity: owner)
         try await bridge.ready()
         XCTAssertTrue(serverWire.snapshot.contains { $0.command == .channelOpened })
+        let sibling = try multiplex.channelTransport(targetEndpoint: "Protected")
+        let siblingBridge = try await BridgeBase(.init(owner: owner, transport: sibling, connection: .outbound))
+        try await siblingBridge.setTransport(sibling, connection: .outbound)
+        try await sibling.setup(URL(string: endpoint.audience)!, identity: owner)
+        await channel.close()
+        XCTAssertFalse(bridge.hasAuthenticatedChannel)
+        XCTAssertTrue(siblingBridge.hasAuthenticatedChannel)
+        XCTAssertEqual(server.session.state, .authenticated)
         let attacker = await identity()
         do {
             try await server.consumeCommand(command: .init(cmd: "openChannel", identity: attacker, payload: nil, cid: 999,
@@ -193,6 +206,92 @@ final class BridgeChannelTransportTests: XCTestCase {
         await revoked.clientGate.close(); await revoked.serverGate.close()
     }
 
+    func testRenewalReprovesIdentityAndLateOldCloseCannotRetireNewGeneration() async throws {
+        let owner = await identity(), publisher = await GeneralCell(owner: await identity("server"))
+        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "Protected", emitCell: publisher, scope: .template, identity: owner)
+        let pair = try await connected(owner: owner, serverOwner: owner, publisher: publisher)
+        let oldSession = pair.clientGate.session
+        let nextClientWire = ChannelWire(), nextServerWire = ChannelWire()
+        nextClientWire.peer = nextServerWire; nextServerWire.peer = nextClientWire
+        let nextServer = try BridgeChannelTransport(underlying: nextServerWire, endpoint: endpoint(), limits: BridgeChannelLimits(), source: "next") { transport, _ in
+            let bridge = try await BridgeBase(.init(owner: owner, transport: transport, connection: .inbound(publisherUuid: "Protected")))
+            try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Protected"))
+            return bridge
+        }
+        try await pair.client.renewAuthenticatedChannel(requester: owner, using: nextClientWire)
+        await pair.client.channelDidClose(oldSession)
+        XCTAssertTrue(pair.client.hasAuthenticatedChannel)
+        XCTAssertEqual(oldSession.state, .closed)
+        XCTAssertNotEqual(nextServer.session.generation, pair.serverGate.session.generation)
+        XCTAssertEqual(nextClientWire.snapshot.map(\.cmd), ["channelAuthHello", "channelAuthProof"])
+        XCTAssertFalse(nextClientWire.snapshot.contains { $0.command == .set || $0.command == .feed })
+        await pair.client.transport?.close(); await pair.serverGate.close(); await nextServer.close()
+    }
+
+    func testTransportLossFailsPendingGetAndDoesNotReplayIt() async throws {
+        let owner = await identity(), bridge = BridgeBase(owner: await identity())
+        let physical = MockBridgeTransport()
+        try await bridge.setTransport(physical, connection: .outbound)
+        try await authenticateBridgeFixture(bridge, principal: owner)
+        let pending = Task { try await bridge.get(keypath: "pending", requester: owner) }
+        for _ in 0..<100 {
+            if !physical.sentData.isEmpty { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(physical.sentData.count, 1)
+        await bridge.pushError(errorMessage: "bridge_transport_closed", error: A.Failure.closed)
+        do { _ = try await pending.value; XCTFail("Transport loss must fail pending read") } catch {}
+        XCTAssertFalse(bridge.hasAuthenticatedChannel)
+        XCTAssertEqual(physical.sentData.count, 1)
+    }
+
+    func testAuthenticatedFeedStopsAtChannelRevocation() async throws {
+        let owner = await identity(), publisher = await GeneralCell(owner: owner.publicIdentitySnapshot())
+        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "Protected", emitCell: publisher, scope: .template, identity: owner)
+        let pair = try await connected(owner: owner, serverOwner: owner, publisher: publisher)
+        let before = expectation(description: "authenticated feed delivered")
+        let values = ChannelCounter()
+        let stream = try await pair.client.flow(requester: owner)
+        let subscription = stream.sink(receiveCompletion: { _ in }, receiveValue: { event in
+            if event.title == "before" { before.fulfill() }
+            values.increment()
+        })
+        let emitterValue = await publisher.makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
+        let emit = try XCTUnwrap(emitterValue)
+        emit(.init(title: "before", content: .string("before"), properties: nil))
+        await fulfillment(of: [before], timeout: 2)
+        pair.serverGate.session.revoke()
+        await pair.serverGate.close()
+        emit(.init(title: "after", content: .string("after"), properties: nil))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(values.value, 1)
+        XCTAssertFalse(pair.serverWire.snapshot.contains { if case let .flowElement(event) = $0.payload { return event.title == "after" }; return false })
+        subscription.cancel(); await pair.clientGate.close()
+    }
+
+    func testSuspendedOldReadCannotDeliverItsResponseOnReplacementTransport() async throws {
+        let owner = await identity(), barrier = ChannelPolicyBarrier()
+        let entered = expectation(description: "old read entered cell")
+        let cell = await SuspendedChannelReadCell(owner: owner)
+        cell.read = { entered.fulfill(); await barrier.wait(); return .string("old-private-result") }
+        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
+        let oldWire = MockBridgeTransport(), newWire = MockBridgeTransport()
+        let bridge = try await BridgeBase(.init(owner: owner, transport: oldWire, connection: .inbound(publisherUuid: "Protected")))
+        try await bridge.setTransport(oldWire, connection: .inbound(publisherUuid: "Protected"))
+        try await authenticateBridgeFixture(bridge, principal: owner)
+        let read = Task { try await bridge.consumeCommand(command: .init(cmd: "get", identity: owner, payload: .string("secret"), cid: 1)) }
+        await fulfillment(of: [entered], timeout: 2)
+        try await bridge.setTransport(newWire, connection: .inbound(publisherUuid: "Protected"))
+        try await authenticateBridgeFixture(bridge, principal: owner)
+        await barrier.resume()
+        try await read.value
+        XCTAssertTrue(newWire.sentData.isEmpty)
+        XCTAssertTrue(oldWire.sentData.isEmpty)
+    }
+
     private func connected(owner: Identity, serverOwner: Identity, publisher: GeneralCell) async throws ->
         (client: BridgeBase, clientGate: BridgeChannelTransport, serverGate: BridgeChannelTransport, clientWire: ChannelWire, serverWire: ChannelWire) {
         let clientWire = ChannelWire(), serverWire = ChannelWire(), endpoint = try endpoint()
@@ -244,4 +343,11 @@ private final class ChannelWire: BridgeTransportProtocol, @unchecked Sendable {
     }
     func close() async { lock.withLock { closed = true } }
     func identityVault(for identity: Identity?) async -> IdentityVaultProtocol { BridgeIdentityVault() }
+}
+
+private final class SuspendedChannelReadCell: GeneralCell {
+    var read: (() async -> ValueType)?
+    override func get(keypath: String, requester: Identity) async throws -> ValueType {
+        await read?() ?? .string("missing fixture")
+    }
 }

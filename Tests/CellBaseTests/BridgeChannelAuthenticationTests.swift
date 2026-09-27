@@ -210,6 +210,71 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
         XCTAssertEqual(limits.connectionCount, 0)
     }
 
+    func testRateLimitsSurviveCloseAndDoNotUseUnprovedVictimIdentity() async throws {
+        let clock = ChannelTestClock()
+        var config = BridgeChannelLimits.Configuration()
+        config.maximumAttemptsPerMinute = 3
+        config.maximumAttemptsPerSourcePerMinute = 1
+        config.maximumVerifiedHandshakesPerKeyPerMinute = 1
+        let limits = BridgeChannelLimits(configuration: config, monotonic: { clock.uptime })
+        let identity = await owner()
+        func prove(_ source: String) async throws -> BridgeChannelSession {
+            let session = try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: source)
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint())
+            do { try session.reserveOpen(try await client.sign(session.issueChallenge(client.hello))); _ = try session.activate() }
+            catch { session.close(); throw error }
+            return session
+        }
+        let first = try await prove("one")
+        first.close()
+        XCTAssertThrowsError(try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: "one"))
+        do { _ = try await prove("two"); XCTFail("Verified key rate survives disconnect") } catch {}
+        XCTAssertThrowsError(try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: "three"))
+        XCTAssertEqual(limits.connectionCount, 0)
+        clock.advance(61)
+        let renewed = try await prove("one")
+        renewed.close()
+        var tiny = BridgeChannelLimits.Configuration(); tiny.maximumRateBuckets = 1
+        let bounded = BridgeChannelLimits(configuration: tiny)
+        XCTAssertThrowsError(try BridgeChannelSession(endpoint: endpoint(), limits: bounded, source: "new-source"))
+        XCTAssertEqual(bounded.connectionCount, 0)
+    }
+
+    func testSharedResourceQuotasAndPendingAuditReleaseWithoutEviction() async throws {
+        var config = BridgeChannelLimits.Configuration()
+        config.maximumOperationsPerKey = 1; config.maximumFeedsPerKey = 1; config.maximumChannelsPerKey = 1
+        config.maximumPendingSendBytes = 10; config.maximumPendingSendBytesPerConnection = 8
+        let limits = BridgeChannelLimits(configuration: config), identity = await owner()
+        var sessions: [BridgeChannelSession] = []
+        for source in ["one", "two"] {
+            let session = try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: source)
+            let client = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint())
+            try session.reserveOpen(try await client.sign(session.issueChallenge(client.hello))); _ = try session.activate()
+            sessions.append(session)
+        }
+        for resource in [BridgeChannelLimits.Resource.operation, .feed, .channel] {
+            try sessions[0].acquire(resource)
+            XCTAssertThrowsError(try sessions[1].acquire(resource))
+            sessions[0].release(resource)
+            try sessions[1].acquire(resource); sessions[1].release(resource)
+        }
+        try sessions[0].acquireSend(bytes: 8)
+        XCTAssertThrowsError(try sessions[0].acquireSend(bytes: 1))
+        XCTAssertThrowsError(try sessions[1].acquireSend(bytes: 3))
+        try sessions[1].acquireSend(bytes: 2)
+        sessions[0].close()
+        try sessions[1].acquireSend(bytes: 6)
+        sessions[1].close(); XCTAssertEqual(limits.connectionCount, 0)
+        let audit = BridgeBaseAuditor(maximumPendingCommands: 1)
+        let command = BridgeCommand(cmd: "set", payload: nil, cid: 1)
+        let accepted = await audit.storeBridgeCommand(command, for: 1)
+        let refused = await audit.storeBridgeCommand(command, for: 2)
+        let retained = await audit.loadBridgeCommandForCommandId(1)
+        XCTAssertTrue(accepted); XCTAssertFalse(refused); XCTAssertNotNil(retained)
+        await audit.clear()
+        let count = await audit.pendingCommandCount(); XCTAssertEqual(count, 0)
+    }
+
     func testBoundedReplayStoreDoesNotEvictUnexpiredUsedNonce() async throws {
         let identity = await owner(), store = CellSecuritySigningChallengeReplayStore(maximumEntries: 1)
         let challenge = try IdentitySigningChallenge.validateSigningData(IdentitySigningChallenge.signingData(
@@ -232,7 +297,7 @@ private final class ChannelTestClock: @unchecked Sendable {
     }
 }
 
-private actor SigningTrapVault: IdentityVaultProtocol {
+actor SigningTrapVault: IdentityVaultProtocol {
     var calls = 0
     func initialize() async -> IdentityVaultProtocol { self }
     func addIdentity(identity: inout Identity, for identityContext: String) async { XCTFail("Server must not store client identity") }

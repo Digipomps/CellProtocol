@@ -67,6 +67,13 @@ public enum BridgeChannelAuthentication {
         public let domain: String
         public var audience: String { origin + route }
 
+        public func validate() throws {
+            guard let url = URL(string: audience),
+                  try Endpoint(url: url, domain: domain, allowInsecureLoopback: origin.hasPrefix("ws://")) == self else {
+                throw Failure.malformed
+            }
+        }
+
         public init(url: URL, domain: String, allowInsecureLoopback: Bool = false) throws {
             guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let scheme = c.scheme, let host = c.host,

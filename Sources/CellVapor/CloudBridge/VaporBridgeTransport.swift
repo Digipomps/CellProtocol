@@ -17,6 +17,19 @@ private enum VaporBridgeTransportEventLoops {
     static let shared = MultiThreadedEventLoopGroup(numberOfThreads: 2)
 }
 
+private final class VaporBridgeSetupWaiter: @unchecked Sendable {
+    let promise: EventLoopPromise<Void>
+    private let lock = NSLock()
+    private var completed = false
+    init(on eventLoop: any EventLoop) { promise = eventLoop.makePromise(of: Void.self) }
+    func complete(_ result: Result<Void, Error>) {
+        let first = lock.withLock { () -> Bool in
+            guard !completed else { return false }; completed = true; return true
+        }
+        if first { promise.completeWith(result) }
+    }
+}
+
 struct VaporBridgeIdentitySnapshot: Sendable {
     private let encodedIdentity: Data?
     private let fallbackUUID: String
@@ -55,6 +68,8 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private var delegate: BridgeDelegateProtocol?
     private var webSocket: WebSocket?
     private var closeCleanupCompleted = false
+    private var connectionGeneration = UUID()
+    private var setupWaiter: VaporBridgeSetupWaiter?
     private var closeUnderlyingChannel: (@Sendable () async -> Void)?
     
 
@@ -94,26 +109,35 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
     
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
-        websocketEndpointURL = endpointURL
-        if let websocketEndpointURL = websocketEndpointURL {
-//            let promise = eventLoopGroup.next().makePromise(of: String.self) // We should probably use promise and not semaphore
-            let identitySnapshot = VaporBridgeIdentitySnapshot(identity)
-            let _ = try await WebSocket.connect(to: websocketEndpointURL.absoluteString, on: VaporBridgeTransportEventLoops.shared) { [weak self] ws in
-                    // Connected WebSocket.
-                   guard let self = self else {return}
-                  self.setWebSocket(ws)
-                   Task { [weak self, identitySnapshot] in // Hmm - should Task be broader scoped?
-                       guard let self else {
-                           return
-                       }
-                       await self.currentDelegate()?.sendCommand(
-                           command: .description,
-                           identity: identitySnapshot.makeIdentity(),
-                           payload: nil
-                       )
-                   }
-                }
-            
+        let generation = UUID(), loop = VaporBridgeTransportEventLoops.shared.next()
+        let waiter = VaporBridgeSetupWaiter(on: loop)
+        withStateLock { connectionGeneration = generation; setupWaiter = waiter }
+        let timeout = loop.scheduleTask(in: .seconds(10)) { waiter.complete(.failure(TransportError.TransportNotFound)) }
+        defer { timeout.cancel() }
+        let snapshot = VaporBridgeIdentitySnapshot(identity)
+        // WebSocketKit's HTTP upgrade future may complete before onUpgrade has
+        // installed our socket. Readiness is this explicit callback, not that future.
+        let connection: EventLoopFuture<Void> = WebSocket.connect(to: endpointURL.absoluteString, on: VaporBridgeTransportEventLoops.shared) { [weak self] socket in
+            guard let self else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
+            let installed = self.withStateLock { () -> Bool in
+                guard self.connectionGeneration == generation, self.setupWaiter === waiter else { return false }
+                self.webSocket = socket; self.closeCleanupCompleted = false
+                return true
+            }
+            guard installed else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
+            self.setupWebSocketCallbacks(on: socket)
+            waiter.complete(.success(()))
+            Task { [weak self] in
+                await self?.currentDelegate()?.sendCommand(command: .description, identity: snapshot.makeIdentity(), payload: nil)
+            }
+        }
+        connection.whenFailure { waiter.complete(.failure($0)) }
+        do {
+            try await waiter.promise.futureResult.get()
+            withStateLock { if setupWaiter === waiter { setupWaiter = nil } }
+        } catch {
+            await close()
+            throw error
         }
     }
     
@@ -138,6 +162,11 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     public func close() async {
+        let pendingSetup = withStateLock { () -> VaporBridgeSetupWaiter? in
+            connectionGeneration = UUID()
+            let pending = setupWaiter; setupWaiter = nil; return pending
+        }
+        pendingSetup?.complete(.failure(TransportError.TransportNotFound))
         let socket = withStateLock { () -> WebSocket? in
             let socket = webSocket; webSocket = nil; return socket
         }

@@ -130,6 +130,40 @@ final class LightweightBridgeTransportTests: XCTestCase {
         super.tearDown()
     }
 
+    func testCopiedRealLocalKeyOnCommandAndResponseNeverObtainsSigner() async throws {
+        let previous = CellBase.defaultIdentityVault
+        defer { CellBase.defaultIdentityVault = previous }
+        let vault = MockIdentityVault(); CellBase.defaultIdentityVault = vault
+        let local = await vault.identity(for: "local", makeNewIfNotFound: true)!
+        let descriptor = local.publicIdentitySnapshot()
+        let challenge = try IdentitySigningChallenge.signingData(for: descriptor, trustedIdentity: local,
+            domain: "bridge", resource: "probe", action: "checkIdentityOrigin", audience: "GeneralCell",
+            nonce: Data(repeating: 9, count: 32))
+        let signature = try await vault.signMessageForIdentity(messageData: challenge, identity: local)
+        XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: challenge, identity: descriptor))
+        let socket = MockLightweightWebSocketClient()
+        let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })
+        let delegate = RecordingBridgeDelegate()
+        transport.setDelegate(delegate)
+        try await transport.setup(URL(string: "wss://bridge.example/cell")!, identity: local)
+        for name in ["get", "response"] {
+            let command = BridgeCommand(cmd: name, identity: descriptor, payload: nil, cid: 1)
+            try await socket.emit(command: command)
+        }
+        let commands = await delegate.consumedCommands
+        let responses = await delegate.consumedResponses
+        XCTAssertEqual(commands.count, 1); XCTAssertEqual(responses.count, 1)
+        for command in commands + responses {
+            let received = try XCTUnwrap(command.identity)
+            XCTAssertEqual(received.signingPublicKeyFingerprint, local.signingPublicKeyFingerprint)
+            let remoteVault = try XCTUnwrap(received.identityVault)
+            XCTAssertTrue(remoteVault is BridgeIdentityVault)
+            do { _ = try await remoteVault.signMessageForIdentity(messageData: challenge, identity: received); XCTFail("Borrowed local signing key") }
+            catch {}
+        }
+        await transport.close()
+    }
+
     func testSendDataUsesBinaryFramesByDefaultAndPerformsInitialPing() async throws {
         let socket = MockLightweightWebSocketClient()
         let transport = LightweightBridgeTransport(connectionFactory: { _ in socket })

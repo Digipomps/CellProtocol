@@ -16,6 +16,7 @@ public actor BridgeChannelClientOperation {
     private var challengeValue: Auth.Challenge?
 
     public init(owner: Identity, endpoint: Auth.Endpoint) throws {
+        try endpoint.validate()
         self.owner = owner.publicIdentitySnapshot()
         self.owner.identityVault = owner.identityVault
         self.endpoint = endpoint

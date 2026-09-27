@@ -942,6 +942,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
             await delegate?.pushError(errorMessage: "Rejected invalid bridge payload", error: nil)
             return
         } catch {
+            await delegate?.pushError(errorMessage: "bridge_payload_rejected", error: error)
             return
         }
         guard let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),

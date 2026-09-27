@@ -181,10 +181,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.check()
         } catch { await close(); throw error }
     }
-    func replacementForRenewal() async throws -> BridgeChannelTransport {
+    func replacementForRenewal(using physical: BridgeTransportProtocol? = nil) async throws -> BridgeChannelTransport {
         guard !isServer else { throw Auth.Failure.unexpectedMessage }
         await close()
-        return try BridgeChannelTransport(underlying: newPhysicalTransport(), endpoint: session.endpoint)
+        return try BridgeChannelTransport(underlying: physical ?? newPhysicalTransport(), endpoint: session.endpoint)
     }
 
     public func close() async {

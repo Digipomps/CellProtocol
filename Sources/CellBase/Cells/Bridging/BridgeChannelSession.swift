@@ -16,6 +16,10 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         public var maximumChannelsPerKey = 16
         public var maximumPendingSendBytes = 16 * 1024 * 1024
         public var maximumPendingSendBytesPerConnection = 4 * 1024 * 1024
+        public var maximumAttemptsPerMinute = 512
+        public var maximumAttemptsPerSourcePerMinute = 60
+        public var maximumVerifiedHandshakesPerKeyPerMinute = 12
+        public var maximumRateBuckets = 4096
         public init() {}
     }
     private struct Entry {
@@ -30,10 +34,35 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     public let configuration: Configuration
-    public init(configuration: Configuration = .init()) { self.configuration = configuration }
+    private struct RateBucket { var started: TimeInterval; var count: Int }
+    private var rateBuckets: [String: RateBucket] = [:]
+    private let monotonic: @Sendable () -> TimeInterval
+    public init(configuration: Configuration = .init(),
+                monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.configuration = configuration; self.monotonic = monotonic
+    }
+
+    // Fixed 60-second windows. Entries outlive sockets, so close/reconnect cannot
+    // reset the rate. Never allocate a bucket from an unverified identity UUID.
+    private func consumeRate(_ key: String, maximum: Int) throws {
+        let now = monotonic()
+        rateBuckets = rateBuckets.filter { now < $0.value.started + 60 }
+        if var bucket = rateBuckets[key] {
+            guard bucket.count < maximum else { throw BridgeChannelAuthentication.Failure.capacity }
+            bucket.count += 1; rateBuckets[key] = bucket
+        } else {
+            guard maximum > 0, rateBuckets.count < configuration.maximumRateBuckets else {
+                throw BridgeChannelAuthentication.Failure.capacity
+            }
+            rateBuckets[key] = RateBucket(started: now, count: 1)
+        }
+    }
 
     func reserve(_ id: String, source: String, revoke: @escaping @Sendable () -> Void) throws {
         try lock.withLock {
+            guard source.utf8.count <= 256 else { throw BridgeChannelAuthentication.Failure.capacity }
+            try consumeRate("global", maximum: configuration.maximumAttemptsPerMinute)
+            try consumeRate("source:" + source, maximum: configuration.maximumAttemptsPerSourcePerMinute)
             guard entries[id] == nil,
                   entries.count < configuration.maximumConnections,
                   entries.values.filter({ $0.principal == nil }).count < configuration.maximumPending,
@@ -49,6 +78,7 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             guard entries.values.filter({ $0.principal == principal }).count < configuration.maximumConnectionsPerKey else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
+            try consumeRate("key:" + principal, maximum: configuration.maximumVerifiedHandshakesPerKeyPerMinute)
             entry.principal = principal
             entries[id] = entry
         }
@@ -136,6 +166,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
     public init(endpoint: Auth.Endpoint, limits: BridgeChannelLimits? = nil, source: String = "local",
                 wallClock: @escaping @Sendable () -> Date = { Date() },
                 monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
+        try endpoint.validate()
         self.endpoint = endpoint; self.limits = limits; self.wallClock = wallClock; self.monotonic = monotonic
         deadline = monotonic() + 10
         try limits?.reserve(generation, source: source) { [weak self] in self?.revoke() }

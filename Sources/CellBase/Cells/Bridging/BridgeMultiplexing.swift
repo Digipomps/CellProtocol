@@ -723,6 +723,7 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
 
     public func close() async {
         guard let closeState = takeCloseState() else { return }
+        if let bridge = closeState.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
         await closeState.session.releaseChannelTransport(
             channelID: channelID,
             identity: closeState.identity
@@ -745,12 +746,13 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
         }
     }
 
-    private func takeCloseState() -> (session: BridgeMultiplexSession, identity: Identity?)? {
+    private func takeCloseState() -> (session: BridgeMultiplexSession, identity: Identity?, delegate: BridgeDelegateProtocol?)? {
         stateLock.withLock {
             guard closed == false, let session else { return nil }
             closed = true
+            let previousDelegate = delegate
             delegate = nil
-            return (session, identity)
+            return (session, identity, previousDelegate)
         }
     }
 }
@@ -886,8 +888,9 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                   BridgeMultiplexSession.isValidChannelID(channelID) else {
                 throw BridgeMultiplexError.invalidChannel
             }
-            stateLock.withLock {
-                if channels.removeValue(forKey: channelID) != nil { channelSession.release(.channel) }
+            let removed = stateLock.withLock { () -> BridgeDelegateProtocol? in
+                let removed = channels.removeValue(forKey: channelID)
+                if removed != nil { channelSession.release(.channel) }
                 if pendingChannelIDs.contains(channelID) {
                     cancelledPendingChannelIDs.insert(channelID)
                 }
@@ -895,7 +898,10 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                     !$0.key.hasPrefix("\(channelID)|")
                 }
                 compactOutboundStreamInsertionOrderIfNeeded()
+                return removed?.delegate
             }
+            if let bridge = removed as? BridgeBase { await bridge.retireLogicalChannel() }
+            else { await removed?.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
         default:
             guard command.protocolVersion == protocolVersion,
                   let channelID = command.channelID,
@@ -987,7 +993,8 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             quotaReserved = true
             let channelTransport = ServerChannelTransport(session: self, channelID: channelID)
             try channelSession?.check(identity: identity, requiresIdentity: true)
-            let delegate = try await channelFactory(targetEndpoint, identity, channelTransport)
+            guard let principal = channelSession?.publicIdentity?.makeIdentity() else { throw BridgeChannelAuthentication.Failure.closed }
+            let delegate = try await channelFactory(targetEndpoint, principal, channelTransport)
             try channelSession?.check(identity: identity, requiresIdentity: true)
             channelTransport.setDelegate(delegate)
             let inserted = stateLock.withLock { () -> Bool in
@@ -1218,6 +1225,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             guard let session else { return }
             try? await session.consumeCommand(command: BridgeCommand(
                 cmd: Command.closeChannel.rawValue,
+                identity: session.channelSession?.publicIdentity?.makeIdentity(),
                 payload: nil,
                 cid: 0,
                 protocolVersion: session.protocolVersion,
