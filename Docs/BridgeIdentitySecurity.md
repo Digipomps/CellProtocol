@@ -1,6 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, 5232688fdfda08d36e00227df15acfdfd0e8eeef.
+Last verified against code: 2026-09-27, 229a15b18692b36d4cb6a9eafadf562c4feefbc5.
 
 ## Admission precedes every Cell operation
 
@@ -209,9 +209,13 @@ transport-provenance tests remain regression requirements.
 loopback framing, rejects a first unauthenticated command, and completes a protected
 read with an instrumented server signer that must never run. This explicitly local
 WS test is not production TLS/proxy evidence. Vapor outgoing setup waits for actual
-socket installation, not just the upstream HTTP upgrade future. Its waiter is
-bounded/cancelled; cleanup of a peer stalled before upstream WebSocket upgrade also
-requires adapter/host-level connection timeouts and remains a load-test obligation.
+socket installation, not just the upstream HTTP upgrade future. Each outgoing
+Vapor connection owns one NIO event-loop thread, allowing timeout/close to terminate
+TCP even before WebSocket upgrade. A second real-socket test stalls the HTTP
+upgrade and verifies close completes within five seconds. Outgoing Vapor frame and
+reassembly size are bounded at 1 MiB with at most 128 accumulated fragments. This
+has a per-connection thread cost; capacity tuning and server ingress load evidence
+remain host integration obligations.
 
 Actual proxy hardening, real client WSS paths, staging recovery and release readiness are separate AP5–AP9
 integration evidence. See the PDD handoff for exact test/CI results and open findings.
