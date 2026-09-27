@@ -1020,6 +1020,50 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(snapshot.instances, 2)
         XCTAssertEqual(snapshot.setupURLs.map(\.path), ["/bridge-a/session", "/bridge-b/session"])
     }
+    func testRepeatedStreamRemovalBoundsBackingHistoryAndPreservesSiblingWatermark() {
+        let tracker = BridgeFlowContinuityTracker(maximumStreams: 2)
+        XCTAssertEqual(tracker.observe(streamID: "sibling|stable", sequence: 10), .first(sequence: 10))
+        for index in 0..<1_000 {
+            _ = tracker.observe(streamID: "reused|\(index)", sequence: 1)
+            tracker.removeStreams(withPrefix: "reused|")
+            XCTAssertLessThanOrEqual(tracker.retainedStreamSlotCount, 5)
+            XCTAssertEqual(tracker.watermark(for: "sibling|stable"), 10)
+        }
+        tracker.removeStreams(withPrefix: "sibling|")
+        XCTAssertEqual(tracker.retainedStreamSlotCount, 0)
+    }
+
+    func testRepeatedChannelReuseBoundsOutboundStreamHistoryAndKeepsSiblingSequence() async throws {
+        let vault = EphemeralIdentityVault()
+        let ownerValue = await vault.identity(for: "history-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerValue), physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: owner)
+        var transports: [String: BridgeTransportProtocol] = [:]
+        let server = BridgeMultiplexServerSession(physicalTransport: physical, maximumTrackedOutboundStreams: 2) { target, _, transport in
+            transports[target] = transport
+            return PassiveBridgeDelegate()
+        }
+        func channel(_ name: String, _ id: String) -> BridgeCommand {
+            .init(cmd: name, identity: owner, payload: nil, cid: 1, protocolVersion: 2, channelID: id, targetEndpoint: name == "openChannel" ? id : nil)
+        }
+        let event = FlowElement(id: "event", title: "event", content: .string("value"), properties: nil)
+        let bytes = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(event), cid: 7))
+        try await server.consumeCommand(command: channel("openChannel", "sibling"))
+        try await XCTUnwrap(transports["sibling"]).sendData(bytes)
+        for _ in 0..<1_000 {
+            try await server.consumeCommand(command: channel("openChannel", "reused"))
+            try await XCTUnwrap(transports["reused"]).sendData(bytes)
+            try await server.consumeCommand(command: channel("closeChannel", "reused"))
+            XCTAssertLessThanOrEqual(server.retainedOutboundStreamSlotCount, 5)
+        }
+        try await XCTUnwrap(transports["sibling"]).sendData(bytes)
+        let sequences = physical.snapshot().filter { $0.channelID == "sibling" && $0.sequence != nil }.compactMap(\.sequence)
+        XCTAssertEqual(sequences, [1, 2])
+        try await server.consumeCommand(command: channel("closeChannel", "sibling"))
+        XCTAssertEqual(server.retainedOutboundStreamSlotCount, 0)
+        await server.close()
+    }
+
 }
 
 private actor PoolHandshakeBarrier {

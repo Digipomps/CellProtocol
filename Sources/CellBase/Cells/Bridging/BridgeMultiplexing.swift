@@ -86,6 +86,8 @@ public final class BridgeFlowContinuityTracker: @unchecked Sendable {
         stateLock.withLock { watermarks.count }
     }
 
+    var retainedStreamSlotCount: Int { stateLock.withLock { insertionOrder.count } }
+
     func removeStreams(withPrefix prefix: String) {
         stateLock.withLock {
             watermarks = watermarks.filter { !$0.key.hasPrefix(prefix) }
@@ -113,10 +115,15 @@ public final class BridgeFlowContinuityTracker: @unchecked Sendable {
     }
 
     private func compactInsertionOrderIfNeeded() {
-        guard insertionHead > maximumStreams, insertionHead * 2 > insertionOrder.count else {
+        if watermarks.isEmpty {
+            insertionOrder.removeAll(keepingCapacity: false); insertionHead = 0
             return
         }
-        insertionOrder.removeFirst(insertionHead)
+        // Close/reopen may remove entries without advancing the eviction head.
+        // Bound the backing order as well as the active watermark dictionary.
+        guard insertionHead > maximumStreams
+                || (insertionOrder.count > maximumStreams && insertionOrder.count - maximumStreams > maximumStreams) else { return }
+        insertionOrder = insertionOrder.filter { watermarks[$0.streamID]?.insertionID == $0.insertionID }
         insertionHead = 0
     }
 }
@@ -1199,12 +1206,19 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         return 1
     }
 
+    var retainedOutboundStreamSlotCount: Int { stateLock.withLock { outboundStreamInsertionOrder.count } }
+
     private func compactOutboundStreamInsertionOrderIfNeeded() {
-        guard outboundStreamInsertionHead > maximumTrackedOutboundStreams,
-              outboundStreamInsertionHead * 2 > outboundStreamInsertionOrder.count else {
+        if outboundStreamSequences.isEmpty {
+            outboundStreamInsertionOrder.removeAll(keepingCapacity: false); outboundStreamInsertionHead = 0
             return
         }
-        outboundStreamInsertionOrder.removeFirst(outboundStreamInsertionHead)
+        guard outboundStreamInsertionHead > maximumTrackedOutboundStreams
+                || (outboundStreamInsertionOrder.count > maximumTrackedOutboundStreams
+                    && outboundStreamInsertionOrder.count - maximumTrackedOutboundStreams > maximumTrackedOutboundStreams) else { return }
+        outboundStreamInsertionOrder = outboundStreamInsertionOrder.filter {
+            outboundStreamSequences[$0.streamID]?.insertionID == $0.insertionID
+        }
         outboundStreamInsertionHead = 0
     }
 

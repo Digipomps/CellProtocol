@@ -159,7 +159,10 @@ requested for tracked transport work; a cancellation request does not release it
 reservation. Non-cooperative awaited code keeps its reservation until it returns.
 Global defaults additionally cap Cell operations at 256, feeds at 128, logical
 channels at 256 and tracked work at 512 (64 per connection). Completed work removes
-its closed record; there is no ever-growing retired-ID set. Feed delivery tasks
+its closed record; there is no ever-growing retired-ID set. Client and server
+stream-order backing arrays are also compacted when channels are repeatedly
+removed/reopened; retaining one sibling cannot keep an unbounded history of
+retired stream IDs. Feed delivery tasks
 reserve operation capacity before they are enqueued. Feed and logical-channel
 leases release exactly once, including after replacement or natural completion.
 An exhausted global budget denies new work; these limits do not promise service
