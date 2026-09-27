@@ -769,7 +769,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func close(requester: Identity) {
         let previous = transport
-        if feedCancellable != nil { channelSession?.release(.feed) }
+        feedLease?.release(); feedLease = nil
         channelSession = nil
         ready = false
         identityProofAuthorization.reset()
@@ -1693,6 +1693,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
+    private var feedLease: BridgeChannelResourceLease?
+
     private func processFeedCommand(command: BridgeCommand) async throws {
         guard let currentSession = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
         if let identity =  command.identity {
@@ -1705,16 +1707,16 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             defer { withCallbackStateLock { feedAdmissionPending = false } }
             let emitter = try await resolvedEmitCell(for: identity)
             if self.feedCancellable == nil {
-                try currentSession.acquire(.feed)
+                let lease = try BridgeChannelResourceLease(session: currentSession, resource: .feed)
                 let publisher: AnyPublisher<FlowElement, Error>
                 do {
                     publisher = try await emitter.flow(requester: identity)
                     guard currentSession === channelSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
                     try currentSession.check(identity: identity, requiresIdentity: true)
-                } catch { currentSession.release(.feed); throw error }
+                } catch { lease.release(); throw error }
                 setupFlow(
                     commandCid: command.cid,
-                    from: publisher
+                    from: publisher, lease: lease, generation: currentSession, transport: transport
                 )
                 inboundFeedCommandID = command.cid
                 inboundFeedRequester = identity
@@ -1737,7 +1739,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
         feedCancellable?.cancel()
         feedCancellable = nil
-        channelSession?.release(.feed)
+        feedLease?.release(); feedLease = nil
         inboundFeedCommandID = nil
         self.inboundFeedRequester = nil
         feedActive = false
@@ -1752,14 +1754,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         return trustedFingerprint == presentedFingerprint
     }
     
-    private func setupFlow(commandCid: Int, from publisher: AnyPublisher<FlowElement, Error>?) {
+    private func setupFlow(commandCid: Int, from publisher: AnyPublisher<FlowElement, Error>?, lease: BridgeChannelResourceLease, generation: BridgeChannelSession, transport: BridgeTransportProtocol?) {
+        feedLease = lease
         feedCancellable = publisher?
             .handleEvents(receiveCancel: {
                 bridgeLog("Cancelled flowElement publisher \(self.uuid)")
             })
         
             .sink(receiveCompletion: { [weak self] completion in
-                self?.channelSession?.release(.feed)
+                lease.release()
+                guard self?.feedLease === lease else { return }
+                self?.feedLease = nil
                 self?.feedCancellable = nil
                 self?.inboundFeedCommandID = nil
                 self?.inboundFeedRequester = nil
@@ -1772,18 +1777,23 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     return true
                 }
                 guard reserved else { self.channelSession?.close(); return }
-                let generation = self.channelSession
+                do { try generation.acquire(.operation) }
+                catch {
+                    self.withCallbackStateLock { self.queuedFeedDeliveries -= 1 }
+                    generation.close(); return
+                }
                 Task { [weak self] in
+                    defer { generation.release(.operation) }
                     guard let self = self else { return }
                     defer { self.withCallbackStateLock { self.queuedFeedDeliveries -= 1 } }
-                    guard let generation, generation === self.channelSession,
+                    guard generation === self.channelSession, self.feedLease === lease,
                           self.inboundFeedCommandID == commandCid,
                           (try? generation.check()) != nil else { return }
                     let payload = ValueType.flowElement(flowElement)
                     let response = BridgeCommand(cmd: "response", payload: payload, cid: commandCid)
                     do {
                         if let responseJSONData = try? JSONEncoder().encode(response),
-                           let transport = self.transport {
+                           let transport {
                             
                             try await transport.sendData(responseJSONData)
                             self.feedActive = true
@@ -1995,7 +2005,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     /// Ends one logical channel without revoking sibling channels on its socket.
     func retireLogicalChannel() async {
-        if feedCancellable != nil { channelSession?.release(.feed) }
+        feedLease?.release(); feedLease = nil
         channelSession = nil
         transport = nil
         await failPendingChannelWork()
@@ -2005,6 +2015,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         ready = false
         identityProofAuthorization.reset()
         feedCancellable?.cancel(); feedCancellable = nil
+        feedLease?.release(); feedLease = nil
         flowElementCallbackCancellable?.cancel(); flowElementCallbackCancellable = nil
         outboundFeedStartTask?.cancel()
         let requests = withCallbackStateLock { () -> [SignRequest] in

@@ -144,14 +144,18 @@ final class BridgeMultiplexingTests: XCTestCase {
         private static let stateLock = NSLock()
         private static var instances = 0
         private static var setupURLs: [URL] = []
+        private static var live: [ResolverMultiplexTransport] = []
+        static var beforeProof: (@Sendable () async -> Void)?
+        private static var principals: [String] = []
 
         private weak var delegate: BridgeDelegateProtocol?
         private let instanceLock = NSLock()
         private let handshake = ResolverHandshakeFixture()
         private var targets: [String: String] = [:]
+        private var closed = false
 
         init() {
-            Self.stateLock.withLock { Self.instances += 1 }
+            Self.stateLock.withLock { Self.instances += 1; Self.live.append(self) }
         }
 
         static func new() -> BridgeTransportProtocol {
@@ -161,12 +165,12 @@ final class BridgeMultiplexingTests: XCTestCase {
         static func reset() {
             stateLock.withLock {
                 instances = 0
-                setupURLs = []
+                setupURLs = []; live = []; beforeProof = nil; principals = []
             }
         }
 
-        static func snapshot() -> (instances: Int, setupURLs: [URL]) {
-            stateLock.withLock { (instances, setupURLs) }
+        static func snapshot() -> (instances: Int, setupURLs: [URL], principals: [String]) {
+            stateLock.withLock { (instances, setupURLs, principals) }
         }
 
         func setDelegate(_ delegate: BridgeDelegateProtocol) {
@@ -181,6 +185,8 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         func sendData(_ data: Data) async throws {
             let command = try JSONDecoder().decode(BridgeCommand.self, from: data)
+            if command.cmd == "channelAuthProof" { await Self.beforeProof?() }
+            guard !instanceLock.withLock({ closed }) else { throw BridgeChannelAuthentication.Failure.closed }
             if try await handshake.consume(command, delegate: delegate) { return }
             guard let channelID = command.channelID else {
                 throw BridgeMultiplexError.invalidChannel
@@ -191,6 +197,7 @@ final class BridgeMultiplexingTests: XCTestCase {
                     throw BridgeMultiplexError.invalidChannel
                 }
                 instanceLock.withLock { targets[channelID] = targetEndpoint }
+                Self.stateLock.withLock { Self.principals.append(command.identity?.signingPublicKeyFingerprint ?? "missing") }
                 try await delegate?.consumeCommand(command: BridgeCommand(
                     cmd: Command.channelOpened.rawValue,
                     identity: command.identity,
@@ -229,6 +236,15 @@ final class BridgeMultiplexingTests: XCTestCase {
                 }
             default:
                 break
+            }
+        }
+
+        func close() async { instanceLock.withLock { closed = true } }
+        static func abort() async {
+            let current = stateLock.withLock { live }
+            for wire in current {
+                await wire.close()
+                await wire.delegate?.pushError(errorMessage: "test abort", error: BridgeChannelAuthentication.Failure.closed)
             }
         }
 
@@ -890,6 +906,44 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(replacementPhysical.snapshot().closeInvocations, 1)
     }
 
+    func testParallelResolverLookupsShareSuspendedAuthenticatedHandshakeAndPrincipal() async throws {
+        for abort in [false, true] {
+            let resolver = CellResolver.sharedInstance, vault = EphemeralIdentityVault()
+            CellBase.defaultCellResolver = resolver; CellBase.defaultIdentityVault = vault
+            ResolverMultiplexTransport.reset()
+            try await resolver.registerTransport(ResolverMultiplexTransport.self, for: "wss")
+            let host = "pending-\(UUID().uuidString.lowercased()).example"
+            resolver.registerRemoteCellHost(host, route: .init(websocketEndpoint: "bridgehead", schemePreference: .wss, connectionSharing: .multiplexedV2))
+            defer { resolver.unregisterRemoteCellHost(host) }
+            let ownerValue = await vault.identity(for: "pending-owner", makeNewIfNotFound: true)
+            let owner = try XCTUnwrap(ownerValue)
+            let barrier = PoolHandshakeBarrier(), entered = expectation(description: "one suspended proof")
+            entered.assertForOverFulfill = true
+            ResolverMultiplexTransport.beforeProof = { entered.fulfill(); await barrier.wait() }
+            let first = Task { try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/First", requester: owner) }
+            await fulfillment(of: [entered], timeout: 2)
+            let others = (0..<7).map { index in Task { try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/Parallel\(index)", requester: owner) } }
+            // Keep the network handshake suspended while the independent resolver calls reach the pool.
+            try await Task.sleep(nanoseconds: 50_000_000)
+            XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 1)
+            if abort { await ResolverMultiplexTransport.abort() }
+            ResolverMultiplexTransport.beforeProof = nil
+            await barrier.resume()
+            for task in [first] + others {
+                do { _ = try await task.value; XCTAssertFalse(abort, "Aborted shared setup must fail every waiter") }
+                catch { XCTAssertTrue(abort, "Shared handshake failed: \(error)") }
+            }
+            if abort {
+                _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/AfterAbort", requester: owner)
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 2)
+            } else {
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 1)
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().principals.count, 8)
+            }
+            XCTAssertEqual(Set(ResolverMultiplexTransport.snapshot().principals), Set([owner.signingPublicKeyFingerprint!]))
+        }
+    }
+
     func testResolverMultiplexRouteUsesOneSessionURLForTwoRemoteCells() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()
@@ -966,4 +1020,11 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(snapshot.instances, 2)
         XCTAssertEqual(snapshot.setupURLs.map(\.path), ["/bridge-a/session", "/bridge-b/session"])
     }
+}
+
+private actor PoolHandshakeBarrier {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    func wait() async { if !released { await withCheckedContinuation { waiters.append($0) } } }
+    func resume() { released = true; let current = waiters; waiters = []; current.forEach { $0.resume() } }
 }

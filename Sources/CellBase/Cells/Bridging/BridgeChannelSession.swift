@@ -11,6 +11,11 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         public var maximumPending = 256
         public var maximumPendingPerSource = 4
         public var maximumConnectionsPerKey = 8
+        public var maximumOperations = 256
+        public var maximumFeeds = 128
+        public var maximumChannels = 256
+        public var maximumOutstandingWork = 512
+        public var maximumOutstandingWorkPerConnection = 64
         public var maximumOperationsPerKey = 32
         public var maximumFeedsPerKey = 16
         public var maximumChannelsPerKey = 16
@@ -26,6 +31,11 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         let source: String
         var principal: String?
         var active = false
+        var closed = false
+        var work = 0
+        var admissions = 0
+        var retainsPending: Bool { !active || admissions > 0 }
+        var hasResources: Bool { operations > 0 || feeds > 0 || channels > 0 || sendBytes > 0 || work > 0 }
         var operations = 0
         var feeds = 0
         var channels = 0
@@ -66,8 +76,8 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             try consumeRate("source:" + source, maximum: configuration.maximumAttemptsPerSourcePerMinute)
             guard entries[id] == nil,
                   entries.count < configuration.maximumConnections,
-                  entries.values.filter({ !$0.active }).count < configuration.maximumPending,
-                  entries.values.filter({ !$0.active && $0.source == source }).count < configuration.maximumPendingPerSource else {
+                  entries.values.filter({ $0.retainsPending }).count < configuration.maximumPending,
+                  entries.values.filter({ $0.retainsPending && $0.source == source }).count < configuration.maximumPendingPerSource else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
             entries[id] = Entry(source: source, revoke: revoke)
@@ -75,7 +85,7 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     }
     func authenticate(_ id: String, principal: String) throws {
         try lock.withLock {
-            guard var entry = entries[id], entry.principal == nil else { throw BridgeChannelAuthentication.Failure.closed }
+            guard var entry = entries[id], !entry.closed, entry.principal == nil else { throw BridgeChannelAuthentication.Failure.closed }
             guard entries.values.filter({ $0.principal == principal }).count < configuration.maximumConnectionsPerKey else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
@@ -86,24 +96,27 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     }
     func activate(_ id: String) throws {
         try lock.withLock {
-            guard var entry = entries[id], entry.principal != nil, !entry.active else { throw BridgeChannelAuthentication.Failure.closed }
+            guard var entry = entries[id], !entry.closed, entry.principal != nil, !entry.active else { throw BridgeChannelAuthentication.Failure.closed }
             entry.active = true; entries[id] = entry
         }
     }
     enum Resource { case operation, feed, channel }
     func acquire(_ id: String, resource: Resource) throws {
         try lock.withLock {
-            guard var entry = entries[id], let principal = entry.principal else { throw BridgeChannelAuthentication.Failure.closed }
+            guard var entry = entries[id], !entry.closed, let principal = entry.principal else { throw BridgeChannelAuthentication.Failure.closed }
             let related = entries.values.filter { $0.principal == principal }
             switch resource {
             case .operation:
-                guard related.reduce(0, { $0 + $1.operations }) < configuration.maximumOperationsPerKey else { throw BridgeChannelAuthentication.Failure.capacity }
+                guard related.reduce(0, { $0 + $1.operations }) < configuration.maximumOperationsPerKey,
+                      entries.values.reduce(0, { $0 + $1.operations }) < configuration.maximumOperations else { throw BridgeChannelAuthentication.Failure.capacity }
                 entry.operations += 1
             case .feed:
-                guard related.reduce(0, { $0 + $1.feeds }) < configuration.maximumFeedsPerKey else { throw BridgeChannelAuthentication.Failure.capacity }
+                guard related.reduce(0, { $0 + $1.feeds }) < configuration.maximumFeedsPerKey,
+                      entries.values.reduce(0, { $0 + $1.feeds }) < configuration.maximumFeeds else { throw BridgeChannelAuthentication.Failure.capacity }
                 entry.feeds += 1
             case .channel:
-                guard related.reduce(0, { $0 + $1.channels }) < configuration.maximumChannelsPerKey else { throw BridgeChannelAuthentication.Failure.capacity }
+                guard related.reduce(0, { $0 + $1.channels }) < configuration.maximumChannelsPerKey,
+                      entries.values.reduce(0, { $0 + $1.channels }) < configuration.maximumChannels else { throw BridgeChannelAuthentication.Failure.capacity }
                 entry.channels += 1
             }
             entries[id] = entry
@@ -117,13 +130,13 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             case .feed: entry.feeds = max(0, entry.feeds - 1)
             case .channel: entry.channels = max(0, entry.channels - 1)
             }
-            entries[id] = entry
+            storeOrRemove(entry, id: id)
         }
     }
     func acquireSend(_ id: String, bytes: Int) throws {
         try lock.withLock {
-            guard var entry = entries[id], entry.principal != nil else { throw BridgeChannelAuthentication.Failure.closed }
-            guard bytes <= configuration.maximumPendingSendBytesPerConnection - entry.sendBytes,
+            guard var entry = entries[id], !entry.closed else { throw BridgeChannelAuthentication.Failure.closed }
+            guard bytes >= 0, bytes <= configuration.maximumPendingSendBytesPerConnection - entry.sendBytes,
                   bytes <= configuration.maximumPendingSendBytes - entries.values.reduce(0, { $0 + $1.sendBytes }) else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
@@ -132,10 +145,45 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         }
     }
     func releaseSend(_ id: String, bytes: Int) {
-        lock.withLock { if var entry = entries[id] { entry.sendBytes = max(0, entry.sendBytes - bytes); entries[id] = entry } }
+        lock.withLock { if var entry = entries[id] { entry.sendBytes = max(0, entry.sendBytes - bytes); storeOrRemove(entry, id: id) } }
     }
-    func release(_ id: String) { lock.withLock { _ = entries.removeValue(forKey: id) } }
-    public var connectionCount: Int { lock.withLock { entries.count } }
+    // Closed entries are bounded tombstones, retained only while owned work lives.
+    // They still count against admission and principal/global resource budgets.
+    private func storeOrRemove(_ entry: Entry, id: String) {
+        if entry.closed && !entry.hasResources { entries[id] = nil }
+        else { entries[id] = entry }
+    }
+    func release(_ id: String) {
+        lock.withLock {
+            guard var entry = entries[id] else { return }
+            entry.closed = true
+            storeOrRemove(entry, id: id)
+        }
+    }
+    func acquireWork(_ id: String, admission: Bool) throws {
+        try lock.withLock {
+            guard var entry = entries[id], !entry.closed else { throw BridgeChannelAuthentication.Failure.closed }
+            guard entry.work < configuration.maximumOutstandingWorkPerConnection,
+                  entries.values.reduce(0, { $0 + $1.work }) < configuration.maximumOutstandingWork else {
+                throw BridgeChannelAuthentication.Failure.capacity
+            }
+            entry.work += 1
+            if admission { entry.admissions += 1 }
+            entries[id] = entry
+        }
+    }
+    func releaseWork(_ id: String, admission: Bool) {
+        lock.withLock {
+            guard var entry = entries[id] else { return }
+            entry.work = max(0, entry.work - 1)
+            if admission { entry.admissions = max(0, entry.admissions - 1) }
+            storeOrRemove(entry, id: id)
+        }
+    }
+    public var connectionCount: Int { lock.withLock { entries.values.filter { !$0.closed }.count } }
+    /// Includes resources whose socket has gone away but whose work has not returned.
+    public var outstandingWorkCount: Int { lock.withLock { entries.values.reduce(0, { $0 + $1.work }) } }
+    public var retainedConnectionCount: Int { lock.withLock { entries.count } }
 
     /// Local host policy calls this after its authoritative key status changes.
     /// This only revokes active transport leases; Cells still own grant revocation.
@@ -268,7 +316,19 @@ public final class BridgeChannelSession: @unchecked Sendable {
             } else if requiresIdentity { throw Auth.Failure.identityMismatch }
         }
     }
-    func acquireSend(bytes: Int) throws { try check(); try limits?.acquireSend(generation, bytes: bytes) }
+    /// Pool reuse includes a live handshake, never a terminal or expired lease.
+    func canReuseConnection() -> Bool {
+        lock.withLock {
+            guard stateValue != .closed && stateValue != .revoked, monotonic() < deadline else { return false }
+            return absoluteExpiry.map { wallClock() < $0 } ?? true
+        }
+    }
+    func acquireWork(admission: Bool) throws { try limits?.acquireWork(generation, admission: admission) }
+    func releaseWork(admission: Bool) { limits?.releaseWork(generation, admission: admission) }
+    func acquireSend(bytes: Int, authenticating: Bool = false) throws {
+        if !authenticating { try check() }
+        try limits?.acquireSend(generation, bytes: bytes)
+    }
     func releaseSend(bytes: Int) { limits?.releaseSend(generation, bytes: bytes) }
     func acquire(_ resource: BridgeChannelLimits.Resource) throws {
         try check()
@@ -294,4 +354,21 @@ public final class BridgeChannelSession: @unchecked Sendable {
         limits?.release(generation)
         callback?()
     }
+}
+
+/// A reservation is released exactly once, independently of socket table removal.
+final class BridgeChannelResourceLease: @unchecked Sendable {
+    private let session: BridgeChannelSession
+    private let resource: BridgeChannelLimits.Resource
+    private let lock = NSLock()
+    private var released = false
+    init(session: BridgeChannelSession, resource: BridgeChannelLimits.Resource) throws {
+        self.session = session; self.resource = resource
+        try session.acquire(resource)
+    }
+    func release() {
+        let shouldRelease = lock.withLock { if released { return false }; released = true; return true }
+        if shouldRelease { session.release(resource) }
+    }
+    deinit { release() }
 }

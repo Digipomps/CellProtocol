@@ -23,6 +23,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private var stopped = false
     private var started = false
     private var pendingSends = 0
+    private var inFlight: [UUID: Task<Void, Error>] = [:]
     private let isServer: Bool
 
     /// The host must supply its configured public endpoint, not request headers.
@@ -93,7 +94,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
     private func sendAuth<T: Encodable>(_ name: String, _ value: T) async throws {
         let command = BridgeCommand(cmd: name, payload: .string(String(decoding: try Auth.encode(value), as: UTF8.self)), cid: 0)
-        try await physicalTransport().sendData(Auth.encode(command))
+        let data = try Auth.encode(command)
+        try session.acquireSend(bytes: data.count, authenticating: true)
+        defer { session.releaseSend(bytes: data.count) }
+        try await trackedWork { try await self.physicalTransport().sendData(data) }
     }
 
     public func validateInboundPayload(_ data: Data) throws {
@@ -105,7 +109,30 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         }
     }
 
+    // Cancellation requests are propagated, but accounting is released by the
+    // worker's defer only after non-cooperative host/cell/transport code returns.
+    private func trackedWork(admission: Bool = false, _ body: @escaping @Sendable () async throws -> Void) async throws {
+        let id = UUID()
+        let task = try lock.withLock { () throws -> Task<Void, Error> in
+            guard !stopped, inFlight.count < 64 else { throw Auth.Failure.capacity }
+            try session.acquireWork(admission: admission)
+            let task = Task { [session] in
+                defer { session.releaseWork(admission: admission) }
+                try Task.checkCancellation()
+                try await body()
+            }
+            inFlight[id] = task
+            return task
+        }
+        defer { _ = lock.withLock { inFlight.removeValue(forKey: id) } }
+        try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+    }
+
     public func consumeCommand(command: BridgeCommand) async throws {
+        do { try await trackedWork(admission: command.cmd.hasPrefix("channelAuth")) { try await self.processCommand(command) } }
+        catch { await close(); throw error }
+    }
+    private func processCommand(_ command: BridgeCommand) async throws {
         do {
             if command.cmd.hasPrefix("channelAuth") {
                 try await consumeAuthentication(command)
@@ -122,6 +149,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         } catch { await close(); throw error }
     }
     public func consumeResponse(command: BridgeCommand) async throws {
+        do { try await trackedWork { try await self.processResponse(command) } }
+        catch { await close(); throw error }
+    }
+    private func processResponse(_ command: BridgeCommand) async throws {
         do {
             try session.check(identity: command.identity)
             guard command.command == .response, let delegate = lock.withLock({ self.delegate }) else { throw Auth.Failure.unexpectedMessage }
@@ -177,7 +208,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.acquireSend(bytes: data.count)
             defer { session.releaseSend(bytes: data.count) }
             try session.check()
-            try await physicalTransport().sendData(data)
+            try await trackedWork { try await self.physicalTransport().sendData(data) }
             try session.check()
         } catch { await close(); throw error }
     }
@@ -191,6 +222,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         let cleanup = lock.withLock { () -> (BridgeDelegateProtocol?, BridgeChannelClientOperation?, BridgeTransportProtocol?)? in
             guard !stopped else { return nil }
             stopped = true; timer?.cancel(); timer = nil
+            inFlight.values.forEach { $0.cancel() }
             let result = (delegate, operation, underlying); delegate = nil; operation = nil; underlying = nil
             return result
         }

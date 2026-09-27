@@ -187,23 +187,25 @@ public final class BridgeConnectionPool: @unchecked Sendable {
         guard key.isSecurityBound else {
             throw BridgeMultiplexError.invalidSecurityContext
         }
-        let result = try stateLock.withLock { () throws -> (BridgeMultiplexSession, BridgeMultiplexSession?) in
+        let result = try stateLock.withLock { () throws -> (BridgeMultiplexSession, [BridgeMultiplexSession]) in
             accessCounter &+= 1
-            if var existing = sessions[key], existing.session.channelSession.map({ (try? $0.check()) != nil }) ?? true {
+            if var existing = sessions[key], existing.session.canReuseConnection {
                 existing.lastAccess = accessCounter
                 sessions[key] = existing
-                return (existing.session, nil)
+                return (existing.session, [])
             }
-            var retiredSession: BridgeMultiplexSession?
+            // Construct first: a throwing factory must not orphan the old entry.
+            let created = BridgeMultiplexSession(physicalTransport: try physicalTransportFactory())
+            var retiredSessions: [BridgeMultiplexSession] = []
+            if let replaced = sessions.removeValue(forKey: key) { retiredSessions.append(replaced.session) }
             if sessions.count >= maximumSessions,
                let oldestKey = sessions.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
-                retiredSession = sessions.removeValue(forKey: oldestKey)?.session
+                if let evicted = sessions.removeValue(forKey: oldestKey) { retiredSessions.append(evicted.session) }
             }
-            let created = BridgeMultiplexSession(physicalTransport: try physicalTransportFactory())
             sessions[key] = SessionEntry(session: created, lastAccess: accessCounter)
-            return (created, retiredSession)
+            return (created, retiredSessions)
         }
-        result.1?.retireFromPool()
+        result.1.forEach { $0.retireFromPool() }
         return try result.0.channelTransport(targetEndpoint: targetEndpoint)
     }
 
@@ -317,6 +319,13 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         )
     }
 
+    fileprivate var canReuseConnection: Bool {
+        stateLock.withLock {
+            !retiredFromPool && !physicalTransportClosed
+                && (channelSession?.canReuseConnection() ?? true)
+        }
+    }
+
     fileprivate func retireFromPool() {
         let shouldClose = stateLock.withLock { () -> Bool in
             retiredFromPool = true
@@ -369,7 +378,12 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             setupTask = task
             return task
         }
-        try await task.value
+        do { try await task.value }
+        catch {
+            stateLock.withLock { physicalTransportClosed = true; retiredFromPool = true }
+            await physicalTransport.close()
+            throw error
+        }
     }
 
     fileprivate func openChannel(
@@ -770,8 +784,10 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     private final class ChannelRecord {
         let delegate: BridgeDelegateProtocol
         let transport: ServerChannelTransport
+        let quota: BridgeChannelResourceLease
 
-        init(delegate: BridgeDelegateProtocol, transport: ServerChannelTransport) {
+        init(delegate: BridgeDelegateProtocol, transport: ServerChannelTransport, quota: BridgeChannelResourceLease) {
+            self.quota = quota
             self.delegate = delegate
             self.transport = transport
         }
@@ -888,9 +904,8 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                   BridgeMultiplexSession.isValidChannelID(channelID) else {
                 throw BridgeMultiplexError.invalidChannel
             }
-            let removed = stateLock.withLock { () -> BridgeDelegateProtocol? in
+            let removed = stateLock.withLock { () -> ChannelRecord? in
                 let removed = channels.removeValue(forKey: channelID)
-                if removed != nil { channelSession.release(.channel) }
                 if pendingChannelIDs.contains(channelID) {
                     cancelledPendingChannelIDs.insert(channelID)
                 }
@@ -898,16 +913,18 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                     !$0.key.hasPrefix("\(channelID)|")
                 }
                 compactOutboundStreamInsertionOrderIfNeeded()
-                return removed?.delegate
+                return removed
             }
-            if let bridge = removed as? BridgeBase { await bridge.retireLogicalChannel() }
-            else { await removed?.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
+            defer { withExtendedLifetime(removed) {} }
+            if let bridge = removed?.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+            else { await removed?.delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
         default:
             guard command.protocolVersion == protocolVersion,
                   let channelID = command.channelID,
                   let record = stateLock.withLock({ channels[channelID] }) else {
                 throw BridgeMultiplexError.channelNotFound
             }
+            defer { withExtendedLifetime(record) {} }
             try await record.delegate.consumeCommand(command: command)
         }
     }
@@ -920,6 +937,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
               let record = stateLock.withLock({ channels[channelID] }) else {
             throw BridgeMultiplexError.channelNotFound
         }
+        defer { withExtendedLifetime(record) {} }
         try await record.delegate.consumeResponse(command: command)
     }
 
@@ -987,15 +1005,15 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             }
         }
 
-        var quotaReserved = false
         do {
-            try channelSession?.acquire(.channel)
-            quotaReserved = true
+            guard let channelSession else { throw BridgeChannelAuthentication.Failure.closed }
+            let quota = try BridgeChannelResourceLease(session: channelSession, resource: .channel)
+            defer { withExtendedLifetime(quota) {} }
             let channelTransport = ServerChannelTransport(session: self, channelID: channelID)
-            try channelSession?.check(identity: identity, requiresIdentity: true)
-            guard let principal = channelSession?.publicIdentity?.makeIdentity() else { throw BridgeChannelAuthentication.Failure.closed }
+            try channelSession.check(identity: identity, requiresIdentity: true)
+            guard let principal = channelSession.publicIdentity?.makeIdentity() else { throw BridgeChannelAuthentication.Failure.closed }
             let delegate = try await channelFactory(targetEndpoint, principal, channelTransport)
-            try channelSession?.check(identity: identity, requiresIdentity: true)
+            try channelSession.check(identity: identity, requiresIdentity: true)
             channelTransport.setDelegate(delegate)
             let inserted = stateLock.withLock { () -> Bool in
                 guard closed == false,
@@ -1004,11 +1022,10 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                       channels[channelID] == nil else {
                     return false
                 }
-                channels[channelID] = ChannelRecord(delegate: delegate, transport: channelTransport)
+                channels[channelID] = ChannelRecord(delegate: delegate, transport: channelTransport, quota: quota)
                 return true
             }
             guard inserted else {
-                if quotaReserved { channelSession?.release(.channel); quotaReserved = false }
                 // A concurrent close already retired the logical request. Do not
                 // close its physical session or send a late rejection to a client
                 // that has removed the opening continuation.
@@ -1025,7 +1042,6 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 channelID: channelID
             ))
         } catch {
-            if quotaReserved { channelSession?.release(.channel) }
             stateLock.withLock {
                 channels[channelID] = nil
                 outboundStreamSequences = outboundStreamSequences.filter {
@@ -1089,20 +1105,25 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     public func close() async {
-        let shouldClose = stateLock.withLock { () -> Bool in
-            guard closed == false else { return false }
+        let retired = stateLock.withLock { () -> [ChannelRecord]? in
+            guard !closed else { return nil }
             closed = true
+            let retired = Array(channels.values)
             channels.removeAll(keepingCapacity: false)
-            pendingChannelIDs.removeAll(keepingCapacity: false)
-            cancelledPendingChannelIDs.removeAll(keepingCapacity: false)
+            // Pending factories own their reservations until they return.
+            cancelledPendingChannelIDs.formUnion(pendingChannelIDs)
             outboundStreamSequences.removeAll(keepingCapacity: false)
             outboundStreamInsertionOrder.removeAll(keepingCapacity: false)
             outboundStreamInsertionHead = 0
-            return true
+            return retired
         }
-        if shouldClose {
-            await physicalTransport.close()
+        guard let retired else { return }
+        for record in retired {
+            if let bridge = record.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+            else { await record.delegate.pushError(errorMessage: "bridge_channel_closed", error: BridgeChannelAuthentication.Failure.closed) }
         }
+        await physicalTransport.close()
+        withExtendedLifetime(retired) {}
     }
 
     private func recordChannelRejection(
@@ -1184,15 +1205,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         _ = setValueState
     }
 
-    public func pushError(errorMessage: String?, error: Error?) async {
-        if channelSession != nil {
-            let delegates = stateLock.withLock { channels.values.map(\.delegate) }
-            for delegate in delegates { await delegate.pushError(errorMessage: "bridge_channel_closed", error: BridgeChannelAuthentication.Failure.closed) }
-            await close()
-        } else {
-            CellBase.diagnosticLog(errorMessage ?? String(describing: error), domain: .bridge)
-        }
-    }
+    public func pushError(errorMessage: String?, error: Error?) async { await close() }
 
     public func ready() async throws {}
 
