@@ -200,7 +200,8 @@ time, scope, cancellation, quota release and bounded replay state.
 `BridgeChannelTransportTests` covers pre-auth dispatch/factory denial, paired wire
 handshakes, V1 Cell proof, multiplex principal binding, revocation during an awaited
 policy check and local/bridge Cell authorization parity. Existing origin-proof and
-transport-provenance tests remain regression requirements. Actual proxy hardening,
+transport-provenance tests remain regression requirements.
+
 `BridgeChannelWebSocketTests` additionally exercises real Vapor/WebSocketKit TCP
 loopback framing, rejects a first unauthenticated command, and completes a protected
 read with an instrumented server signer that must never run. This explicitly local
