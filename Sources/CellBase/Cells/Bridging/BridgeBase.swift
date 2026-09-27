@@ -458,7 +458,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
         let replacement = try await current.replacementForRenewal(using: physical)
         try await setTransport(replacement, connection: .outbound)
-        try await replacement.setup(URL(string: replacement.session.endpoint.audience)!, identity: requester)
+        guard let endpoint = replacement.session.endpoint else { throw BridgeChannelAuthentication.Failure.unavailable }
+        try await replacement.setup(URL(string: endpoint.audience)!, identity: requester)
     }
 
     /// Called locally by the authenticated physical transport, never by a ready frame.
@@ -1296,7 +1297,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Send command: \(command.rawValue)")
         try await ready()
         guard let currentSession = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
-        try currentSession.check(identity: identity, requiresIdentity: true)
+        try currentSession.checkOutbound(identity: identity, requiresIdentity: true)
         let resolvedCommandId: Int
         if let commandId {
             resolvedCommandId = commandId
@@ -1318,7 +1319,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
 
         guard currentSession === channelSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
-        try currentSession.check(identity: identity, requiresIdentity: true)
+        try currentSession.checkOutbound(identity: identity, requiresIdentity: true)
         identityProofAuthorization.begin(bridgeCommand)
         do {
             try await transport.sendData(bridgeCommandJson)
@@ -1345,7 +1346,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
         do {
             guard command.command != .ready else { throw BridgeChannelAuthentication.Failure.unexpectedMessage }
-            try channelSession.check(identity: command.identity, requiresIdentity: command.command != .response)
+            try channelSession.checkInbound(command)
             if command.command != .sign, let presented = command.identity {
                 command.identity = try channelSession.requester(for: presented, bridge: self)
             }
@@ -1571,11 +1572,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     }
                     
                     guard identityProofAuthorization.isCurrent(permit),
-                          (try? channelSession.check(identity: identity, requiresIdentity: true)) != nil else { return }
+                          (try? channelSession.checkOutbound(identity: identity, requiresIdentity: true)) != nil else { return }
                         do {
                             let signatureData = try await permit.vault.signMessageForIdentity(messageData: value, identity: permit.identity)
                             guard identityProofAuthorization.isCurrent(permit),
-                          (try? channelSession.check(identity: identity, requiresIdentity: true)) != nil else { return }
+                          (try? channelSession.checkOutbound(identity: identity, requiresIdentity: true)) != nil else { return }
                             await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid, using: transport)
                         } catch {
                             bridgeLog("Consume command signing data failed with error: \(error)")
@@ -1809,7 +1810,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     // This is the processing of responses of commands sent over the websocket
     public func consumeResponse(command: BridgeCommand) async throws {
         guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
-        try channelSession.check(identity: command.identity)
+        try channelSession.checkInbound(command)
         bridgeLog("Consume response cmd: \(command.cmd)")
 
         if let commandRequest = await auditor.loadBridgeCommandForCommandId(command.cid) {

@@ -5,6 +5,23 @@ import XCTest
 @testable import CellBase
 
 final class ScannerServiceInvitationTests: XCTestCase {
+    func testCrossedInvitationsSelectOneSetupAndRequireExplicitAcceptance() throws {
+        let a = ScannerService(owner: Identity(), sessionUUID: "a"), b = ScannerService(owner: Identity(), sessionUUID: "b")
+        defer { a.stop(); b.stop() }
+        let ap = MCPeerID(displayName: "a"), bp = MCPeerID(displayName: "b")
+        a.foundPeersDict["b"] = bp; a.reversedFoundPeersDict[bp] = "b"
+        b.foundPeersDict["a"] = ap; b.reversedFoundPeersDict[ap] = "a"
+        let outgoingA = try a.makeInvitation(remoteUUID: "b"), outgoingB = try b.makeInvitation(remoteUUID: "a")
+        var toA: [Bool] = [], toB: [Bool] = []
+        a.receiveInvitation(from: bp, endpoint: outgoingB) { accepted, _ in toA.append(accepted) }
+        b.receiveInvitation(from: ap, endpoint: outgoingA) { accepted, _ in toB.append(accepted) }
+        XCTAssertEqual(toA, [false]); XCTAssertTrue(toB.isEmpty)
+        XCTAssertEqual(a.pendingInvitationCount, 0); XCTAssertEqual(b.pendingInvitationCount, 1)
+        XCTAssertTrue(b.respondToInvitation(remoteUUID: "a", accept: true))
+        XCTAssertEqual(toB, [true]); XCTAssertEqual(b.pendingInvitationCount, 0)
+        XCTAssertEqual(a.bridgeDelegateCount, 0); XCTAssertEqual(b.bridgeDelegateCount, 0)
+    }
+
     func testUnknownPeerIsRejectedImmediately() {
         let service = ScannerService(owner: Identity())
         let peer = MCPeerID(displayName: "unknown")

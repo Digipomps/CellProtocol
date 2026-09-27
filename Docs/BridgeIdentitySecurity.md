@@ -281,7 +281,69 @@ legacy `BridgeBase.attach` → `connectEmitter` wire API: the existing receiver 
 `connectEmitter` handler. That separate generic attach capability remains
 unsupported; no new reverse-bridge authority was added to make this test pass.
 
-ScannerService still requires Kjetil's explicit peer-profile migration or support
-withdrawal decision (R3); Binding's custom transport is consumer work (N05).
-Neither is certified by these WS-adapter tests. Host ingress fragment/CPU limits,
+ScannerService now uses the explicit mutual peer profile below (R3); Binding's
+custom transport remains separate consumer work (N05). WS-adapter tests alone
+do not certify either consumer. Host ingress fragment/CPU limits,
 drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evidence.
+
+
+## Multipeer peer profile (R3)
+
+`org.haven.bridge-peer-channel.v1` is a separate profile, not a WSS-origin alias.
+An explicitly accepted Scanner invitation supplies an immutable endpoint containing
+both session-scoped discovery peer identifiers, the invitation/setup UUID and the
+`nearby` domain. Scanner binds those identifiers to the observed `MCPeerID` objects
+and checks the source peer before dispatch. Display names, UUIDs and possession of
+an MCSession alone confer no identity or Cell authority. MCSession encryption is
+required; this proves keys for the accepted peer route, not a real-world identity
+or an independently attested device certificate.
+
+The initiator sends a public identity, fresh nonce, role, generation and timestamp.
+The responder signs a transcript containing both hellos and its signer role; the
+initiator verifies that proof and returns its own role-bound signature. The
+responder verifies and acknowledges. The audience hashes the complete endpoint;
+the signing resource hashes the complete transcript under the peer profile.
+Both signatures therefore bind both peer identifiers, setup ID, roles, both
+nonces, both public identities and both connection generations. The existing
+`Proof`, `Authenticated`, canonical encoding, public-key verifier and
+`IdentitySigningChallenge` format are reused. Private vaults remain local.
+
+`BridgeChannelSession.reserveOpen` consumes the same pending state before public
+verification for both profiles. Its deadline, absolute expiry, principal binding,
+revocation, activation and retained resource accounting are shared. The transport
+uses the existing tracked-work, send-byte, cancellation and close machinery.
+Scanner services share one default limits owner; a host may inject its existing
+limits owner. Local setup work also uses the transport's retained work budget.
+There is no peer `ready` exception. New peer setup requires a fresh accepted
+invitation and proof; WS renewal does not fabricate a peer URL.
+
+A peer session has two proved principals: the remote requester and the locally
+initiated signer. Incoming Cell requests match the remote principal; outgoing
+requests match the local principal. Only `sign` callbacks and responses use their
+corresponding local-request identity. The existing narrow GeneralCell proof permit
+still applies to signing callbacks. No incoming descriptor receives a local vault.
+`session.endpoint` is optional for peer sessions; WS users retain the typed WS
+endpoint and peer users have `peerEndpoint`.
+
+Scanner installs only the gate before proof. Base creation, resolver access and
+registration, description and lobby attachment follow proof. Auth frames are
+processed before the ordinary Command enum; the pre-auth bound is 16 KiB.
+Disconnect cancels setup and closes that physical generation. Old transports
+cannot send through a replacement, and registration teardown finishes before a
+replacement reuses the remote cell UUID. Consumer status reports `authenticating`,
+then `connected` after setup, or `bridgeFailed:<reason>` on failure.
+
+`ScannerPeerAuthenticationTests`, `ScannerServiceInvitationTests` and
+`EntityScannerCellContractTests` cover controlled delivery, actual LobbyCell
+attachment/feed, owner-approval denial after valid proof, replay, role/peer/setup binding, reconnect, revocation,
+quota exhaustion, retained work and proxy provenance. The opt-in
+`ScannerMultipeerProcessTests` runs real discovery, encrypted MCSession and Scanner
+setup in two separate processes, with each process as inviter in turn. Its fixture
+explicitly configures owner-published read grants for the Lobby; authentication
+does not grant those rights. See [Scanner Multipeer verification](ScannerMultipeer.md).
+
+N06: a resource lease starts without ownership. Only successful acquisition arms
+release, including throwing initialization/deinitialization. Same-session tests
+hold an existing lease while repeatedly rejecting feed/channel acquisition at
+per-key and global limits, exercise actual mux open/reject/open, and check close
+plus late/double completion. Rejected acquisition cannot release another owner.

@@ -213,7 +213,15 @@ public final class BridgeChannelSession: @unchecked Sendable {
     public enum State: String, Sendable { case unauthenticated, challengeIssued, verifying, authenticated, closed, revoked }
     private let lock = NSLock()
     private var stateValue: State = .unauthenticated
-    private var pending: Auth.Challenge?
+    private struct Pending {
+        let sessionID: String
+        let identity: Auth.PublicIdentity
+        let signingData: Data
+        let digest: String
+        let issued: Int64
+        let expires: Int64
+    }
+    private var pending: Pending?
     private var identityValue: Auth.PublicIdentity?
     private var authValue: Auth.Authenticated?
     private var absoluteExpiry: Date?
@@ -223,16 +231,54 @@ public final class BridgeChannelSession: @unchecked Sendable {
     private let wallClock: @Sendable () -> Date
     private let limits: BridgeChannelLimits?
     public let generation = UUID().uuidString
-    public let endpoint: Auth.Endpoint
+    public let endpoint: Auth.Endpoint?
+    public let peerEndpoint: BridgePeerChannelAuthentication.Endpoint?
+    private let localPeerIdentity: Auth.PublicIdentity?
+    private var domain: String { peerEndpoint?.domain ?? endpoint!.domain }
     private var closedCallback: (@Sendable () -> Void)?
 
     public init(endpoint: Auth.Endpoint, limits: BridgeChannelLimits? = nil, source: String = "local",
                 wallClock: @escaping @Sendable () -> Date = { Date() },
                 monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         try endpoint.validate()
-        self.endpoint = endpoint; self.limits = limits; self.wallClock = wallClock; self.monotonic = monotonic
+        self.endpoint = endpoint; self.peerEndpoint = nil; self.localPeerIdentity = nil; self.limits = limits; self.wallClock = wallClock; self.monotonic = monotonic
         deadline = monotonic() + 10
         try limits?.reserve(generation, source: source) { [weak self] in self?.revoke() }
+    }
+    init(peerEndpoint: BridgePeerChannelAuthentication.Endpoint, localIdentity: Auth.PublicIdentity,
+         limits: BridgeChannelLimits, source: String) throws {
+        try peerEndpoint.validate()
+        endpoint = nil; self.peerEndpoint = peerEndpoint; localPeerIdentity = localIdentity
+        self.limits = limits; wallClock = { Date() }; monotonic = { ProcessInfo.processInfo.systemUptime }
+        deadline = ProcessInfo.processInfo.systemUptime + 10
+        try limits.reserve(generation, source: source) { [weak self] in self?.revoke() }
+    }
+    func issuePeerChallenge(_ challenge: BridgePeerChannelAuthentication.Challenge) throws {
+        try lock.withLock {
+            guard stateValue == .unauthenticated, monotonic() < deadline,
+                  challenge.transcript.initiator.endpoint == peerEndpoint,
+                  challenge.generation == generation else { throw Auth.Failure.unexpectedMessage }
+            pending = Pending(sessionID: challenge.sessionID, identity: challenge.identity,
+                signingData: challenge.signingData, digest: Auth.digest(try Auth.encode(challenge.transcript)),
+                issued: challenge.transcript.issued, expires: challenge.transcript.issued + Int64(Auth.channelLifetime * 1000))
+            handshakeExpiry = Date(timeIntervalSince1970: Double(challenge.transcript.issued) / 1000 + Auth.challengeLifetime)
+            stateValue = .challengeIssued
+        }
+    }
+    /// Peer requests originate locally; incoming requests remain bound to the remote proof.
+    func checkOutbound(identity: Identity?, requiresIdentity: Bool = false) throws {
+        guard let localPeerIdentity else { return try check(identity: identity, requiresIdentity: requiresIdentity) }
+        try check()
+        guard let identity, (try? Auth.PublicIdentity(identity)) == localPeerIdentity else { throw Auth.Failure.identityMismatch }
+    }
+    func checkInbound(_ command: BridgeCommand) throws {
+        if localPeerIdentity != nil, command.command == .sign {
+            try checkOutbound(identity: command.identity, requiresIdentity: true)
+        } else if localPeerIdentity != nil, command.command == .response {
+            try check()
+            if let identity = command.identity,
+               (try? Auth.PublicIdentity(identity)) != localPeerIdentity { try check(identity: identity) }
+        } else { try check(identity: command.identity, requiresIdentity: command.command != .response) }
     }
     deinit { limits?.release(generation) }
     public var state: State { lock.withLock { stateValue } }
@@ -244,8 +290,11 @@ public final class BridgeChannelSession: @unchecked Sendable {
         try lock.withLock {
             guard stateValue == .unauthenticated else { throw Auth.Failure.unexpectedMessage }
             guard monotonic() < deadline else { throw Auth.Failure.expired }
+            guard let endpoint else { throw Auth.Failure.unexpectedMessage }
             let challenge = try Auth.challenge(hello: hello, endpoint: endpoint, generation: generation, now: wallClock())
-            pending = challenge
+            pending = Pending(sessionID: challenge.transcript.sessionID, identity: challenge.transcript.identity,
+                signingData: challenge.signingData, digest: Auth.digest(try Auth.encode(challenge.transcript)),
+                issued: challenge.transcript.issuedAtMilliseconds, expires: challenge.transcript.channelExpiresAtMilliseconds)
             handshakeExpiry = Date(timeIntervalSince1970: Double(challenge.transcript.issuedAtMilliseconds) / 1000 + Auth.challengeLifetime)
             stateValue = .challengeIssued
             return challenge
@@ -256,29 +305,29 @@ public final class BridgeChannelSession: @unchecked Sendable {
     /// sequence. Consume before expensive verification; no concurrent winner and
     /// no replacement of pending bytes from the wire. No vault is consulted.
     public func reserveOpen(_ proof: Auth.Proof) throws {
-        let challenge = try lock.withLock { () throws -> Auth.Challenge in
+        let challenge = try lock.withLock { () throws -> Pending in
             guard stateValue == .challengeIssued, let pending else { throw Auth.Failure.unexpectedMessage }
             guard monotonic() < deadline,
-                  wallClock().timeIntervalSince1970 < Double(pending.transcript.issuedAtMilliseconds) / 1000 + Auth.challengeLifetime else {
+                  wallClock().timeIntervalSince1970 < Double(pending.issued) / 1000 + Auth.challengeLifetime else {
                 throw Auth.Failure.expired
             }
-            guard proof.sessionID == pending.transcript.sessionID, proof.generation == generation else { throw Auth.Failure.staleGeneration }
+            guard proof.sessionID == pending.sessionID, proof.generation == generation else { throw Auth.Failure.staleGeneration }
             stateValue = .verifying
             self.pending = nil
             return pending
         }
         guard proof.signature.count <= 256,
               IdentityPublicKeySignatureVerifier.verify(signature: proof.signature, messageData: challenge.signingData,
-                identity: challenge.transcript.identity.makeIdentity()) else {
+                identity: challenge.identity.makeIdentity()) else {
             close(); throw Auth.Failure.invalidProof
         }
         try lock.withLock {
             guard stateValue == .verifying, monotonic() < deadline else { throw Auth.Failure.expired }
-            try limits?.authenticate(generation, principal: BridgeChannelLimits.principal(identity: challenge.transcript.identity, domain: endpoint.domain))
-            identityValue = challenge.transcript.identity
-            absoluteExpiry = Date(timeIntervalSince1970: Double(challenge.transcript.channelExpiresAtMilliseconds) / 1000)
+            try limits?.authenticate(generation, principal: BridgeChannelLimits.principal(identity: challenge.identity, domain: domain))
+            identityValue = challenge.identity
+            absoluteExpiry = Date(timeIntervalSince1970: Double(challenge.expires) / 1000)
             authValue = Auth.Authenticated(sessionID: proof.sessionID, generation: generation,
-                transcriptDigest: Auth.digest(try Auth.encode(challenge.transcript)))
+                transcriptDigest: challenge.digest)
         }
     }
 
@@ -289,6 +338,10 @@ public final class BridgeChannelSession: @unchecked Sendable {
                   let expiry = absoluteExpiry, wallClock() < expiry,
                   let handshakeExpiry, wallClock() < handshakeExpiry else { throw Auth.Failure.expired }
         }
+    }
+    func peerAcknowledgement() throws -> Auth.Authenticated {
+        try recheckBeforeActivation()
+        return try lock.withLock { guard peerEndpoint != nil, let authValue else { throw Auth.Failure.unexpectedMessage }; return authValue }
     }
     public func activate() throws -> Auth.Authenticated {
         try lock.withLock {

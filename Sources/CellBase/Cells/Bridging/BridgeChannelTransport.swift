@@ -19,6 +19,8 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private let factory: ServerFactory?
     private let recheckPolicy: @Sendable (Auth.PublicIdentity) async throws -> Void
     private var operation: BridgeChannelClientOperation?
+    private var peerOperation: BridgePeerChannelAuthentication.Operation?
+    private var peerReady = false
     private var timer: Task<Void, Never>?
     private var stopped = false
     private var started = false
@@ -45,6 +47,71 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         self.factory = nil; self.recheckPolicy = { _ in }; isServer = false
         install()
     }
+    public init(underlying: BridgeTransportProtocol, peerEndpoint: BridgePeerChannelAuthentication.Endpoint,
+                role: BridgePeerChannelAuthentication.Role, owner: Identity, limits: BridgeChannelLimits,
+                source: String, recheckPolicy: @escaping @Sendable (Auth.PublicIdentity) async throws -> Void = { _ in },
+                factory: @escaping ServerFactory) throws {
+        self.underlying = underlying; newPhysicalTransport = { type(of: underlying).new() }
+        session = try BridgeChannelSession(peerEndpoint: peerEndpoint, localIdentity: Auth.PublicIdentity(owner), limits: limits, source: source)
+        peerOperation = try .init(owner: owner, endpoint: peerEndpoint, role: role, generation: session.generation)
+        self.factory = factory; self.recheckPolicy = recheckPolicy; isServer = true
+        install()
+    }
+    public func startPeer() async throws {
+        guard let peer = lock.withLock({ peerOperation }),
+              lock.withLock({ if started || stopped { return false }; started = true; return true }) else { throw Auth.Failure.unexpectedMessage }
+        do {
+            if peer.hello.role == .initiator { try await sendAuth("channelAuthPeerHello", peer.hello) }
+            while !lock.withLock({ peerReady }) {
+                guard !lock.withLock({ stopped }) else { throw Auth.Failure.closed }
+                try Task.checkCancellation()
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            try session.check()
+        } catch { await close(); throw error }
+    }
+    private func activatePeer() async throws {
+        try session.recheckBeforeActivation()
+        _ = try session.activate()
+        guard let factory else { throw Auth.Failure.unavailable }
+        let delegate = try await factory(self, session)
+        try session.check()
+        lock.withLock { self.delegate = delegate }
+        if let bridge = delegate as? BridgeBase { try bridge.activateAuthenticatedChannel() }
+        scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+    }
+    private func consumePeerAuthentication(_ command: BridgeCommand, bytes: Data,
+        peer: BridgePeerChannelAuthentication.Operation) async throws {
+        typealias P = BridgePeerChannelAuthentication
+        switch (peer.hello.role, command.cmd) {
+        case (.responder, "channelAuthPeerHello"):
+            let remote = try Auth.decode(P.Hello.self, from: bytes)
+            try session.issuePeerChallenge(await peer.prepare(remote))
+            try await sendAuth("channelAuthPeerChallenge", P.Offer(hello: peer.hello, proof: await peer.sign()))
+        case (.initiator, "channelAuthPeerChallenge"):
+            let offer = try Auth.decode(P.Offer.self, from: bytes)
+            try session.issuePeerChallenge(await peer.prepare(offer.hello))
+            try session.reserveOpen(offer.proof)
+            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
+            try await recheckPolicy(identity); try session.recheckBeforeActivation()
+            try await sendAuth("channelAuthPeerProof", await peer.sign())
+        case (.responder, "channelAuthPeerProof"):
+            try session.reserveOpen(Auth.decode(Auth.Proof.self, from: bytes))
+            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
+            try await recheckPolicy(identity)
+            try session.recheckBeforeActivation()
+            // Save acknowledgement before factory; activatePeer performs the shared transition.
+            let acknowledgement = try session.peerAcknowledgement()
+            try await activatePeer()
+            try await sendAuth("channelAuthPeerAccepted", acknowledgement)
+            lock.withLock { peerReady = true }
+        case (.initiator, "channelAuthPeerAccepted"):
+            try await peer.finish(Auth.decode(Auth.Authenticated.self, from: bytes))
+            try await activatePeer()
+            lock.withLock { peerReady = true }
+        default: throw Auth.Failure.unexpectedMessage
+        }
+    }
     private func install() {
         session.retainTransport()
         session.onClose { [weak self] in
@@ -63,9 +130,9 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     public func setDelegate(_ delegate: BridgeDelegateProtocol) { lock.withLock { self.delegate = delegate } }
 
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
-        guard !isServer, endpointURL.absoluteString == session.endpoint.audience,
+        guard !isServer, let endpoint = session.endpoint, endpointURL.absoluteString == endpoint.audience,
               lock.withLock({ if started || stopped { return false }; started = true; return true }) else { throw Auth.Failure.unexpectedMessage }
-        let operation = try BridgeChannelClientOperation(owner: identity, endpoint: session.endpoint)
+        let operation = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint)
         lock.withLock { self.operation = operation }
         do {
             try await physicalTransport().setup(endpointURL, identity: identity.publicIdentitySnapshot())
@@ -131,6 +198,15 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
     }
 
+    /// Host setup uses the same retained work budget as dispatch and factories.
+    public func withAuthenticatedWork(_ body: @escaping @Sendable () async throws -> Void) async throws {
+        try await trackedWork {
+            try self.session.check()
+            try await body()
+            try self.session.check()
+        }
+    }
+
     public func consumeCommand(command: BridgeCommand) async throws {
         do { try await trackedWork(admission: command.cmd.hasPrefix("channelAuth")) { try await self.processCommand(command) } }
         catch { await close(); throw error }
@@ -142,7 +218,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
                 return
             }
             guard command.command != .ready else { throw Auth.Failure.unexpectedMessage }
-            try session.check(identity: command.identity, requiresIdentity: command.command != .response)
+            try session.checkInbound(command)
             if !isServer {
                 guard [.sign, .response, .channelOpened, .channelRejected].contains(command.command) else { throw Auth.Failure.unexpectedMessage }
             }
@@ -157,7 +233,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
     private func processResponse(_ command: BridgeCommand) async throws {
         do {
-            try session.check(identity: command.identity)
+            try session.checkInbound(command)
             guard command.command == .response, let delegate = lock.withLock({ self.delegate }) else { throw Auth.Failure.unexpectedMessage }
             try await delegate.consumeResponse(command: command)
         } catch { await close(); throw error }
@@ -169,6 +245,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
               command.streamID == nil, command.sequence == nil, command.resumeFromSequence == nil,
               case let .string(payload) = command.payload else { throw Auth.Failure.malformed }
         let bytes = Data(payload.utf8)
+        if let peer = lock.withLock({ peerOperation }) {
+            try await consumePeerAuthentication(command, bytes: bytes, peer: peer)
+            return
+        }
         switch (isServer, command.cmd) {
         case (true, "channelAuthHello"):
             let challenge = try session.issueChallenge(Auth.decode(Auth.Hello.self, from: bytes))
@@ -218,7 +298,8 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     func replacementForRenewal(using physical: BridgeTransportProtocol? = nil) async throws -> BridgeChannelTransport {
         guard !isServer else { throw Auth.Failure.unexpectedMessage }
         await close()
-        return try BridgeChannelTransport(underlying: physical ?? newPhysicalTransport(), endpoint: session.endpoint)
+        guard let endpoint = session.endpoint else { throw Auth.Failure.unavailable }
+        return try BridgeChannelTransport(underlying: physical ?? newPhysicalTransport(), endpoint: endpoint)
     }
 
     public func close() async {
@@ -233,6 +314,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         defer { session.releaseTransport() }
         session.close()
         await cleanup.1?.cancel()
+        await lock.withLock({ peerOperation })?.cancel()
         if let bridge = cleanup.0 as? BridgeBase {
             await bridge.channelDidClose(session)
         } else {
