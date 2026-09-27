@@ -1155,7 +1155,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     let commandID = await self.auditor.getNewCommandId()
                     let bridgeCommand = BridgeCommand(
                         cmd: Command.sign.rawValue,
-                        identity: identity,
+                        identity: identity.publicIdentitySnapshot(),
                         payload: .signData(messageData),
                         cid: commandID
                     )
@@ -1189,7 +1189,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func sendResponse(command: Command, identity: Identity, payload: ValueType?, cid: Int, using transport: BridgeTransportProtocol?) async {
-        let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: cid)
+        let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity.publicIdentitySnapshot(), payload: payload, cid: cid)
         
         if let cloudBridgeCommandJson = try? JSONEncoder().encode(bridgeCommand),
         let transport = transport {
@@ -1307,7 +1307,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             throw BridgeChannelAuthentication.Failure.capacity
         }
 
-        guard let bridgeCommandJson = try? JSONEncoder().encode(bridgeCommand) else {
+        var wireCommand = bridgeCommand
+        wireCommand.identity = identity.publicIdentitySnapshot()
+        guard let bridgeCommandJson = try? JSONEncoder().encode(wireCommand) else {
             throw BridgeError.someError
         }
         guard let transport else {

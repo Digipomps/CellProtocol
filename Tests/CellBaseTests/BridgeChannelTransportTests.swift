@@ -61,12 +61,18 @@ final class BridgeChannelTransportTests: XCTestCase {
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
         try await resolver.registerNamedEmitCell(name: "Protected", emitCell: publisher, scope: .template, identity: serverOwner)
+        owner.properties = ["private-test": .string("must-not-cross-wire")]
+        owner.homeVaultReference = "must-not-cross-vault-reference"
         let pair = try await connected(owner: owner, serverOwner: serverOwner, publisher: publisher)
         await pair.client.sendCommand(command: .get, identity: owner, payload: .string("secret"))
         let response = try XCTUnwrap(pair.serverWire.snapshot.last { $0.command == .response && $0.payload == .string("protected-value") })
         XCTAssertEqual(response.payload, .string("protected-value"))
         XCTAssertTrue(pair.clientWire.snapshot.contains { if case .signature = $0.payload { return true }; return false })
         XCTAssertEqual(pair.serverGate.session.publicIdentity, try A.PublicIdentity(owner))
+        for command in pair.clientWire.snapshot {
+            let wire = String(decoding: try JSONEncoder().encode(command), as: UTF8.self)
+            XCTAssertFalse(wire.contains("must-not-cross"), "Normal commands must not export local identity metadata")
+        }
         let attacker = await identity()
         do {
             try await pair.serverGate.consumeCommand(command: .init(cmd: "get", identity: attacker, payload: .string("secret"), cid: 999))

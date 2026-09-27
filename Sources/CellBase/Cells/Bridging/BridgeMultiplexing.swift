@@ -387,7 +387,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         }
         let open = BridgeCommand(
             cmd: Command.openChannel.rawValue,
-            identity: identity,
+            identity: identity.publicIdentitySnapshot(),
             payload: nil,
             cid: cid,
             protocolVersion: protocolVersion,
@@ -464,7 +464,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         }
         let close = BridgeCommand(
             cmd: Command.closeChannel.rawValue,
-            identity: identity,
+            identity: identity?.publicIdentitySnapshot(),
             payload: nil,
             cid: cid,
             protocolVersion: protocolVersion,
@@ -602,7 +602,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             commandID += 1
             return commandID
         }
-        let frame = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: cid)
+        let frame = BridgeCommand(cmd: command.rawValue, identity: identity.publicIdentitySnapshot(), payload: payload, cid: cid)
         if let data = try? JSONEncoder().encode(frame) {
             try? await physicalTransport.sendData(data)
         }
