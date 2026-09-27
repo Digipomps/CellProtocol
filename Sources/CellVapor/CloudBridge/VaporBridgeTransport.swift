@@ -70,6 +70,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private var closeCleanupCompleted = false
     private var connectionGeneration = UUID()
     private var setupWaiter: VaporBridgeSetupWaiter?
+    private var outgoingGroup: MultiThreadedEventLoopGroup?
     private var closeUnderlyingChannel: (@Sendable () async -> Void)?
     
 
@@ -109,15 +110,33 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
     
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
+        guard let target = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false),
+              let scheme = target.scheme, ["ws", "wss"].contains(scheme), let host = target.host else {
+            throw TransportError.InvalidURL
+        }
+        // This adapter owns the outgoing loop so timeout/close also closes TCP
+        // channels that have not reached WebSocket onUpgrade yet. A shared global
+        // loop cannot cancel one such pre-upgrade connection through WebSocketKit.
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        var configuration = WebSocketClient.Configuration(maxFrameSize: BridgeInboundPayloadValidator.defaultMaximumBytes)
+        configuration.maxAccumulatedFrameSize = BridgeInboundPayloadValidator.defaultMaximumBytes
+        configuration.maxAccumulatedFrameCount = 128
+        let client = WebSocketClient(eventLoopGroupProvider: .shared(group), configuration: configuration)
         let generation = UUID(), loop = VaporBridgeTransportEventLoops.shared.next()
         let waiter = VaporBridgeSetupWaiter(on: loop)
-        withStateLock { connectionGeneration = generation; setupWaiter = waiter }
+        let accepted = withStateLock { () -> Bool in
+            guard outgoingGroup == nil, webSocket == nil, setupWaiter == nil else { return false }
+            outgoingGroup = group; connectionGeneration = generation; setupWaiter = waiter
+            return true
+        }
+        guard accepted else { try? await group.shutdownGracefully(); throw TransportError.TransportNotFound }
         let timeout = loop.scheduleTask(in: .seconds(10)) { waiter.complete(.failure(TransportError.TransportNotFound)) }
         defer { timeout.cancel() }
         let snapshot = VaporBridgeIdentitySnapshot(identity)
         // WebSocketKit's HTTP upgrade future may complete before onUpgrade has
         // installed our socket. Readiness is this explicit callback, not that future.
-        let connection: EventLoopFuture<Void> = WebSocket.connect(to: endpointURL.absoluteString, on: VaporBridgeTransportEventLoops.shared) { [weak self] socket in
+        let connection: EventLoopFuture<Void> = client.connect(scheme: scheme, host: host,
+            port: target.port ?? (scheme == "wss" ? 443 : 80), path: target.percentEncodedPath, query: target.percentEncodedQuery) { [weak self] socket in
             guard let self else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
             let installed = self.withStateLock { () -> Bool in
                 guard self.connectionGeneration == generation, self.setupWaiter === waiter else { return false }
@@ -176,6 +195,10 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         // Do not await peer acknowledgement before closing the host-owned socket.
         if let socket { socket.close(code: .policyViolation, promise: nil) }
         await hardClose?()
+        let group = withStateLock { () -> MultiThreadedEventLoopGroup? in
+            let group = outgoingGroup; outgoingGroup = nil; return group
+        }
+        try? await group?.shutdownGracefully()
         await cleanupClosedWebSocketRegistration()
     }
 
@@ -202,7 +225,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
             CellBase.diagnosticLog("Vapor bridge websocket closed with failure: \(error)", domain: .bridge)
         }
         Task { [weak self] in
-            await self?.cleanupClosedWebSocketRegistration()
+            await self?.close()
         }
     }
 

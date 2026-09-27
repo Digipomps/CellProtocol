@@ -9,6 +9,34 @@ import Vapor
 /// Real loopback WebSocket framing and callbacks. TLS/proxy deployment evidence
 /// remains a separate staging requirement; this test explicitly enables local WS.
 final class BridgeChannelWebSocketTests: XCTestCase {
+    func testCloseCancelsARealSocketStalledBeforeWebSocketUpgrade() async throws {
+        let app = try await Application.make(.testing)
+        let entered = expectation(description: "server received upgrade request")
+        let release = SocketUpgradeBarrier()
+        app.get("stall") { _ async -> HTTPStatus in
+            entered.fulfill()
+            await release.wait()
+            return .ok
+        }
+        let transport = VaporBridgeTransport()
+        do {
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
+            let pending = Task { try await transport.setup(URL(string: "ws://127.0.0.1:\(port)/stall")!, identity: Identity()) }
+            await fulfillment(of: [entered], timeout: 3)
+            let began = ProcessInfo.processInfo.systemUptime
+            await transport.close()
+            do { try await pending.value; XCTFail("Unfinished upgrade must fail on close") } catch {}
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 5)
+            await release.resume()
+            await app.server.shutdown(); try await app.asyncShutdown()
+        } catch {
+            await transport.close(); await release.resume()
+            await app.server.shutdown(); try await app.asyncShutdown()
+            throw error
+        }
+    }
+
     func testVaporSocketRequiresProofThenPerformsProtectedReadWithNoServerSigner() async throws {
         let oldResolver = CellBase.defaultCellResolver, oldVault = CellBase.defaultIdentityVault
         defer { CellBase.defaultCellResolver = oldResolver; CellBase.defaultIdentityVault = oldVault }
@@ -71,6 +99,16 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             throw error
         }
     }
+}
+
+private actor SocketUpgradeBarrier {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func resume() { released = true; continuation?.resume(); continuation = nil }
 }
 
 private final class SocketAuthFixtureState: @unchecked Sendable {
