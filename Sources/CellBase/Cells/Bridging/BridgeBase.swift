@@ -1204,6 +1204,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private func sendSigningDenied(
         _ message: String,
         cid: Int,
+        using transport: BridgeTransportProtocol?,
         identity: Identity? = nil,
         reasonCode: String = CellSecurityReasonCode.bridgeSigningDenied,
         kind: CellSecurityEventKind = .vaultSignRejected,
@@ -1512,6 +1513,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         await sendSigningDenied(
                             String(describing: error),
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: CellSecurityReasonCode.invalidSigningChallenge
                         )
@@ -1521,6 +1523,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         await sendSigningDenied(
                             "bridge session is not ready",
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: CellSecurityReasonCode.bridgeNotReady,
                             kind: .transportRejected,
@@ -1532,6 +1535,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         await sendSigningDenied(
                             denial.message,
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: denial.reasonCode,
                             kind: .transportRejected,
@@ -1544,6 +1548,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         await sendSigningDenied(
                             "no active local operation authorizes this identity and challenge scope",
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: "unexpected_identity_signing_challenge"
                         )
@@ -1555,6 +1560,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             await sendSigningDenied(
                                 "signing challenge rejected: \(replayDecision)",
                                 cid: command.cid,
+                                using: transport,
                                 identity: identity,
                                 reasonCode: replayDecision.reasonCode,
                                 kind: replayDecision == .replay ? .signingChallengeReplay : .vaultSignRejected,
@@ -1576,6 +1582,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             await self.sendSigningDenied(
                                 String(describing: error),
                                 cid: command.cid,
+                                using: transport,
                                 identity: identity,
                                 reasonCode: CellSecurityReasonCode.bridgeSigningDenied
                             )

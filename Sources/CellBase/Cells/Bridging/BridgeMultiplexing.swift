@@ -1048,8 +1048,9 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         ))
     }
 
-    fileprivate func send(_ data: Data, channelID: String) async throws {
-        guard stateLock.withLock({ closed == false && channels[channelID] != nil }) else {
+    fileprivate func send(_ data: Data, channelID: String, transport: ServerChannelTransport) async throws {
+        // Object identity is the logical generation; reused wire IDs confer no authority.
+        guard stateLock.withLock({ closed == false && channels[channelID]?.transport === transport }) else {
             throw BridgeMultiplexError.channelNotFound
         }
         guard var command = try? JSONDecoder().decode(BridgeCommand.self, from: data) else {
@@ -1195,7 +1196,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
     public func ready() async throws {}
 
-    private final class ServerChannelTransport: BridgeTransportProtocol, @unchecked Sendable {
+    fileprivate final class ServerChannelTransport: BridgeTransportProtocol, @unchecked Sendable {
         var channelSession: BridgeChannelSession? { session?.channelSession }
         private weak var delegate: BridgeDelegateProtocol?
         private weak var session: BridgeMultiplexServerSession?
@@ -1221,11 +1222,11 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
         func sendData(_ data: Data) async throws {
             guard let session else { throw BridgeMultiplexError.sessionClosed }
-            try await session.send(data, channelID: channelID)
+            try await session.send(data, channelID: channelID, transport: self)
         }
 
         func close() async {
-            guard let session else { return }
+            guard let session, session.stateLock.withLock({ session.channels[channelID]?.transport === self }) else { return }
             try? await session.consumeCommand(command: BridgeCommand(
                 cmd: Command.closeChannel.rawValue,
                 identity: session.channelSession?.publicIdentity?.makeIdentity(),

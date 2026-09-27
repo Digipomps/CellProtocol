@@ -359,6 +359,78 @@ final class BridgeChannelTransportTests: XCTestCase {
         XCTAssertTrue(wire.sentData.isEmpty)
     }
 
+    func testRetiredMultiplexGetSetAndSignDenialCannotReachReusedChannelOrCID() async throws {
+        for kind in ["get", "set", "sign"] {
+            let owner = await identity(), barrier = ChannelPolicyBarrier()
+            let entered = expectation(description: "suspended old \(kind)")
+            let cell = await SuspendedChannelReadCell(owner: owner)
+            cell.read = { entered.fulfill(); await barrier.wait(); return .string("old-result") }
+            cell.write = { entered.fulfill(); await barrier.wait(); return .string("old-result") }
+            let oldSink = CellBase.securityEventSink
+            if kind == "sign" { CellBase.securityEventSink = SuspendedSigningEventSink(entered: entered, barrier: barrier) }
+            defer { CellBase.securityEventSink = oldSink }
+            let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+            try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
+            let wire = MockBridgeTransport(), holder = BridgeBase(owner: owner)
+            try await holder.setTransport(wire, connection: .outbound)
+            try await authenticateBridgeFixture(holder, principal: owner)
+            let mux = BridgeMultiplexServerSession(physicalTransport: try XCTUnwrap(holder.transport), bridgeOwner: owner)
+            let id = UUID().uuidString, sibling = UUID().uuidString
+            func command(_ name: String, _ channel: String, payload: ValueType? = nil) -> BridgeCommand {
+                .init(cmd: name, identity: owner.publicIdentitySnapshot(), payload: payload, cid: 7,
+                      protocolVersion: 2, channelID: channel, targetEndpoint: name == "openChannel" ? "Protected" : nil)
+            }
+            try await mux.consumeCommand(command: command("openChannel", id))
+            try await mux.consumeCommand(command: command("openChannel", sibling))
+            let payload: ValueType = kind == "sign" ? .signData(Data([1])) : kind == "set" ? .keyValue(.init(key: "secret", value: .string("old"))) : .string("secret")
+            let old = Task { try await mux.consumeCommand(command: command(kind, id, payload: payload)) }
+            await fulfillment(of: [entered], timeout: 2)
+            try await mux.consumeCommand(command: command("closeChannel", id))
+            try await mux.consumeCommand(command: command("openChannel", id))
+            cell.read = { .string("fresh-result") }
+            try await mux.consumeCommand(command: command("get", id, payload: .string("secret")))
+            try await mux.consumeCommand(command: command("get", sibling, payload: .string("secret")))
+            await barrier.resume(); try await old.value
+            let responses = wire.sentData.compactMap { try? JSONDecoder().decode(BridgeCommand.self, from: $0) }.filter { $0.command == .response }
+            XCTAssertEqual(responses.count, 2, kind)
+            XCTAssertEqual(Set(responses.compactMap(\.channelID)), Set([id, sibling]), kind)
+            XCTAssertTrue(responses.allSatisfy { $0.cid == 7 && $0.payload == .string("fresh-result") }, kind)
+            await mux.close()
+        }
+    }
+
+    func testSuspendedGetSetAndSignDenialStayOnOriginalPhysicalGenerationWithCIDCollision() async throws {
+        for kind in ["get", "set", "sign"] {
+            let owner = await identity(), barrier = ChannelPolicyBarrier()
+            let entered = expectation(description: "old physical \(kind)")
+            let cell = await SuspendedChannelReadCell(owner: owner)
+            cell.read = { entered.fulfill(); await barrier.wait(); return .string("old-result") }
+            cell.write = { entered.fulfill(); await barrier.wait(); return .string("old-result") }
+            let oldSink = CellBase.securityEventSink
+            if kind == "sign" { CellBase.securityEventSink = SuspendedSigningEventSink(entered: entered, barrier: barrier) }
+            defer { CellBase.securityEventSink = oldSink }
+            let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+            try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
+            let oldWire = MockBridgeTransport(), newWire = MockBridgeTransport()
+            let bridge = BridgeBase(owner: owner)
+            try await bridge.setTransport(oldWire, connection: .inbound(publisherUuid: "Protected"))
+            try await authenticateBridgeFixture(bridge, principal: owner)
+            let payload: ValueType = kind == "sign" ? .signData(Data([1])) : kind == "set" ? .keyValue(.init(key: "secret", value: .string("old"))) : .string("secret")
+            let old = Task { try await bridge.consumeCommand(command: .init(cmd: kind, identity: owner, payload: payload, cid: 7)) }
+            await fulfillment(of: [entered], timeout: 2)
+            try await bridge.setTransport(newWire, connection: .inbound(publisherUuid: "Protected"))
+            try await authenticateBridgeFixture(bridge, principal: owner)
+            cell.read = { .string("fresh-result") }
+            try await bridge.consumeCommand(command: .init(cmd: "get", identity: owner, payload: .string("secret"), cid: 7))
+            await barrier.resume(); try await old.value
+            XCTAssertTrue(oldWire.sentData.isEmpty, kind)
+            let responses = newWire.sentData.compactMap { try? JSONDecoder().decode(BridgeCommand.self, from: $0) }
+            XCTAssertEqual(responses.count, 1, kind)
+            XCTAssertEqual(responses.first?.payload, .string("fresh-result"), kind)
+            await bridge.transport?.close()
+        }
+    }
+
     private func connected(owner: Identity, serverOwner: Identity, publisher: GeneralCell) async throws ->
         (client: BridgeBase, clientGate: BridgeChannelTransport, serverGate: BridgeChannelTransport, clientWire: ChannelWire, serverWire: ChannelWire) {
         let clientWire = ChannelWire(), serverWire = ChannelWire(), endpoint = try endpoint()
@@ -418,6 +490,8 @@ private final class ChannelWire: BridgeTransportProtocol, @unchecked Sendable {
 
 private final class SuspendedChannelReadCell: GeneralCell {
     var read: (() async -> ValueType)?
+    var write: (() async -> ValueType)?
+    override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? { await write?() }
     override func get(keypath: String, requester: Identity) async throws -> ValueType {
         await read?() ?? .string("missing fixture")
     }
@@ -428,5 +502,14 @@ private final class SuspendedChannelFeedCell: GeneralCell {
     override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
         await beforeFlow?()
         return getFeedPublisher()
+    }
+}
+
+private struct SuspendedSigningEventSink: CellSecurityEventSink {
+    let entered: XCTestExpectation
+    let barrier: ChannelPolicyBarrier
+    func record(_ event: CellSecurityEvent) async {
+        guard event.kind == .vaultSignRejected else { return }
+        entered.fulfill(); await barrier.wait()
     }
 }
