@@ -25,6 +25,7 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     private struct Entry {
         let source: String
         var principal: String?
+        var active = false
         var operations = 0
         var feeds = 0
         var channels = 0
@@ -65,8 +66,8 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             try consumeRate("source:" + source, maximum: configuration.maximumAttemptsPerSourcePerMinute)
             guard entries[id] == nil,
                   entries.count < configuration.maximumConnections,
-                  entries.values.filter({ $0.principal == nil }).count < configuration.maximumPending,
-                  entries.values.filter({ $0.principal == nil && $0.source == source }).count < configuration.maximumPendingPerSource else {
+                  entries.values.filter({ !$0.active }).count < configuration.maximumPending,
+                  entries.values.filter({ !$0.active && $0.source == source }).count < configuration.maximumPendingPerSource else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
             entries[id] = Entry(source: source, revoke: revoke)
@@ -81,6 +82,12 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             try consumeRate("key:" + principal, maximum: configuration.maximumVerifiedHandshakesPerKeyPerMinute)
             entry.principal = principal
             entries[id] = entry
+        }
+    }
+    func activate(_ id: String) throws {
+        try lock.withLock {
+            guard var entry = entries[id], entry.principal != nil, !entry.active else { throw BridgeChannelAuthentication.Failure.closed }
+            entry.active = true; entries[id] = entry
         }
     }
     enum Resource { case operation, feed, channel }
@@ -229,6 +236,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
         try lock.withLock {
             guard stateValue == .verifying, monotonic() < deadline, let authValue,
                   let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+            try limits?.activate(generation)
             deadline = monotonic() + min(Auth.channelLifetime, expiry.timeIntervalSince(wallClock()))
             stateValue = .authenticated
             return authValue

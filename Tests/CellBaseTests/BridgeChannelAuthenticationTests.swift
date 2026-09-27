@@ -182,7 +182,8 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
 
     func testCanonicalEndpointRejectsInsecureNonlocalAndAmbiguousTargets() throws {
         for url in ["ws://remote.example/bridgehead/a/b", "wss://u:p@bridge.example/a", "wss://bridge.example/a?token=x",
-                    "wss://bridge.example/a#fragment", "wss://bridge.example:443/a", "wss://bridge.example/a/%2e%2e/b"] {
+                    "wss://bridge.example/a#fragment", "wss://bridge.example:443/a",
+                    "wss://bridge.example:0/a", "wss://bridge.example:65536/a", "wss://bridge.example/a/%2e%2e/b"] {
             XCTAssertThrowsError(try A.Endpoint(url: XCTUnwrap(URL(string: url)), domain: "bridge", allowInsecureLoopback: true), url)
         }
         XCTAssertThrowsError(try A.Endpoint(url: XCTUnwrap(URL(string: "ws://localhost/a")), domain: "bridge"))
@@ -207,6 +208,22 @@ final class BridgeChannelAuthenticationTests: XCTestCase {
         second.close()
         limits.revoke(identity: try A.PublicIdentity(identity), domain: "bridge")
         XCTAssertEqual(first.state, .revoked)
+        XCTAssertEqual(limits.connectionCount, 0)
+    }
+
+    func testVerifyingConnectionRetainsPreAuthQuotaUntilActivation() async throws {
+        var config = BridgeChannelLimits.Configuration()
+        config.maximumPending = 1; config.maximumPendingPerSource = 1
+        let limits = BridgeChannelLimits(configuration: config)
+        let identity = await owner()
+        let session = try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: "one")
+        let client = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint())
+        try session.reserveOpen(try await client.sign(session.issueChallenge(client.hello)))
+        XCTAssertEqual(session.state, .verifying)
+        XCTAssertThrowsError(try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: "two"))
+        _ = try session.activate()
+        let next = try BridgeChannelSession(endpoint: endpoint(), limits: limits, source: "two")
+        next.close(); session.close()
         XCTAssertEqual(limits.connectionCount, 0)
     }
 

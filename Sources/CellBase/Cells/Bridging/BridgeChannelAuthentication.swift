@@ -80,6 +80,7 @@ public enum BridgeChannelAuthentication {
                   c.user == nil, c.password == nil, c.query == nil, c.fragment == nil,
                   scheme == scheme.lowercased(), host == host.lowercased(),
                   !host.isEmpty, !host.hasSuffix("."),
+                  c.port.map({ (1...65535).contains($0) }) ?? true,
                   !c.path.isEmpty, c.path.hasPrefix("/"), !c.path.contains("//"),
                   !c.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }),
                   c.percentEncodedPath == c.path,
