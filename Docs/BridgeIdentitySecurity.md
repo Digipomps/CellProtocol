@@ -1,6 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, f1e150795e0fc0b881811240a51043008d07b939.
+Last verified against code: 2026-09-27, 616a3b22f798f70d96a4880d7739b9a7b0c4d0a6.
 
 ## Admission precedes every Cell operation
 
@@ -130,7 +130,8 @@ not redirect or substitute an insecure transport.
 ## Lifecycle, quotas and retained state
 
 Before authentication the server retains one bounded public hello/challenge per
-connection, generation, deadline and quota reservation. After authentication it
+connection, generation, deadline and quota reservation. A verified proof awaiting
+host policy still occupies pre-auth capacity until full activation. After authentication it
 retains only the minimal immutable public principal, endpoint, session/transcript
 digest, expiry and bounded operation/feed/channel accounting. Pending signature
 bytes are discarded after verification. There is no persisted client key, bearer
