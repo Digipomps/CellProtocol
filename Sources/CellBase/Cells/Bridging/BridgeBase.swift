@@ -81,6 +81,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var outboundFeedCommandID: Int?
     private var outboundFeedRequester: Identity?
     private var queuedFeedDeliveries = 0
+    private var feedAdmissionPending = false
     private var inboundFeedCommandID: Int?
     private var inboundFeedRequester: Identity?
     private var localFeedSubscriberCount = 0
@@ -144,7 +145,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var loadPublisherCancellable: AnyCancellable?
     
     private var readyPublisher = PassthroughSubject<Bool, Error>()
-    private var ready = false
+    private var readyValue = false
+    private var ready: Bool {
+        get { connectionStateLock.withLock { readyValue } }
+        set { connectionStateLock.withLock { readyValue = newValue } }
+    }
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
     var feedActive = false
@@ -155,8 +160,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         get { withDescriptionStateLock { descriptionState.feedProperties } }
         set { withDescriptionStateLock { descriptionState.feedProperties = newValue } }
     }
-    var transport: BridgeTransportProtocol?
-    private var channelSession: BridgeChannelSession?
+    private let connectionStateLock = NSLock()
+    private var transportValue: BridgeTransportProtocol?
+    private var channelSessionValue: BridgeChannelSession?
+    var transport: BridgeTransportProtocol? {
+        get { connectionStateLock.withLock { transportValue } }
+        set { connectionStateLock.withLock { transportValue = newValue } }
+    }
+    private var channelSession: BridgeChannelSession? {
+        get { connectionStateLock.withLock { channelSessionValue } }
+        set { connectionStateLock.withLock { channelSessionValue = newValue } }
+    }
     var emitCellAtEndpoint: Emit?
     private var inboundEmitCellCache = [String: Emit]()
     private var inboundPublisherLookupIdentity: Identity?
@@ -184,8 +198,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             identityDomain: config.identityDomain
         )
         feedEndpoint = URL(string: "https://localhost/")
-        self.transport = config.transport
-        self.channelSession = config.transport.channelSession
+        self.transportValue = config.transport
+        self.channelSessionValue = config.transport.channelSession
         self.inboundPublisherLookupIdentity = config.inboundPublisherLookupIdentity
         self.cellScope = .template // TODO: get from config's 
 //        self.cellScope = config.cellRepresentation?.cellScope
@@ -505,11 +519,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         case .inbound(publisherUuid: let publisherUuid):
             self.publisherUuid = publisherUuid
             emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
+            withCallbackStateLock { inboundEmitCellCache = [:] }
         case .outbound:
             self.publisherUuid = nil
             emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
+            withCallbackStateLock { inboundEmitCellCache = [:] }
         }
         
         
@@ -956,7 +970,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
             let resolvingIdentity = try inboundPublisherResolvingIdentity(for: requester)
             let cacheKey = [channelSession?.generation ?? "host", resolvingIdentity.uuid, resolvingIdentity.signingPublicKeyFingerprint ?? ""].joined(separator: ":")
-            if let cached = inboundEmitCellCache[cacheKey] {
+            if let cached = withCallbackStateLock({ inboundEmitCellCache[cacheKey] }) {
                 return cached
             }
 
@@ -966,7 +980,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             )
             guard currentSession === channelSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
             try currentSession.check(identity: requester, requiresIdentity: true)
-            inboundEmitCellCache[cacheKey] = resolved
+            withCallbackStateLock { inboundEmitCellCache[cacheKey] = resolved }
             return resolved
         }
 
@@ -1349,8 +1363,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Consume command cmd: \(command.cmd)")
             switch command.command {
             case .ready:
-                ready = true
-                self.readyPublisher.send(true)
+                throw BridgeChannelAuthentication.Failure.unexpectedMessage
                 
             case .admit:
                 if let identity = command.identity {
@@ -1674,6 +1687,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private func processFeedCommand(command: BridgeCommand) async throws {
         guard let currentSession = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
         if let identity =  command.identity {
+            let reserved = withCallbackStateLock { () -> Bool in
+                guard !feedAdmissionPending else { return false }
+                feedAdmissionPending = true
+                return true
+            }
+            guard reserved else { throw BridgeChannelAuthentication.Failure.capacity }
+            defer { withCallbackStateLock { feedAdmissionPending = false } }
             let emitter = try await resolvedEmitCell(for: identity)
             if self.feedCancellable == nil {
                 try currentSession.acquire(.feed)

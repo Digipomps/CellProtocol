@@ -292,6 +292,28 @@ final class BridgeChannelTransportTests: XCTestCase {
         XCTAssertTrue(oldWire.sentData.isEmpty)
     }
 
+    func testConcurrentFeedStartHasOneAdmissionAndCloseWinsSuspendedSubscription() async throws {
+        let owner = await identity(), barrier = ChannelPolicyBarrier()
+        let entered = expectation(description: "feed admission entered")
+        let cell = await SuspendedChannelFeedCell(owner: owner)
+        cell.beforeFlow = { entered.fulfill(); await barrier.wait() }
+        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
+        let wire = MockBridgeTransport()
+        let bridge = try await BridgeBase(.init(owner: owner, transport: wire, connection: .inbound(publisherUuid: "Protected")))
+        try await bridge.setTransport(wire, connection: .inbound(publisherUuid: "Protected"))
+        try await authenticateBridgeFixture(bridge, principal: owner)
+        let start = Task { try await bridge.consumeCommand(command: .init(cmd: "feed", identity: owner, payload: nil, cid: 1)) }
+        await fulfillment(of: [entered], timeout: 2)
+        do { try await bridge.consumeCommand(command: .init(cmd: "feed", identity: owner, payload: nil, cid: 2)); XCTFail("Duplicate pending admission") }
+        catch { XCTAssertEqual(error as? A.Failure, .capacity) }
+        await bridge.retireLogicalChannel()
+        await barrier.resume()
+        do { try await start.value; XCTFail("Closed logical channel must not install feed") } catch {}
+        XCTAssertFalse(bridge.feedActive)
+        XCTAssertTrue(wire.sentData.isEmpty)
+    }
+
     private func connected(owner: Identity, serverOwner: Identity, publisher: GeneralCell) async throws ->
         (client: BridgeBase, clientGate: BridgeChannelTransport, serverGate: BridgeChannelTransport, clientWire: ChannelWire, serverWire: ChannelWire) {
         let clientWire = ChannelWire(), serverWire = ChannelWire(), endpoint = try endpoint()
@@ -349,5 +371,13 @@ private final class SuspendedChannelReadCell: GeneralCell {
     var read: (() async -> ValueType)?
     override func get(keypath: String, requester: Identity) async throws -> ValueType {
         await read?() ?? .string("missing fixture")
+    }
+}
+
+private final class SuspendedChannelFeedCell: GeneralCell {
+    var beforeFlow: (() async -> Void)?
+    override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
+        await beforeFlow?()
+        return getFeedPublisher()
     }
 }
