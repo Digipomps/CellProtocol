@@ -1,7 +1,6 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Last verified against code: 2026-09-27, work in progress on pdd/bro-kanal-auth
-(replaced with the verified source revision before delivery).
+Last verified against code: 2026-09-27, 196b910ed64540d753a4f90b87e29e40db60cca6.
 
 ## Admission precedes every Cell operation
 
@@ -98,7 +97,10 @@ let admission = try BridgeChannelTransport(
 
 Retain the admission object for the connection. For multiplex, the factory returns
 `BridgeMultiplexServerSession(physicalTransport: admittedTransport, bridgeOwner: …)`;
-its logical transports inherit the same verified session. The service identity is
+its logical transports inherit the same verified session. Closing one logical
+channel cancels its work and releases its quota without revoking sibling channels.
+The factory receives the minimal proven principal, not wire-supplied metadata.
+The service identity is
 only an explicit local publisher lookup identity, never a replacement requester.
 
 The reusable `BridgeChannelSession.reserveOpen`, `recheckBeforeActivation`, and
@@ -106,6 +108,13 @@ The reusable `BridgeChannelSession.reserveOpen`, `recheckBeforeActivation`, and
 reservation/recheck/activation pattern. That application must retain its person
 link evidence and scope checks, and compose them in its admission/recheck step.
 Its HTTP-upgrade proof alone must not be turned into a ready-only exception.
+
+For Vapor ingress, use `VaporBridgeTransport(webSocket:closeUnderlyingChannel:)`
+and supply `{ try? await ownedNIOChannel.close().get() }`. Reuse the existing
+PersonEntityRead upgrader's frame/reassembly/error-close pattern to obtain that
+channel. A WebSocket close frame alone depends on peer cooperation. The generic
+Vapor route helper does not prove those production ingress bounds. Install the
+gate synchronously in the upgrade callback before accepting peer messages.
 
 CellResolver wraps both dedicated and multiplex outgoing transports automatically.
 A direct client can construct the client initializer of `BridgeChannelTransport`,
@@ -127,7 +136,12 @@ token, server-side client signer or positive Cell authorization cache.
 Shared limits cover total connections, pending handshakes, pending handshakes per
 trusted source, and connections/operations/feeds/logical channels per proven
 (domain, UUID, fingerprint). Pending sends have per-connection and global byte
-bounds. Pre-auth wire envelopes are limited to 16 KiB; ordinary bridge payload
+bounds. Fixed 60-second rate windows survive socket closure: defaults are 512
+attempts globally, 60 per trusted source and 12 verified handshakes per proven key.
+Rate buckets are bounded (4096); unknown sources cannot evict unexpired buckets.
+Unproved UUIDs never consume a victim's key-specific bucket. These are configurable
+starting values, not measured production capacity.
+Pre-auth wire envelopes are limited to 16 KiB; ordinary bridge payload
 limits still apply. The host must also bound WebSocket frames, accumulated fragments
 and ingress task/CPU scheduling **before** JSON decoding. Transport-side limits do
 not establish those host-level bounds by themselves.
@@ -138,10 +152,20 @@ are bounded (default 256). Feed send work is bounded and captures its generation
 revoked/expired generations cannot enqueue new deliveries. Local host policy can
 call `session.revoke()` or `sharedLimits.revoke(identity:domain:)`. Closing, expiry,
 transport loss and replacement invalidate the session and local proof leases and
-cancel feeds/signing callbacks. The physical transport is released on close.
+cancel feeds and fail pending callbacks. Suspended old replies retain their old
+transport; a late close callback cannot invalidate a replacement generation.
+Concurrent feed admissions are bounded, and closure is rechecked after awaiting
+the Cell's stream. The physical transport is released on close.
+
+`sharedLimits.revoke` invalidates currently admitted leases; it is not a durable
+revoked-key database. The host must supply authoritative current key/link policy in
+`recheckPolicy` to deny subsequent reconnection when required. No global revocation
+propagation or host-policy freshness guarantee is inferred from local invalidation.
 
 `BridgeBase.renewAuthenticatedChannel(requester:)` explicitly starts a new dedicated
-physical connection and fresh proof. It ends the old streams and pending work;
+physical connection and fresh proof. `using:` may supply a fresh configured physical
+adapter; it must not reuse an adapter still owned by another connection. It ends
+the old streams and pending work;
 subscriptions and writes are not automatically replayed. Expired resolver cache
 entries and multiplex pool sessions are replaced on a new client resolution.
 A failed send is surfaced; an already-issued write may have an unknown outcome.
@@ -177,5 +201,13 @@ time, scope, cancellation, quota release and bounded replay state.
 handshakes, V1 Cell proof, multiplex principal binding, revocation during an awaited
 policy check and local/bridge Cell authorization parity. Existing origin-proof and
 transport-provenance tests remain regression requirements. Actual proxy hardening,
-real client WSS paths, staging recovery and release readiness are separate AP5–AP9
+`BridgeChannelWebSocketTests` additionally exercises real Vapor/WebSocketKit TCP
+loopback framing, rejects a first unauthenticated command, and completes a protected
+read with an instrumented server signer that must never run. This explicitly local
+WS test is not production TLS/proxy evidence. Vapor outgoing setup waits for actual
+socket installation, not just the upstream HTTP upgrade future. Its waiter is
+bounded/cancelled; cleanup of a peer stalled before upstream WebSocket upgrade also
+requires adapter/host-level connection timeouts and remains a load-test obligation.
+
+Actual proxy hardening, real client WSS paths, staging recovery and release readiness are separate AP5–AP9
 integration evidence. See the PDD handoff for exact test/CI results and open findings.
