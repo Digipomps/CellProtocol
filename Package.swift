@@ -39,7 +39,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.45.0"),
         .package(
             url: "https://github.com/Digipomps/FileUtils-c.git",
-            revision: "26f365ca39955ee693e138ef028560df3bdf218c"
+            exact: "2026.9.1"
         ),
         .package(url: "https://github.com/apple/swift-collections.git", "1.1.0" ..< "2.0.0"),
         .package(url: "https://github.com/attaswift/BigInt.git", from: "5.4.0"),
