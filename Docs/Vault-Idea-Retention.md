@@ -32,3 +32,5 @@ snapshots decode with an empty retention registry. Mutations and encoding share
 a recursive storage lock; sweeps never run from get/Explore. Retention mutation
 requires the existing Vault write grant and the actual owner identity. It does
 not expand a collaborator's delete authority.
+
+Persistent Vault mutations now serialize through a mutation gate and verify a fresh storage read before returning success. Failure returns `vault_snapshot_unverified` with `appliedInMemory: true`; it does not claim rollback.

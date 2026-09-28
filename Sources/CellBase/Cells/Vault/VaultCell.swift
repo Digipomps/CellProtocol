@@ -5,6 +5,18 @@ import Foundation
 
 public final class VaultCell: GeneralCell {
     private let storageLock = NSRecursiveLock()
+    private actor MutationGate {
+        private var locked = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func acquire() async {
+            if !locked { locked = true; return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func release() {
+            if waiters.isEmpty { locked = false } else { waiters.removeFirst().resume() }
+        }
+    }
+    private let mutationGate = MutationGate()
     private var ideaRetention = VaultIdeaRetention()
     private var notesByID: [String: VaultNoteRecord]
     private var linksByKey: [String: VaultLinkRecord]
@@ -38,6 +50,45 @@ public final class VaultCell: GeneralCell {
         self.updatedAtEpochMs = try container.decodeIfPresent(Int.self, forKey: .updatedAtEpochMs) ?? 0
         try super.init(from: decoder)
 
+    }
+
+    public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        await mutationGate.acquire()
+        do {
+            let response = try await super.set(keypath: keypath, value: value, requester: requester)
+            var verified = response
+            if persistancy == .persistant, case .object(let envelope)? = response,
+               envelope["status"] == .string("ok") {
+                let expected = storageSnapshot()
+                if let resolver = CellBase.defaultCellResolver as? CellResolver,
+                   await resolver.persistCellSnapshot(self), let utility = resolver.tcUtility,
+                   case .loaded(let loaded) = utility.loadTypedEmitCellResult(with: uuid),
+                   let restored = loaded as? VaultCell, restored.storageSnapshot() == expected {
+                    // Confirmed from storage, not the resolver's in-memory cache.
+                } else {
+                    verified = .object(["status": .string("error"), "code": .string("vault_snapshot_unverified"),
+                        "appliedInMemory": .bool(true),
+                        "message": .string("Vault changed in this session, but storage could not be verified. Check before retrying.")])
+                }
+            }
+            await mutationGate.release()
+            return verified
+        } catch {
+            await mutationGate.release()
+            throw error
+        }
+    }
+
+    private struct StorageSnapshot: Equatable {
+        let notes: [String: VaultNoteRecord]
+        let links: [String: VaultLinkRecord]
+        let version: Int
+        let retention: VaultIdeaRetention
+    }
+    private func storageSnapshot() -> StorageSnapshot {
+        storageLock.lock()
+        defer { storageLock.unlock() }
+        return StorageSnapshot(notes: notesByID, links: linksByKey, version: stateVersion, retention: ideaRetention)
     }
 
     public override func installCellRuntimeBindingsForAccess() async throws {
