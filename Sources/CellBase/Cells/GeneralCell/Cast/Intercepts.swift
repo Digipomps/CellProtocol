@@ -92,6 +92,19 @@ actor Intercepts {
         return interceptSetValueForKeys[key]
     }
     
+    /// The keypaths this cell actually answers, per method.
+    ///
+    /// Only the two keypath dictionaries are reported. `GeneralCell.get` and
+    /// `set` look up an exact keypath in exactly these two, so they are the
+    /// only ones a caller can reach by keypath. The older key-based
+    /// dictionaries are deliberately excluded: counting them would report
+    /// differences that are not contract breaches.
+    ///
+    /// Names only — no handler, no value and no requester state leaves here.
+    func registeredKeypaths() -> (get: [String], set: [String]) {
+        (interceptValueForKeypaths.keys.sorted(), interceptSetValueForKeypaths.keys.sorted())
+    }
+
     // Keypath lookup
     func storeInterceptGet(keypath: String, intercept: @escaping GetValueIntercept) {
         interceptValueForKeypaths[keypath] = intercept

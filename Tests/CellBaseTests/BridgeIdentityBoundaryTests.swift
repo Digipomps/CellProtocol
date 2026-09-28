@@ -84,6 +84,175 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         CellBase.debugValidateAccessForEverything = previousDebug
     }
 
+    private final class GuestSurface: GeneralCell {
+        required init(owner: Identity) async {
+            await super.init(owner: owner)
+            await addInterceptForGet(requester: owner, key: "guest.configuration") { _, _ in
+                .string("private-surface-\(owner.uuid)")
+            }
+        }
+        required init(from decoder: Decoder) throws { try super.init(from: decoder) }
+    }
+
+    // Function: a fresh identity-unique guest surface can be resolved through
+    // the real resolver, with the key proof travelling back to the peer.
+    func testGuestCanCreateAndReadOwnSurfaceOverBridge() async throws {
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let guest = await vault.identity(for: "guest", makeNewIfNotFound: true)!
+        let house = await vault.identity(for: "house", makeNewIfNotFound: true)!
+        let resolver = CellResolver.sharedInstance
+        CellBase.defaultCellResolver = resolver
+        let name = "GuestSurface-\(UUID().uuidString)"
+        let domain = "guest-surface-test"
+        try await resolver.addCellResolve(name: name, cellScope: .identityUnique,
+            identityDomain: domain, type: GuestSurface.self)
+        let result = try await readPersonalSurface(publisher: name, requester: guest,
+            serverOwner: house, peerVault: vault)
+        XCTAssertEqual(result.response.payload, .string("private-surface-\(guest.uuid)"))
+        let challenges = try result.proofs.map { command -> IdentitySigningChallenge in
+            guard case let .signData(data) = command.payload else { throw IdentitySigningChallengeError.invalidPayload }
+            return try IdentitySigningChallenge.validateSigningData(data, for: guest)
+        }
+        XCTAssertFalse(challenges.isEmpty)
+        let creation = try XCTUnwrap(challenges.first)
+        XCTAssertEqual(creation.domain, domain)
+        XCTAssertEqual(creation.resource, name)
+        XCTAssertEqual(creation.action, "checkIdentityOrigin")
+        XCTAssertEqual(creation.audience, "GeneralCell")
+        XCTAssertEqual(Set(challenges.map(\.nonce)).count, challenges.count,
+            "Every proof must use a fresh resolver/cell nonce")
+    }
+
+    // Purpose: neither a real house key nor the guest's copied public identity
+    // may read the guest's private data. Possessing the route is not authority.
+    func testHouseCannotReadGuestDataOrUseCopiedGuestDescriptorOverBridge() async throws {
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let guest = await vault.identity(for: "guest", makeNewIfNotFound: true)!
+        let house = await vault.identity(for: "house", makeNewIfNotFound: true)!
+        let resolver = CellResolver.sharedInstance
+        CellBase.defaultCellResolver = resolver
+        let name = "GuestIsolation-\(UUID().uuidString)"
+        try await resolver.addCellResolve(name: name, cellScope: .identityUnique,
+            identityDomain: "guest-isolation-test", type: GuestSurface.self)
+        let cell = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: guest)
+        let allowedGuest = try await readPersonalSurface(publisher: cell.uuid, requester: guest,
+            serverOwner: house, peerVault: vault)
+        XCTAssertEqual(allowedGuest.response.payload, .string("private-surface-\(guest.uuid)"),
+            "The exact UUID route must work for the guest before checking house rejection")
+        let deniedHouse = try await readPersonalSurface(publisher: cell.uuid, requester: house,
+            serverOwner: house, peerVault: vault)
+        XCTAssertNotEqual(deniedHouse.response.payload, .string("private-surface-\(guest.uuid)"))
+        guard case let .string(houseFailure) = deniedHouse.response.payload else { return XCTFail("Expected explicit denial") }
+        XCTAssertTrue(houseFailure.contains("ownerAuthorityUnavailable"), houseFailure)
+        let copied = try await readPersonalSurface(publisher: name, requester: guest.publicIdentitySnapshot(),
+            serverOwner: house, peerVault: nil)
+        XCTAssertGreaterThan(copied.proofs.count, 0, "The server's local guest key must not answer for the peer")
+        guard case let .string(copyFailure) = copied.response.payload else { return XCTFail("Expected explicit denial") }
+        XCTAssertTrue(copyFailure.contains("ownerAuthorityUnavailable"), copyFailure)
+        let freshName = "UnprovenGuest-\(UUID().uuidString)"
+        try await resolver.addCellResolve(name: freshName, cellScope: .identityUnique,
+            identityDomain: "guest-isolation-test", type: GuestSurface.self)
+        let freshDenied = try await readPersonalSurface(publisher: freshName, requester: guest.publicIdentitySnapshot(),
+            serverOwner: house, peerVault: nil)
+        XCTAssertGreaterThan(freshDenied.proofs.count, 0)
+        guard case let .string(freshFailure) = freshDenied.response.payload else { return XCTFail("Expected explicit denial") }
+        XCTAssertTrue(freshFailure.contains("ownerAuthorityUnavailable"), freshFailure)
+        let mappings = await resolver.identityNamedCells(requester: house)
+        XCTAssertNil(mappings[guest.uuid]?[freshName], "No private instance is registered without a proof")
+        let stillOwned = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: guest)
+        XCTAssertEqual(stillOwned.uuid, cell.uuid)
+    }
+
+    /// A host that explicitly knows the private surface's UUID can pin both
+    /// creation and cell scopes. This fixture does not grant discovery authority.
+    private final class PinnedGuestSurface: GeneralCell {
+        static let identifier = UUID().uuidString
+        static let domain = "paired-guest-surface"
+        required init(owner: Identity) async {
+            await super.init(owner: owner)
+            uuid = Self.identifier
+            identityDomain = Self.domain
+            await addInterceptForGet(requester: owner, key: "guest.configuration") { _, _ in
+                .string("paired-private-surface-\(owner.uuid)")
+            }
+        }
+        required init(from decoder: Decoder) throws { try super.init(from: decoder) }
+    }
+
+    func testPairedBridgesCreateFreshGuestSurfaceOnlyWithinExplicitProofScopes() async throws {
+        let clientVault = EphemeralIdentityVault()
+        let guest = await clientVault.identity(for: "guest", makeNewIfNotFound: true)!
+        let serverVault = EphemeralIdentityVault()
+        CellBase.defaultIdentityVault = serverVault
+        let house = await serverVault.identity(for: "house", makeNewIfNotFound: true)!
+        let resolver = CellResolver.sharedInstance
+        CellBase.defaultCellResolver = resolver
+        let name = "PairedGuest-\(UUID().uuidString)"
+        try await resolver.addCellResolve(name: name, cellScope: .identityUnique,
+            identityDomain: PinnedGuestSurface.domain, type: PinnedGuestSurface.self)
+        for allowCreation in [false, true] {
+            let outgoing = PairedTransport()
+            let incoming = PairedTransport()
+            let client = try await BridgeBase(BridgeBase.Config(owner: guest, transport: outgoing,
+                connection: .outbound, identityProofScopes: [
+                    .init(domain: PinnedGuestSurface.domain, resource: allowCreation ? name : "another-surface"),
+                    .init(domain: PinnedGuestSurface.domain, resource: PinnedGuestSurface.identifier)
+                ]))
+            let server = try await BridgeBase(BridgeBase.Config(owner: house, transport: incoming,
+                connection: .inbound(publisherUuid: name)))
+            try await client.setTransport(outgoing, connection: .outbound)
+            try await server.setTransport(incoming, connection: .inbound(publisherUuid: name))
+            outgoing.peer = server
+            incoming.peer = client
+            for endpoint in [client, server] {
+                try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+            }
+            await client.sendCommand(command: .get, identity: guest, payload: .string("guest.configuration"))
+            let reply = try XCTUnwrap(incoming.snapshot().last { $0.command == .response })
+            if !allowCreation {
+                guard case let .string(reason) = reply.payload else { return XCTFail("Unpinned creation must be denied") }
+                XCTAssertTrue(reason.contains("ownerAuthorityUnavailable"), reason)
+                let mappings = await resolver.identityNamedCells(requester: house)
+                XCTAssertNil(mappings[guest.uuid]?[name])
+                continue
+            }
+            XCTAssertEqual(reply.payload, .string("paired-private-surface-\(guest.uuid)"))
+            let proofs = incoming.snapshot().filter { $0.command == .sign }
+            let challenges = try proofs.map { command -> IdentitySigningChallenge in
+                guard case let .signData(data) = command.payload else { throw IdentitySigningChallengeError.invalidPayload }
+                return try IdentitySigningChallenge.validateSigningData(data, for: guest)
+            }
+            XCTAssertEqual(Set(challenges.map(\.resource)), Set([name, PinnedGuestSurface.identifier]))
+            XCTAssertTrue(challenges.allSatisfy { $0.domain == PinnedGuestSurface.domain })
+            let signed = outgoing.snapshot().filter { if case .signature = $0.payload { return true }; return false }
+            XCTAssertEqual(signed.count, proofs.count)
+            XCTAssertGreaterThan(signed.count, 1, "Both resolver and Cell proofs must be signed by the real client")
+            let firstProof = try XCTUnwrap(proofs.first)
+            try await client.consumeCommand(command: BridgeCommand(cmd: "sign", identity: guest.publicIdentitySnapshot(),
+                payload: firstProof.payload, cid: 980))
+            let replay = try XCTUnwrap(outgoing.snapshot().last)
+            guard case let .string(reason) = replay.payload else { return XCTFail("Completed operation must not retain signing authority") }
+            XCTAssertTrue(reason.contains("signing denied"), reason)
+        }
+    }
+
+    private func readPersonalSurface(publisher: String, requester: Identity, serverOwner: Identity,
+                                    peerVault: IdentityVaultProtocol?) async throws
+        -> (response: BridgeCommand, proofs: [BridgeCommand]) {
+        let transport = PeerTransport(peerVault: peerVault)
+        let server = try await BridgeBase(BridgeBase.Config(owner: serverOwner, transport: transport,
+            connection: .inbound(publisherUuid: publisher)))
+        try await server.setTransport(transport, connection: .inbound(publisherUuid: publisher))
+        transport.setDelegate(server)
+        try await server.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+        try await server.consumeCommand(command: BridgeCommand(cmd: "get", identity: requester,
+            payload: .string("guest.configuration"), cid: 801))
+        return (try XCTUnwrap(transport.snapshot().last { $0.command == .response && $0.cid == 801 }),
+                transport.snapshot().filter { $0.command == .sign })
+    }
+
     func testCopiedPublicOwnerCannotUseServerVaultForProtectedRead() async throws {
         let result = try await readThroughBridge(peerControlsOwnerKey: false)
         XCTAssertNotEqual(result.response.payload, .string("protected-value"))

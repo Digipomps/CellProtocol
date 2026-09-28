@@ -1,6 +1,20 @@
 # EntityData – gjennomgang med Vegar
 
-**Ny gjennomgang, 17. september:** Beslutningene fra 15.–16. september er nå innarbeidet i et [eget målskjema](EntityData.v2.schema.json). Les [oppdatert forklaring og åpne spørsmål](OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md) først. [current-review.json](current-review.json) peker til de gjeldende lokale filene. Teksten nedenfor og `EntityData.review.schema.json` er det historiske kodegrunnlaget fra 11. september og beskriver derfor også eldre former som er tatt ut av målmodellen.
+**Gjeldende målmodell, 25. september:** [EntityData.v2.schema.json](EntityData.v2.schema.json) er oppdatert i samme fil etter [22.09-beslutningene og bevisavklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret). Start med [målmodellens forklaring](V2-BESLUTTET-FORM.md) og [current-review.json](current-review.json). Bevispostenes nye `supports` og avledede oppslag er målkrav, ikke implementert i Swift. Teksten nedenfor og `EntityData.review.schema.json` er det urørte runtime-grunnlaget fra 11. september.
+
+Undergruppesteget `apply_decisions_2026_09_23_groups.py` innfører: valgfri `partOf` på
+barnet, ingen persistert barneliste, og `relations.bokprosjekt` tatt ut av målskjemaet.
+Dekoderen må kontrollere referansetyper og avvise sykler. Dette er besluttet, ikke
+implementert i Swift.
+
+Siste byggesteg er `apply_decisions_2026_09_25_skills.py`: `person.skills` er fjernet
+og eksplisitt avvist. Skills er vanlige formålsnoder med påkrevd, målbart `goal`;
+ingen egen type eller avledet skill-liste. `evidenceRefs` følger listen ut.
+Stabil beviskobling til én formålsnode er en [åpen sperre](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#åpen-sperre-2509-bevis-til-en-bestemt-skill-node).
+Se [kontrollresultatet](TARGET-VALIDATION-2026-09-25-SKILLS.json). Visualiseringssjekkene
+ble ikke kjørt fordi de leser utdaterte eksterne artefakter fra 16.09/17.09.
+
+23.09-steget håndhever også UUID-nøkler i `relations.records`. Eksempelets relasjons- og kontaktreferanser omskrives samlet med faste, fiktive UUID-er; validatorene kontrollerer at lokale referanser og bevisstier fortsatt kan følges.
 
 Datert 11. september 2026. Dette er et kildebasert diskusjonsgrunnlag, kontrollert mot de lokale arbeidsfilene i CellProtocol, Binding og CellScaffold. Oppdatert etter avklaringen om PerspectiveNode og med tilhørende lokale kodeendringer. Det fastsetter ingen ny protokollversjon. Eksemplene er fiktive.
 

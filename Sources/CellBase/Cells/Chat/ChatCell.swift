@@ -1903,7 +1903,10 @@ public final class ChatCell: GeneralCell {
                 expectedChatCellUUID: uuid
             )
 
-            let inviteeIdentity = resolveInvitationIdentity(from: artifact.invitedIdentity)
+            let inviteeIdentity = resolveInvitationIdentity(
+                from: artifact.invitedIdentity,
+                keyAgreementKey: acceptance.inviteeKeyAgreementKey
+            )
             let now = Self.timestampString()
             guard var record = invitationRecordsByIdentityUUID[inviteeIdentity.uuid] else {
                 return .string("error: invitation record not found for artifact")
@@ -2553,12 +2556,22 @@ public final class ChatCell: GeneralCell {
         }
     }
 
-    private func resolveInvitationIdentity(from descriptor: IdentityPublicKeyDescriptor) -> Identity {
+    private func resolveInvitationIdentity(
+        from descriptor: IdentityPublicKeyDescriptor,
+        keyAgreementKey: Data? = nil
+    ) -> Identity {
         if let resolved = resolveIdentity(explicitUUID: descriptor.uuid) {
+            // An invitee known only by signing key gains the key-agreement key
+            // its signed acceptance carried; a key already on file is kept.
+            if resolved.publicKeyAgreementSecureKey == nil,
+               let keyAgreementKey, !keyAgreementKey.isEmpty {
+                resolved.publicKeyAgreementSecureKey = ChatInvitationProofUtility.keyAgreementSecureKey(keyAgreementKey)
+            }
             return resolved
         }
         return ChatInvitationProofUtility.identity(
             from: descriptor,
+            keyAgreementKey: keyAgreementKey,
             identityVault: CellBase.defaultIdentityVault
         )
     }
@@ -4057,6 +4070,7 @@ public final class ChatCell: GeneralCell {
                 "chatCellUUID": ExploreContract.schema(type: "string"),
                 "inviterIdentityUUID": ExploreContract.schema(type: "string"),
                 "inviteeIdentity": identityPublicKeyDescriptorSchema(),
+                "inviteeKeyAgreementKey": ExploreContract.schema(type: "data"),
                 "createdAt": ExploreContract.schema(type: "string"),
                 "nonce": ExploreContract.schema(type: "data"),
                 "proof": invitationAcceptanceProofSchema()
@@ -4419,6 +4433,7 @@ public final class ChatCell: GeneralCell {
             "chatCellUUID": .string(acceptance.chatCellUUID),
             "inviterIdentityUUID": .string(acceptance.inviterIdentityUUID),
             "inviteeIdentity": .object(Self.identityPublicKeyDescriptorObject(acceptance.inviteeIdentity)),
+            "inviteeKeyAgreementKey": acceptance.inviteeKeyAgreementKey.map(ValueType.data) ?? .null,
             "createdAt": .string(acceptance.createdAt),
             "nonce": .data(acceptance.nonce),
             "proof": acceptance.proof.map { proof in

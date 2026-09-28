@@ -4,12 +4,27 @@
 import Foundation
 
 public final class VaultCell: GeneralCell {
+    private let storageLock = NSRecursiveLock()
+    private actor MutationGate {
+        private var locked = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func acquire() async {
+            if !locked { locked = true; return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func release() {
+            if waiters.isEmpty { locked = false } else { waiters.removeFirst().resume() }
+        }
+    }
+    private let mutationGate = MutationGate()
+    private var ideaRetention = VaultIdeaRetention()
     private var notesByID: [String: VaultNoteRecord]
     private var linksByKey: [String: VaultLinkRecord]
     private var stateVersion: Int
     private var updatedAtEpochMs: Int
 
     private enum CodingKeys: String, CodingKey {
+        case ideaRetention
         case notesByID
         case linksByKey
         case stateVersion
@@ -28,6 +43,7 @@ public final class VaultCell: GeneralCell {
 
     public required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.ideaRetention = try container.decodeIfPresent(VaultIdeaRetention.self, forKey: .ideaRetention) ?? VaultIdeaRetention()
         self.notesByID = try container.decodeIfPresent([String: VaultNoteRecord].self, forKey: .notesByID) ?? [:]
         self.linksByKey = try container.decodeIfPresent([String: VaultLinkRecord].self, forKey: .linksByKey) ?? [:]
         self.stateVersion = try container.decodeIfPresent(Int.self, forKey: .stateVersion) ?? 0
@@ -36,14 +52,56 @@ public final class VaultCell: GeneralCell {
 
     }
 
+    public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        await mutationGate.acquire()
+        do {
+            let response = try await super.set(keypath: keypath, value: value, requester: requester)
+            var verified = response
+            if persistancy == .persistant, case .object(let envelope)? = response,
+               envelope["status"] == .string("ok") {
+                let expected = storageSnapshot()
+                if let resolver = CellBase.defaultCellResolver as? CellResolver,
+                   await resolver.persistCellSnapshot(self), let utility = resolver.tcUtility,
+                   case .loaded(let loaded) = utility.loadTypedEmitCellResult(with: uuid),
+                   let restored = loaded as? VaultCell, restored.storageSnapshot() == expected {
+                    // Confirmed from storage, not the resolver's in-memory cache.
+                } else {
+                    verified = .object(["status": .string("error"), "code": .string("vault_snapshot_unverified"),
+                        "appliedInMemory": .bool(true),
+                        "message": .string("Vault changed in this session, but storage could not be verified. Check before retrying.")])
+                }
+            }
+            await mutationGate.release()
+            return verified
+        } catch {
+            await mutationGate.release()
+            throw error
+        }
+    }
+
+    private struct StorageSnapshot: Equatable {
+        let notes: [String: VaultNoteRecord]
+        let links: [String: VaultLinkRecord]
+        let version: Int
+        let retention: VaultIdeaRetention
+    }
+    private func storageSnapshot() -> StorageSnapshot {
+        storageLock.lock()
+        defer { storageLock.unlock() }
+        return StorageSnapshot(notes: notesByID, links: linksByKey, version: stateVersion, retention: ideaRetention)
+    }
+
     public override func installCellRuntimeBindingsForAccess() async throws {
         await setupPermissions(owner: owner)
         await setupKeys(owner: owner)
     }
 
     public override func encode(to encoder: Encoder) throws {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         try super.encode(to: encoder)
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(ideaRetention, forKey: .ideaRetention)
         try container.encode(notesByID, forKey: .notesByID)
         try container.encode(linksByKey, forKey: .linksByKey)
         try container.encode(stateVersion, forKey: .stateVersion)
@@ -57,6 +115,20 @@ public final class VaultCell: GeneralCell {
 
     private func setupKeys(owner: Identity) async {
         await registerContracts(requester: owner)
+
+        await addInterceptForGet(requester: owner, key: "vault.retention.state") { [weak self] _, requester in
+            guard let self else { return .string("failure") }
+            guard await self.validateAccess("r---", at: "vault", for: requester) else { return .string("denied") }
+            return self.retentionState()
+        }
+        for operation in Self.retentionOperations {
+            await addInterceptForSet(requester: owner, key: operation) { [weak self] _, value, requester in
+                guard let self else { return .string("failure") }
+                guard requester.uuid == self.owner.uuid,
+                      await self.validateAccess("-w--", at: "vault", for: requester) else { return .string("denied") }
+                return self.handleRetention(operation: operation, value: value)
+            }
+        }
 
         await addInterceptForGet(requester: owner, key: "vault.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }
@@ -108,6 +180,7 @@ public final class VaultCell: GeneralCell {
     }
 
     private func registerContracts(requester: Identity) async {
+        await registerRetentionContracts(requester: requester)
         await registerExploreContract(
             requester: requester,
             key: "vault.state",
@@ -198,6 +271,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func statePayload() -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let notes = sortedNotesSnapshot()
         let links = sortedLinksSnapshot()
         let payload = VaultStatePayload(
@@ -224,6 +299,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleNoteCreate(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.note.create"
 
         let parsedNoteResult = parseNote(from: value)
@@ -245,7 +322,7 @@ public final class VaultCell: GeneralCell {
             let normalized = normalize(note: parsedNote, now: now)
 
             var errors = validateRequiredFields(for: normalized)
-            if notesByID[normalized.id] != nil {
+            if notesByID[normalized.id] != nil || ideaRetention.deletedIDs.contains(normalized.id) {
                 errors.append(
                     VaultFieldError(
                         field: "id",
@@ -264,6 +341,12 @@ public final class VaultCell: GeneralCell {
             }
 
             notesByID[normalized.id] = normalized
+            if normalized.tags.contains(where: { $0.lowercased() == "idea" }) {
+                ideaRetention.enroll(id: normalized.id, now: now)
+                if normalized.tags.contains(where: { $0.lowercased() == "project" }) {
+                    ideaRetention.protect(id: normalized.id, reference: "project-stage")
+                }
+            }
             if let encoded = try? VaultCellCodec.encode(normalized) {
                 let version = advanceStateVersion(now: now)
                 emitMutationEvent(
@@ -288,6 +371,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleNoteUpdate(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.note.update"
 
         let parsedNoteResult = parseNote(from: value)
@@ -334,6 +419,12 @@ public final class VaultCell: GeneralCell {
                 )
             }
 
+            if normalized.title != existing.title || normalized.content != existing.content {
+                ideaRetention.touch(id: normalized.id, now: now)
+            }
+            if normalized.tags.contains(where: { $0.lowercased() == "project" }) {
+                ideaRetention.protect(id: normalized.id, reference: "project-stage")
+            }
             normalized.createdAtEpochMs = existing.createdAtEpochMs
             normalized.updatedAtEpochMs = max(normalized.updatedAtEpochMs, existing.updatedAtEpochMs + 1)
 
@@ -362,6 +453,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleNoteGet(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.note.get"
 
         guard let id = parseNoteID(from: value), !id.isEmpty else {
@@ -401,6 +494,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleNoteList(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.note.list"
 
         let queryResult = parseQuery(from: value)
@@ -420,6 +515,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleLinkAdd(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.link.add"
 
         let linkResult = parseLink(from: value)
@@ -473,6 +570,8 @@ public final class VaultCell: GeneralCell {
             )
             let key = linkKey(for: normalized)
             linksByKey[key] = normalized
+            ideaRetention.protect(id: fromID, reference: "vault-link:\(key)")
+            ideaRetention.protect(id: toID, reference: "vault-link:\(key)")
 
             if let encoded = try? VaultCellCodec.encode(normalized) {
                 let version = advanceStateVersion(now: max(currentEpochMs(), normalized.createdAtEpochMs))
@@ -498,6 +597,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleLinksForward(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.links.forward"
         guard let id = parseNoteID(from: value), !id.isEmpty else {
             return validationError(
@@ -529,6 +630,8 @@ public final class VaultCell: GeneralCell {
     }
 
     private func handleBacklinks(value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
         let operation = "vault.links.backlinks"
         guard let id = parseNoteID(from: value), !id.isEmpty else {
             return validationError(
@@ -790,7 +893,7 @@ public final class VaultCell: GeneralCell {
             "vault.link.add",
             "vault.links.forward",
             "vault.links.backlinks"
-        ]
+        ] + retentionOperations
     }
 
     private func advanceStateVersion(now: Int) -> Int {
@@ -828,6 +931,99 @@ public final class VaultCell: GeneralCell {
         flowElement.topic = "vault.mutation"
         flowElement.origin = uuid
         pushFlowElement(flowElement, requester: owner)
+    }
+
+    private static let retentionOperations = ["vault.retention.configure", "vault.retention.sweep",
+        "vault.note.retention.set", "vault.note.retention.touch", "vault.note.retention.restore", "vault.note.retention.protect"]
+
+    private func retentionState() -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
+        return (try? VaultCellCodec.encode(ideaRetention)) ?? .null
+    }
+
+    private func handleRetention(operation: String, value: ValueType) -> ValueType {
+        storageLock.lock()
+        defer { storageLock.unlock() }
+        let payload: Object
+        if case .object(let object) = value { payload = object } else { payload = [:] }
+        let now = currentEpochMs()
+        let before = ideaRetention
+        do {
+            if operation == "vault.retention.configure" {
+                guard case .integer(let days)? = payload["defaultTTLDays"] else { throw VaultIdeaRetention.RetentionError.invalidDays }
+                try ideaRetention.configure(days: days)
+            } else if operation == "vault.retention.sweep" {
+                // An owner coordinator must first reconcile external references.
+                // A stale scan cannot delete after a concurrent local mutation.
+                guard case .integer(let checkedVersion)? = payload["checkedStateVersion"], checkedVersion == stateVersion,
+                      case .bool(true)? = payload["externalDependenciesChecked"] else {
+                    throw VaultIdeaRetention.RetentionError.notEnrolled
+                }
+                let linkedIDs = Set(linksByKey.values.flatMap { [$0.fromNoteID, $0.toNoteID] })
+                let purged = ideaRetention.sweep(now: now, existingIDs: Set(notesByID.keys), linkedIDs: linkedIDs)
+                for id in purged { notesByID.removeValue(forKey: id) }
+            } else {
+                guard let id = parseNoteID(from: value), notesByID[id] != nil else { throw VaultIdeaRetention.RetentionError.deleted }
+                switch operation {
+                case "vault.note.retention.set":
+                    guard case .integer(let days)? = payload["ttlDays"] else { throw VaultIdeaRetention.RetentionError.invalidDays }
+                    try ideaRetention.setTTL(id: id, days: days, now: now)
+                    if notesByID[id]?.tags.contains(where: { $0.lowercased() == "project" }) == true {
+                        ideaRetention.protect(id: id, reference: "project-stage")
+                    }
+                    if linksByKey.values.contains(where: { $0.fromNoteID == id || $0.toNoteID == id }) {
+                        ideaRetention.protect(id: id, reference: "vault-link")
+                    }
+                case "vault.note.retention.touch": ideaRetention.touch(id: id, now: now)
+                case "vault.note.retention.restore": try ideaRetention.restore(id: id, now: now)
+                case "vault.note.retention.protect":
+                    guard case .string(let reference)? = payload["reference"], !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw VaultIdeaRetention.RetentionError.notEnrolled
+                    }
+                    ideaRetention.enroll(id: id, now: now)
+                    ideaRetention.protect(id: id, reference: reference)
+                default: throw VaultIdeaRetention.RetentionError.notEnrolled
+                }
+            }
+            if before != ideaRetention {
+                let version = advanceStateVersion(now: now)
+                emitMutationEvent(operation: operation, recordKind: "retention", recordID: "ideas",
+                    result: .object(["changed": .bool(true)]), stateVersion: version, emittedAtEpochMs: updatedAtEpochMs)
+            }
+            return VaultCellCodec.success(operation: operation, payload: retentionState())
+        } catch {
+            return VaultCellCodec.error(VaultCellErrorPayload(operation: operation, code: "retention_rejected",
+                message: "Retention change rejected: use valid days (1–3650), an existing note, and a fresh dependency scan before sweeping."))
+        }
+    }
+
+    private func registerRetentionContracts(requester: Identity) async {
+        let integer = ExploreContract.schema(type: "integer")
+        let string = ExploreContract.schema(type: "string")
+        let record = ExploreContract.objectSchema(properties: [
+            "ttlDays": integer, "expiresAtEpochMs": integer, "lastExtendedAtEpochMs": integer,
+            "quarantinedAtEpochMs": integer,
+            "dependencyRefs": ExploreContract.listSchema(item: string)
+         ], requiredKeys: ["ttlDays", "expiresAtEpochMs", "lastExtendedAtEpochMs", "dependencyRefs"])
+        let state = ExploreContract.objectSchema(properties: [
+            "defaultTTLDays": integer,
+            "records": .object(["type": .string("object"), "additionalProperties": record, "description": .string("Map from note ID to retention record.")]),
+            "deletedIDs": ExploreContract.listSchema(item: string)
+         ], requiredKeys: ["defaultTTLDays", "records", "deletedIDs"])
+        await registerExploreContract(requester: requester, key: "vault.retention.state", method: .get,
+            input: nil, returns: state, permissions: ["r---"], required: false,
+            description: .string("Owner Vault retention policy, enrolled ideas, quarantine and deletion tombstones. Historical backups and mutation history keep their existing retention."))
+        for operation in Self.retentionOperations {
+            let input = ExploreContract.objectSchema(properties: [
+                "id": string, "ttlDays": integer, "defaultTTLDays": integer, "reference": string,
+                "checkedStateVersion": integer, "externalDependenciesChecked": ExploreContract.schema(type: "boolean")
+            ], description: "Owner-only action. Configure affects new ideas; set resets a note deadline. Touch extends once per day; restore gives full TTL. Protect is monotonic. Sweep requires reconciled external dependencies and exact Vault stateVersion.")
+            await registerExploreContract(requester: requester, key: operation, method: .set,
+                input: input, returns: ExploreContract.oneOfSchema(options: [Self.successEnvelopeSchema(operation: operation, result: state), Self.errorSchema(operation: operation)]),
+                permissions: ["-w--"], required: false,
+                description: .string("Idea TTL lifecycle: seven-day recoverable quarantine; no automatic deletion with dependencies. Existing undated notes are never enrolled by a sweep."))
+        }
     }
 
     private func currentEpochMs() -> Int {

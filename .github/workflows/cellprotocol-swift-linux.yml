@@ -95,13 +95,15 @@ jobs:
           for suite in AgreementSecurityTests FileCryptoSecurityTests \
             FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
+            BridgeDescriptionConcurrencyTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
-            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests; do
+            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
             Tests/CellBaseTests/TestSupport/TestFixtures.swift \
             Tests/CellBaseTests/TestSupport/MockIdentityVault.swift \
+            Tests/CellBaseTests/TestSupport/SimulatedEntity.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"

@@ -2116,7 +2116,7 @@ public class CellResolver: CellResolverProtocol {
             print("Error cell not found for: \(endpoint) at create and register personal cell")
             throw CellResolverError.cellNotFound
         }
-        guard await requesterProvesSigningControl(identity) else {
+        guard await requesterProvesSigningControl(identity, domain: resolve.identityDomain, resource: endpoint) else {
             throw CellSetupError.ownerAuthorityUnavailable
         }
         await ensurePersistedCellMasterKeyLoaded()
@@ -2787,7 +2787,7 @@ public class CellResolver: CellResolverProtocol {
                     for: emitCell
                 )
         }
-        return await requesterProvesSigningControl(requester)
+        return await requesterProvesSigningControl(requester, domain: emitCell.identityDomain, resource: emitCell.uuid)
             ? .valid
             : identityUniqueOwnerAuthorityUnproven(
                 .requesterSigningControlFailed,
@@ -2829,27 +2829,43 @@ public class CellResolver: CellResolverProtocol {
         return await generalCell.hasVerifiedAuthorizationContract(for: requester)
     }
 
-    private func requesterProvesSigningControl(_ requester: Identity) async -> Bool {
+    /// Use the same scoped identity-origin envelope as GeneralCell. Bridge
+    /// vaults deliberately reject arbitrary signing data. Generate the nonce
+    /// locally and verify against the public key, never a requester-vault verdict.
+    private func requesterProvesSigningControl(
+        _ requester: Identity,
+        domain: String,
+        resource: String
+    ) async -> Bool {
         guard let vault = requester.identityVault,
-              let challenge = await vault.randomBytes64(),
-              !challenge.isEmpty else {
+              let nonce = randomData(count: 64) else {
             return false
         }
         do {
+            let challenge = try IdentitySigningChallenge.signingData(
+                for: requester,
+                trustedIdentity: requester,
+                domain: domain,
+                resource: resource,
+                action: "checkIdentityOrigin",
+                audience: "GeneralCell",
+                nonce: nonce
+            )
+            try IdentitySigningChallenge.validateSigningData(challenge, for: requester)
             let signature = try await vault.signMessageForIdentity(
                 messageData: challenge,
                 identity: requester
             )
-            return try await vault.verifySignature(
+            return IdentityPublicKeySignatureVerifier.verify(
                 signature: signature,
                 messageData: challenge,
-                for: requester
+                identity: requester
             )
         } catch {
             return false
         }
     }
-    
+
     public func loadTypedEmitCell(by name: String) async throws -> Emit? {
         
         
@@ -3042,7 +3058,7 @@ public class CellResolver: CellResolverProtocol {
         _ namedCells: [String: String],
         requester: Identity
     ) async throws {
-        guard await requesterProvesSigningControl(requester) else {
+        guard await requesterProvesSigningControl(requester, domain: "CellResolver", resource: "identity-mappings:\(requester.uuid)") else {
             CellBase.diagnosticLog(
                 "Refusing identity mapping replacement without requester key proof identity=\(requester.uuid)",
                 domain: .resolver
@@ -3058,7 +3074,7 @@ public class CellResolver: CellResolverProtocol {
         requester: Identity,
         authorization: CellResolverRecoveryAuthorization
     ) async throws -> [String: [String: String]] {
-        guard await requesterProvesSigningControl(requester) else {
+        guard await requesterProvesSigningControl(requester, domain: "CellResolver", resource: "identity-mappings:\(requester.uuid)") else {
             CellBase.diagnosticLog(
                 "Refusing identity mapping recovery without requester key proof identity=\(requester.uuid)",
                 domain: .resolver

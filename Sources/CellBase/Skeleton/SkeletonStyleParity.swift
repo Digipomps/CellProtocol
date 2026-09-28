@@ -53,6 +53,7 @@ public enum SkeletonStyleParity {
     /// i CellScaffold skanner stilarkene og feiler med differansen.
     ///
     /// Generated 2026-09-17 against the integrated CellScaffold Public surface; 139 roles.
+    /// 2026-09-19: + butler-chat-tabs, butler-workbench (Butler-temaet, Public/css/themes/Co-Pilot Chat.css); 141 roles.
     public static let webStylesheetRoles: Set<String> = [
         "admin-actions",
         "admin-banner-critical",
@@ -130,9 +131,11 @@ public enum SkeletonStyleParity {
         "admin-value-mono",
         "arendalsuka-optional-list",
         "assistant-response-actions",
+        "butler-chat-tabs",
         "butler-helper-tree-chat",
         "butler-helper-tree-layout",
         "butler-helper-tree-rail",
+        "butler-workbench",
         "chat-active-tool-chip",
         "chat-active-tool-chips",
         "chat-ask-this-time",

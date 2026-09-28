@@ -259,6 +259,13 @@ final class CellLifecycleTests: XCTestCase {
                 await responder.recorder.hasEvent(type: .memoryTTLExpired, uuid: first.uuid)
             }
             XCTAssertTrue(sawExpiry)
+            // The responder records the notification before returning the
+            // action. Wait for actual eviction, not merely that notification,
+            // before asking the resolver to reload the persisted instance.
+            let wasUnloaded = await waitUntil(timeout: 2.0) {
+                await resolver.auditor.loadCellInstance(forUUID: first.uuid) == nil
+            }
+            XCTAssertTrue(wasUnloaded, "persistAndUnload must evict the live instance")
 
             let second = try await resolver.cellAtEndpoint(endpoint: "cell:///\(name)", requester: identity!)
             XCTAssertEqual(first.uuid, second.uuid)

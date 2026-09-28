@@ -1,0 +1,451 @@
+[
+  {
+    "name": "componentID-missing",
+    "field": "componentID",
+    "mount": {
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-null",
+    "field": "componentID",
+    "mount": {
+      "componentID": null,
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-number",
+    "field": "componentID",
+    "mount": {
+      "componentID": 42,
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-bool",
+    "field": "componentID",
+    "mount": {
+      "componentID": true,
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-array",
+    "field": "componentID",
+    "mount": {
+      "componentID": [],
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-empty",
+    "field": "componentID",
+    "mount": {
+      "componentID": "",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "componentID-blank",
+    "field": "componentID",
+    "mount": {
+      "componentID": " \t\n",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-missing",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-null",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": null,
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-number",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": 42,
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-bool",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": true,
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-array",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": [],
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-empty",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "revision-blank",
+    "field": "revision",
+    "mount": {
+      "componentID": "program-card",
+      "revision": " \t\n",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-missing",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-null",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": null,
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-number",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": 42,
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-bool",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": true,
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-array",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": [],
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-empty",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "sourceCellEndpoint-blank",
+    "field": "sourceCellEndpoint",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": " \t\n",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      }
+    }
+  },
+  {
+    "name": "skeleton-missing",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture"
+    }
+  },
+  {
+    "name": "skeleton-null",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": null
+    }
+  },
+  {
+    "name": "skeleton-number",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": 42
+    }
+  },
+  {
+    "name": "skeleton-bool",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": true
+    }
+  },
+  {
+    "name": "skeleton-array",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": []
+    }
+  },
+  {
+    "name": "skeleton-empty",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": ""
+    }
+  },
+  {
+    "name": "skeleton-blank",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": " \t\n"
+    }
+  },
+  {
+    "name": "skeleton-empty-object",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {}
+    }
+  },
+  {
+    "name": "skeleton-multiple-elements",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {},
+        "Button": {}
+      }
+    }
+  },
+  {
+    "name": "skeleton-unknown-element",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "FutureElement": {}
+      }
+    }
+  },
+  {
+    "name": "skeleton-scalar-element-payload",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "VStack": 42
+      }
+    }
+  },
+  {
+    "name": "skeleton-null-element-payload",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": null
+      }
+    }
+  },
+  {
+    "name": "skeleton-unsupported-element",
+    "field": "skeleton",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Unsupported": {
+          "elementType": "Broken",
+          "reason": "not a definition"
+        }
+      }
+    }
+  },
+  {
+    "name": "instanceID-belongs-to-surface",
+    "field": "instanceID",
+    "mount": {
+      "componentID": "program-card",
+      "revision": "r1",
+      "sourceCellEndpoint": "cell:///ProgramFixture",
+      "skeleton": {
+        "Text": {
+          "keypath": "title"
+        }
+      },
+      "instanceID": "A"
+    }
+  }
+]
