@@ -79,7 +79,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
         try await resolver.registerNamedEmitCell(name: "Owned", emitCell: publisher, scope: .template, identity: house)
-        let store = OwnerAttachEntityExtensionTests.Store()
+        let store = OwnerAttachBridgeStore()
         let host = OwnerAttachEntityExtensionHost(receiver: house, label: "Remote test runtime", store: store)
         await OwnerAttachExtensionRuntime.shared.install(host)
         let outgoing = PairedTransport(), incoming = PairedTransport()
@@ -500,4 +500,13 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         XCTAssertTrue(owner.identityVault is MockIdentityVault, "Sanitizing the wire identity must not mutate the local owner")
         return (response, commands.filter { $0.command == .sign }.count)
     }
+}
+
+// Keep this fixture self-contained: the Linux bridge gate copies a bounded
+// subset of test files and does not include the owner-attach test suite.
+private actor OwnerAttachBridgeStore: OwnerAttachExtensionStore {
+    private var values: [String: Data] = [:]
+    private(set) var writes = 0
+    func read(id: String) -> Data? { values[id] }
+    func write(_ data: Data, id: String) { values[id] = data; writes += 1 }
 }
