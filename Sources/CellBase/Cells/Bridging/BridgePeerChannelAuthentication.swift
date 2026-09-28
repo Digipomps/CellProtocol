@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 import Foundation
+import Crypto
 
 /// Mutual Multipeer admission. Peer labels correlate an explicitly accepted
 /// invitation, never grant Cell authority. This is not the WebSocket profile.
 public enum BridgePeerChannelAuthentication {
     public typealias Auth = BridgeChannelAuthentication
-    public static let profile = "org.haven.bridge-peer-channel.v1"
+    public static let profile = "org.haven.bridge-peer-channel.v2"
     public enum Role: String, Codable, Sendable {
         case initiator, responder
         var opposite: Self { self == .initiator ? .responder : .initiator }
@@ -32,6 +33,7 @@ public enum BridgePeerChannelAuthentication {
         public let endpoint: Endpoint
         public let role: Role
         public let identity: Auth.PublicIdentity
+        public let ephemeralPublicKey: Data
         public let nonce: Data
         public let generation: String
         public let issuedAtMilliseconds: Int64
@@ -44,9 +46,9 @@ public enum BridgePeerChannelAuthentication {
         var verifierHello: Hello { signer == .initiator ? responder : initiator }
         var issued: Int64 { min(initiator.issuedAtMilliseconds, responder.issuedAtMilliseconds) }
     }
-    public struct Challenge: Codable, Equatable, Sendable {
-        public let transcript: Transcript
-        public let signingData: Data
+    struct Challenge: Equatable, Sendable {
+        let transcript: Transcript
+        let signingData: Data
         var identity: Auth.PublicIdentity { transcript.signedHello.identity }
         var generation: String { transcript.verifierHello.generation }
         var sessionID: String { transcript.initiator.endpoint.setupID }
@@ -77,16 +79,19 @@ public enum BridgePeerChannelAuthentication {
         private var active = true
         private var outgoing: Challenge?
         private var signingStarted = false
+        private var ephemeral: Curve25519.KeyAgreement.PrivateKey?
         init(owner: Identity, endpoint: Endpoint, role: Role, generation: String) throws {
             try endpoint.validate()
             self.owner = owner.publicIdentitySnapshot(); self.owner.identityVault = owner.identityVault
+            let ephemeral = Curve25519.KeyAgreement.PrivateKey()
+            self.ephemeral = ephemeral
             hello = Hello(profile: profile, endpoint: endpoint, role: role, identity: try Auth.PublicIdentity(owner),
-                          nonce: Auth.randomNonce(), generation: generation, issuedAtMilliseconds: Auth.milliseconds(Date()))
+                          ephemeralPublicKey: ephemeral.publicKey.rawRepresentation, nonce: Auth.randomNonce(), generation: generation, issuedAtMilliseconds: Auth.milliseconds(Date()))
         }
         func prepare(_ remote: Hello) throws -> Challenge {
             guard active, outgoing == nil, ProcessInfo.processInfo.systemUptime < deadline,
                   remote.profile == profile, remote.endpoint == hello.endpoint, remote.role == hello.role.opposite,
-                  remote.nonce.count == 32, UUID(uuidString: remote.generation) != nil,
+                  remote.ephemeralPublicKey.count == 32, remote.nonce.count == 32, UUID(uuidString: remote.generation) != nil,
                   remote.issuedAtMilliseconds <= Auth.milliseconds(Date()) + 5_000,
                   remote.issuedAtMilliseconds > Auth.milliseconds(Date()) - 10_000 else { throw Auth.Failure.invalidProof }
             try remote.identity.validate()
@@ -111,6 +116,12 @@ public enum BridgePeerChannelAuthentication {
                   acknowledgement.transcriptDigest == Auth.digest(try Auth.encode(outgoing.transcript)) else { throw Auth.Failure.invalidProof }
             active = false
         }
-        func cancel() { active = false; outgoing = nil }
+        func deriveRecordLayer() throws -> BridgePeerRecordLayer {
+            guard active, signingStarted, let outgoing, let ephemeral else { throw Auth.Failure.unexpectedMessage }
+            // One use, including failure. Never persist or export the ephemeral secret.
+            defer { self.ephemeral = nil }
+            return try BridgePeerRecordLayer(local: hello, remote: outgoing.transcript.verifierHello, privateKey: ephemeral)
+        }
+        func cancel() { active = false; outgoing = nil; ephemeral = nil }
     }
 }

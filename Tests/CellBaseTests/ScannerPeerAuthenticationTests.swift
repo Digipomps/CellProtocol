@@ -2,6 +2,7 @@ import Foundation
 import MultipeerConnectivity
 import XCTest
 import Combine
+import Crypto
 @testable import CellApple
 @testable import CellBase
 
@@ -110,7 +111,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let a = try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer)
         let b = try pair.b.prepareBridge(remoteUUID: pair.a.mySessionUUID, peerID: pair.aPeer)
         let at = Task { try await a.gate.startPeer() }, bt = Task { try await b.gate.startPeer() }
-        for _ in 0..<4 { try await pair.deliverNext() }
+        for _ in 0..<5 { try await pair.deliverNext() }
         try await at.value; try await bt.value
         XCTAssertNotEqual(a.channelSession?.generation, pair.pa.channelSession?.generation)
         XCTAssertNotEqual(b.channelSession?.generation, pair.pb.channelSession?.generation)
@@ -175,9 +176,8 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             XCTAssertEqual(lobby.subscriptionCount, 2, "Both real feed subscriptions are installed before emission")
             lobby.pushFlowElement(FlowElement(title: "lobby", content: .string(marker), properties: .init(type: .content, contentType: .string)), requester: pair.a.owner)
             await fulfillment(of: [localFlow, remoteFlow], timeout: 3)
-            XCTAssertTrue(pair.wire.history.contains { $0.command.cmd == "description" })
-            XCTAssertTrue(pair.wire.history.contains { $0.command.cmd == "admit" })
-            XCTAssertTrue(pair.wire.history.contains { $0.command.cmd == "feed" })
+            XCTAssertGreaterThan(pair.wire.history.filter { $0.sealed }.count, 6)
+            XCTAssertFalse(pair.wire.history.contains { $0.data.range(of: Data(marker.utf8)) != nil })
             XCTAssertTrue(pair.wire.errors.isEmpty, "\(pair.wire.errors)")
         }
     }
@@ -199,8 +199,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             XCTFail("Transport proof granted unapproved Lobby access")
         } catch { XCTAssertEqual(error as? StreamState, .denied) }
         _ = try? await server.value
-        XCTAssertTrue(pair.wire.history.contains { $0.command.cmd == "channelAuthPeerAccepted" })
-        XCTAssertTrue(pair.wire.history.contains { $0.command.cmd == "agreement" })
+        XCTAssertGreaterThan(pair.wire.history.filter { $0.sealed }.count, 2)
         XCTAssertTrue(observer.statuses.contains { $0 == "bridgeFailed:denied" })
     }
 
@@ -216,7 +215,9 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         cell.beforeFlow = { entered.fulfill(); await barrier.wait(); try Task.checkCancellation() }
         try await resolver.registerNamedEmitCell(name: "Lobby", emitCell: cell, scope: .template, identity: pair.a.owner)
         let command = BridgeCommand(cmd: "feed", identity: pair.b.owner.publicIdentitySnapshot(), payload: nil, cid: 3, peerGeneration: pair.pb.gate.session.generation)
-        let work = Task { try await pair.a.extractCommandFromData(A.encode(command), from: pair.bPeer) }
+        try await pair.pb.gate.sendData(A.encode(command))
+        let frame = try await pair.next()
+        let work = pair.pa.enqueueReceive(frame.data)
         await fulfillment(of: [entered], timeout: 2)
         await pair.pa.gate.close()
         XCTAssertEqual(limits.retainedConnectionCount, 4)
@@ -248,12 +249,17 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         // generation and cid, but its physical callback must never reach B's gate.
         let bridge = try XCTUnwrap(pair.pa.bridge)
         await bridge.sendCommand(command: .get, identity: pair.a.owner, payload: .string("private"))
-        let pending = try await pair.next()
-        let forged = BridgeCommand(cmd: "response", payload: .string("from-c"), cid: pending.command.cid,
+        let heldRequest = try await pair.next()
+        // Admit the record at B without running a Cell request; this assertion
+        // concerns A's physical route, and preserves the receive sequence.
+        _ = try pair.pb.gate.openPeerFrame(heldRequest.data)
+        let pendingCommand = await bridge.auditor.loadBridgeCommandForCommandId(1)
+        XCTAssertNotNil(pendingCommand)
+        let forged = BridgeCommand(cmd: "response", payload: .string("from-c"), cid: 1,
                                    peerGeneration: pair.pb.gate.session.generation)
-        try await pc.sendData(A.encode(forged))
+        try await pc.gate.sendData(A.encode(forged))
         try await pair.deliverNext()
-        let stillPending = await bridge.auditor.loadBridgeCommandForCommandId(pending.command.cid)
+        let stillPending = await bridge.auditor.loadBridgeCommandForCommandId(1)
         XCTAssertNotNil(stillPending, "C's response must not consume B's pending cid")
 
         let marker = FlowElement(title: "only-b", content: .string("b-data"), properties: .init(type: .event, contentType: .string))
@@ -271,45 +277,41 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     }
 
     func testOldCommandsAndResponsesCannotCrossReconnectWithCollidingCID() async throws {
-        let pair = try await ScannerPair(); defer { pair.stop() }
-        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
-        let lobby = await LobbyCell(owner: pair.a.owner)
-        try await resolver.registerNamedEmitCell(name: "Lobby", emitCell: lobby, scope: .template, identity: pair.a.owner)
-        try await pair.finish(pair.start()); try await pair.addThirdPeer()
-        await pair.pb.bridge!.sendCommand(command: .description, identity: pair.b.owner, payload: nil)
-        let oldCommand = try await pair.next(), captured = try pair.receiver(oldCommand)
-        try await pair.deliver(oldCommand)
-        let oldResponse = try await pair.next(), capturedResponse = try pair.receiver(oldResponse)
-        XCTAssertEqual(oldResponse.command.cmd, "response")
-        await pair.pa.gate.close(); await pair.pb.gate.close()
-        let fresh = try pair.prepareReconnect()
-        // Bytes still in the physical wire during pending auth are stale too.
-        try await pair.deliver(oldCommand); try await pair.deliver(oldResponse)
-        try await pair.authenticateTransports(fresh.0, fresh.1)
-        await fresh.1.bridge!.sendCommand(command: .description, identity: pair.b.owner, payload: nil)
-        let newCommand = try await pair.next()
-        XCTAssertEqual(oldCommand.command.cid, newCommand.command.cid, "Exercise actual Base cid reuse")
-        let before = resolver.lookupCountSnapshot()
-        try await pair.deliver(oldCommand); try await pair.deliver(oldResponse)
-        XCTAssertEqual(resolver.lookupCountSnapshot(), before, "Old command must not resolve a Cell")
-        let pending = await fresh.1.bridge!.auditor.loadBridgeCommandForCommandId(newCommand.command.cid)
-        XCTAssertNotNil(pending, "Old response must not consume the new generation's pending cid")
-        // Callbacks captured before Task dispatch never reselect the new gate,
-        // even when their payload is malformed and close arrives late.
-        do { try await captured.receiveData(Data([0xff])); XCTFail() } catch {}
-        do { try await capturedResponse.receiveData(oldResponse.data); XCTFail() } catch {}
-        pair.a.peerDisconnected(captured)
-        await captured.close(); await capturedResponse.close()
-        try await pair.deliver(newCommand); try await pair.deliverNext()
-        let finished = await fresh.1.bridge!.auditor.loadBridgeCommandForCommandId(newCommand.command.cid)
-        XCTAssertNil(finished)
-        XCTAssertEqual(fresh.1.bridge?.uuid, lobby.uuid)
-        try fresh.0.gate.session.check(); try fresh.1.gate.session.check()
-        let sibling = try XCTUnwrap(pair.c)
-        let marker = FlowElement(title: "sibling", content: .string("ok"), properties: .init(type: .event, contentType: .string))
-        try await pair.a.sendScannerFlowElement(marker, remoteUUID: sibling.mySessionUUID)
-        let frame = try await pair.next(); XCTAssertEqual(frame.to, pair.cPeer)
-        try await pair.deliver(frame); try pair.ac!.gate.session.check(); try pair.pc!.gate.session.check()
+        for oldResponse in [false, true] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+            let lobby = await LobbyCell(owner: pair.a.owner)
+            try await resolver.registerNamedEmitCell(name: "Lobby", emitCell: lobby, scope: .template, identity: pair.a.owner)
+            try await pair.finish(pair.start()); try await pair.addThirdPeer()
+            await pair.pb.bridge!.sendCommand(command: .description, identity: pair.b.owner, payload: nil)
+            let oldCommand = try await pair.next(), captured = try pair.receiver(oldCommand)
+            let firstCID = await pair.pb.bridge!.auditor.loadBridgeCommandForCommandId(1)
+            XCTAssertEqual(firstCID?.cid, 1)
+            try await pair.deliver(oldCommand)
+            let response = try await pair.next(), capturedResponse = try pair.receiver(response)
+            await pair.pa.gate.close(); await pair.pb.gate.close()
+            let fresh = try pair.prepareReconnect()
+            try await pair.authenticateTransports(fresh.0, fresh.1)
+            await fresh.1.bridge!.sendCommand(command: .description, identity: pair.b.owner, payload: nil)
+            let newCommand = try await pair.next()
+            let newCID = await fresh.1.bridge!.auditor.loadBridgeCommandForCommandId(1)
+            XCTAssertEqual(firstCID?.cid, newCID?.cid, "Actual Base cid reuse")
+            // A callback already captured by an old transport cannot close the new one.
+            do { try await captured.receiveData(Data([0xff])); XCTFail() } catch {}
+            do { try await capturedResponse.receiveData(response.data); XCTFail() } catch {}
+            pair.a.peerDisconnected(captured); await captured.close()
+            try fresh.0.gate.session.check(); try fresh.1.gate.session.check()
+            try await pair.deliver(newCommand); try await pair.deliverNext()
+            XCTAssertEqual(fresh.1.bridge?.uuid, lobby.uuid)
+            let before = resolver.lookupCountSnapshot()
+            // N07 strengthens N08: replay on the *current* connection closes it.
+            do { try await pair.deliver(oldResponse ? response : oldCommand); XCTFail() } catch {}
+            XCTAssertEqual(resolver.lookupCountSnapshot(), before)
+            XCTAssertThrowsError(try (oldResponse ? fresh.1 : fresh.0).gate.session.check())
+            let marker = FlowElement(title: "sibling", content: .string("ok"), properties: .init(type: .event, contentType: .string))
+            try await pair.a.sendScannerFlowElement(marker, remoteUUID: pair.c!.mySessionUUID)
+            try await pair.deliverNext(); try pair.ac!.gate.session.check(); try pair.pc!.gate.session.check()
+        }
     }
 
     func testLateReceiveFailureAndDisconnectLeaveReconnectAndSiblingAlive() async throws {
@@ -360,8 +362,8 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertEqual(sent, 1)
         let selected = Array(pair.wire.history.dropFirst(before))
         XCTAssertEqual(selected.count, 1); XCTAssertEqual(selected.first?.to, pair.bPeer)
-        XCTAssertEqual(selected.first?.command.cid, -1)
-        XCTAssertEqual(selected.first?.command.peerGeneration, pair.pa.gate.session.generation)
+        XCTAssertTrue(selected.first?.sealed == true)
+        XCTAssertNil(selected.first?.data.range(of: Data("opaque-ni-archive".utf8)))
         try await pair.deliverNext()
         XCTAssertEqual(ac.gate.session.state, .unauthenticated)
         XCTAssertEqual(pc.gate.session.state, .unauthenticated)
@@ -377,18 +379,19 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     func testPeerGenerationWireFieldIsRequiredAndAuthFramesRemainUntagged() async throws {
         let pair = try await ScannerPair(); defer { pair.stop() }
         try await pair.finish(pair.start())
-        for frame in pair.wire.history {
+        for frame in pair.wire.history.filter({ !$0.sealed }) {
             let json = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.data) as? [String: Any])
             XCTAssertNil(json["&peerGeneration"])
         }
         let command = BridgeCommand(cmd: "response", payload: .string("value"), cid: 42)
         try await pair.pb.gate.sendData(A.encode(command))
         let frame = try await pair.next()
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.data) as? [String: Any])
-        XCTAssertEqual(json["&peerGeneration"] as? String, pair.pb.gate.session.generation)
-        XCTAssertEqual(frame.command.peerGeneration, pair.pb.gate.session.generation)
+        XCTAssertTrue(frame.sealed)
+        XCTAssertEqual(String(decoding: frame.data.dropFirst(4).prefix(36), as: UTF8.self), pair.pb.gate.session.generation)
         try await pair.deliver(frame)
-        do { try await pair.pa.receiveData(A.encode(command)); XCTFail("Untagged ordinary peer frame accepted") }
+        // A correctly sealed payload still cannot omit the inner generation.
+        try await pair.pb.sendData(A.encode(command))
+        do { try await pair.deliverNext(); XCTFail("Untagged ordinary peer frame accepted") }
         catch { XCTAssertEqual(error as? A.Failure, .malformed) }
         XCTAssertThrowsError(try pair.pa.gate.session.check())
     }
@@ -401,6 +404,169 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let before = pair.wire.history.count
         let sent = try await pair.a.shareDiscoveryTokenData(Data(repeating: 7, count: 20 * 1024))
         XCTAssertEqual(sent, 0); XCTAssertEqual(pair.wire.history.count, before)
+        XCTAssertThrowsError(try pair.pa.gate.session.check())
+    }
+
+    func testRelayForwardsRealHandshakeButSeesOnlyCiphertextInBothDirections() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        let middleman = pair.wire // two independent MCSession adapter endpoints; M has bytes, no keys
+        try await pair.finish(pair.start()) // M forwards all five real handshake messages unchanged
+        XCTAssertEqual(middleman.history.filter { !$0.sealed }.map { $0.command.cmd },
+                       ["channelAuthPeerHello", "channelAuthPeerChallenge", "channelAuthPeerProof"])
+        XCTAssertEqual(middleman.history.filter { $0.sealed }.count, 2)
+        let aObserver = ScannerStatusObserver(), bObserver = ScannerStatusObserver()
+        pair.a.radarDelegate = aObserver; pair.b.radarDelegate = bObserver
+        for (sender, remote, receiver) in [(pair.a, pair.b.mySessionUUID, bObserver), (pair.b, pair.a.mySessionUUID, aObserver)] {
+            let marker = "confidential-" + UUID().uuidString
+            let flow = FlowElement(title: marker, content: .string(marker), properties: .init(type: .event, contentType: .string))
+            try await sender.sendScannerFlowElement(flow, remoteUUID: remote)
+            let intercepted = try await pair.next()
+            XCTAssertTrue(intercepted.sealed)
+            XCTAssertNil(intercepted.data.range(of: Data(marker.utf8)))
+            XCTAssertThrowsError(try JSONDecoder().decode(BridgeCommand.self, from: intercepted.data))
+            try await pair.deliver(intercepted)
+            XCTAssertEqual(receiver.flows.last?.title, marker)
+        }
+        try pair.pa.gate.session.check(); try pair.pb.gate.session.check()
+    }
+
+    func testRelayTamperInsertionReplayReorderReflectionAndMalformedRecordsCloseWithoutDispatch() async throws {
+        for attack in ["tag", "insert", "replay", "reorder", "reflection", "generation", "truncated", "oversize", "empty", "plaintext"] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            try await pair.finish(pair.start())
+            let observer = ScannerStatusObserver(); pair.b.radarDelegate = observer; pair.a.radarDelegate = observer
+            let flow = FlowElement(title: "protected", content: .string("secret"), properties: .init(type: .event, contentType: .string))
+            try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.b.mySessionUUID)
+            let intercepted = try await pair.next()
+            var data = intercepted.data
+            var target = pair.pb
+            switch attack {
+            case "tag": data[data.count - 1] ^= 1
+            case "insert": data.replaceSubrange(49..<data.count, with: Data(repeating: 0x61, count: data.count - 49))
+            case "replay": try await pair.deliver(intercepted)
+            case "reorder":
+                try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.b.mySessionUUID)
+                data = try await pair.next().data
+            case "reflection": target = pair.pa
+            case "generation": data[4] = data[4] == 0x41 ? 0x42 : 0x41
+            case "truncated": data = Data(data.prefix(50))
+            case "oversize": data = Data(repeating: 0, count: BridgeInboundPayloadValidator.defaultMaximumBytes + 66)
+            case "empty": data = Data()
+            case "plaintext": data = try A.encode(BridgeCommand(cmd: "response", payload: .flowElement(flow), cid: -1, peerGeneration: pair.pa.gate.session.generation))
+            default: XCTFail(attack)
+            }
+            let before = observer.flows.count
+            do { try await target.receiveData(data); XCTFail(attack) } catch {}
+            XCTAssertEqual(observer.flows.count, before, attack)
+            XCTAssertThrowsError(try target.gate.session.check(), attack)
+            do { try await target.receiveData(intercepted.data); XCTFail("Closed channel reopened: \(attack)") } catch {}
+            XCTAssertEqual(observer.flows.count, before, attack)
+        }
+    }
+
+    func testReplacingEitherEphemeralKeyInvalidatesIdentitySignature() async throws {
+        for replaceInitiator in [true, false] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            let tasks = pair.start()
+            if !replaceInitiator { try await pair.deliverNext() }
+            let intercepted = try await pair.next()
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(intercepted.command.payload!.stringValue().utf8)) as? [String: Any])
+            let substitutedKey = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+            if replaceInitiator { json["ephemeralPublicKey"] = substitutedKey }
+            else {
+                var hello = try XCTUnwrap(json["hello"] as? [String: Any])
+                hello["ephemeralPublicKey"] = substitutedKey; json["hello"] = hello
+            }
+            let bytes = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .withoutEscapingSlashes])
+            let changed = BridgeCommand(cmd: intercepted.command.cmd, payload: .string(String(decoding: bytes, as: UTF8.self)), cid: 0)
+            if replaceInitiator {
+                try await pair.pb.receiveData(A.encode(changed)) // B signs altered transcript
+                do { try await pair.deliverNext(); XCTFail("Substituted initiator key verified") }
+                catch { XCTAssertEqual(error as? A.Failure, .invalidProof) }
+            } else {
+                do { try await pair.pa.receiveData(A.encode(changed)); XCTFail("Substituted responder key verified") }
+                catch { XCTAssertEqual(error as? A.Failure, .invalidProof) }
+            }
+            XCTAssertNil(pair.pa.bridge); XCTAssertNil(pair.pb.bridge)
+            await pair.pa.gate.close(); await pair.pb.gate.close()
+            _ = try? await tasks.0.value; _ = try? await tasks.1.value
+        }
+    }
+
+    func testMissingEphemeralKeyAndOldProfileCannotDowngrade() async throws {
+        for missingKey in [true, false] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            let tasks = pair.start(), hello = try await pair.next()
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(hello.command.payload!.stringValue().utf8)) as? [String: Any])
+            if missingKey { json.removeValue(forKey: "ephemeralPublicKey") }
+            else { json["profile"] = "org.haven.bridge-peer-channel.v1" }
+            let bytes = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .withoutEscapingSlashes])
+            let changed = BridgeCommand(cmd: hello.command.cmd, payload: .string(String(decoding: bytes, as: UTF8.self)), cid: 0)
+            do { try await pair.pb.receiveData(A.encode(changed)); XCTFail() } catch {}
+            XCTAssertNil(pair.pb.bridge)
+            await pair.pa.gate.close(); await pair.pb.gate.close()
+            _ = try? await tasks.0.value; _ = try? await tasks.1.value
+        }
+    }
+
+    func testBothFactoriesWaitForSealedConfirmationAndEarlyDataIsRejected() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        let tasks = pair.start()
+        for _ in 0..<3 { try await pair.deliverNext() }
+        XCTAssertNil(pair.pa.bridge); XCTAssertNil(pair.pb.bridge)
+        XCTAssertEqual(pair.pa.gate.session.state, .verifying)
+        XCTAssertEqual(pair.pb.gate.session.state, .verifying)
+        let responderConfirmation = try await pair.next()
+        XCTAssertTrue(responderConfirmation.sealed)
+        try await pair.deliver(responderConfirmation)
+        XCTAssertNotNil(pair.pa.bridge); XCTAssertNil(pair.pb.bridge)
+        let initiatorConfirmation = try await pair.next()
+        XCTAssertTrue(initiatorConfirmation.sealed)
+        // A legitimate sender can produce application data now; B must not
+        // dispatch it if M withholds the first, confirmation record.
+        try await pair.pa.gate.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("too-early"), cid: 9)))
+        do { try await pair.deliverNext(); XCTFail("Data passed before key confirmation") } catch {}
+        XCTAssertNil(pair.pb.bridge)
+        await pair.pa.gate.close(); await pair.pb.gate.close()
+        _ = try? await tasks.0.value; _ = try? await tasks.1.value
+    }
+
+    func testQueuedArrivalOrderAndConcurrentSendsPreserveCounters() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start())
+        let observer = ScannerStatusObserver(); pair.b.radarDelegate = observer
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0..<20 { group.addTask {
+                let flow = FlowElement(title: "frame-\(index)", content: .string(String(index)), properties: .init(type: .event, contentType: .string))
+                try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.b.mySessionUUID)
+            } }
+            try await group.waitForAll()
+        }
+        var received: [Task<Void, Error>] = []
+        for sequence in 1...20 {
+            let frame = try await pair.next()
+            let counter = frame.data.dropFirst(41).prefix(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+            XCTAssertEqual(counter, UInt64(sequence))
+            received.append(pair.pb.enqueueReceive(frame.data))
+        }
+        for task in received { try await task.value }
+        XCTAssertEqual(Set(observer.flows.map(\.title)).count, 20)
+        try pair.pb.gate.session.check()
+    }
+
+    func testAEADOverheadIsIncludedInExistingSendQuota() async throws {
+        let payload = ValueType.string(String(repeating: "q", count: 20_000))
+        let tagged = BridgeCommand(cmd: "response", payload: payload, cid: 7, peerGeneration: "11111111-1111-4111-8111-111111111111")
+        var config = BridgeChannelLimits.Configuration()
+        config.maximumPendingSendBytesPerConnection = try A.encode(tagged).count
+        let pair = try await ScannerPair(limits: BridgeChannelLimits(configuration: config)); defer { pair.stop() }
+        try await pair.finish(pair.start())
+        let before = pair.wire.history.count
+        do {
+            try await pair.pa.gate.sendData(A.encode(BridgeCommand(cmd: "response", payload: payload, cid: 7)))
+            XCTFail("The plaintext fits exactly, but AEAD overhead exceeds the quota")
+        } catch { XCTAssertEqual(error as? A.Failure, .capacity) }
+        XCTAssertEqual(pair.wire.history.count, before)
         XCTAssertThrowsError(try pair.pa.gate.session.check())
     }
 
@@ -492,7 +658,7 @@ private final class ScannerPair {
     }
     func authenticateTransports(_ a: ScannerPeerTransport, _ b: ScannerPeerTransport) async throws {
         let at = Task { try await a.gate.startPeer() }, bt = Task { try await b.gate.startPeer() }
-        for _ in 0..<4 { try await deliverNext() }
+        for _ in 0..<5 { try await deliverNext() }
         try await at.value; try await bt.value
     }
     func receiver(_ frame: ScannerControlledWire.Frame) throws -> ScannerPeerTransport {
@@ -511,10 +677,8 @@ private final class ScannerPair {
                 if let frame = wire.take() {
                     do {
                         let physical = try receiver(frame) // capture before dispatch, as the MC callback does
-                        Task {
-                            do { try await physical.receiveData(frame.data) }
-                            catch { wire.failed(error) }
-                        }
+                        let received = physical.enqueueReceive(frame.data)
+                        Task { do { try await received.value } catch { wire.failed(error) } }
                     } catch { wire.failed(error) }
                 } else { try? await Task.sleep(nanoseconds: 1_000_000) }
             }
@@ -536,7 +700,7 @@ private final class ScannerPair {
     }
     private typealias A = BridgeChannelAuthentication
     func finish(_ tasks: (Task<Void, Error>, Task<Void, Error>)) async throws {
-        for _ in 0..<4 where pa.channelSession?.state != .authenticated || pb.channelSession?.state != .authenticated {
+        for _ in 0..<5 where pa.channelSession?.state != .authenticated || pb.channelSession?.state != .authenticated {
             try await deliverNext()
         }
         try await tasks.0.value; try await tasks.1.value
@@ -544,7 +708,13 @@ private final class ScannerPair {
     func stop() { a.stop(); b.stop(); c?.stop() }
 }
 private final class ScannerControlledWire: @unchecked Sendable {
-    struct Frame { let data: Data; let command: BridgeCommand; let from: MCPeerID; let to: MCPeerID }
+    struct Frame {
+        let data: Data; let from: MCPeerID; let to: MCPeerID
+        var sealed: Bool { data.starts(with: Data("HPC2".utf8)) }
+        // No plaintext capture or keys in M. Only the three public handshake
+        // messages are decodable; encrypted frames have an explicit sentinel.
+        var command: BridgeCommand { (try? JSONDecoder().decode(BridgeCommand.self, from: data)) ?? BridgeCommand(cmd: "sealed", payload: nil, cid: 0) }
+    }
     private let lock = NSLock()
     private var pending: [Frame] = [], recorded: [Frame] = []
     private var failures: [String] = []
@@ -552,7 +722,7 @@ private final class ScannerControlledWire: @unchecked Sendable {
     func failed(_ error: Error) { lock.withLock { failures.append(String(describing: error)) } }
     var history: [Frame] { lock.withLock { recorded } }
     func append(_ data: Data, from: MCPeerID, to: MCPeerID) throws {
-        let frame = Frame(data: data, command: try JSONDecoder().decode(BridgeCommand.self, from: data), from: from, to: to)
+        let frame = Frame(data: data, from: from, to: to)
         lock.withLock { pending.append(frame); recorded.append(frame) }
     }
     func take() -> Frame? { lock.withLock { pending.isEmpty ? nil : pending.removeFirst() } }

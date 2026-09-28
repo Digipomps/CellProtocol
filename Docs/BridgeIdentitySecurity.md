@@ -287,9 +287,9 @@ do not certify either consumer. Host ingress fragment/CPU limits,
 drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evidence.
 
 
-## Multipeer peer profile (R3)
+## Multipeer peer profile (R3, N07 v2)
 
-`org.haven.bridge-peer-channel.v1` is a separate profile, not a WSS-origin alias.
+`org.haven.bridge-peer-channel.v2` is a separate profile, not a WSS-origin alias.
 An explicitly accepted Scanner invitation supplies an immutable endpoint containing
 both session-scoped discovery peer identifiers, the invitation/setup UUID and the
 `nearby` domain. Scanner binds those identifiers to the observed `MCPeerID` objects
@@ -298,15 +298,22 @@ an MCSession alone confer no identity or Cell authority. MCSession encryption is
 required; this proves keys for the accepted peer route, not a real-world identity
 or an independently attested device certificate.
 
-The initiator sends a public identity, fresh nonce, role, generation and timestamp.
+The initiator sends a public identity, fresh ephemeral X25519 key, nonce, role, generation and timestamp.
 The responder signs a transcript containing both hellos and its signer role; the
 initiator verifies that proof and returns its own role-bound signature. The
-responder verifies and acknowledges. The audience hashes the complete endpoint;
+responder verifies and acknowledges with its first sealed record; the initiator
+returns its own sealed acknowledgement. Each side waits for valid key confirmation
+before activation. The audience hashes the complete endpoint;
 the signing resource hashes the complete transcript under the peer profile.
 Both signatures therefore bind both peer identifiers, setup ID, roles, both
-nonces, both public identities and both connection generations. The existing
+nonces, both public identities, both ephemeral keys and both connection generations. The existing
 `Proof`, `Authenticated`, canonical encoding, public-key verifier and
 `IdentitySigningChallenge` format are reused. Private vaults remain local.
+X25519/HKDF-SHA256 derives two directional keys; ChaCha20-Poly1305 protects every
+subsequent frame. Generation, direction and exact-next counter are authenticated;
+invalid, replayed, reordered or plaintext records close the channel. There is no
+v1 downgrade. The complete [v2 wire and security contract](../Documentation/BridgePeerChannelV2.md)
+defines transcript, KDF info, AAD, bounds, claims and non-claims.
 
 `BridgeChannelSession.reserveOpen` consumes the same pending state before public
 verification for both profiles. Its deadline, absolute expiry, principal binding,

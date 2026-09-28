@@ -71,6 +71,11 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     let setupID = UUID()
     var isInitiator: Bool { role == .initiator }
     private weak var delegate: BridgeDelegateProtocol?
+    private let sendLock = NSLock()
+    private let receiveLock = NSLock()
+    private var receiveTail: Task<Data?, Error>?
+    private var queuedReceives = 0
+    private var queuedBytes = 0
     var gate: BridgeChannelTransport!
     var bridge: BridgeBase?
     var channelSession: BridgeChannelSession? { gate?.session }
@@ -92,7 +97,11 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
 
     func sendData(_ data: Data) async throws {
         guard let service else { throw ScannerServiceError.peerNotConnected(remoteUUID) }
-        try service.sendPeerData(data, on: self)
+        do {
+            // Non-suspending critical section: counter allocation and MC send
+            // have the same order, even when several Cell tasks send at once.
+            try sendLock.withLock { try service.sendPeerData(gate.sealPeerFrame(data), on: self) }
+        } catch { await gate.close(); throw error }
     }
 
     func identityVault(for identity: Identity?) async -> any IdentityVaultProtocol {
@@ -100,11 +109,48 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         return await service.identityVault(for: identity, bridgeDelegate: delegate)
     }
 
-    // N07's future per-message protection belongs at this bound send/receive
-    // boundary. Generation metadata alone does not authenticate message bytes.
-    func receiveData(_ data: Data) async throws {
-        guard let service else { throw CancellationError() }
-        try await service.extractCommandFromData(data, on: self)
+    func receiveData(_ data: Data) async throws { try await enqueueReceive(data).value }
+
+    // Called synchronously by MCSessionDelegate, before creating asynchronous
+    // work. Serialize record opening and handshake progression, but let Cell
+    // dispatch await later responses (in particular the origin-signature RPC).
+    @discardableResult
+    func enqueueReceive(_ data: Data) -> Task<Void, Error> {
+        receiveLock.withLock {
+            guard data.count <= BridgeChannelTransport.maximumPeerFrameBytes,
+                  queuedReceives < 64, data.count <= 4 * 1024 * 1024 - queuedBytes else {
+                gate.session.close() // revoke dispatch immediately, before asynchronous cleanup
+                return Task { await gate.close(); throw BridgeChannelAuthentication.Failure.capacity }
+            }
+            queuedReceives += 1; queuedBytes += data.count
+            let previous = receiveTail
+            let preparation = Task<Data?, Error> { [self] in
+                _ = try await previous?.value
+                guard let service else { throw CancellationError() }
+                let plaintext = try gate.openPeerFrame(data)
+                try gate.validateInboundPayload(plaintext)
+                let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
+                if command.cmd.hasPrefix("channelAuth") {
+                    try await service.extractCommandFromData(plaintext, on: self)
+                    return nil
+                }
+                return plaintext
+            }
+            receiveTail = preparation
+            return Task { [self] in
+                defer { receiveLock.withLock { queuedReceives -= 1; queuedBytes -= data.count } }
+                do {
+                    if let plaintext = try await preparation.value {
+                        guard let service else { throw CancellationError() }
+                        try await service.extractCommandFromData(plaintext, on: self)
+                    }
+                } catch {
+                    service?.reportBridgeFailure(error, on: self)
+                    await gate.close()
+                    throw error
+                }
+            }
+        }
     }
 
     func close() async { service?.peerChannelClosed(self) }
@@ -419,7 +465,7 @@ class ScannerService :  NSObject, ObservableObject {
             reportBridgeFailure(BridgeChannelAuthentication.Failure.closed, remoteUUID: transport.remoteUUID)
         }
     }
-    private func reportBridgeFailure(_ error: Error, on transport: ScannerPeerTransport) {
+    fileprivate func reportBridgeFailure(_ error: Error, on transport: ScannerPeerTransport) {
         withState {
             guard bridgeTransportsByRemoteUUID[transport.remoteUUID] === transport else { return }
             reportBridgeFailure(error, remoteUUID: transport.remoteUUID)
@@ -1081,10 +1127,7 @@ extension ScannerService : MCSessionDelegate {
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         guard let physical = try? capturePeerTransport(session: session, peerID: peerID, prepare: true) else { return }
         Task { [weak self, physical] in try? await self?.setupBridge(physical) }
-        Task { [physical] in
-            // receiveData closes/reports only this captured generation on failure.
-            try? await physical.receiveData(data)
-        }
+        physical.enqueueReceive(data) // preserve callback order before Task scheduling
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {
@@ -1147,8 +1190,7 @@ extension ScannerService {
         guard withState({ bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { throw CancellationError() }
         let gate = physical.gate!
         do {
-            do { try gate.validateInboundPayload(data) }
-            catch BridgeChannelAuthentication.Failure.staleGeneration { return } // delayed old frame, never a new gate failure
+            try gate.validateInboundPayload(data)
             let command = try JSONDecoder().decode(BridgeCommand.self, from: data)
             if let identity = command.identity { identity.identityVault = await identityVault(for: identity, bridgeDelegate: physical.bridge) }
             if command.cmd.hasPrefix("channelAuth") {

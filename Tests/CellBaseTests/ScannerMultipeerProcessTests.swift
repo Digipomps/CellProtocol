@@ -92,7 +92,12 @@ final class ScannerMultipeerProcessTests: XCTestCase {
         await fulfillment(of: [feed], timeout: 4)
         await sender.value
         XCTAssertFalse(observer.statuses.contains { $0.hasPrefix("bridgeFailed:") })
-        try Data("authenticated; description; attach; feed\n".utf8).write(to: folder.appendingPathComponent("\(role).passed"))
+        let peerID = try XCTUnwrap(service.foundPeersDict[remoteID])
+        let physical = try service.capturePeerTransport(session: service.mcSession, peerID: peerID)
+        let records = try XCTUnwrap(physical.gate.peerRecordCounts)
+        XCTAssertGreaterThan(records.sent, 1, "Real MC must send sealed application records after confirmation")
+        XCTAssertGreaterThan(records.received, 1, "Real MC must receive sealed application records after confirmation")
+        try Data("authenticated; description; attach; feed; sealedSent=\(records.sent); sealedReceived=\(records.received)\n".utf8).write(to: folder.appendingPathComponent("\(role).passed"))
         // Keep the inviter alive until its receiver has recorded delivery.
         let doneDeadline = ProcessInfo.processInfo.systemUptime + 4
         while !FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(other).passed").path), ProcessInfo.processInfo.systemUptime < doneDeadline { try await Task.sleep(nanoseconds: 20_000_000) }
