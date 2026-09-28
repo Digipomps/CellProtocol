@@ -97,7 +97,7 @@ jobs:
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
             BridgeDescriptionConcurrencyTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
-            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests; do
+            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
