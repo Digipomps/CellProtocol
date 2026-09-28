@@ -554,6 +554,38 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         try pair.pb.gate.session.check()
     }
 
+    func testOldCiphertextDuringHandshakeAndRewrittenGenerationBothFailClosed() async throws {
+        for pendingHandshake in [true, false] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            try await pair.finish(pair.start())
+            let command = BridgeCommand(cmd: "response", payload: .string("old-secret"), cid: 1)
+            try await pair.pb.gate.sendData(A.encode(command))
+            let old = try await pair.next()
+            let oldHello = try XCTUnwrap(pair.wire.history.first { $0.command.cmd == "channelAuthPeerHello" })
+            await pair.pa.gate.close(); await pair.pb.gate.close()
+            let fresh = try pair.prepareReconnect()
+            var replay = old.data
+            if !pendingHandshake {
+                let before = pair.wire.history.count
+                try await pair.authenticateTransports(fresh.0, fresh.1)
+                let freshHello = try XCTUnwrap(pair.wire.history.dropFirst(before).first { $0.command.cmd == "channelAuthPeerHello" })
+                let oldKey = try A.decode(BridgePeerChannelAuthentication.Hello.self, from: Data(oldHello.command.payload!.stringValue().utf8)).ephemeralPublicKey
+                let freshKey = try A.decode(BridgePeerChannelAuthentication.Hello.self, from: Data(freshHello.command.payload!.stringValue().utf8)).ephemeralPublicKey
+                XCTAssertNotEqual(oldKey, freshKey)
+                let request = BridgeCommand(cmd: "description", identity: pair.a.owner.publicIdentitySnapshot(), payload: nil, cid: 1)
+                let stored = await fresh.0.bridge!.auditor.storeBridgeCommand(request, for: 1)
+                XCTAssertTrue(stored)
+                // M knows the public new generation and the expected counter.
+                // Rewriting N08 metadata cannot make old ciphertext authenticate.
+                replay.replaceSubrange(4..<40, with: Data(fresh.1.gate.session.generation.utf8))
+                replay.replaceSubrange(41..<49, with: Data([0, 0, 0, 0, 0, 0, 0, 1]))
+            }
+            do { try await fresh.0.receiveData(replay); XCTFail() } catch {}
+            XCTAssertThrowsError(try fresh.0.gate.session.check())
+            if pendingHandshake { XCTAssertNil(fresh.0.bridge) }
+        }
+    }
+
     func testAEADOverheadIsIncludedInExistingSendQuota() async throws {
         let payload = ValueType.string(String(repeating: "q", count: 20_000))
         let tagged = BridgeCommand(cmd: "response", payload: payload, cid: 7, peerGeneration: "11111111-1111-4111-8111-111111111111")
