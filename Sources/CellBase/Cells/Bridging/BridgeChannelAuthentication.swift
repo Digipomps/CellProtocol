@@ -38,12 +38,26 @@ public enum BridgeChannelAuthentication {
 
         public func validate() throws {
             guard !uuid.isEmpty, uuid.utf8.count <= 512 else { throw Failure.malformed }
+            _ = try canonicalPublicKey()
+        }
+
+        /// Process-local accounting only, never an authorization principal or wire ID.
+        /// UUID/domain/transport changes must not create a fresh budget for one key.
+        func quotaKeyIdentifier() throws -> String {
+            let fields = ["org.haven.bridge-quota-key.v1", algorithm.rawValue, curve.rawValue,
+                          try canonicalPublicKey().base64EncodedString()]
+            return BridgeChannelAuthentication.digest(try BridgeChannelAuthentication.encode(fields))
+        }
+
+        private func canonicalPublicKey() throws -> Data {
             switch (algorithm, curve) {
             case (.EdDSA, .Curve25519):
-                guard (try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey)) != nil else { throw Failure.malformed }
+                guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey) else { throw Failure.malformed }
+                return key.rawRepresentation
             case (.ECDSA, .P256):
-                guard (try? P256.Signing.PublicKey(compressedRepresentation: publicKey)) != nil
-                    || (try? P256.Signing.PublicKey(x963Representation: publicKey)) != nil else { throw Failure.malformed }
+                guard let key = (try? P256.Signing.PublicKey(compressedRepresentation: publicKey))
+                    ?? (try? P256.Signing.PublicKey(x963Representation: publicKey)) else { throw Failure.malformed }
+                return key.compressedRepresentation
             default: throw Failure.malformed
             }
         }

@@ -30,6 +30,7 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     private struct Entry {
         let source: String
         var principal: String?
+        var quotaKey: String?
         var active = false
         var closed = false
         var work = 0
@@ -84,14 +85,15 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             entries[id] = Entry(source: source, revoke: revoke)
         }
     }
-    func authenticate(_ id: String, principal: String) throws {
+    func authenticate(_ id: String, principal: String, quotaKey: String) throws {
         try lock.withLock {
             guard var entry = entries[id], !entry.closed, entry.principal == nil else { throw BridgeChannelAuthentication.Failure.closed }
-            guard entries.values.filter({ $0.principal == principal }).count < configuration.maximumConnectionsPerKey else {
+            guard entries.values.filter({ $0.quotaKey == quotaKey }).count < configuration.maximumConnectionsPerKey else {
                 throw BridgeChannelAuthentication.Failure.capacity
             }
-            try consumeRate("key:" + principal, maximum: configuration.maximumVerifiedHandshakesPerKeyPerMinute)
+            try consumeRate("key:" + quotaKey, maximum: configuration.maximumVerifiedHandshakesPerKeyPerMinute)
             entry.principal = principal
+            entry.quotaKey = quotaKey
             entries[id] = entry
         }
     }
@@ -104,8 +106,8 @@ public final class BridgeChannelLimits: @unchecked Sendable {
     enum Resource { case operation, feed, channel }
     func acquire(_ id: String, resource: Resource) throws {
         try lock.withLock {
-            guard var entry = entries[id], !entry.closed, let principal = entry.principal else { throw BridgeChannelAuthentication.Failure.closed }
-            let related = entries.values.filter { $0.principal == principal }
+            guard var entry = entries[id], !entry.closed, let quotaKey = entry.quotaKey else { throw BridgeChannelAuthentication.Failure.closed }
+            let related = entries.values.filter { $0.quotaKey == quotaKey }
             switch resource {
             case .operation:
                 guard related.reduce(0, { $0 + $1.operations }) < configuration.maximumOperationsPerKey,
@@ -149,7 +151,7 @@ public final class BridgeChannelLimits: @unchecked Sendable {
         lock.withLock { if var entry = entries[id] { entry.sendBytes = max(0, entry.sendBytes - bytes); storeOrRemove(entry, id: id) } }
     }
     // Closed entries are bounded tombstones, retained only while owned work lives.
-    // They still count against admission and principal/global resource budgets.
+    // They still count against admission and canonical-key/global resource budgets.
     private func storeOrRemove(_ entry: Entry, id: String) {
         if entry.closed && !entry.hasResources { entries[id] = nil }
         else { entries[id] = entry }
@@ -323,7 +325,9 @@ public final class BridgeChannelSession: @unchecked Sendable {
         }
         try lock.withLock {
             guard stateValue == .verifying, monotonic() < deadline else { throw Auth.Failure.expired }
-            try limits?.authenticate(generation, principal: BridgeChannelLimits.principal(identity: challenge.identity, domain: domain))
+            try limits?.authenticate(generation,
+                principal: BridgeChannelLimits.principal(identity: challenge.identity, domain: domain),
+                quotaKey: challenge.identity.quotaKeyIdentifier())
             identityValue = challenge.identity
             absoluteExpiry = Date(timeIntervalSince1970: Double(challenge.expires) / 1000)
             authValue = Auth.Authenticated(sessionID: proof.sessionID, generation: generation,

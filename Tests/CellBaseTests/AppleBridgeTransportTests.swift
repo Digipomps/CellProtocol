@@ -101,6 +101,29 @@ final class AppleBridgeTransportTests: XCTestCase {
         super.tearDown()
     }
 
+    func testTransportDiagnosticsNeverLogErrorDescriptionsOrPayloads() async throws {
+        let marker = "SYNTHETIC_PRIVATE_APPLE_N19"
+        let failure = NSError(domain: marker, code: 19, userInfo: [NSLocalizedDescriptionKey: marker])
+        let domains = CellBase.enabledDiagnosticLogDomains, handler = CellBase.diagnosticLogHandler
+        var messages: [String] = []
+        CellBase.enabledDiagnosticLogDomains = [.bridge]
+        CellBase.diagnosticLogHandler = { _, text in messages.append(text) }
+        defer {
+            CellBase.enabledDiagnosticLogDomains = domains
+            CellBase.diagnosticLogHandler = handler
+        }
+        for text in [false, true] {
+            CellBase.sendDataAsText = text
+            let socket = MockAppleWebSocketConnection()
+            socket.sendDataError = failure; socket.sendTextError = failure
+            let transport = AppleBridgeTransport(webSocketConnection: socket)
+            do { try await transport.sendData(Data(marker.utf8)); XCTFail("Expected send failure") } catch {}
+            await transport.onError(connection: socket, error: failure)
+        }
+        XCTAssertEqual(messages.filter { $0.contains("code=transport_failed") }.count, 4)
+        XCTAssertFalse(messages.joined().contains(marker))
+    }
+
     func testCopiedRealLocalKeyOnCommandAndResponseNeverObtainsSigner() async throws {
         let previous = CellBase.defaultIdentityVault
         defer { CellBase.defaultIdentityVault = previous }

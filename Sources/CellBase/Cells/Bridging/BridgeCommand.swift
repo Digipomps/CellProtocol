@@ -59,6 +59,8 @@ public struct BridgeCommand: Codable {
             return Command(rawValue: cmd) ?? .none
         }
     }
+    /// Only bounded, allowlisted metadata. `cmd` itself is peer-controlled text.
+    var diagnosticMetadata: String { "type=\(command.rawValue) cid=\(cid)" }
     public var identity: Identity?
     public var payload: ValueType?
     public var cid: Int
@@ -230,7 +232,6 @@ public struct BridgeCommand: Codable {
 
                 
 //            default:
-//                print("Got something to encode with unknown type: \(String(describing: payload))")
             case let .bool(value):
                 try container.encode(value, forKey: .bool)
             case let .integer(value):

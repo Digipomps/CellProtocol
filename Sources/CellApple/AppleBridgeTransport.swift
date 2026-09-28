@@ -61,7 +61,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             
             try websocketConn.ping()
         } catch {
-            CellBase.diagnosticLog("Apple websocket connection failed with error: \(error)", domain: .bridge)
+            CellBase.diagnosticLog("Apple websocket connection failed with error: code=transport_failed", domain: .bridge)
             await currentDelegate()?.sendSetValueState(for: ReservedKeypath.bridgesetup.rawValue, setValueState: .paramErr) // Remember to set back to .error
             await currentDelegate()?.pushError(errorMessage: "Websocket connection failed with error: \(error)", error: error)
             await cleanupClosedWebSocketRegistration()
@@ -92,7 +92,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             do {
                 try await webSocketConnection.send(text: text)
             } catch {
-                CellBase.diagnosticLog("Apple websocket text send failed with error: \(error)", domain: .bridge)
+                CellBase.diagnosticLog("Apple websocket text send failed with error: code=transport_failed", domain: .bridge)
                 await cleanupClosedWebSocketRegistration()
                 throw error
             }
@@ -100,7 +100,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             do {
                 try await webSocketConnection.send(data: data)
             } catch {
-                CellBase.diagnosticLog("Apple websocket binary send failed with error: \(error)", domain: .bridge)
+                CellBase.diagnosticLog("Apple websocket binary send failed with error: code=transport_failed", domain: .bridge)
                 await cleanupClosedWebSocketRegistration()
                 throw error
             }
@@ -118,7 +118,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     }
     
     public func onError(connection: WebSocketConnection2, error: Error) async {
-        CellBase.diagnosticLog("Apple websocket error: \(error)", domain: .bridge)
+        CellBase.diagnosticLog("Apple websocket error: code=transport_failed", domain: .bridge)
         if let delegate = currentDelegate() {
             await delegate.pushError(errorMessage: "WebSocketConnection error", error: error)
         }

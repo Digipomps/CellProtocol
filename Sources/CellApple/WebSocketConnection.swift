@@ -7,6 +7,7 @@
 
 
 import Foundation
+import CellBase
 #if canImport(FoundationNetworking)
     import FoundationNetworking
 #endif
@@ -177,7 +178,7 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
           guard let self = self else { return }
           guard self.webSocketTask === webSocketTask else { return }
         if let error = error {
-          print("Error when sending PING \(error)")
+          CellBase.diagnosticLog("Websocket ping failed code=ping_failed", domain: .bridge)
         } else {
 //            print("Web Socket connection is alive")
             let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in
@@ -323,7 +324,7 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
           guard let self = self else { return }
           guard self.webSocketTask === webSocketTask else { return }
         if let error = error {
-          print("Error when sending PING \(error)")
+          CellBase.diagnosticLog("Websocket ping failed code=ping_failed", domain: .bridge)
         } else {
 //            print("Web Socket connection is alive")
             let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in

@@ -232,8 +232,8 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     func handleWebSocketClose(_ result: Result<Void, Error>) {
-        if case .failure(let error) = result {
-            CellBase.diagnosticLog("Vapor bridge websocket closed with failure: \(error)", domain: .bridge)
+        if case .failure = result {
+            CellBase.diagnosticLog("Vapor bridge websocket closed with failure: code=transport_failed", domain: .bridge)
         }
         Task { [weak self] in
             await self?.close()

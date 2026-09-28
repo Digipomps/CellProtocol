@@ -183,7 +183,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public init(_ config: Config) async throws {
         identityProofAuthorization = BridgeIdentityProofAuthorization(owner: config.owner, scopes: config.identityProofScopes)
-        bridgeLog("Bridge base init. identity.uuid: \(config.owner.uuid) identityDomain: \(config.identityDomain)")
+        bridgeLog("Bridge base initialized")
         self.owner = config.owner
         
         let initialAgreement: Agreement
@@ -590,8 +590,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             .handleEvents(receiveCancel: {
                 bridgeLog("Cancelled remote feed forwarding")
             })
-            .sink(receiveCompletion: { [weak self] completion in
-                bridgeLog("Bridge remote feed completed: \(completion)")
+            .sink(receiveCompletion: { [weak self] _ in
+                bridgeLog("Bridge remote feed completed")
                 self?.markOutboundFeedInactive(commandID: commandID)
             }, receiveValue: { [weak self] flowElement in
                 bridgeLog("Bridge received flow element")
@@ -681,7 +681,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             try await transport.sendData(data)
         } catch {
-            bridgeLog("Stopping remote feed failed with transport error: \(error)")
+            bridgeLog("Stopping remote feed failed with transport error: code=operation_failed")
         }
     }
     // Should this be moved to base?
@@ -707,7 +707,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     commandId: commandID
                 )
             } catch {
-                bridgeLog("Cloud Bridge connect setup failed with error: \(error)")
+                bridgeLog("Cloud Bridge connect setup failed with error: code=operation_failed")
                 _ = transport
                 clearConnectPromise(for: commandID)
                 return .notConnected
@@ -717,7 +717,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 clearConnectPromise(for: commandID)
                 return connectState
             } catch {
-                bridgeLog("Cloud Bridge connect failed with error: \(error)")
+                bridgeLog("Cloud Bridge connect failed with error: code=operation_failed")
                 clearConnectPromise(for: commandID)
             }
         }
@@ -744,7 +744,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         connectPublisher.send(completion: .failure(ConnectError.cancelled ))
                     })
                     .sink(receiveCompletion: {[weak self] completion in
-                        bridgeLog("Connect callback publisher completed: \(completion)")
+                        bridgeLog("Connect callback publisher completed")
                         connectPublisher.send(completion: .finished)
                         self?.connectCallbackCancellable = nil
                     }, receiveValue: { connectState in
@@ -1017,13 +1017,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         publisher?.send(completion: .finished)
     }
     
-    private func configure(from description: Data) {
+    // Internal decoding seam; callers must never log the description or decoder error.
+    func configure(from description: Data) {
         do {
             let anyCell = try JSONDecoder().decode(AnyCell.self, from: description)
             self.configure(from: anyCell)
             
         } catch  {
-            bridgeLog("Decoding of AnyCell failed. source: \(String(describing: String(data: description, encoding: .utf8 )))")
+            bridgeLog("Bridge description rejected code=invalid_description bytes=\(description.count)")
         }
         
         
@@ -1048,7 +1049,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
          //send a message that description is fetched
         self.descriptionFetchedPublisher.send(true)
         
-//        print("Configured cell with identityDomain: \(self.identityDomain)")
     }
     
 
@@ -1097,7 +1097,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     
     public func absorbFlow(label: String, requester: Identity) {
-        bridgeLog("Absorb flow requested for label: \(label)")
+        bridgeLog("Absorb flow requested")
         Task {
             await self.sendCommand(command: .absorbFlow, identity: requester, payload: .string(label))
         }
@@ -1197,7 +1197,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             do {
                 try await transport.sendData(cloudBridgeCommandJson)
             } catch {
-                bridgeLog("Sending response failed with error: \(error)")
+                bridgeLog("Sending response failed with error: code=operation_failed")
             }
         }
     }
@@ -1211,7 +1211,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         kind: CellSecurityEventKind = .vaultSignRejected,
         requiredAction: String = "retry_with_valid_identity_signing_challenge"
     ) async {
-        bridgeLog("Rejected bridge signing request: \(message)")
+        bridgeLog("Rejected bridge signing request code=signing_denied cid=\(cid)")
         await recordSigningDeniedEvent(
             message,
             identity: identity,
@@ -1335,7 +1335,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             try await sendCommandChecked(command: command, identity: identity, payload: payload)
         } catch {
-            bridgeLog("Sending command failed with error: \(error)")
+            bridgeLog("Sending command failed with error: code=operation_failed")
         }
     }
     
@@ -1364,7 +1364,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             requester.identityVault = BridgeIdentityVault(cloudBridge: self)
             command.identity = requester
         }
-        bridgeLog("Consume command cmd: \(command.cmd)")
+        bridgeLog("Consume command \(command.diagnosticMetadata)")
             switch command.command {
             case .ready:
                 throw BridgeChannelAuthentication.Failure.unexpectedMessage
@@ -1381,7 +1381,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             do {
                                 try await transport.sendData(connectStateJSONData)
                             } catch {
-                                bridgeLog("Sending response failed with error: \(error)")
+                                bridgeLog("Sending response failed with error: code=operation_failed")
                             }
                         } else {
                             bridgeLog("Could not encode ConnectState: \(connectState)")
@@ -1404,7 +1404,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         case let .agreementPayload(value):
                             agreement =  value
                         default:
-                            bridgeLog("Did not get expected agreement payload: \(String(describing: command.payload))")
+                            bridgeLog("Bridge payload rejected code=expected_agreement \(command.diagnosticMetadata)")
                             return
                         }
                         let contractState = try await publisher.addAgreement(agreement, for: identity)
@@ -1418,7 +1418,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                         try await transport.sendData(responseJSONData)
                                     }
                                 } catch {
-                                    bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+                                    bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
                                 }
 //                            }
                         }
@@ -1460,7 +1460,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                     try await transport.sendData(responseJSONData)
                                 }
                             } catch {
-                                bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+                                bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
                             }
                         
                         
@@ -1579,7 +1579,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                           (try? channelSession.checkOutbound(identity: identity, requiresIdentity: true)) != nil else { return }
                             await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid, using: transport)
                         } catch {
-                            bridgeLog("Consume command signing data failed with error: \(error)")
+                            bridgeLog("Consume command signing data failed with error: code=operation_failed")
                             await self.sendSigningDenied(
                                 String(describing: error),
                                 cid: command.cid,
@@ -1655,7 +1655,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func sendGetErrorResponse(message: String, cid: Int, using transport: BridgeTransportProtocol?) async {
-        bridgeLog(message)
+        bridgeLog("Bridge get rejected code=get_failed cid=\(cid)")
         let response = BridgeCommand(cmd: "response", payload: .string("failure: \(message)"), cid: cid)
         do {
             if let responseJSONData = try? JSONEncoder().encode(response),
@@ -1663,7 +1663,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 try await transport.sendData(responseJSONData)
             }
         } catch {
-            bridgeLog("Sending get error response failed with error: \(error)")
+            bridgeLog("Sending get error response failed with error: code=operation_failed")
         }
     }
   
@@ -1677,7 +1677,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             publisher = try await resolvedEmitCell(for: identity)
         } catch {
-            bridgeLog("Failed to resolve emit cell at endpoint: \(error)")
+            bridgeLog("Failed to resolve emit cell at endpoint: code=operation_failed")
             return
         }
         do {
@@ -1690,7 +1690,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 try await transport.sendData(responseJSONData)
             }
         } catch {
-            bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+            bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
         }
     }
 
@@ -1759,7 +1759,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         feedLease = lease
         feedCancellable = publisher?
             .handleEvents(receiveCancel: {
-                bridgeLog("Cancelled flowElement publisher \(self.uuid)")
+                bridgeLog("Cancelled flowElement publisher")
             })
         
             .sink(receiveCompletion: { [weak self] completion in
@@ -1800,7 +1800,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             self.feedActive = true
                         }
                     } catch {
-                        bridgeLog("Consume command \(commandCid) failed with error: \(error)")
+                        bridgeLog("Consume command \(commandCid) failed with error: code=operation_failed")
                     }
                 }
             })
@@ -1811,7 +1811,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func consumeResponse(command: BridgeCommand) async throws {
         guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
         try channelSession.checkInbound(command)
-        bridgeLog("Consume response cmd: \(command.cmd)")
+        bridgeLog("Consume response \(command.diagnosticMetadata)")
 
         if let commandRequest = await auditor.loadBridgeCommandForCommandId(command.cid) {
             let retainCommandForStream = commandRequest.command == .feed
@@ -1827,7 +1827,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         
                         
                     default:
-                        bridgeLog("Did not get expected description payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_description \(command.diagnosticMetadata)")
                     }
                 }
                 
@@ -1843,7 +1843,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         publisher?.send(value)
                         publisher?.send(completion: .finished)
                     default:
-                        bridgeLog("Did not get expected connect payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_connect \(command.diagnosticMetadata)")
                         promise?(.failure(ValueTypeError.unexpectedValueType))
                         publisher?.send(completion: .failure(ValueTypeError.unexpectedValueType))
                     }
@@ -1863,7 +1863,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         publisher?.send(value)
                         publisher?.send(completion: .finished)
                     default:
-                        bridgeLog("Did not get expected contract payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_contract \(command.diagnosticMetadata)")
                         promise?(.failure(ValueTypeError.unexpectedValueType))
                         publisher?.send(completion: .failure(ValueTypeError.unexpectedValueType))
                     }
@@ -1880,7 +1880,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         flowElementCallbackDataPublisher.send(value)
                         
                     default:
-                        bridgeLog("Did not get expected flow payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_flow \(command.diagnosticMetadata)")
                     }
                 }
                 
@@ -1902,7 +1902,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         let publisher = takeValuePublisher(for: requestedKey)
                         publisher?.send(sentPayload)
                         publisher?.send(completion: .finished)
-//                        print("Got valueForKeypath payload. \(String(describing: try? sentPayload.jsonString())) Key: \(requestedKey)") //Do we need registery?
                     }
                 }
                 
@@ -1963,7 +1962,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                signCallbackCancellable = nil
                 
             default:
-                bridgeLog("Response did not match commands: \(commandRequest.cmd)")
+                bridgeLog("Response did not match request \(commandRequest.diagnosticMetadata)")
             }
 
             if retainCommandForStream == false {
@@ -1971,7 +1970,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
             
         } else {
-            bridgeLog("Could not find command request for response: \(command)")
+            bridgeLog("Unmatched response code=unknown_cid \(command.diagnosticMetadata)")
         }
     }
    
@@ -2072,7 +2071,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public func attachedStatus(for label: String, requester: Identity) async throws -> ConnectionStatus {
-        bridgeLog("Bridge base attachedStatus for: \(label)")
+        bridgeLog("Bridge base attachedStatus")
         return ConnectionStatus(name: "Not implemented", connected: true, active: true)
     }
     

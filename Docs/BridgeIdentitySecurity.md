@@ -133,6 +133,21 @@ paths and ambiguous explicit default ports are rejected. TLS certificate/hostnam
 validation remains the physical adapter's responsibility; production adapters must
 not redirect or substitute an insecure transport.
 
+## Diagnostic privacy
+
+Bridge diagnostics use bounded, allowlisted metadata (recognized command type,
+numeric cid, byte length and fixed failure codes). Unknown command names map to
+`none`; peer-supplied labels, UUIDs, descriptions, payloads and arbitrary Error or
+publisher-completion descriptions are not logged. Apple/Vapor transport failures
+and WebSocket ping failures follow the same rule. Diagnostic logging remains
+opt-in, but enabling its handler does not permit plaintext payload dumps.
+
+`BridgeDiagnosticPrivacyTests` exercises every Base payload-mismatch/unknown-cid
+site and malformed-description decoding with synthetic secret markers. Adapter
+tests inject an NSError whose domain and description both contain a marker.
+This is a diagnostics guarantee, not a promise to sanitize application responses,
+security-event stores, external delegate implementations or all other log domains.
+
 ## Lifecycle, quotas and retained state
 
 Before authentication the server retains one bounded public hello/challenge per
@@ -145,12 +160,28 @@ token, server-side client signer or positive Cell authorization cache.
 
 Shared limits cover total connections, pending handshakes, pending handshakes per
 trusted source, and connections/operations/feeds/logical channels per proven
-(domain, UUID, fingerprint). Pending sends have per-connection and global byte
-bounds. Fixed 60-second rate windows survive socket closure: defaults are 512
+canonical signing key. This accounting ID hashes a domain-separated tuple of
+algorithm, curve and normalized public-key bytes: P256 compressed and X9.63
+encodings normalize to compressed P256; Ed25519 uses its raw 32-byte encoding.
+The channel accepts only those two signing-key types. UUID, authorization domain,
+route and transport profile are excluded from this process-local accounting ID;
+rotating them does not reset a key's quota or rate window, including across WS
+and peer sessions sharing one limits owner. It is never sent, logged or used as
+an authorization/revocation principal. Those checks still bind the original
+(domain, UUID, fingerprint) and exact public identity. Pending sends have
+per-connection and global byte bounds. Fixed 60-second rate windows survive socket closure: defaults are 512
 attempts globally, 60 per trusted source and 12 verified handshakes per proven key.
 Rate buckets are bounded (4096); unknown sources cannot evict unexpired buckets.
 Unproved UUIDs never consume a victim's key-specific bucket. These are configurable
 starting values, not measured production capacity.
+
+Regression rule: a verified identity principal is not a canonical key. Quota tests
+must vary UUID, domain, transport profile and every supported encoding while
+holding the signing key fixed. Fill the limit, reject limit+1 repeatedly, retain
+closed owners with live leases, and prove an independent key still works.
+`BridgeCanonicalKeyQuotaTests` executes these checks with actual signed WS and
+peer challenges at the shared session boundary. It does not simulate MC delivery
+or replace transport-level acceptance tests.
 
 Closed socket records remain in the bounded accounting table while any operation,
 feed, logical channel, pending admission/factory, send bytes or physical close is
