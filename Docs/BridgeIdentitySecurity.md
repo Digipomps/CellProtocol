@@ -182,6 +182,11 @@ closed owners with live leases, and prove an independent key still works.
 `BridgeCanonicalKeyQuotaTests` executes these checks with actual signed WS and
 peer challenges at the shared session boundary. It does not simulate MC delivery
 or replace transport-level acceptance tests.
+Send-suspension fixtures must match decoded response type/cid/payload, not bytes
+from independent ordinary JSONEncoder calls: JSON object-key order is not fixed.
+`BridgeChannelLifetimeQuotaTests.testPendingSendBarrierMatchesResponseFieldsIndependentOfJSONKeyOrder`
+pins two equivalent orders and rejects mismatched fields. This does not relax
+exact-byte checks for canonical signing transcripts or authenticated records.
 
 Closed socket records remain in the bounded accounting table while any operation,
 feed, logical channel, pending admission/factory, send bytes or physical close is

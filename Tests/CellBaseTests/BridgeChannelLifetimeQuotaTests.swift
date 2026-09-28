@@ -142,11 +142,30 @@ final class BridgeChannelLifetimeQuotaTests: XCTestCase {
         }
     }
 
+    // Ordinary BridgeCommand JSON has no canonical object-key order. Match the
+    // response fields, or the send barrier can randomly miss an actual response.
+    private static func isQuotaValueResponse(_ data: Data) -> Bool {
+        guard let response = try? JSONDecoder().decode(BridgeCommand.self, from: data) else { return false }
+        return response.command == .response && response.cid == 1 && response.payload == .string("value")
+    }
+
+    func testPendingSendBarrierMatchesResponseFieldsIndependentOfJSONKeyOrder() async throws {
+        let first = Data(#"{"cmd":"response","cid":1,"&string":"value"}"#.utf8)
+        let reordered = Data(#"{"&string":"value","cid":1,"cmd":"response"}"#.utf8)
+        XCTAssertNotEqual(first, reordered)
+        let reached = QuotaCount(), wire = QuotaWire()
+        wire.beforeSend = { data in if Self.isQuotaValueResponse(data) { reached.increment() } }
+        try await wire.sendData(first)
+        try await wire.sendData(reordered)
+        try await wire.sendData(Data(#"{"cmd":"response","cid":2,"&string":"value"}"#.utf8))
+        try await wire.sendData(Data(#"{"cmd":"response","cid":1,"&string":"other"}"#.utf8))
+        XCTAssertEqual(reached.value, 2)
+    }
+
     func testManyKeysCannotEscapeGlobalCellFeedChannelAndSendLimitsByDisconnecting() async throws {
         for stage in ["cell", "feed", "channelFactory", "send"] {
             var config = BridgeChannelLimits.Configuration()
             config.maximumOperations = 8; config.maximumFeeds = 8; config.maximumChannels = 8
-            let response = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .string("value"), cid: 1))
             // Leave room for handshakes; use a separate send-only test below for exact byte saturation.
             let limits = BridgeChannelLimits(configuration: config)
             let previous = CellBase.defaultCellResolver; defer { CellBase.defaultCellResolver = previous }
@@ -174,7 +193,7 @@ final class BridgeChannelLifetimeQuotaTests: XCTestCase {
                 let suspend: @Sendable () async -> Void = { reached.increment(); entered.fulfill(); await barrier.wait() }
                 cell.beforeRead = stage == "cell" ? suspend : nil
                 cell.beforeFeed = stage == "feed" ? suspend : nil
-                if stage == "send" { wire.beforeSend = { data in if data == response { await suspend() } } }
+                if stage == "send" { wire.beforeSend = { data in if Self.isQuotaValueResponse(data) { await suspend() } } }
                 let name = stage == "feed" ? "feed" : stage == "channelFactory" ? "openChannel" : "get"
                 let command = BridgeCommand(cmd: name, identity: identity, payload: .string("value"), cid: 1,
                     protocolVersion: name == "openChannel" ? 2 : nil, channelID: name == "openChannel" ? UUID().uuidString : nil,
