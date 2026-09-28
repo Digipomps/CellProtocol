@@ -263,3 +263,25 @@ public enum OwnerAttachWire {
     }
     public static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 }
+
+/// Ephemeral runtime metadata; never persist host availability into a cell's
+/// schema. Owner-only operations deliberately advertise no grant permission.
+enum OwnerAttachExplore {
+    static let keys = [OwnerAttachEntityExtensionHost.offerKeypath, OwnerAttachEntityExtensionHost.acceptKeypath]
+    static func contains(_ key: String) -> Bool { keys.contains(key) }
+    static func method(for key: String) -> ExploreContractMethod {
+        key == OwnerAttachEntityExtensionHost.offerKeypath ? .get : .set
+    }
+    static func summary(for key: String) -> String {
+        if method(for: key) == .get {
+            return "Requires fresh direct or linked owner proof. Ordinary grants do not qualify. Returns a signed five-minute presence offer without activating it."
+        }
+        return "Confirms signed owner-attach consent after fresh owner proof and durable persistence. Reuses the human identity; does not enroll keys or copy data."
+    }
+    static func contract(for key: String) -> ValueType {
+        ExploreContract.keyContract(key: key, method: method(for: key),
+            input: method(for: key) == .get ? .null : ExploreContract.schema(type: "object"),
+            returns: ExploreContract.schema(type: "object"), permissions: [], required: true,
+            summary: summary(for: key))
+    }
+}

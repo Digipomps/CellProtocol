@@ -219,14 +219,19 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     public func keys(requester: Identity) async throws -> [String] {
         try await ensureRuntimeReady()
-        // validate permissions
-        
-        return Array(schemaDict.keys)
+        let runtimeAvailable = await OwnerAttachExtensionRuntime.shared.host != nil
+        return Array(schemaDict.keys.filter { !OwnerAttachExplore.contains($0) })
+            + (runtimeAvailable ? OwnerAttachExplore.keys : [])
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
         try await ensureRuntimeReady()
-        // validate permissions
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return OwnerAttachExplore.contract(for: key)
+        }
         guard let schema = schemaDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -240,6 +245,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         requester: Identity
     ) async throws -> ValueType {
         try await ensureRuntimeReady()
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil,
+                  OwnerAttachExplore.method(for: key) == method else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return OwnerAttachExplore.contract(for: key)
+        }
         guard let schema = operationSchemaDict[key]?[method] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -248,8 +260,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 
     public func operationContracts(requester: Identity) async throws -> [ValueType] {
         try await ensureRuntimeReady()
-        return operationSchemaDict.keys.sorted().flatMap { key in
-            operationSchemaDict[key, default: [:]].keys
+        let runtimeAvailable = await OwnerAttachExtensionRuntime.shared.host != nil
+        let runtimeKeys = runtimeAvailable ? OwnerAttachExplore.keys : []
+        let keys = Set(operationSchemaDict.keys.filter { !OwnerAttachExplore.contains($0) }).union(runtimeKeys)
+        return keys.sorted().flatMap { key -> [ValueType] in
+            if OwnerAttachExplore.contains(key) { return [OwnerAttachExplore.contract(for: key)] }
+            return operationSchemaDict[key, default: [:]].keys
                 .sorted { $0.rawValue < $1.rawValue }
                 .compactMap { operationSchemaDict[key]?[$0] }
         }
@@ -277,7 +293,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var declared: Set<String> = []
         var declaredGet: Set<String> = []
         var declaredSet: Set<String> = []
-        for (key, methods) in operationSchemaDict {
+        for (key, methods) in operationSchemaDict where !OwnerAttachExplore.contains(key) {
             for method in methods.keys {
                 declared.insert(key)
                 switch method {
@@ -286,8 +302,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 }
             }
         }
-        let interceptGet = Set(registered.get)
-        let interceptSet = Set(registered.set)
+        var interceptGet = Set(registered.get.filter { !OwnerAttachExplore.contains($0) })
+        var interceptSet = Set(registered.set.filter { !OwnerAttachExplore.contains($0) })
+        // These two handlers live in GeneralCell's guarded get/set entrypoints,
+        // not the intercept dictionary. Their metadata follows host lifetime.
+        if await OwnerAttachExtensionRuntime.shared.host != nil {
+            declaredGet.insert(OwnerAttachEntityExtensionHost.offerKeypath)
+            declaredSet.insert(OwnerAttachEntityExtensionHost.acceptKeypath)
+            interceptGet.insert(OwnerAttachEntityExtensionHost.offerKeypath)
+            interceptSet.insert(OwnerAttachEntityExtensionHost.acceptKeypath)
+        }
 
         func rows(_ keys: Set<String>, _ method: ExploreContractMethod) -> [ValueType] {
             keys.sorted().map { key in
@@ -314,6 +338,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
         try await ensureRuntimeReady()
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return .string(OwnerAttachExplore.summary(for: key))
+        }
         guard let description = schemaDescriptionDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -1914,15 +1944,6 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             defer { token.invalidate() }
             try await Self.$runtimeBindingInstallationToken.withValue(token) {
                 try await self.installCellRuntimeBindingsForAccess()
-                await self.registerExploreContract(requester: self.owner,
-                    key: OwnerAttachEntityExtensionHost.offerKeypath, method: .get,
-                    returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: true,
-                    description: .string("Optional runtime capability. Requires fresh direct or linked owner proof; ordinary read grants do not qualify. Returns a signed, five-minute presence offer, without activating it."))
-                await self.registerExploreContract(requester: self.owner,
-                    key: OwnerAttachEntityExtensionHost.acceptKeypath, method: .set,
-                    input: ExploreContract.schema(type: "object"), returns: ExploreContract.schema(type: "object"),
-                    permissions: ["-w--"], required: true,
-                    description: .string("Confirms the exact signed owner-attach consent after fresh owner proof and durable persistence. Reuses the existing human identity; does not enroll keys or copy cell data."))
             }
         }
     }

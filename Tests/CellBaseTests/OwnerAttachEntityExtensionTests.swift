@@ -52,6 +52,49 @@ final class OwnerAttachEntityExtensionTests: XCTestCase {
         return (owner, cell, OwnerAttachEntityExtensionHost(receiver: receiver, label: "Test receiver", store: store), store)
     }
 
+    func testExplorePresenceTracksHostLifetimeWithoutChangingPersistedCellContracts() async throws {
+        let previous = await OwnerAttachExtensionRuntime.shared.host
+        do {
+            await OwnerAttachExtensionRuntime.shared.install(nil)
+            let (owner, cell, host, _) = await fixture()
+            let baselineKeys = Set(try await cell.keys(requester: owner))
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let before = try encoder.encode(cell)
+            let offerKey = OwnerAttachEntityExtensionHost.offerKeypath
+            let acceptKey = OwnerAttachEntityExtensionHost.acceptKeypath
+            XCTAssertFalse(baselineKeys.contains(offerKey))
+            await OwnerAttachExtensionRuntime.shared.install(host)
+            let activeKeys = Set(try await cell.keys(requester: owner))
+            XCTAssertEqual(activeKeys.subtracting(baselineKeys), [offerKey, acceptKey])
+            for (key, method) in [(offerKey, ExploreContractMethod.get), (acceptKey, .set)] {
+                let contract = try await cell.contract(for: key, method: method, requester: owner)
+                let object = try XCTUnwrap(ExploreContract.object(from: contract))
+                XCTAssertEqual(ExploreContract.list(from: object[ExploreContract.Field.permissions]), [])
+                let legacy = try await cell.typeForKey(key: key, requester: owner)
+                XCTAssertTrue(ExploreContractValidator.deepEqual(contract, legacy))
+                let description = try await cell.schemaDescriptionForKey(key: key, requester: owner)
+                XCTAssertNotEqual(description, .string("*"))
+            }
+            let audit = await cell.registeredKeypathAudit()
+            XCTAssertEqual(ExploreContract.object(from: audit)?["ok"], .bool(true))
+            XCTAssertEqual(try encoder.encode(cell), before, "Host metadata must never become persisted schema")
+            let restored = try JSONDecoder().decode(GeneralCell.self, from: before)
+            let restoredKeys = Set(try await restored.keys(requester: owner))
+            XCTAssertEqual(restoredKeys, activeKeys)
+            await OwnerAttachExtensionRuntime.shared.install(nil)
+            let stoppedKeys = Set(try await cell.keys(requester: owner))
+            XCTAssertEqual(stoppedKeys, baselineKeys)
+            for key in [offerKey, acceptKey] {
+                do { _ = try await restored.typeForKey(key: key, requester: owner); XCTFail("Inactive host must not advertise an operation") }
+                catch { XCTAssertTrue(error is GeneralCellErrors) }
+            }
+            await OwnerAttachExtensionRuntime.shared.install(previous)
+        } catch {
+            await OwnerAttachExtensionRuntime.shared.install(previous)
+            throw error
+        }
+    }
+
     func testRealAttachOnlyInvokesExplicitUserContext() async throws {
         let (owner, cell, _, _) = await fixture()
         let source = await GeneralCell(owner: owner)

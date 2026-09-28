@@ -36,6 +36,14 @@ No production release or cross-platform rollout is claimed.
   connect admission as at read/write. This fixes previously inconsistent
   rejection at attach; it does not authorize ordinary sharing as ownership.
 
+Explore advertises the two owner-only operations only while a receiver host is
+installed. Availability is an ephemeral overlay across keys, method contracts,
+descriptions and keypath audit; it is not serialized into a cell's schema.
+Cells created before host installation acquire the metadata immediately, and
+removing the host removes it again. Existing cell contracts remain unchanged
+on runtimes without this optional capability. A grant never enables these
+operations: their permissions list is empty and fresh owner proof is mandatory.
+
 ## Policy and persistence
 
 The client offers once, automatic here, or do not ask here. Persistent choices
@@ -73,7 +81,8 @@ exercise signed offers, consents and persisted receipts.
 
 ## Validation and adoption
 
-101 focused CellBase tests passed with the final ISO8601 wire profile, including
+The full local CellBase suite passed (1,311 tests, two skipped) after the runtime
+Explore lifecycle fix. Coverage includes
 bridge origin leases, owner proof rejection, linked-owner revocation, policy
 expiry/restart, duplicate completion and encrypted storage corruption. This is
 Swift coverage, not evidence of interoperability with Sprout or a deployed host.
