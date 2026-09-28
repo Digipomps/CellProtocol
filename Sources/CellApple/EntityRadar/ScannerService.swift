@@ -1031,7 +1031,10 @@ extension ScannerService : MCSessionDelegate {
             if _reversedFoundPeersDict[physical.peerID] == physical.remoteUUID { _reversedFoundPeersDict[physical.peerID] = nil }
             if _connectedPeer == physical.peerID {
                 _connectedPeer = nil; _connectedRemoteUUID = nil
-                connectedPeerIdDisplayname = nil
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.withState({ self._connectedPeer == nil }) else { return }
+                    self.connectedPeerIdDisplayname = nil
+                }
             }
             radarDelegate?.lostDeviceChanged(manager: self, lostDevice: physical.peerID, remoteUUID: physical.remoteUUID)
             radarDelegate?.scannerStatusChanged(manager: self, status: "disconnected", remoteUUID: physical.remoteUUID)

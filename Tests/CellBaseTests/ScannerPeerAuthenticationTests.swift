@@ -325,9 +325,14 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let frame = try await pair.next(), captured = try pair.receiver(frame)
         let work = Task { try await captured.receiveData(frame.data) }
         await fulfillment(of: [entered], timeout: 2)
+        // Actual MC delegate entry point retires the captured generation before
+        // its main-queue UI callback can run through a reconnect.
+        pair.a.session(pair.a.mcSession, peer: pair.bPeer, didChange: .notConnected)
+        pair.b.session(pair.b.mcSession, peer: pair.aPeer, didChange: .notConnected)
         await pair.pa.gate.close(); await pair.pb.gate.close()
         let fresh = try pair.prepareReconnect()
         try await pair.authenticateTransports(fresh.0, fresh.1)
+        let aObserver = ScannerStatusObserver(); pair.a.radarDelegate = aObserver
         await barrier.resume()
         do { try await work.value; XCTFail("old work unexpectedly succeeded") } catch {}
         pair.a.peerDisconnected(captured); await captured.close()
@@ -339,6 +344,9 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         try await pair.a.sendScannerFlowElement(marker, remoteUUID: pair.c!.mySessionUUID)
         try await pair.deliverNext()
         XCTAssertEqual(bObserver.flows.count, 1); XCTAssertEqual(cObserver.flows.count, 1)
+        XCTAssertFalse(aObserver.statuses.contains { $0.hasPrefix("bridgeFailed:") })
+        XCTAssertFalse(bObserver.statuses.contains { $0.hasPrefix("bridgeFailed:") })
+        XCTAssertFalse(cObserver.statuses.contains { $0.hasPrefix("bridgeFailed:") })
         try fresh.0.gate.session.check(); try fresh.1.gate.session.check()
         try pair.ac!.gate.session.check(); try pair.pc!.gate.session.check()
     }
@@ -364,6 +372,25 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertEqual(afterRevoke, 1)
         XCTAssertEqual(Array(pair.wire.history.dropFirst(revokedStart)).map(\.to), [pair.bPeer])
         try await pair.deliverNext(); try pair.pa.gate.session.check(); try pair.pb.gate.session.check()
+    }
+
+    func testPeerGenerationWireFieldIsRequiredAndAuthFramesRemainUntagged() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start())
+        for frame in pair.wire.history {
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.data) as? [String: Any])
+            XCTAssertNil(json["&peerGeneration"])
+        }
+        let command = BridgeCommand(cmd: "response", payload: .string("value"), cid: 42)
+        try await pair.pb.gate.sendData(A.encode(command))
+        let frame = try await pair.next()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.data) as? [String: Any])
+        XCTAssertEqual(json["&peerGeneration"] as? String, pair.pb.gate.session.generation)
+        XCTAssertEqual(frame.command.peerGeneration, pair.pb.gate.session.generation)
+        try await pair.deliver(frame)
+        do { try await pair.pa.receiveData(A.encode(command)); XCTFail("Untagged ordinary peer frame accepted") }
+        catch { XCTAssertEqual(error as? A.Failure, .malformed) }
+        XCTAssertThrowsError(try pair.pa.gate.session.check())
     }
 
     func testDiscoveryTokenUsesExistingSendByteQuota() async throws {
@@ -454,6 +481,9 @@ private final class ScannerPair {
         if authenticate { try await authenticateTransports(ac!, pc!) }
     }
     func prepareReconnect() throws -> (ScannerPeerTransport, ScannerPeerTransport) {
+        // Rediscovery after a physical disconnect, retaining the same MCPeerIDs.
+        a.foundPeersDict[b.mySessionUUID] = bPeer; a.reversedFoundPeersDict[bPeer] = b.mySessionUUID
+        b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID
         let endpoint = try a.makeInvitation(remoteUUID: b.mySessionUUID)
         b.receiveInvitation(from: aPeer, endpoint: endpoint) { _, _ in }
         XCTAssertTrue(b.respondToInvitation(remoteUUID: a.mySessionUUID, accept: true))
