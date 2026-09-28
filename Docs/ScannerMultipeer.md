@@ -49,3 +49,32 @@ and the `_haven-radar._tcp` Bonjour service as required by
 [Apple's Multipeer documentation](https://developer.apple.com/documentation/multipeerconnectivity)
 and [local-network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
 Do not treat a failed run as an authenticated connection.
+
+## Physical binding and reconnect fence (N08/N09)
+
+Each ScannerPeerTransport retains its accepted MCPeerID, MCSession instance,
+local setup ID and role. Send, callback capture and retirement use that binding,
+not discovery routes. Colliding discovery cannot replace a pending/active route;
+discovery loss alone does not disconnect the channel. MC receive callbacks
+capture the transport synchronously before starting asynchronous work. A late
+failure, disconnect or close can only retire that transport instance.
+
+Ordinary peer BridgeCommands require `&peerGeneration`, stamped by the gate from
+its local session generation and checked against the remote hello generation
+before dispatch/cid lookup. Old-generation frames are discarded without closing
+the replacement gate. Auth frames and WebSocket frames omit the field. Both peer
+ends must run this protocol version; untagged ordinary peer frames fail closed.
+The final encoded bytes, including the generation, count toward send limits.
+
+This is a reconnect fence, **not cryptographic integrity**. N07 remains open:
+a relay terminating two MC connections can still forward authentic proofs and
+modify ordinary messages. The future per-message protection layer belongs at
+ScannerPeerTransport.sendData/receiveData, the bound physical byte boundary;
+it must account for its wire overhead in the existing gate's budgets.
+
+NI discovery tokens use shareDiscoveryTokenData, one gated send per eligible
+peer. Pending/factory/ack-incomplete, expired and revoked channels are skipped;
+normal send admission and retained-work/byte limits are rechecked. The macOS
+suite exercises this same helper using opaque synthetic archived bytes, including
+an active B plus pending/revoked C and an exceeded byte quota. Creating/decoding
+NIDiscoveryToken and running NISession/UWB still require iOS verification.

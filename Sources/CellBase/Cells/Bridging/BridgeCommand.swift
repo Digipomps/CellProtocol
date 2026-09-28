@@ -71,6 +71,8 @@ public struct BridgeCommand: Codable {
     public var streamID: String?
     public var sequence: UInt64?
     public var resumeFromSequence: UInt64?
+    /// Peer reconnect fence, not cryptographic message authentication. Absent on WS/auth frames.
+    public var peerGeneration: String?
     
     enum CodingKeys: String, CodingKey
     {
@@ -83,6 +85,7 @@ public struct BridgeCommand: Codable {
         case streamID = "&streamID"
         case sequence = "&sequence"
         case resumeFromSequence = "&resumeFromSequence"
+        case peerGeneration = "&peerGeneration"
         case description = "&description"
         case connectState = "&connectState"
         case agreementState = "&agreementState"
@@ -133,7 +136,8 @@ public struct BridgeCommand: Codable {
         targetEndpoint: String? = nil,
         streamID: String? = nil,
         sequence: UInt64? = nil,
-        resumeFromSequence: UInt64? = nil
+        resumeFromSequence: UInt64? = nil,
+        peerGeneration: String? = nil
     ) {
         self.cmd = cmd
         self.payload = payload
@@ -145,6 +149,7 @@ public struct BridgeCommand: Codable {
         self.streamID = streamID
         self.sequence = sequence
         self.resumeFromSequence = resumeFromSequence
+        self.peerGeneration = peerGeneration
     }
     
     public init(from decoder: Decoder) throws {
@@ -158,6 +163,7 @@ public struct BridgeCommand: Codable {
         streamID = try? values.decodeIfPresent(String.self, forKey: .streamID)
         sequence = try? values.decodeIfPresent(UInt64.self, forKey: .sequence)
         resumeFromSequence = try? values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
+        peerGeneration = try values.decodeIfPresent(String.self, forKey: .peerGeneration)
         payload = Self.decodePayload(from: values)
     }
     
@@ -174,6 +180,7 @@ public struct BridgeCommand: Codable {
         try container.encodeIfPresent(streamID, forKey: .streamID)
         try container.encodeIfPresent(sequence, forKey: .sequence)
         try container.encodeIfPresent(resumeFromSequence, forKey: .resumeFromSequence)
+        try container.encodeIfPresent(peerGeneration, forKey: .peerGeneration)
         if let payload = payload {
             switch payload {
             case let .description(value):

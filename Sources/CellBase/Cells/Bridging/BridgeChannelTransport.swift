@@ -21,6 +21,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private var operation: BridgeChannelClientOperation?
     private var peerOperation: BridgePeerChannelAuthentication.Operation?
     private var peerReady = false
+    private var remotePeerGeneration: String?
     private var timer: Task<Void, Never>?
     private var stopped = false
     private var started = false
@@ -87,10 +88,12 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         case (.responder, "channelAuthPeerHello"):
             let remote = try Auth.decode(P.Hello.self, from: bytes)
             try session.issuePeerChallenge(await peer.prepare(remote))
+            lock.withLock { remotePeerGeneration = remote.generation }
             try await sendAuth("channelAuthPeerChallenge", P.Offer(hello: peer.hello, proof: await peer.sign()))
         case (.initiator, "channelAuthPeerChallenge"):
             let offer = try Auth.decode(P.Offer.self, from: bytes)
             try session.issuePeerChallenge(await peer.prepare(offer.hello))
+            lock.withLock { remotePeerGeneration = offer.hello.generation }
             try session.reserveOpen(offer.proof)
             guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
             try await recheckPolicy(identity); try session.recheckBeforeActivation()
@@ -170,9 +173,24 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         try await trackedWork { try await self.physicalTransport().sendData(data) }
     }
 
+    /// Optional broadcasts skip pending/closed peers without submitting a send
+    /// that would terminate their handshake. sendData still rechecks admission.
+    public var canSendPeerData: Bool {
+        lock.withLock { peerReady && !stopped } && (try? session.check()) != nil
+    }
+
+    private func checkPeerGeneration(_ command: BridgeCommand) throws {
+        guard lock.withLock({ peerOperation != nil }), !command.cmd.hasPrefix("channelAuth") else { return }
+        guard let generation = command.peerGeneration else { throw Auth.Failure.malformed }
+        guard generation == lock.withLock({ remotePeerGeneration }) else { throw Auth.Failure.staleGeneration }
+    }
+
     public func validateInboundPayload(_ data: Data) throws {
         let maximum = session.state == .authenticated ? BridgeInboundPayloadValidator.defaultMaximumBytes : Auth.maximumEnvelopeBytes
         try BridgeInboundPayloadValidator(maximumBytes: maximum).validate(data)
+        if lock.withLock({ peerOperation != nil }) {
+            try checkPeerGeneration(JSONDecoder().decode(BridgeCommand.self, from: data))
+        }
         if session.state != .authenticated {
             guard let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),
                   command.cmd.hasPrefix("channelAuth"), try Auth.encode(command) == data else { throw Auth.Failure.malformed }
@@ -218,6 +236,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
                 return
             }
             guard command.command != .ready else { throw Auth.Failure.unexpectedMessage }
+            try checkPeerGeneration(command)
             try session.checkInbound(command)
             if !isServer {
                 guard [.sign, .response, .channelOpened, .channelRejected].contains(command.command) else { throw Auth.Failure.unexpectedMessage }
@@ -233,6 +252,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
     private func processResponse(_ command: BridgeCommand) async throws {
         do {
+            try checkPeerGeneration(command)
             try session.checkInbound(command)
             guard command.command == .response, let delegate = lock.withLock({ self.delegate }) else { throw Auth.Failure.unexpectedMessage }
             try await delegate.consumeResponse(command: command)
@@ -242,7 +262,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private func consumeAuthentication(_ command: BridgeCommand) async throws {
         guard command.identity == nil, command.cid == 0, command.protocolVersion == nil,
               command.channelID == nil, command.targetEndpoint == nil,
-              command.streamID == nil, command.sequence == nil, command.resumeFromSequence == nil,
+              command.streamID == nil, command.sequence == nil, command.resumeFromSequence == nil, command.peerGeneration == nil,
               case let .string(payload) = command.payload else { throw Auth.Failure.malformed }
         let bytes = Data(payload.utf8)
         if let peer = lock.withLock({ peerOperation }) {
@@ -282,6 +302,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     public func sendData(_ data: Data) async throws {
         do {
             guard data.count <= BridgeInboundPayloadValidator.defaultMaximumBytes else { throw Auth.Failure.capacity }
+            var data = data
+            if lock.withLock({ peerOperation != nil }) {
+                var command = try JSONDecoder().decode(BridgeCommand.self, from: data)
+                command.peerGeneration = session.generation
+                data = try Auth.encode(command)
+            }
+            guard data.count <= BridgeInboundPayloadValidator.defaultMaximumBytes else { throw Auth.Failure.capacity }
             let reserved = lock.withLock { () -> Bool in
                 guard !stopped, pendingSends < 32 else { return false }
                 pendingSends += 1; return true
@@ -291,7 +318,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.acquireSend(bytes: data.count)
             defer { session.releaseSend(bytes: data.count) }
             try session.check()
-            try await trackedWork { try await self.physicalTransport().sendData(data) }
+            try await trackedWork { [data] in try await self.physicalTransport().sendData(data) }
             try session.check()
         } catch { await close(); throw error }
     }

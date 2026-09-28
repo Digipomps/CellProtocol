@@ -64,29 +64,35 @@ private enum ScannerServiceError: Error {
 
 final class ScannerPeerTransport: BridgeTransportProtocol {
     private weak var service: ScannerService?
-    private let remoteUUID: String
-    fileprivate let setupID: UUID
+    let remoteUUID: String
+    let peerID: MCPeerID
+    let mcSession: MCSession
+    let role: BridgePeerChannelAuthentication.Role
+    let setupID = UUID()
+    var isInitiator: Bool { role == .initiator }
     private weak var delegate: BridgeDelegateProtocol?
     var gate: BridgeChannelTransport!
     var bridge: BridgeBase?
     var channelSession: BridgeChannelSession? { gate?.session }
 
-    init(service: ScannerService, remoteUUID: String, setupID: UUID) {
+    init(service: ScannerService, remoteUUID: String, peerID: MCPeerID,
+         session: MCSession, endpoint: BridgePeerChannelAuthentication.Endpoint) {
         self.service = service
         self.remoteUUID = remoteUUID
-        self.setupID = setupID
+        self.peerID = peerID
+        self.mcSession = session
+        self.role = endpoint.initiator == service.mySessionUUID ? .initiator : .responder
     }
 
     func setDelegate(_ delegate: BridgeDelegateProtocol) {
         self.delegate = delegate
-        service?.setBridgeDelegate(delegate, for: remoteUUID, setupID: setupID)
     }
 
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
 
     func sendData(_ data: Data) async throws {
         guard let service else { throw ScannerServiceError.peerNotConnected(remoteUUID) }
-        try service.sendPeerData(data, remoteUUID: remoteUUID, setupID: setupID)
+        try service.sendPeerData(data, on: self)
     }
 
     func identityVault(for identity: Identity?) async -> any IdentityVaultProtocol {
@@ -94,7 +100,14 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         return await service.identityVault(for: identity, bridgeDelegate: delegate)
     }
 
-    func close() async { service?.peerChannelClosed(remoteUUID: remoteUUID, setupID: setupID) }
+    // N07's future per-message protection belongs at this bound send/receive
+    // boundary. Generation metadata alone does not authenticate message bytes.
+    func receiveData(_ data: Data) async throws {
+        guard let service else { throw CancellationError() }
+        try await service.extractCommandFromData(data, on: self)
+    }
+
+    func close() async { service?.peerChannelClosed(self) }
 
     static func new() -> any BridgeTransportProtocol {
         preconditionFailure("Radar transport must be obtained from a running ScannerService, not constructed.")
@@ -249,14 +262,12 @@ class ScannerService :  NSObject, ObservableObject {
     private let serviceAdvertiser : MCNearbyServiceAdvertiser
     private let serviceBrowser : MCNearbyServiceBrowser
 
-    private var invitedRemoteUUIDs = Set<String>()
     private var invitationEndpoints = [String: BridgePeerChannelAuthentication.Endpoint]()
     private static let peerLimits = BridgeChannelLimits()
     var channelLimits = ScannerService.peerLimits
     // Internal adapter seam: production always uses MCSession reliable delivery.
-    var peerSend: ((Data, String) throws -> Void)?
+    var peerSend: ((Data, MCPeerID, MCSession) throws -> Void)?
     var radarDelegate : ConnectServiceDelegate?
-    private var bridgeDelegatesByRemoteUUID = [String: BridgeDelegateProtocol]()
     private var bridgeTransportsByRemoteUUID = [String: ScannerPeerTransport]()
     private var registeredBridgeUUIDsByRemoteUUID = [String: String]()
     private var bridgeSetupTasks = [String: BridgeSetupOperation]()
@@ -367,15 +378,19 @@ class ScannerService :  NSObject, ObservableObject {
             setupID: UUID().uuidString, domain: "nearby")
         try withState {
             guard _foundPeersDict[remoteUUID] != nil, bridgeTransportsByRemoteUUID[remoteUUID] == nil else { throw BridgeChannelAuthentication.Failure.unexpectedMessage }
-            invitedRemoteUUIDs.insert(remoteUUID)
             invitationEndpoints[remoteUUID] = endpoint
         }
         return endpoint
     }
 
     func isConnected(remoteUUID: String) -> Bool {
-        guard let peerID = withState({ _foundPeersDict[remoteUUID] }) else { return false }
-        return mcSession.connectedPeers.contains(peerID)
+        withState {
+            if let physical = bridgeTransportsByRemoteUUID[remoteUUID] {
+                return physical.mcSession.connectedPeers.contains(physical.peerID)
+            }
+            guard let peer = _foundPeersDict[remoteUUID] else { return false }
+            return mcSession.connectedPeers.contains(peer)
+        }
     }
 
     func sendScannerFlowElement(_ flowElement: FlowElement, remoteUUID: String? = nil) async throws {
@@ -386,34 +401,32 @@ class ScannerService :  NSObject, ObservableObject {
         for transport in transports { try await transport.gate.sendData(encodedElement) }
     }
 
-    fileprivate func sendPeerData(_ data: Data, remoteUUID: String, setupID: UUID) throws {
+    fileprivate func sendPeerData(_ data: Data, on transport: ScannerPeerTransport) throws {
         try withState {
-            guard bridgeTransportsByRemoteUUID[remoteUUID]?.setupID == setupID else { throw CancellationError() }
-            if let peerSend { try peerSend(data, remoteUUID) }
-            else { try sendMultipeerData(data, remoteUUID: remoteUUID) }
+            guard bridgeTransportsByRemoteUUID[transport.remoteUUID] === transport else { throw CancellationError() }
+            if let peerSend { try peerSend(data, transport.peerID, transport.mcSession) }
+            else {
+                guard transport.mcSession.connectedPeers.contains(transport.peerID) else {
+                    throw ScannerServiceError.peerNotConnected(transport.remoteUUID)
+                }
+                try transport.mcSession.send(data, toPeers: [transport.peerID], with: .reliable)
+            }
         }
     }
-    fileprivate func peerChannelClosed(remoteUUID: String, setupID: UUID) {
-        guard withState({ bridgeTransportsByRemoteUUID[remoteUUID]?.setupID == setupID }) else { return }
-        removeBridge(for: remoteUUID)
-        reportBridgeFailure(BridgeChannelAuthentication.Failure.closed, remoteUUID: remoteUUID)
+    fileprivate func peerChannelClosed(_ transport: ScannerPeerTransport) {
+        withState {
+            guard removeBridge(for: transport.remoteUUID, expected: transport) else { return }
+            reportBridgeFailure(BridgeChannelAuthentication.Failure.closed, remoteUUID: transport.remoteUUID)
+        }
+    }
+    private func reportBridgeFailure(_ error: Error, on transport: ScannerPeerTransport) {
+        withState {
+            guard bridgeTransportsByRemoteUUID[transport.remoteUUID] === transport else { return }
+            reportBridgeFailure(error, remoteUUID: transport.remoteUUID)
+        }
     }
     private func reportBridgeFailure(_ error: Error, remoteUUID: String?) {
         radarDelegate?.scannerStatusChanged(manager: self, status: "bridgeFailed:\(error)", remoteUUID: remoteUUID)
-    }
-    fileprivate func sendMultipeerData(_ data: Data, remoteUUID: String? = nil) throws {
-        if let remoteUUID {
-            guard let peerID = withState({ _foundPeersDict[remoteUUID] }),
-                  mcSession.connectedPeers.contains(peerID) else {
-                throw ScannerServiceError.peerNotConnected(remoteUUID)
-            }
-            try mcSession.send(data, toPeers: [peerID], with: .reliable)
-            return
-        }
-        guard mcSession.connectedPeers.isEmpty == false else {
-            throw ScannerServiceError.noConnectedPeers
-        }
-        try mcSession.send(data, toPeers: mcSession.connectedPeers, with: .reliable)
     }
 
     func disconnect() {
@@ -476,7 +489,7 @@ class ScannerService :  NSObject, ObservableObject {
         let remotes = withState { Set(bridgeTransportsByRemoteUUID.keys).union(bridgeSetupTasks.keys).union(registeredBridgeUUIDsByRemoteUUID.keys) }
         for remote in remotes { removeBridge(for: remote) }
         withState {
-            invitedRemoteUUIDs.removeAll(); invitationEndpoints.removeAll()
+            invitationEndpoints.removeAll()
             _foundPeersDict.removeAll(); _reversedFoundPeersDict.removeAll()
             advertisementPeers.removeAll(); advertisementProofPeers.removeAll()
             _connectedPeersDict.removeAll(); _reversedConnectedPeersDict.removeAll()
@@ -486,10 +499,8 @@ class ScannerService :  NSObject, ObservableObject {
 
     var pendingInvitationCount: Int { withState { pendingInvitations.count } }
 
-    /// Number of per-peer bridge delegates currently held. There is no global
-    /// bridge delegate any more: each peer owns its own, so the vault can never
-    /// be derived from another peer's bridge.
-    var bridgeDelegateCount: Int { withState { bridgeDelegatesByRemoteUUID.count } }
+    /// Each retained transport owns exactly one gate/delegate.
+    var bridgeDelegateCount: Int { withState { bridgeTransportsByRemoteUUID.count } }
 
     @discardableResult
     func respondToInvitation(remoteUUID: String, accept: Bool) -> Bool {
@@ -582,7 +593,7 @@ class ScannerService :  NSObject, ObservableObject {
             // Resolve crossed invitations deterministically without creating two channels.
             let keepOutgoing = withState { invitationEndpoints[remoteUUID] != nil && mySessionUUID < remoteUUID }
             if keepOutgoing { handler(false, nil); return }
-            withState { invitedRemoteUUIDs.remove(remoteUUID); invitationEndpoints[remoteUUID] = nil }
+            withState { invitationEndpoints[remoteUUID] = nil }
         }
         queueInvitation(from: peerID, remoteUUID: remoteUUID, endpoint: endpoint, handler: handler)
     }
@@ -590,26 +601,31 @@ class ScannerService :  NSObject, ObservableObject {
     @discardableResult
     func prepareBridge(remoteUUID: String, peerID: MCPeerID) throws -> ScannerPeerTransport {
         try withState {
+            if let current = bridgeTransportsByRemoteUUID[remoteUUID] {
+                guard current.peerID == peerID, current.mcSession === mcSession else { throw BridgeChannelAuthentication.Failure.identityMismatch }
+                return current
+            }
             guard _foundPeersDict[remoteUUID] == peerID, _reversedFoundPeersDict[peerID] == remoteUUID,
-                  let endpoint = invitationEndpoints[remoteUUID] else { throw BridgeChannelAuthentication.Failure.unavailable }
-            if let current = bridgeTransportsByRemoteUUID[remoteUUID] { return current }
-            let physical = ScannerPeerTransport(service: self, remoteUUID: remoteUUID, setupID: UUID())
+                  let endpoint = invitationEndpoints[remoteUUID],
+                  !bridgeTransportsByRemoteUUID.values.contains(where: { $0.peerID == peerID }) else { throw BridgeChannelAuthentication.Failure.unavailable }
+            let physical = ScannerPeerTransport(service: self, remoteUUID: remoteUUID, peerID: peerID,
+                                                session: mcSession, endpoint: endpoint)
             bridgeTransportsByRemoteUUID[remoteUUID] = physical
             do {
                 physical.gate = try BridgeChannelTransport(underlying: physical, peerEndpoint: endpoint,
-                    role: endpoint.initiator == mySessionUUID ? .initiator : .responder,
+                    role: physical.role,
                     owner: owner, limits: channelLimits, source: remoteUUID) { [weak self, weak physical] transport, _ in
                         guard let self, let physical else { throw CancellationError() }
                         try self.checkCurrent(physical, remoteUUID: remoteUUID)
                         let config = BridgeBase.Config(owner: self.owner, identityDomain: "nearby", transport: transport)
                         let bridge = try await BridgeBase(config)
-                        try await bridge.setTransport(transport, connection: endpoint.initiator == self.mySessionUUID ? .inbound(publisherUuid: "Lobby") : .outbound)
+                        try await bridge.setTransport(transport, connection: physical.isInitiator ? .inbound(publisherUuid: "Lobby") : .outbound)
                         try self.checkCurrent(physical, remoteUUID: remoteUUID)
                         physical.bridge = bridge
                         return bridge
                     }
                 return physical
-            } catch { bridgeTransportsByRemoteUUID[remoteUUID] = nil; bridgeDelegatesByRemoteUUID[remoteUUID] = nil; throw error }
+            } catch { bridgeTransportsByRemoteUUID[remoteUUID] = nil; throw error }
         }
     }
     private func checkCurrent(_ transport: ScannerPeerTransport, remoteUUID: String) throws {
@@ -620,7 +636,10 @@ class ScannerService :  NSObject, ObservableObject {
         try transport.gate.session.check()
     }
     func setupBridge(remoteUUID: String, peerID: MCPeerID) async throws {
-        let physical = try prepareBridge(remoteUUID: remoteUUID, peerID: peerID)
+        try await setupBridge(prepareBridge(remoteUUID: remoteUUID, peerID: peerID))
+    }
+    private func setupBridge(_ physical: ScannerPeerTransport) async throws {
+        let remoteUUID = physical.remoteUUID
         // A prior setup/registration must finish its cleanup before the same
         // remote cell UUID can be registered by a new generation.
         while let previous = withState({ bridgeSetupTasks[remoteUUID] }), previous.id != physical.setupID {
@@ -629,7 +648,8 @@ class ScannerService :  NSObject, ObservableObject {
             try Task.checkCancellation()
             guard withState({ bridgeTransportsByRemoteUUID[remoteUUID] === physical }) else { throw CancellationError() }
         }
-        let operation = withState { () -> BridgeSetupOperation? in
+        let operation = try withState { () throws -> BridgeSetupOperation? in
+            guard bridgeTransportsByRemoteUUID[remoteUUID] === physical else { throw CancellationError() }
             if let existingOperation = bridgeSetupTasks[remoteUUID] {
                 return existingOperation
             }
@@ -640,11 +660,7 @@ class ScannerService :  NSObject, ObservableObject {
             let setupID = physical.setupID
             let task = Task { [weak self] in
                 guard let self else { return }
-                try await self.performBridgeSetup(
-                    remoteUUID: remoteUUID,
-                    peerID: peerID,
-                    setupID: setupID
-                )
+                try await self.performBridgeSetup(physical)
             }
             let operation = BridgeSetupOperation(id: setupID, task: task)
             bridgeSetupTasks[remoteUUID] = operation
@@ -665,25 +681,26 @@ class ScannerService :  NSObject, ObservableObject {
                 Task { await physical.gate.close() }
             })
         }
-        catch { await physical.gate.close(); reportBridgeFailure(error, remoteUUID: remoteUUID); throw error }
+        catch { reportBridgeFailure(error, on: physical); await physical.gate.close(); throw error }
     }
 
-    private func performBridgeSetup(remoteUUID: String, peerID: MCPeerID, setupID: UUID) async throws {
-        guard let peerTransport = withState({ bridgeTransportsByRemoteUUID[remoteUUID] }), peerTransport.setupID == setupID else { throw CancellationError() }
+    private func performBridgeSetup(_ peerTransport: ScannerPeerTransport) async throws {
+        let remoteUUID = peerTransport.remoteUUID, peerID = peerTransport.peerID
+        guard withState({ bridgeTransportsByRemoteUUID[remoteUUID] === peerTransport }) else { throw CancellationError() }
         try await peerTransport.gate.startPeer()
         try checkCurrent(peerTransport, remoteUUID: remoteUUID)
         try await peerTransport.gate.withAuthenticatedWork {
             guard let resolver = CellBase.defaultCellResolver else { throw CellBaseError.noResolver }
             guard let cellBridge = peerTransport.bridge else { throw BridgeChannelAuthentication.Failure.unavailable }
-            let wasInvited = self.withState {
+            try self.withState {
+                guard self.bridgeTransportsByRemoteUUID[remoteUUID] === peerTransport else { throw CancellationError() }
                 self._connectedPeersDict[peerID] = peerTransport.gate.session.publicIdentity?.makeIdentity()
                 self._reversedConnectedPeersDict[remoteUUID] = peerID
-                return self.invitedRemoteUUIDs.contains(remoteUUID)
             }
 
             var registeredUUID: String?
             do {
-                if wasInvited {
+                if peerTransport.isInitiator {
                     try await self.attachLobbyToEntityScanner(requester: self.owner)
                 } else {
                     try await cellBridge.retrieveProxyRepresentation(for: self.owner)
@@ -722,12 +739,12 @@ class ScannerService :  NSObject, ObservableObject {
                 }
                 print("********* Finished setting up bridge for \(remoteUUID)")
             } catch {
+                self.reportBridgeFailure(error, on: peerTransport)
                 if let registeredUUID {
                     await resolver.unregisterEmitCell(uuid: registeredUUID)
                 }
                 self.withState {
                     guard self.bridgeTransportsByRemoteUUID[remoteUUID] === peerTransport else { return }
-                    self.bridgeDelegatesByRemoteUUID[remoteUUID] = nil
                     self.bridgeTransportsByRemoteUUID[remoteUUID] = nil
                     self._connectedPeersDict[peerID] = nil
                     self._reversedConnectedPeersDict[remoteUUID] = nil
@@ -737,30 +754,16 @@ class ScannerService :  NSObject, ObservableObject {
         }
     }
 
-    fileprivate func setBridgeDelegate(
-        _ delegate: BridgeDelegateProtocol,
-        for remoteUUID: String,
-        setupID: UUID
-    ) {
+    @discardableResult
+    private func removeBridge(for remoteUUID: String, expected: ScannerPeerTransport? = nil) -> Bool {
         withState {
-            let isCurrentSetup = bridgeSetupTasks[remoteUUID]?.id == setupID
-            let isCurrentTransport = bridgeTransportsByRemoteUUID[remoteUUID]?.setupID == setupID
-            guard isCurrentSetup || isCurrentTransport else {
-                return
-            }
-            bridgeDelegatesByRemoteUUID[remoteUUID] = delegate
-        }
-    }
-
-    private func removeBridge(for remoteUUID: String, peerID: MCPeerID? = nil) {
-        withState {
+            if let expected, bridgeTransportsByRemoteUUID[remoteUUID] !== expected { return false }
             let operation = bridgeSetupTasks[remoteUUID]
             let transport = bridgeTransportsByRemoteUUID.removeValue(forKey: remoteUUID)
             let registeredUUID = registeredBridgeUUIDsByRemoteUUID.removeValue(forKey: remoteUUID)
-            guard transport != nil || registeredUUID != nil else { operation?.task.cancel(); return }
-            bridgeDelegatesByRemoteUUID[remoteUUID] = nil
-            invitationEndpoints[remoteUUID] = nil; invitedRemoteUUIDs.remove(remoteUUID)
-            if let peer = peerID ?? _reversedConnectedPeersDict[remoteUUID] { _connectedPeersDict[peer] = nil }
+            guard transport != nil || registeredUUID != nil else { operation?.task.cancel(); return false }
+            invitationEndpoints[remoteUUID] = nil
+            if let peer = transport?.peerID { _connectedPeersDict[peer] = nil }
             _reversedConnectedPeersDict[remoteUUID] = nil
             operation?.task.cancel()
             let retirementID = UUID(), resolver = CellBase.defaultCellResolver
@@ -773,6 +776,7 @@ class ScannerService :  NSObject, ObservableObject {
                 }
             }
             bridgeSetupTasks[remoteUUID] = BridgeSetupOperation(id: retirementID, task: cleanup)
+            return true
         }
     }
 
@@ -782,28 +786,29 @@ class ScannerService :  NSObject, ObservableObject {
 
 
     
+    /// Shared iOS production path; opaque archived bytes allow macOS tests to
+    /// exercise selection, quotas and lifecycle without fabricating an NI token.
+    @discardableResult
+    func shareDiscoveryTokenData(_ encodedData: Data) async throws -> Int {
+        let content: Object = ["token": .data(encodedData), "userUuid": .string(owner.uuid)]
+        let flow = FlowElement(title: "DiscoveryToken", content: .object(content), properties: .init(type: .event, contentType: .object))
+        let data = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(flow), cid: -1))
+        let transports = withState { Array(bridgeTransportsByRemoteUUID.values) }
+        var sent = 0
+        for transport in transports where transport.gate.canSendPeerData {
+            do { try await transport.gate.sendData(data); sent += 1 }
+            catch { reportBridgeFailure(error, on: transport) }
+        }
+        return sent
+    }
+
 #if os(iOS)
     func shareMyDiscoveryToken(token: NIDiscoveryToken) {
-        guard let encodedData = try?  NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) else {
-            print("Unexpectedly failed to encode discovery token.")
-            return
-        }
-        
-        let contentObject: Object = ["token" : .data(encodedData), "userUuid" : .string(owner.uuid)]
-        let flowElement = FlowElement(title: "DiscoveryToken", content: .object(contentObject), properties: FlowElement.Properties(type: .event, contentType: .object))
-        
-        let bridgeCommand = BridgeCommand(cmd: "response", payload: .flowElement(flowElement), cid: -1)
-        
-        guard let encodedElement = try? JSONEncoder().encode(bridgeCommand) else {
-            print("Unexpectedly failed to encode flow element in bridge command")
-            return
-        }
-        do {
-            try mcSession.send(encodedElement, toPeers: mcSession.connectedPeers, with: .reliable)
-            sharedTokenWithPeer = true
-            print("Did share token with peers")
-        } catch {
-            print("Sending ni discovery tokens failed with error: \(error)")
+        guard let data = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do { self.sharedTokenWithPeer = try await self.shareDiscoveryTokenData(data) > 0 }
+            catch { self.reportBridgeFailure(error, remoteUUID: nil) }
         }
     }
 #endif
@@ -937,7 +942,17 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
         guard remoteUUID != mySessionUUID else {
             return
         }
-        let discoveredPeerNames = withState {
+        let discoveredPeerNames = withState { () -> [String]? in
+            if let bound = bridgeTransportsByRemoteUUID[remoteUUID], bound.peerID != peerID { return nil }
+            if bridgeTransportsByRemoteUUID.values.contains(where: { $0.peerID == peerID && $0.remoteUUID != remoteUUID }) { return nil }
+            // Discovery never retargets an accepted invitation or a live channel,
+            // in either direction (another peer's UUID or this peer's new UUID).
+            if let existing = _foundPeersDict[remoteUUID], existing != peerID,
+               bridgeTransportsByRemoteUUID[remoteUUID] != nil || invitationEndpoints[remoteUUID] != nil || pendingInvitations[existing] != nil { return nil }
+            if let previous = _reversedFoundPeersDict[peerID], previous != remoteUUID,
+               bridgeTransportsByRemoteUUID[previous] != nil || invitationEndpoints[previous] != nil || pendingInvitations[peerID] != nil { return nil }
+            if let previous = _reversedFoundPeersDict[peerID], previous != remoteUUID { _foundPeersDict[previous] = nil }
+            if let previous = _foundPeersDict[remoteUUID], previous != peerID { _reversedFoundPeersDict[previous] = nil }
             _foundPeersDict[remoteUUID] = peerID
             _reversedFoundPeersDict[peerID] = remoteUUID
             if info?["ad"] == "1" { advertisementPeers.insert(remoteUUID) }
@@ -947,6 +962,10 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
             return _foundPeersDict.values.map(\.displayName)
         }
 
+        guard let discoveredPeerNames else {
+            radarDelegate?.scannerStatusChanged(manager: self, status: "peerDiscoveryCollision", remoteUUID: remoteUUID)
+            return
+        }
         self.discoveredDevices = discoveredPeerNames
         print("Discovered devices: \(String(describing: self.discoveredDevices))")
         self.radarDelegate?.foundDevicesChanged(
@@ -979,7 +998,7 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
             return remoteUUID
         }
         if let remoteUUID {
-            self.removeBridge(for: remoteUUID, peerID: peerID)
+            // Discovery loss is not a physical disconnect. The bound channel survives.
             self.radarDelegate?.lostDeviceChanged(manager: self, lostDevice: peerID, remoteUUID: remoteUUID)
             self.radarDelegate?.scannerStatusChanged(manager: self, status: "peerLost", remoteUUID: remoteUUID)
         }
@@ -994,79 +1013,62 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
 
 extension ScannerService : MCSessionDelegate {
     
+    /// Capture under the state lock, synchronously in the MC callback. No
+    /// asynchronous worker may reselect a transport using discovery metadata.
+    func capturePeerTransport(session: MCSession, peerID: MCPeerID, prepare: Bool = false) throws -> ScannerPeerTransport {
+        try withState {
+            guard session === mcSession else { throw BridgeChannelAuthentication.Failure.unavailable }
+            if let bound = bridgeTransportsByRemoteUUID.values.first(where: { $0.peerID == peerID && $0.mcSession === session }) { return bound }
+            guard prepare, let remote = _reversedFoundPeersDict[peerID] else { throw BridgeChannelAuthentication.Failure.unavailable }
+            return try prepareBridge(remoteUUID: remote, peerID: peerID)
+        }
+    }
+
+    func peerDisconnected(_ physical: ScannerPeerTransport) {
+        withState {
+            guard removeBridge(for: physical.remoteUUID, expected: physical) else { return }
+            if _foundPeersDict[physical.remoteUUID] == physical.peerID { _foundPeersDict[physical.remoteUUID] = nil }
+            if _reversedFoundPeersDict[physical.peerID] == physical.remoteUUID { _reversedFoundPeersDict[physical.peerID] = nil }
+            if _connectedPeer == physical.peerID {
+                _connectedPeer = nil; _connectedRemoteUUID = nil
+                connectedPeerIdDisplayname = nil
+            }
+            radarDelegate?.lostDeviceChanged(manager: self, lostDevice: physical.peerID, remoteUUID: physical.remoteUUID)
+            radarDelegate?.scannerStatusChanged(manager: self, status: "disconnected", remoteUUID: physical.remoteUUID)
+        }
+    }
+
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
-            NSLog("%@", "peer \(peerID) didChangeState: \(state.rawValue)")
-        self.radarDelegate?.connectedDevicesChanged(manager: self, connectedDevices:
-                                                        session.connectedPeers.map{$0.displayName})
-        
-        DispatchQueue.main.async {
+        let physical = try? capturePeerTransport(session: session, peerID: peerID, prepare: state == .connected)
+        // Retire synchronously; an old queued UI callback cannot retire a reconnect.
+        if state == .notConnected, let physical { peerDisconnected(physical) }
+        DispatchQueue.main.async { [weak self, physical] in
+            guard let self else { return }
+            self.connectedDevices = session.connectedPeers.map(\.displayName)
+            self.radarDelegate?.connectedDevicesChanged(manager: self, connectedDevices: session.connectedPeers.map(\.displayName))
+            guard let physical, self.withState({ self.bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { return }
             switch state {
-            case .notConnected:
-                print("***************** .notConnected  for \(peerID.displayName)")
-                if self.connectedPeerIdDisplayname == peerID.displayName {
-                    self.connectedPeerIdDisplayname = nil
-                }
-                let remoteUUID = self.withState { () -> String? in
-                    guard let remoteUUID = self._reversedFoundPeersDict.removeValue(forKey: peerID) else {
-                        return nil
-                    }
-                    self._foundPeersDict.removeValue(forKey: remoteUUID)
-                    return remoteUUID
-                }
-                if let remoteUUID {
-                    self.removeBridge(for: remoteUUID, peerID: peerID)
-                    self.radarDelegate?.lostDeviceChanged(manager: self, lostDevice: peerID, remoteUUID: remoteUUID)
-                    self.radarDelegate?.scannerStatusChanged(manager: self, status: "disconnected", remoteUUID: remoteUUID)
-                }
-                if self.connectedPeer == peerID {
-                    self.connectedPeer = nil
-                }
-                self.connectedRemoteUUID = nil
             case .connecting:
-                print("***************** .connecting for \(peerID.displayName)")
-                if let remoteUUID = self.withState({ self._reversedFoundPeersDict[peerID] }) {
-                    self.radarDelegate?.scannerStatusChanged(manager: self, status: "connecting", remoteUUID: remoteUUID)
-                } else {
-                    print("Did not find remoteUUID for peerID: \(peerID)")
-                }
+                self.radarDelegate?.scannerStatusChanged(manager: self, status: "connecting", remoteUUID: physical.remoteUUID)
             case .connected:
                 self.connectedPublisher.send(true)
-                self.connectedPeerIdDisplayname = peerID.displayName
-                print("***************** .connected for \(peerID.displayName)")
-                self.connectedPeer = peerID
-                if let remoteUUID = self.withState({ self._reversedFoundPeersDict[peerID] }) {
-                    self.connectedRemoteUUID = remoteUUID
-                    self.radarDelegate?.scannerStatusChanged(manager: self, status: "authenticating", remoteUUID: remoteUUID)
-                    Task {
-                        do {
-                            try await self.setupBridge(remoteUUID: remoteUUID, peerID: peerID)
-                            self.radarDelegate?.scannerStatusChanged(manager: self, status: "connected", remoteUUID: remoteUUID)
-                            self.startup()
-                        } catch {
-                            self.reportBridgeFailure(error, remoteUUID: remoteUUID)
-                        }
-                    }
-                } else {
-                    self.reportBridgeFailure(BridgeChannelAuthentication.Failure.unavailable, remoteUUID: nil)
+                self.connectedPeerIdDisplayname = physical.peerID.displayName
+                self.connectedPeer = physical.peerID
+                self.connectedRemoteUUID = physical.remoteUUID
+                self.radarDelegate?.scannerStatusChanged(manager: self, status: "authenticating", remoteUUID: physical.remoteUUID)
+                Task {
+                    do {
+                        try await self.setupBridge(physical)
+                        try self.checkCurrent(physical, remoteUUID: physical.remoteUUID)
+                        self.radarDelegate?.scannerStatusChanged(manager: self, status: "connected", remoteUUID: physical.remoteUUID)
+                        self.startup()
+                    } catch { self.reportBridgeFailure(error, on: physical) }
                 }
-               
-                
-                
-            @unknown default:
-                print("Unknown ")
+            default: break
             }
-            
-            
-            //
-            self.connectedDevices = session.connectedPeers.map{$0.displayName}
-            
-            print("Found peers dict: \(self.foundPeersDict)")
-            print("connected devices: \(String(describing: self.connectedDevices))")
-            print("self.discoveredDevices: \(String(describing: self.discoveredDevices))")
         }
-        
     }
-    
+
     public func connected() async throws {
         if self.connected == false {
             self.connected = try await self.connectedPublisher.getOneWithTimeout(1)
@@ -1074,24 +1076,14 @@ extension ScannerService : MCSessionDelegate {
     }
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        NSLog("%@", "didReceiveData bytes=\(data.count)")
-        Task { [weak self] in
-            guard let self = self else { return }
-            do {
-                // Maybe wait for .connected state instead?
-                if let remoteUUID = self.withState({ self._reversedFoundPeersDict[peerID] }) {
-                    try self.prepareBridge(remoteUUID: remoteUUID, peerID: peerID)
-                    Task { try? await self.setupBridge(remoteUUID: remoteUUID, peerID: peerID) }
-                }
-                try await self.extractCommandFromData(data, from: peerID)
-            } catch {
-                let remote = self.withState { self._reversedFoundPeersDict[peerID] }
-                self.reportBridgeFailure(error, remoteUUID: remote)
-                if let remote { self.removeBridge(for: remote, peerID: peerID) }
-            }
+        guard let physical = try? capturePeerTransport(session: session, peerID: peerID, prepare: true) else { return }
+        Task { [weak self, physical] in try? await self?.setupBridge(physical) }
+        Task { [physical] in
+            // receiveData closes/reports only this captured generation on failure.
+            try? await physical.receiveData(data)
         }
     }
-    
+
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {
         NSLog("%@", "didReceiveStream")
     }
@@ -1144,16 +1136,18 @@ extension ScannerService {
         radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, remoteUUID: remoteUUID)
     }
     func extractCommandFromData(_ data: Data, from peerID: MCPeerID) async throws {
-        guard let route = withState({ () -> (String, ScannerPeerTransport)? in
-            guard let remote = _reversedFoundPeersDict[peerID], _foundPeersDict[remote] == peerID,
-                  let physical = bridgeTransportsByRemoteUUID[remote] else { return nil }
-            return (remote, physical)
-        }) else { throw BridgeChannelAuthentication.Failure.unavailable }
-        let gate = route.1.gate!
+        let physical = try capturePeerTransport(session: mcSession, peerID: peerID)
+        try await physical.receiveData(data)
+    }
+
+    fileprivate func extractCommandFromData(_ data: Data, on physical: ScannerPeerTransport) async throws {
+        guard withState({ bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { throw CancellationError() }
+        let gate = physical.gate!
         do {
-            try gate.validateInboundPayload(data)
+            do { try gate.validateInboundPayload(data) }
+            catch BridgeChannelAuthentication.Failure.staleGeneration { return } // delayed old frame, never a new gate failure
             let command = try JSONDecoder().decode(BridgeCommand.self, from: data)
-            if let identity = command.identity { identity.identityVault = await identityVault(for: identity, bridgeDelegate: route.1.bridge) }
+            if let identity = command.identity { identity.identityVault = await identityVault(for: identity, bridgeDelegate: physical.bridge) }
             if command.cmd.hasPrefix("channelAuth") {
                 try await gate.consumeCommand(command: command)
                 return
@@ -1162,12 +1156,12 @@ extension ScannerService {
             if command.cid < 0 {
                 try gate.session.check(identity: command.identity)
                 guard command.command == .response, case let .flowElement(flowElement) = command.payload else { throw BridgeChannelAuthentication.Failure.malformed }
-                try await gate.withAuthenticatedWork { self.handleOutOfBandFlowElement(flowElement, remoteUUID: route.0) }
+                try await gate.withAuthenticatedWork { self.handleOutOfBandFlowElement(flowElement, remoteUUID: physical.remoteUUID) }
             } else if command.command == .response { try await gate.consumeResponse(command: command) }
             else { try await gate.consumeCommand(command: command) }
         } catch {
+            reportBridgeFailure(error, on: physical)
             await gate.close()
-            reportBridgeFailure(error, remoteUUID: route.0)
             throw error
         }
     }
