@@ -610,6 +610,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         let connectState = await emitter.admit(context: connectContext )
         CellBase.diagnosticLog("attach label=\(label) connectState=\(connectState)", domain: .flow)
         let adjustedConnectState =  try await self.consumeConnectResponseForIdentity(connectState: connectState, label: label, identity: requester, emitCell: emitter)
+        if adjustedConnectState == .connected, let handler = OwnerAttachExtensionContext.handler {
+            await handler(self, emitter, label, requester)
+        }
         return adjustedConnectState
     }
 
@@ -1644,6 +1647,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     open func get(keypath: String, requester: Identity) async throws -> ValueType {
         try await ensureRuntimeReady()
+        if keypath == OwnerAttachEntityExtensionHost.offerKeypath {
+            guard let host = await OwnerAttachExtensionRuntime.shared.host else {
+                throw OwnerAttachExtensionError.unavailable
+            }
+            return try await OwnerAttachWire.value(from: host.offer(cell: self, requester: requester))
+        }
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
         let operationAuthorizationDecision = try await explicitMeddleAuthorizationDecision(
@@ -1780,6 +1789,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         try await ensureRuntimeReady()
+        if keypath == OwnerAttachEntityExtensionHost.acceptKeypath {
+            guard let host = await OwnerAttachExtensionRuntime.shared.host else {
+                throw OwnerAttachExtensionError.unavailable
+            }
+            let consent = try OwnerAttachWire.decode(OwnerAttachExtensionConsent.self, from: value)
+            return try await OwnerAttachWire.value(from: host.accept(consent, cell: self, requester: requester))
+        }
         
         
         var response: ValueType?
@@ -1898,6 +1914,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             defer { token.invalidate() }
             try await Self.$runtimeBindingInstallationToken.withValue(token) {
                 try await self.installCellRuntimeBindingsForAccess()
+                await self.registerExploreContract(requester: self.owner,
+                    key: OwnerAttachEntityExtensionHost.offerKeypath, method: .get,
+                    returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: true,
+                    description: .string("Optional runtime capability. Requires fresh direct or linked owner proof; ordinary read grants do not qualify. Returns a signed, five-minute presence offer, without activating it."))
+                await self.registerExploreContract(requester: self.owner,
+                    key: OwnerAttachEntityExtensionHost.acceptKeypath, method: .set,
+                    input: ExploreContract.schema(type: "object"), returns: ExploreContract.schema(type: "object"),
+                    permissions: ["-w--"], required: true,
+                    description: .string("Confirms the exact signed owner-attach consent after fresh owner proof and durable persistence. Reuses the existing human identity; does not enroll keys or copy cell data."))
             }
         }
     }
@@ -2030,6 +2055,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var ownerProofValid: Bool
         var contracts: [Contract]
         var linkedIdentityLinkID: String? = nil
+    }
+
+    /// Closed implementation: neither an overridden validateAccess nor a
+    /// serialized CellAuthorizationDecision can mint owner-attach evidence.
+    final func requireOwnerAttachProof(requester: Identity) async throws {
+        guard !CellBase.debugValidateAccessForEverything else {
+            throw OwnerAttachExtensionError.ownerProofRequired
+        }
+        let evidence = await authorizationEvidence(for: requester)
+        guard evidence.ownerReferenceMatches, evidence.ownerProofValid else {
+            throw OwnerAttachExtensionError.ownerProofRequired
+        }
     }
 
     private func authorizationEvidence(for identity: Identity) async -> AuthorizationEvidence {
@@ -2218,8 +2255,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     func determineIdentityState(identity: Identity) async -> IdentityState {
         var identityState = IdentityState.other
-        if identitiesReferenceSame(owner, identity),
-           await checkIdentityOrigin(identity, against: owner) {
+        // Admission must honor the same verified, domain-bound same-entity
+        // owner path as get/set. A linked owner still proves its own key.
+        let evidence = await authorizationEvidence(for: identity)
+        if evidence.ownerReferenceMatches, evidence.ownerProofValid {
             identityState = IdentityState.owner
         } else {
             

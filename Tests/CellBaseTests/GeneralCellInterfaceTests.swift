@@ -1286,10 +1286,14 @@ final class GeneralCellInterfaceTests: XCTestCase {
         )
 
         let catalog = try await cell.exploreContractCatalog(requester: owner)
-        XCTAssertEqual(catalog.records.count, 1)
-        XCTAssertEqual(catalog.records.first?.id, "GeneralCell#legacy")
-        XCTAssertEqual(catalog.records.first?.key, "legacy")
-        XCTAssertEqual(catalog.records.first?.contract, .string("string"))
+        // GeneralCell also advertises optional owner-attach runtime operations.
+        // They must not change or suppress a legacy, method-less declaration.
+        let legacy = catalog.records.filter { $0.key == "legacy" }
+        XCTAssertEqual(legacy.count, 1)
+        XCTAssertEqual(legacy.first?.id, "GeneralCell#legacy")
+        XCTAssertEqual(legacy.first?.contract, .string("string"))
+        XCTAssertTrue(catalog.records.contains { $0.key == OwnerAttachEntityExtensionHost.offerKeypath && $0.method == "get" })
+        XCTAssertTrue(catalog.records.contains { $0.key == OwnerAttachEntityExtensionHost.acceptKeypath && $0.method == "set" })
     }
 
     func testStrictModeGetContractCannotAuthorizeSetHandler() async throws {
