@@ -57,13 +57,17 @@ extension ScannerMultipeerProcessTests {
                 }
                 // Raw peer ignores ALL application messages and never voluntarily
                 // closes. Only the receiver's supported MC disconnect can evict it.
-                try await isolationWait(seconds: 15) { attacker.disconnected }
+                // MC does not promise when the remote observes disconnect. Use
+                // the same physical-state observation/window as the authenticated
+                // phases; a delayed delegate callback is not retained authority.
+                let retirementStarted = ProcessInfo.processInfo.systemUptime
+                try await isolationWait(seconds: 60) { attacker.session.connectedPeers.isEmpty }
                 XCTAssertTrue(attacker.session.connectedPeers.isEmpty)
                 XCTAssertThrowsError(try attacker.session.send(Data([1]), toPeers: [peer], with: .reliable))
                 for stream in outputs { stream.close() }
                 // MC's sender completion can lag disconnect; receiver-side
                 // cancellation and both physical endpoints are asserted instead.
-                try isolationMark(folder, "\(phase).done", "remote observed physical disconnect; ignored app messages; openedStreams=\(outputs.count); resourceCompletionObserved=\(attacker.resourceComplete) resourceFailed=\(attacker.resourceFailed)")
+                try isolationMark(folder, "\(phase).done", "remote observed physical disconnect; ignored app messages; openedStreams=\(outputs.count); resourceCompletionObserved=\(attacker.resourceComplete) resourceFailed=\(attacker.resourceFailed); disconnectCallback=\(attacker.disconnected); observedAfterSeconds=\(ProcessInfo.processInfo.systemUptime - retirementStarted)")
                 try await isolationWait { isolationExists(folder, "\(phase).checked") }
                 attacker.stop()
             }
@@ -131,7 +135,7 @@ extension ScannerMultipeerProcessTests {
             let baseline = isolationRSS()
             for phase in ["resource", "streams", "expiry"] {
                 let before = observer.flows
-                try await isolationWait(seconds: 20) { isolationExists(folder, "\(phase).done") }
+                try await isolationWait(seconds: 65) { isolationExists(folder, "\(phase).done") }
                 try await isolationWait { service.retainedPhysicalCount == 1 && observer.flows > before }
                 XCTAssertTrue(service.isConnected(remoteUUID: prefix + "c"))
                 XCTAssertEqual(service.admission.snapshot(.physical).count, 1)
