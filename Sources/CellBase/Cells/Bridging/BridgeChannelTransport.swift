@@ -485,6 +485,15 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try await delegate.consumeCommand(command: command)
         } catch { await close(); throw error }
     }
+    /// Scheduling only; all response validation still runs through this gate.
+    public func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+        let target = lock.withLock { stopped ? nil : delegate }
+        if let bridge = target as? BridgeBase { return bridge.isOriginSigningResponse(command) }
+        if let mux = target as? BridgeMultiplexSession { return mux.isOriginSigningResponse(command) }
+        if let mux = target as? BridgeMultiplexServerSession { return mux.isOriginSigningResponse(command) }
+        return false
+    }
+
     public func consumeResponse(command: BridgeCommand) async throws {
         do { try await trackedWork { try await self.processResponse(command) } }
         catch { await close(); throw error }

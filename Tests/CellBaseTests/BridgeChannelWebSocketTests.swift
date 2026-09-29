@@ -42,6 +42,14 @@ final class BridgeChannelWebSocketTests: XCTestCase {
     }
 
     func testVaporSocketRequiresProofThenPerformsProtectedReadWithNoServerSigner() async throws {
+        try await protectedRead(multiplexed: false)
+    }
+
+    func testVaporMuxSocketPreservesOriginSigningProgressDuringProtectedRead() async throws {
+        try await protectedRead(multiplexed: true)
+    }
+
+    private func protectedRead(multiplexed: Bool) async throws {
         let oldResolver = CellBase.defaultCellResolver, oldVault = CellBase.defaultIdentityVault
         defer { CellBase.defaultCellResolver = oldResolver; CellBase.defaultIdentityVault = oldVault }
         let vault = MockIdentityVault()
@@ -59,6 +67,10 @@ final class BridgeChannelWebSocketTests: XCTestCase {
                 let transport = VaporBridgeTransport(webSocket: socket)
                 let gate = try BridgeChannelTransport(underlying: transport, endpoint: state.endpoint(), limits: limits, source: "127.0.0.1") { transport, _ in
                     state.admitted()
+                    if multiplexed {
+                        return BridgeMultiplexServerSession(physicalTransport: transport,
+                            bridgeOwner: owner.publicIdentitySnapshot(), inboundPublisherLookupIdentity: owner.publicIdentitySnapshot())
+                    }
                     let bridge = try await BridgeBase(.init(owner: owner.publicIdentitySnapshot(), transport: transport,
                         connection: .inbound(publisherUuid: "Protected"), inboundPublisherLookupIdentity: owner.publicIdentitySnapshot()))
                     try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Protected"))
@@ -83,15 +95,19 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             XCTAssertEqual(state.gates.first?.session.state, .closed)
             await raw.close()
             let gate = try BridgeChannelTransport(underlying: VaporBridgeTransport(), endpoint: state.endpoint())
-            let bridge = try await BridgeBase(.init(owner: owner, transport: gate, connection: .outbound,
+            let mux = multiplexed ? BridgeMultiplexSession(physicalTransport: gate) : nil
+            let transport = try mux?.channelTransport(targetEndpoint: "Protected") ?? gate
+            let bridge = try await BridgeBase(.init(owner: owner, transport: transport, connection: .outbound,
                 identityProofScopes: [.init(domain: cell.identityDomain, resource: cell.uuid)]))
-            try await bridge.setTransport(gate, connection: .outbound)
-            try await gate.setup(url, identity: owner)
+            try await bridge.setTransport(transport, connection: .outbound)
+            try await transport.setup(url, identity: owner)
             let value = try await bridge.get(keypath: "secret", requester: owner)
             XCTAssertEqual(value, .string("socket-value"))
             XCTAssertEqual(state.count, 1)
             let signerCalls = await trap.calls; XCTAssertEqual(signerCalls, 0)
+            await transport.close()
             await gate.close()
+            withExtendedLifetime(mux) {}
             for connection in state.gates { await connection.close() }
             XCTAssertEqual(limits.connectionCount, 0)
             await app.server.shutdown()

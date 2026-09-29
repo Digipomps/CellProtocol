@@ -97,3 +97,6 @@ Regression evidence lives in `BridgeResponseLifetimeTests`,
 `BridgeFeedAndRPCOrderingTests`, `BridgeMuxSendLifetimeTests`, `BridgeFactoryLifetimeTests`,
 `BridgeSigningLifetimeTests` and `BridgePeerV3Tests`. The barriers deliberately
 ignore task cancellation and hold work at the relevant lifetime boundary.
+
+Vapor WebSocket receive admission and callback ordering are specified in
+[VaporWebSocketAdmission.md](VaporWebSocketAdmission.md).

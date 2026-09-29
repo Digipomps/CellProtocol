@@ -559,6 +559,12 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         try await delegate.consumeCommand(command: command)
     }
 
+    func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+        guard command.protocolVersion == protocolVersion, let id = command.channelID,
+              let bridge = delegate(for: id) as? BridgeBase else { return false }
+        return bridge.isOriginSigningResponse(command)
+    }
+
     public func consumeResponse(command: BridgeCommand) async throws {
         if try handleSessionCommand(command) {
             return
@@ -964,6 +970,12 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             defer { withExtendedLifetime(record) {} }
             try await record.dispatch(command)
         }
+    }
+
+    func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+        guard command.protocolVersion == protocolVersion, let id = command.channelID,
+              let bridge = stateLock.withLock({ channels[id]?.delegate }) as? BridgeBase else { return false }
+        return bridge.isOriginSigningResponse(command)
     }
 
     public func consumeResponse(command: BridgeCommand) async throws {

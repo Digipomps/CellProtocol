@@ -71,8 +71,30 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private var connectionGeneration = UUID()
     private var setupWaiter: VaporBridgeSetupWaiter?
     private var outgoingGroup: MultiThreadedEventLoopGroup?
+    private var physicalCloseTask: Task<Void, Never>?
     private var closeUnderlyingChannel: (@Sendable () async -> Void)?
     
+
+    private let receiveLock = NSLock()
+    private var receiveBudget = VaporBridgeReceiveBudget.shared
+    private var queuedReceives = 0
+    private var queuedReceiveBytes = 0
+    private var receivesStopped = false
+    private var receiveTail: Task<Void, Never>?
+    private var dispatchTail: Task<Void, Never>?
+    private var receiveCloseTask: Task<Void, Never>?
+    // Deterministic test seams, installed before traffic; no production bypass.
+    var beforeReceivePreparation: (@Sendable () async -> Void)?
+    var receiveSnapshot: (count: Int, bytes: Int, stopped: Bool) {
+        receiveLock.withLock { (queuedReceives, queuedReceiveBytes, receivesStopped) }
+    }
+
+    convenience init(webSocket: WebSocket, receiveBudget: VaporBridgeReceiveBudget,
+                     closeUnderlyingChannel: (@Sendable () async -> Void)? = nil) {
+        self.init(closeUnderlyingChannel: closeUnderlyingChannel)
+        self.receiveBudget = receiveBudget
+        setWebSocket(webSocket)
+    }
 
     var identityDomain:String
     var delegateSource: (() async throws -> BridgeDelegateProtocol?)?
@@ -117,6 +139,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
     
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
+        try checkReceiving() // A retired adapter cannot inherit a new generation.
         guard let target = URLComponents(url: endpointURL, resolvingAgainstBaseURL: false),
               let scheme = target.scheme, ["ws", "wss"].contains(scheme), let host = target.host else {
             throw TransportError.InvalidURL
@@ -131,10 +154,13 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         let client = WebSocketClient(eventLoopGroupProvider: .shared(group), configuration: configuration)
         let generation = UUID(), loop = VaporBridgeTransportEventLoops.shared.next()
         let waiter = VaporBridgeSetupWaiter(on: loop)
-        let accepted = withStateLock { () -> Bool in
-            guard outgoingGroup == nil, webSocket == nil, setupWaiter == nil else { return false }
-            outgoingGroup = group; connectionGeneration = generation; setupWaiter = waiter
-            return true
+        let accepted = receiveLock.withLock { () -> Bool in
+            guard !receivesStopped else { return false }
+            return withStateLock {
+                guard outgoingGroup == nil, webSocket == nil, setupWaiter == nil else { return false }
+                outgoingGroup = group; connectionGeneration = generation; setupWaiter = waiter
+                return true
+            }
         }
         guard accepted else {
             waiter.complete(.failure(TransportError.TransportNotFound))
@@ -192,6 +218,22 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     public func close() async {
+        stopReceiving()
+        // Overflow, the gate and socket onClose may race. Every caller must
+        // await the same physical retirement before it can release a gate slot.
+        let physical = withStateLock { () -> Task<Void, Never> in
+            if let physicalCloseTask { return physicalCloseTask }
+            let task = Task { [self] in await closePhysicalTransport() }
+            physicalCloseTask = task
+            return task
+        }
+        await physical.value
+        // Delegate cleanup is outside the physical Task: it may re-enter close
+        // through the gate, and must not await its own Task.
+        await cleanupClosedWebSocketRegistration()
+    }
+
+    private func closePhysicalTransport() async {
         let pendingSetup = withStateLock { () -> VaporBridgeSetupWaiter? in
             connectionGeneration = UUID()
             let pending = setupWaiter; setupWaiter = nil; return pending
@@ -210,20 +252,17 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
             let group = outgoingGroup; outgoingGroup = nil; return group
         }
         try? await group?.shutdownGracefully()
-        await cleanupClosedWebSocketRegistration()
     }
 
     private func setupWebSocketCallbacks(on webSocket: WebSocket) {
-        webSocket.onText{[weak self] ws, text in
-            if let incomingData = text.data(using: .utf8) {
-                do { try await self?.extractCommand(incomingData) }
-                catch { await self?.currentDelegate()?.pushError(errorMessage: "bridge_payload_rejected", error: error) }
-            }
+        // Explicit synchronous signatures: the async overload creates an
+        // unaccounted Task per frame before entering this adapter.
+        webSocket.onText { [weak self] (ws: WebSocket, text: String) -> Void in
+            self?.enqueueReceive(bytes: text.utf8.count) { Data(text.utf8) }
         }
-        webSocket.onBinary{ [weak self] ws, buf in
-            if let incomingData = buf.getData(at: 0, length: buf.readableBytes) {
-                do { try await self?.extractCommand(incomingData) }
-                catch { await self?.currentDelegate()?.pushError(errorMessage: "bridge_payload_rejected", error: error) }
+        webSocket.onBinary { [weak self] (ws: WebSocket, buffer: ByteBuffer) -> Void in
+            self?.enqueueReceive(bytes: buffer.readableBytes) {
+                Data(buffer.readableBytesView)
             }
         }
         webSocket.onClose.whenComplete { [weak self] result in
@@ -231,13 +270,96 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         }
     }
 
+    /// Count/bytes are reserved before copying payloads or creating Tasks.
+    /// Preparation is ordered, including handshake completion. Ordinary dispatch
+    /// is ordered separately so a held Cell can still complete origin signing.
+    private func enqueueReceive(bytes: Int, copy: () -> Data) {
+        receiveLock.withLock {
+            guard !receivesStopped else { return }
+            guard bytes <= BridgeInboundPayloadValidator.defaultMaximumBytes,
+                  queuedReceives < VaporBridgeReceiveBudget.connectionCountLimit,
+                  bytes <= VaporBridgeReceiveBudget.connectionByteLimit - queuedReceiveBytes,
+                  receiveBudget.acquire(bytes: bytes) else {
+                stopReceivingLocked()
+                scheduleReceiveCloseLocked()
+                return
+            }
+            queuedReceives += 1; queuedReceiveBytes += bytes
+            let data = copy(), previous = receiveTail
+            receiveTail = Task { [self] in
+                await previous?.value
+                await beforeReceivePreparation?()
+                do {
+                    try checkReceiving()
+                    let command = try prepareCommand(data)
+                    if command.cmd.hasPrefix("channelAuth") {
+                        try await dispatchCommand(command)
+                        releaseReceive(bytes: bytes)
+                        return
+                    }
+                    let gate = currentDelegate() as? BridgeChannelTransport
+                    let control = command.command == .sign || gate?.isOriginSigningResponse(command) == true
+                    receiveLock.withLock {
+                        let prior = control ? nil : dispatchTail
+                        let dispatch = Task { [self] in
+                            defer { releaseReceive(bytes: bytes) }
+                            await prior?.value
+                            do {
+                                try checkReceiving()
+                                try await dispatchCommand(command)
+                            } catch { rejectReceive(error) }
+                        }
+                        if !control { dispatchTail = dispatch }
+                    }
+                } catch {
+                    releaseReceive(bytes: bytes)
+                    rejectReceive(error)
+                }
+            }
+        }
+    }
+
+    private func releaseReceive(bytes: Int) {
+        receiveLock.withLock {
+            queuedReceives -= 1; queuedReceiveBytes -= bytes
+            receiveBudget.release(bytes: bytes)
+        }
+    }
+
+    private func checkReceiving() throws {
+        try receiveLock.withLock {
+            guard !receivesStopped else { throw BridgeChannelAuthentication.Failure.closed }
+        }
+    }
+
+    private func stopReceiving() { receiveLock.withLock { stopReceivingLocked() } }
+    private func stopReceivingLocked() {
+        receivesStopped = true
+        // Synchronous revocation, before asynchronous physical/delegate cleanup.
+        (currentDelegate() as? BridgeChannelTransport)?.session.close()
+    }
+    private func scheduleReceiveCloseLocked(_ error: Error? = nil) {
+        guard receiveCloseTask == nil else { return }
+        receiveCloseTask = Task { [self] in
+            await close()
+            if let error = error as? BridgeInboundPayloadError {
+                await CellBase.recordSecurityEvent(.bridgePayloadRejected(
+                    transportIdentifier: "vapor-websocket", error: error))
+            }
+        }
+    }
+    private func rejectReceive(_ error: Error? = nil) {
+        receiveLock.withLock {
+            stopReceivingLocked()
+            scheduleReceiveCloseLocked(error)
+        }
+    }
+
     func handleWebSocketClose(_ result: Result<Void, Error>) {
         if case .failure = result {
             CellBase.diagnosticLog("Vapor bridge websocket closed with failure: code=transport_failed", domain: .bridge)
         }
-        Task { [weak self] in
-            await self?.close()
-        }
+        rejectReceive()
     }
 
     func cleanupClosedWebSocketRegistration() async {
@@ -265,24 +387,21 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
             )
             throw error
         }
-        let command = try? JSONDecoder().decode(BridgeCommand.self, from: incomingData)
-        let delegate = currentDelegate()
-        guard let command = command,
-              let delegate = delegate
-        else {
-            return
-        }
-        let identity = command.identity
-        let vault = await self.identityVault(for: identity)
-        switch command.command {
-        case .response:
-            command.identity?.identityVault = vault
-            try await delegate.consumeResponse(command: command)
-        default:
-            command.identity?.identityVault = vault
-            try await delegate.consumeCommand(command: command)
-        }
+        let command = try JSONDecoder().decode(BridgeCommand.self, from: incomingData)
+        try await dispatchCommand(command)
+    }
 
+    private func prepareCommand(_ incomingData: Data) throws -> BridgeCommand {
+        try BridgeInboundPayloadValidator().validate(incomingData)
+        try currentDelegate()?.validateInboundPayload(incomingData)
+        return try JSONDecoder().decode(BridgeCommand.self, from: incomingData)
+    }
+
+    private func dispatchCommand(_ command: BridgeCommand) async throws {
+        guard let delegate = currentDelegate() else { throw TransportError.TransportNotFound }
+        command.identity?.identityVault = await identityVault(for: command.identity)
+        if command.command == .response { try await delegate.consumeResponse(command: command) }
+        else { try await delegate.consumeCommand(command: command) }
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {

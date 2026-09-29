@@ -308,6 +308,9 @@ extension BridgeFeedAndRPCOrderingTests {
             await hold.release()
             await orderingEventually { bridge.pendingFeedDeliveries == 0 && wire.channelSession?.state == .closed }
             XCTAssertEqual(wire.commands.count, failSend ? 0 : 1)
+            // The final send releases its value before the next drain iteration
+            // retires the feed lease. Observe retirement, not that earlier count.
+            await orderingEventually { limits.retainedConnectionCount == 0 }
             XCTAssertEqual(limits.retainedConnectionCount, 0)
         }
     }
