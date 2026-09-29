@@ -101,35 +101,44 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         _ = try session.activate()
         guard let factory else { throw Auth.Failure.unavailable }
         let result = try await factory(self, session)
+        try await adoptFactoryResult(result, peer: true)
+    }
+
+    /// Exactly one owner retires a returned factory result: this adoption or
+    /// close. setDelegate during factory construction is deliberately provisional.
+    private func adoptFactoryResult(_ result: BridgeDelegateProtocol, peer: Bool) async throws {
         var adopted = false
         do {
+            try Task.checkCancellation()
             try session.check()
-            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
-            try await recheckPolicy(identity)
-            try session.check()
+            if peer {
+                guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
+                try await recheckPolicy(identity)
+            }
             try lock.withLock {
+                try Task.checkCancellation()
                 guard !stopped else { throw Auth.Failure.closed }
                 try session.check()
                 delegate = result; adopted = true
-            }
-            if let bridge = result as? BridgeBase { try bridge.activateAuthenticatedChannel() }
-            try lock.withLock {
-                guard !stopped else { throw Auth.Failure.closed }
-                try session.check(); peerReady = true
+                // Publication and ownership share the terminality lock. close
+                // cannot retire the Base between activation and ready publication.
+                if let bridge = result as? BridgeBase { try bridge.activateAuthenticatedChannel() }
+                if peer { peerReady = true }
             }
             scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
         } catch {
             let ownsCleanup = lock.withLock { () -> Bool in
                 if !adopted { return true }
                 guard delegate === result else { return false }
-                delegate = nil; return true
+                delegate = nil; peerReady = false; return true
             }
-            if ownsCleanup {
-                if let bridge = result as? BridgeBase { await bridge.channelDidClose(session) }
-                else { await result.pushError(errorMessage: "bridge_channel_closed", error: Auth.Failure.closed) }
-            }
+            if ownsCleanup { await retireFactoryResult(result) }
             throw error
         }
+    }
+    private func retireFactoryResult(_ result: BridgeDelegateProtocol) async {
+        if let bridge = result as? BridgeBase { await bridge.channelDidClose(session) }
+        else { await result.pushError(errorMessage: "bridge_channel_closed", error: Auth.Failure.closed) }
     }
     private func consumePeerAuthentication(_ command: BridgeCommand, bytes: Data,
         peer: BridgePeerChannelAuthentication.Operation) async throws {
@@ -197,9 +206,9 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
     public func setDelegate(_ delegate: BridgeDelegateProtocol) {
         lock.withLock {
-            // Peer factories may bind BridgeBase while suspended. Adoption is
-            // owned by activatePeer, never by a provisional setTransport call.
-            if !stopped && (peerOperation == nil || peerReady) { self.delegate = delegate }
+            // Server factory results are adopted only under the terminality
+            // guard. A suspended WS/peer factory must not create a retain cycle.
+            if !stopped && factory == nil { self.delegate = delegate }
         }
     }
 
@@ -234,7 +243,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             catch { return }
             await self?.close()
         }
-        lock.withLock { timer?.cancel(); timer = task }
+        lock.withLock {
+            guard !stopped else { task.cancel(); return }
+            timer?.cancel(); timer = task
+        }
     }
     private func sendAuth<T: Encodable>(_ name: String, _ value: T) async throws {
         let command = BridgeCommand(cmd: name, payload: .string(String(decoding: try Auth.encode(value), as: UTF8.self)), cid: 0)
@@ -421,11 +433,8 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try await recheckPolicy(identity)
             try session.recheckBeforeActivation()
             let acknowledgement = try session.activate()
-            let delegate = try await factory(self, session)
-            try session.check()
-            lock.withLock { self.delegate = delegate }
-            if let bridge = delegate as? BridgeBase { try bridge.activateAuthenticatedChannel() }
-            scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+            let result = try await factory(self, session)
+            try await adoptFactoryResult(result, peer: false)
             try await sendAuth("channelAuthAccepted", acknowledgement)
         case (false, "channelAuthChallenge"):
             guard let operation = lock.withLock({ self.operation }) else { throw Auth.Failure.unexpectedMessage }
@@ -499,7 +508,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         BridgeIdentityVault(cloudBridge: lock.withLock { delegate as? BridgeProtocol })
     }
     public func pushError(errorMessage: String?, error: Error?) async { await close() }
-    public func ready() async throws { try session.check() }
+    public func ready() async throws {
+        try lock.withLock {
+            guard !stopped else { throw Auth.Failure.closed }
+            try session.check()
+        }
+    }
+    var hasDelegate: Bool { lock.withLock { delegate != nil } }
     public func sendCommand(command: Command, identity: Identity, payload: ValueType?) async {
         // Underlying adapters historically initiate description on connect. The
         // resolver starts that operation after authenticated readiness instead.

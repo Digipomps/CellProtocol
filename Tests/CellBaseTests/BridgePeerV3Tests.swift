@@ -167,13 +167,17 @@ actor V3Vault: IdentityVaultProtocol {
 private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     weak var gate: BridgeChannelTransport?
     let wire = V3Wire()
+    var beforeSubmission: (@Sendable (Data) async -> Void)?
+    var submitted: (@Sendable (Data) -> Void)?
     var beforeFirstSubmission: (@Sendable () async -> Void)?
     var afterFirstSubmission: (@Sendable () async -> Void)?
     func setDelegate(_ delegate: BridgeDelegateProtocol) { gate = delegate as? BridgeChannelTransport }
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
     func sendData(_ data: Data) async throws {
         if wire.count == 0 { await beforeFirstSubmission?() }
+        await beforeSubmission?(data)
         try gate!.submitPeerFrame(data) { try wire.append($0) }
+        submitted?(data)
         if wire.count == 1 { await afterFirstSubmission?() }
     }
     func identityVault(for: Identity?) async -> IdentityVaultProtocol { BridgeIdentityVault() }
@@ -227,6 +231,7 @@ private final class V3GatePair {
     let io: Identity, ro: Identity
     init(policy: P.DisclosurePolicy? = nil, responderPolicy: P.DisclosurePolicy? = nil,
          family: String = "vectors", sameIdentity: Bool = false, limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil, factoryRole: P.Role = .initiator,
+         factory: BridgeChannelTransport.ServerFactory? = nil,
          responderRecheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in },
          recheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in }) throws {
         self.limits = limits
@@ -238,14 +243,16 @@ private final class V3GatePair {
         let endpoint = try P.Endpoint(initiator: "I", responder: "R", setupID: UUID().uuidString, domain: "nearby")
         i = try BridgeChannelTransport(underlying: it, peerEndpoint: endpoint, role: .initiator, owner: io,
             limits: limits, source: UUID().uuidString, disclosurePolicy: policy ?? .anyProvenIdentity(allowUnauthenticatedInitiator: true),
-            recheckPolicy: recheck, wallClock: clock.date, monotonic: clock.uptime) { [id] gate, _ in
+            recheckPolicy: recheck, wallClock: clock.date, monotonic: clock.uptime) { [id] gate, session in
+                if let factory, factoryRole == .initiator { return try await factory(gate, session) }
                 id.created(); gate.setDelegate(id)
                 if factoryRole == .initiator { await factoryBarrier?.wait() }
                 return id
             }
         r = try BridgeChannelTransport(underlying: rt, peerEndpoint: endpoint, role: .responder, owner: ro,
             limits: limits, source: UUID().uuidString, disclosurePolicy: responderPolicy ?? .anyProvenIdentity(allowUnauthenticatedInitiator: true),
-            recheckPolicy: responderRecheck, wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, _ in
+            recheckPolicy: responderRecheck, wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, session in
+                if let factory, factoryRole == .responder { return try await factory(gate, session) }
                 rd.created(); gate.setDelegate(rd)
                 if factoryRole == .responder { await factoryBarrier?.wait() }
                 return rd
@@ -723,5 +730,63 @@ private actor V3MutablePolicy {
     func deny() { allowed = false }
     func check() throws {
         guard allowed else { throw BridgeChannelAuthentication.Failure.identityMismatch }
+    }
+}
+
+
+extension BridgePeerV3Tests {
+    func testPeerLateFactoryTransportBindingRetiresSubscriptionAndDeinitializesForBothRoles() async throws {
+        for role in [P.Role.initiator, .responder] {
+            for bindBeforeHold in [true, false] {
+                let hold = BridgeLifecycleBarrier(), cleanup = BridgeLifecycleBarrier(), stats = BridgeFactoryLifetimeStats()
+                let owner = await MockIdentityVault().identity(for: "factory", makeNewIfNotFound: true)!
+                let pair = try V3GatePair(factoryRole: role, factory: { transport, _ in
+                    try await BridgeFactoryLifetimeSpy.make(owner: owner, transport: transport, stats: stats,
+                        hold: hold, cleanup: cleanup, bindBeforeHold: bindBeforeHold)
+                })
+                let startup = try await pair.start(), step = role == .initiator ? 4 : 5
+                for n in 1..<step { try await pair.step(n) }
+                let pending = Task { try await pair.step(step) }
+                await fulfillment(of: [hold.entered], timeout: 2)
+                let gate = role == .initiator ? pair.i : pair.r
+                XCTAssertFalse(gate.hasDelegate)
+                await gate.close(); await hold.release()
+                await fulfillment(of: [cleanup.entered], timeout: 2)
+                XCTAssertGreaterThan(pair.limits.outstandingWorkCount, 0)
+                XCTAssertEqual(stats.snapshot.subscriptions, 1)
+                await cleanup.release(); _ = try? await pending.value
+                XCTAssertFalse(gate.hasDelegate); XCTAssertFalse(gate.canSendPeerData)
+                XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(stats.snapshot.subscriptions, 0)
+                XCTAssertEqual(stats.snapshot.deinitialized, 1)
+                await pair.stop(startup)
+                XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+            }
+        }
+    }
+
+    func testPeerMuxHeldPhysicalSubmissionFencesReusedIDAndCIDWhileSiblingWorks() async throws {
+        let owner = await MockIdentityVault().identity(for: "factory", makeNewIfNotFound: true)!
+        let stats = BridgeFactoryLifetimeStats(), frames = BridgeMuxLifetimeFrames(), hold = BridgeLifecycleBarrier()
+        let pair = try V3GatePair(factoryRole: .responder, factory: { transport, _ in
+            BridgeMultiplexServerSession(physicalTransport: transport, maximumChannels: 3) { target, _, logical in
+                let spy = try await BridgeFactoryLifetimeSpy.make(owner: owner, transport: logical,
+                    stats: target == "old" ? stats : .init())
+                spy.reply = target
+                return spy
+            }
+        })
+        let startup = try await pair.start()
+        for step in 1...5 { try await pair.step(step) }
+        try await startup.value
+        pair.rt.beforeSubmission = { data in
+            if (try? JSONDecoder().decode(BridgeCommand.self, from: data).payload) == .string("old") { await hold.hold() }
+        }
+        pair.rt.submitted = { data in if let frame = try? JSONDecoder().decode(BridgeCommand.self, from: data) { frames.append(frame) } }
+        try await exerciseMuxSubmissionLifetime(owner: pair.io, hold: hold, frames: frames, stats: stats) { command in
+            var command = command
+            command.peerGeneration = pair.i.session.generation
+            try await pair.r.consumeCommand(command: command)
+        }
+        await pair.stop(startup)
     }
 }

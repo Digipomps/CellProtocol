@@ -31,8 +31,9 @@ public actor BridgeChannelClientOperation {
     public func cancel() { active = false; challengeValue = nil }
 
     private func validate(_ challenge: Auth.Challenge, now: Date) throws {
+        try Task.checkCancellation()
         let t = challenge.transcript
-        guard monotonic() < deadline,
+        guard active, monotonic() < deadline,
               t.profile == Auth.profile, t.direction == "client-to-server", t.endpoint == endpoint,
               t.identity == hello.identity, t.clientNonce == hello.clientNonce,
               t.serverNonce.count == 32, UUID(uuidString: t.sessionID) != nil,
@@ -57,6 +58,9 @@ public actor BridgeChannelClientOperation {
         // concurrent signing or extend a permit while the vault is suspended.
         signingStarted = true
         guard await vault.identityExistInVault(owner), active else { throw Auth.Failure.identityMismatch }
+        // The vault lookup may suspend past either deadline without observing
+        // cancellation. Revalidate the local permit at private-key admission.
+        try validate(challenge, now: wallClock())
         let signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner)
         guard active, monotonic() < deadline,
               IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: challenge.signingData, identity: hello.identity.makeIdentity()) else {

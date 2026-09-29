@@ -818,7 +818,11 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
         }
         func retire() async {
-            lock.withLock { retired = true; tasks.values.forEach { $0.cancel() } }
+            let ownsCleanup = lock.withLock { () -> Bool in
+                guard !retired else { return false }
+                retired = true; tasks.values.forEach { $0.cancel() }; return true
+            }
+            guard ownsCleanup else { return }
             if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
             else { await delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
         }
@@ -847,6 +851,9 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     private let maximumPendingChannelOpens: Int
     private let maximumTrackedOutboundStreams: Int
     private var channels: [String: ChannelRecord] = [:]
+    // A retired wire ID is unavailable until every admitted send has returned
+    // from the physical transport, including non-cooperative queued sends.
+    private var sendingChannelIDs: [String: Int] = [:]
     private var pendingChannelIDs: Set<String> = []
     private var cancelledPendingChannelIDs: Set<String> = []
     private var outboundStreamSequences: [String: OutboundSequenceEntry] = [:]
@@ -972,6 +979,17 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     private func open(_ command: BridgeCommand) async throws {
+        // Reserve the response lifetime before any rejection audit/factory await.
+        // Even a delayed rejection for an old open cannot target a later reuse.
+        let reservedID = command.channelID.flatMap { BridgeMultiplexSession.isValidChannelID($0) ? $0 : nil }
+        let previousSends = stateLock.withLock { () -> Int in
+            guard let reservedID else { return 0 }
+            let previous = sendingChannelIDs[reservedID, default: 0]
+            sendingChannelIDs[reservedID] = previous + 1
+            return previous
+        }
+        defer { if let reservedID { releaseSendReservation(reservedID) } }
+
         guard command.protocolVersion == protocolVersion,
               let channelID = command.channelID,
               BridgeMultiplexSession.isValidChannelID(channelID),
@@ -994,10 +1012,12 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
         let reservation = stateLock.withLock { () -> ChannelReservation in
             guard closed == false else { return .closed }
-            guard channels[channelID] == nil, pendingChannelIDs.contains(channelID) == false else {
+            guard channels[channelID] == nil, pendingChannelIDs.contains(channelID) == false,
+                  previousSends == 0 else {
                 return .conflict
             }
-            guard channels.count + pendingChannelIDs.count < maximumChannels,
+            let retainedIDs = Set(channels.keys).union(pendingChannelIDs).union(sendingChannelIDs.keys).subtracting([channelID])
+            guard retainedIDs.count < maximumChannels,
                   pendingChannelIDs.count < maximumPendingChannelOpens else {
                 return .capacityExceeded
             }
@@ -1035,6 +1055,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             }
         }
 
+        var result: ChannelRecord?
         do {
             guard let channelSession else { throw BridgeChannelAuthentication.Failure.closed }
             let quota = try BridgeChannelResourceLease(session: channelSession, resource: .channel)
@@ -1043,42 +1064,31 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             try channelSession.check(identity: identity, requiresIdentity: true)
             guard let principal = channelSession.publicIdentity?.makeIdentity() else { throw BridgeChannelAuthentication.Failure.closed }
             let delegate = try await channelFactory(targetEndpoint, principal, channelTransport)
-            try channelSession.check(identity: identity, requiresIdentity: true)
-            channelTransport.setDelegate(delegate)
-            let inserted = stateLock.withLock { () -> Bool in
-                guard closed == false,
-                      pendingChannelIDs.contains(channelID),
-                      cancelledPendingChannelIDs.contains(channelID) == false,
-                      channels[channelID] == nil else {
-                    return false
-                }
-                channels[channelID] = ChannelRecord(delegate: delegate, transport: channelTransport, quota: quota)
+            // Own cleanup immediately, including a throwing session check.
+            let record = ChannelRecord(delegate: delegate, transport: channelTransport, quota: quota)
+            result = record
+            let inserted = try stateLock.withLock { () throws -> Bool in
+                try Task.checkCancellation()
+                try channelSession.check(identity: identity, requiresIdentity: true)
+                guard !closed, pendingChannelIDs.contains(channelID),
+                      !cancelledPendingChannelIDs.contains(channelID), channels[channelID] == nil else { return false }
+                channelTransport.setDelegate(delegate)
+                channels[channelID] = record
                 return true
             }
-            guard inserted else {
-                // A concurrent close already retired the logical request. Do not
-                // close its physical session or send a late rejection to a client
-                // that has removed the opening continuation.
-                if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
-                else { await delegate.pushError(errorMessage: "bridge_channel_cancelled", error: BridgeChannelAuthentication.Failure.closed) }
-                return
-            }
-            try await sendSessionFrame(BridgeCommand(
-                cmd: Command.channelOpened.rawValue,
-                identity: identity,
-                payload: nil,
-                cid: command.cid,
-                protocolVersion: protocolVersion,
-                channelID: channelID
-            ))
+            guard inserted else { await record.retire(); return }
+            let opened = BridgeCommand(cmd: Command.channelOpened.rawValue, identity: identity,
+                payload: nil, cid: command.cid, protocolVersion: protocolVersion, channelID: channelID)
+            try await send(JSONEncoder().encode(opened), channelID: channelID, transport: channelTransport)
         } catch {
             stateLock.withLock {
-                channels[channelID] = nil
-                outboundStreamSequences = outboundStreamSequences.filter {
-                    !$0.key.hasPrefix("\(channelID)|")
-                }
+                if let result, channels[channelID] === result { channels[channelID] = nil }
+                outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
                 compactOutboundStreamInsertionOrderIfNeeded()
             }
+            await result?.retire()
+            guard stateLock.withLock({ !closed && !cancelledPendingChannelIDs.contains(channelID) }),
+                  !Task.isCancelled, (try? channelSession?.check()) != nil else { return }
             try await reject(command)
         }
     }
@@ -1095,9 +1105,18 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     fileprivate func send(_ data: Data, channelID: String, transport: ServerChannelTransport) async throws {
-        // Object identity is the logical generation; reused wire IDs confer no authority.
-        guard stateLock.withLock({ closed == false && channels[channelID]?.transport === transport }) else {
-            throw BridgeMultiplexError.channelNotFound
+        // The object guard and reservation are one decision. A close may now
+        // remove the record, but open cannot reuse its wire ID until defer runs.
+        let record = try stateLock.withLock { () throws -> ChannelRecord in
+            guard !closed, let record = channels[channelID], record.transport === transport else {
+                throw BridgeMultiplexError.channelNotFound
+            }
+            sendingChannelIDs[channelID, default: 0] += 1
+            return record
+        }
+        defer {
+            releaseSendReservation(channelID)
+            withExtendedLifetime(record) {}
         }
         guard var command = try? JSONDecoder().decode(BridgeCommand.self, from: data) else {
             throw BridgeMultiplexError.invalidFrame
@@ -1123,6 +1142,14 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         try await sendSessionFrame(command)
     }
 
+    private func releaseSendReservation(_ channelID: String) {
+        stateLock.withLock {
+            guard let count = sendingChannelIDs[channelID] else { return }
+            if count == 1 { sendingChannelIDs[channelID] = nil }
+            else { sendingChannelIDs[channelID] = count - 1 }
+        }
+    }
+
     fileprivate func vault(for identity: Identity?) async -> IdentityVaultProtocol {
         await physicalTransport.identityVault(for: identity)
     }
@@ -1131,6 +1158,11 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         guard stateLock.withLock({ closed == false }) else {
             throw BridgeMultiplexError.sessionClosed
         }
+        // Control responses must not outlive an ID reservation either (a held
+        // channelRejected must not reject a subsequent open using the same cid).
+        let id = command.channelID
+        if let id { stateLock.withLock { sendingChannelIDs[id, default: 0] += 1 } }
+        defer { if let id { releaseSendReservation(id) } }
         try await physicalTransport.sendData(JSONEncoder().encode(command))
     }
 
