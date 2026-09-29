@@ -103,6 +103,26 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
         XCTAssertEqual(denied["status"], .string("rejected"))
     }
 
+    @MainActor func testSameSigningIdentityOnTwoSessionsPersistsTheResponderRole() async throws {
+        let owner = await ScannerPair.owner()
+        let f = try await ConsumerFixture(sharedOwner: owner); defer { f.stop() }
+        XCTAssertEqual(f.context.localIdentity, f.context.identity)
+        XCTAssertNotEqual(f.context.localUUID, f.context.remoteUUID)
+        let request = try await f.incomingRequest(signer: f.pair.b.owner, context: f.context)
+        var flow = f.flow(request); flow.topic = "scanner.transport.contact.request"
+        try await f.pair.b.sendScannerFlowElement(flow, remoteUUID: f.pair.a.mySessionUUID)
+        try await f.pair.deliverNext()
+        let result = try await f.cell.set(keypath: "acceptContact", value: .object(request), requester: owner)
+        guard case let .object(reply)? = result else { return XCTFail("Missing acceptance") }
+        XCTAssertEqual(reply["status"], .string("accepted"))
+        let stored = try await f.anchor.get(keypath: "proofs.encounters.\(f.id(request))", requester: owner)
+        guard case let .object(encounter) = stored else { return XCTFail("Missing real encounter") }
+        XCTAssertEqual(encounter["localRole"], .string("responder"))
+        XCTAssertEqual(encounter["localSessionUUID"], .string(f.context.localUUID))
+        XCTAssertEqual(encounter["remoteSessionUUID"], .string(f.context.remoteUUID))
+        XCTAssertEqual(f.established, 1)
+    }
+
     @MainActor func testPendingExpiryDuringVerificationAndFutureSignedAcceptanceCannotPersist() async throws {
         let f = try await ConsumerFixture(); defer { f.stop() }
         let request = try await f.request()
@@ -289,8 +309,8 @@ private actor ConsumerBarrier {
     let resolver: MockCellResolver
     let context: ScannerConsumerContext
     var established = 0
-    init(limits: BridgeChannelLimits = BridgeChannelLimits()) async throws {
-        pair = try await ScannerPair(limits: limits)
+    init(limits: BridgeChannelLimits = BridgeChannelLimits(), sharedOwner: Identity? = nil) async throws {
+        pair = try await ScannerPair(limits: limits, ownerA: sharedOwner, ownerB: sharedOwner)
         try await pair.finish(pair.start())
         context = try pair.a.consumerContext(remoteUUID: pair.b.mySessionUUID)
         resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver

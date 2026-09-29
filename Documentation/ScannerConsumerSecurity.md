@@ -72,7 +72,9 @@ have the exact type/version, request ID, encounter ID, canonical hash of the
 entire signed request, local requester session, remote responder session and
 local target UUID. The responder identity UUID and full descriptor must equal
 the channel's proven principal; same UUID with another key is rejected. No
-identity delegation is currently implemented or implicitly inferred. The
+identity delegation is currently implemented or implicitly inferred. Encounter role
+is selected by the validated local session binding, including when both devices
+use the same signing identity. The
 acceptance's own hash and signature must also verify. Signed createdAt must be
 finite, newer than 60 wall-clock seconds and no more than 5 seconds in the future;
 the pending record's independent monotonic deadline is checked after verification.

@@ -932,14 +932,16 @@ final class ScannerPair {
     var c: ScannerService?
     var cPeer = MCPeerID(displayName: "test-c")
     var ac: ScannerPeerTransport?, pc: ScannerPeerTransport?
-    init(limits: BridgeChannelLimits = BridgeChannelLimits(), ownerA: Identity? = nil, reverse: Bool = false, admissionA: ScannerAdmission = ScannerAdmission()) async throws {
+    init(limits: BridgeChannelLimits = BridgeChannelLimits(), ownerA: Identity? = nil, ownerB: Identity? = nil, reverse: Bool = false, admissionA: ScannerAdmission = ScannerAdmission()) async throws {
         let resolvedOwnerA: Identity
         if let ownerA { resolvedOwnerA = ownerA }
         else { resolvedOwnerA = await Self.owner() }
-        let ownerB = await Self.owner()
+        let resolvedOwnerB: Identity
+        if let ownerB { resolvedOwnerB = ownerB }
+        else { resolvedOwnerB = await Self.owner() }
         let suffix = UUID().uuidString
         a = ScannerService(admission: admissionA, owner: resolvedOwnerA, sessionUUID: (reverse ? "second-" : "first-") + suffix)
-        b = ScannerService(admission: ScannerAdmission(), owner: ownerB, sessionUUID: (reverse ? "first-" : "second-") + suffix)
+        b = ScannerService(admission: ScannerAdmission(), owner: resolvedOwnerB, sessionUUID: (reverse ? "first-" : "second-") + suffix)
         a.channelLimits = limits; b.channelLimits = limits
         a.foundPeersDict[b.mySessionUUID] = bPeer; a.reversedFoundPeersDict[bPeer] = b.mySessionUUID
         b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID

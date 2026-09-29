@@ -797,7 +797,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         context: ScannerConsumerContext
     ) async throws -> Object {
         try context.check()
-        let localIsRequester = string(from: requestObject["requesterIdentityUUID"]) == requester.uuid
+        let localIsRequester = string(from: requestObject["requesterSessionUUID"]) == context.localUUID
         let remoteIdentity: Identity?
         let remotePerspective: ValueType
         let localPerspective: ValueType
