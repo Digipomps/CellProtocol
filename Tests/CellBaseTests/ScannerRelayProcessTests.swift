@@ -177,7 +177,7 @@ private final class RelayObservation {
         }
     }
     func verify() throws {
-        let frames = lock.withLock { frames }
+        let frames = lock.withLock { self.frames }
         var commands: [String] = [], records: [String: Int] = [:]
         let helloKeys: Set<String> = ["profile","role","ephemeralPublicKey","nonce","generation","issuedAtMilliseconds"]
         var forbidden = ["relay-private-application-", "relay-secret-identity-"]
