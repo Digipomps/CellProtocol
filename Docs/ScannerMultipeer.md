@@ -52,25 +52,29 @@ Do not treat a failed run as an authenticated connection.
 
 ## Physical binding and reconnect fence (N08/N09)
 
-Each ScannerPeerTransport retains its accepted MCPeerID, MCSession instance,
-local setup ID and role. Send, callback capture and retirement use that binding,
-not discovery routes. Colliding discovery cannot replace a pending/active route;
-discovery loss alone does not disconnect the channel. MC receive callbacks
-capture the transport synchronously before starting asynchronous work. A late
-failure, disconnect or close can only retire that transport instance.
+Each installed ScannerPeerTransport retains its MCPeerID, MCSession instance,
+local setup ID and role. Send, callback capture and retirement use this object
+binding. Discovery cannot replace an installed adapter. Pending/accepted
+invitation ownership before adapter creation remains N11 work; it must not be
+inferred from the installed-adapter guarantee.
 
-Ordinary peer BridgeCommands require `&peerGeneration`, stamped by the gate from
-its local session generation and checked against the remote hello generation
-before dispatch/cid lookup. Old-generation frames are discarded without closing
-the replacement gate. Auth frames and WebSocket frames omit the field. Both peer
-ends must run this protocol version; untagged ordinary peer frames fail closed.
-The final encoded bytes, including the generation, count toward send limits.
+The active [peer v3 contract](../Documentation/BridgePeerChannelV3.md) protects
+identity fields against a pure inner-handshake relay and encrypts all subsequent
+application records. Scanner explicitly accepts first contact with any proven
+identity; this is not an expected-person policy. Active DH participants have the
+asymmetric disclosure limits documented in that contract.
 
-This is a reconnect fence, **not cryptographic integrity**. N07 remains open:
-a relay terminating two MC connections can still forward authentic proofs and
-modify ordinary messages. The future per-message protection layer belongs at
-ScannerPeerTransport.sendData/receiveData, the bound physical byte boundary;
-it must account for its wire overhead in the existing gate's budgets.
+Ordinary peer commands retain the inner `&peerGeneration` check in addition to
+HPC3 AEAD. An old callback captured on a retired adapter cannot affect its
+replacement. Old ciphertext delivered to the **current** adapter, including one
+whose generation/counter has been rewritten, is a terminal error for that gate.
+Auth frames and WS frames omit the inner generation field. Both peer ends must
+run v3; v1/v2/HPC2 and plaintext application frames are rejected. Actual encoded
+wire bytes, padding and cryptographic overhead count toward send limits.
+
+The former N07 application-integrity gap is closed. Consumer ordering (N10),
+physical retirement (N15), general delivery backpressure (N18), contact/NI
+binding and other review findings remain separate work and verification gates.
 
 NI discovery tokens use shareDiscoveryTokenData, one gated send per eligible
 peer. Pending/factory/ack-incomplete, expired and revoked channels are skipped;

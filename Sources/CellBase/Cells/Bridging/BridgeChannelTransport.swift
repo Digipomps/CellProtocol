@@ -160,8 +160,14 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         // progress; initial M1/M2 have no previous reservation.
         if previous > 0 { releasePeerHandshakeBytes(previous) }
         try await physicalTransport().sendData(data)
-        try checkPeerHandshake()
-        guard lock.withLock({ peerAuthSend == nil }) else { throw Auth.Failure.unavailable }
+        try lock.withLock {
+            guard !stopped else { throw Auth.Failure.closed }
+            // M1 submission may return after the independent receive queue has
+            // already completed the handshake. Recheck this captured session,
+            // without rejecting legitimate authenticated progress.
+            if peerReady { try session.check() } else { try session.checkPeerHandshake() }
+            guard peerAuthSend != data else { throw Auth.Failure.unavailable }
+        }
     }
     private func releasePeerHandshakeBytes(_ bytes: Int? = nil) {
         lock.withLock {

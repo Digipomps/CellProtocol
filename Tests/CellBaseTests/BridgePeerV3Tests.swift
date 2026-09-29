@@ -6,12 +6,15 @@ import Crypto
 final class BridgePeerV3Tests: XCTestCase {
     typealias P = BridgePeerChannelAuthentication
     typealias A = BridgeChannelAuthentication
-    static func vectors() throws -> [String: Data] {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/PeerV3/vectors.json")
+    static func vectors(_ name: String = "vectors") throws -> [String: Data] {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/PeerV3/\(name).json")
         return try JSONDecoder().decode([String: Data].self, from: Data(contentsOf: url))
     }
     func testIndependentFullHandshakeAndAllKeyPurposes() async throws {
-        let v = try Self.vectors()
+        for name in ["vectors", "p256", "mixed-i", "mixed-r"] { try await checkFullVector(name) }
+    }
+    private func checkFullVector(_ name: String) async throws {
+        let v = try Self.vectors(name)
         func data(_ name: String) -> Data { v[name]! }
         let endpoint = try A.decode(P.Endpoint.self, from: data("endpoint"))
         let ih = try A.decode(P.Hello.self, from: data("hello0")), rh = try A.decode(P.Hello.self, from: data("hello1"))
@@ -117,6 +120,7 @@ final class V3Wire: @unchecked Sendable {
 actor V3Vault: IdentityVaultProtocol {
     let descriptor: BridgeChannelAuthentication.PublicIdentity
     let key: Curve25519.Signing.PrivateKey
+    let p256: P256.Signing.PrivateKey?
     let fixed: (Data, Data)?
     private(set) var signCount = 0
     private(set) var signedBytes: Data?
@@ -124,6 +128,7 @@ actor V3Vault: IdentityVaultProtocol {
     var beforeSign: (@Sendable () async -> Void)?
     init(identity: BridgeChannelAuthentication.PublicIdentity, seed: Data, fixed: (Data, Data)? = nil) throws {
         descriptor = identity; key = try .init(rawRepresentation: seed); self.fixed = fixed
+        p256 = identity.algorithm == .ECDSA ? try .init(rawRepresentation: seed) : nil
     }
     func setBarriers(exist: (@Sendable () async -> Void)? = nil, sign: (@Sendable () async -> Void)? = nil) {
         beforeExist = exist; beforeSign = sign
@@ -137,11 +142,12 @@ actor V3Vault: IdentityVaultProtocol {
         if let fixed {
             // CryptoKit may randomize Ed25519 signatures. Freeze a independently
             // generated valid signature only for this exact synthetic message.
-            guard messageData == fixed.0, key.publicKey.isValidSignature(fixed.1, for: messageData) else {
+            guard messageData == fixed.0, IdentityPublicKeySignatureVerifier.verify(signature: fixed.1, messageData: messageData, identity: descriptor.makeIdentity()) else {
                 throw BridgeChannelAuthentication.Failure.invalidProof
             }
             return fixed.1
         }
+        if let p256 { return try p256.signature(for: messageData).derRepresentation }
         return try key.signature(for: messageData)
     }
     func initialize() async -> IdentityVaultProtocol { self }
@@ -161,9 +167,13 @@ actor V3Vault: IdentityVaultProtocol {
 private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     weak var gate: BridgeChannelTransport?
     let wire = V3Wire()
+    var afterFirstSubmission: (@Sendable () async -> Void)?
     func setDelegate(_ delegate: BridgeDelegateProtocol) { gate = delegate as? BridgeChannelTransport }
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
-    func sendData(_ data: Data) async throws { try gate!.submitPeerFrame(data) { try wire.append($0) } }
+    func sendData(_ data: Data) async throws {
+        try gate!.submitPeerFrame(data) { try wire.append($0) }
+        if wire.count == 1 { await afterFirstSubmission?() }
+    }
     func identityVault(for: Identity?) async -> IdentityVaultProtocol { BridgeIdentityVault() }
     static func new() -> BridgeTransportProtocol { V3Transport() }
     func receive(_ data: Data) async throws {
@@ -214,13 +224,13 @@ private final class V3GatePair {
     let limits: BridgeChannelLimits
     let io: Identity, ro: Identity
     init(policy: P.DisclosurePolicy? = nil, responderPolicy: P.DisclosurePolicy? = nil,
-         limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil,
+         family: String = "vectors", sameIdentity: Bool = false, limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil,
          recheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in }) throws {
         self.limits = limits
-        let v = try BridgePeerV3Tests.vectors()
+        let v = try BridgePeerV3Tests.vectors(family)
         let ide = try A.decode(A.PublicIdentity.self, from: v["identity0"]!)
-        let rde = try A.decode(A.PublicIdentity.self, from: v["identity1"]!)
-        iv = try .init(identity: ide, seed: v["seed0"]!); rv = try .init(identity: rde, seed: v["seed1"]!)
+        let rde = sameIdentity ? ide : try A.decode(A.PublicIdentity.self, from: v["identity1"]!)
+        iv = try .init(identity: ide, seed: v["seed0"]!); rv = try .init(identity: rde, seed: v[sameIdentity ? "seed0" : "seed1"]!)
         io = ide.makeIdentity(); ro = rde.makeIdentity(); io.identityVault = iv; ro.identityVault = rv
         let endpoint = try P.Endpoint(initiator: "I", responder: "R", setupID: UUID().uuidString, domain: "nearby")
         i = try BridgeChannelTransport(underlying: it, peerEndpoint: endpoint, role: .initiator, owner: io,
@@ -330,5 +340,281 @@ extension BridgePeerV3Tests {
         await pair.stop(task)
         XCTAssertEqual(pair.id.counts.close, 1)
         XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+    }
+}
+
+private struct V3VectorExchange {
+    typealias P = BridgePeerChannelAuthentication
+    typealias A = BridgeChannelAuthentication
+    let v: [String: Data]
+    let i: P.Operation, r: P.Operation
+    let iv: V3Vault, rv: V3Vault
+    let wire = V3Wire()
+    init(_ name: String = "vectors", policy: P.DisclosurePolicy = .anyProvenIdentity(allowUnauthenticatedInitiator: true)) throws {
+        v = try BridgePeerV3Tests.vectors(name)
+        let endpoint = try A.decode(P.Endpoint.self, from: v["endpoint"]!)
+        let ih = try A.decode(P.Hello.self, from: v["hello0"]!), rh = try A.decode(P.Hello.self, from: v["hello1"]!)
+        let id = try A.decode(A.PublicIdentity.self, from: v["identity0"]!), rd = try A.decode(A.PublicIdentity.self, from: v["identity1"]!)
+        iv = try V3Vault(identity: id, seed: v["seed0"]!, fixed: (v["challenge0"]!,v["signature0"]!))
+        rv = try V3Vault(identity: rd, seed: v["seed1"]!, fixed: (v["challenge1"]!,v["signature1"]!))
+        let io = id.makeIdentity(), ro = rd.makeIdentity(); io.identityVault = iv; ro.identityVault = rv
+        i = try P.Operation(owner: io, endpoint: endpoint, role: .initiator, generation: ih.generation, policy: policy,
+            wallClock: { Date(timeIntervalSince1970: 1_800_000_000.125) }, ephemeral: .init(rawRepresentation: v["dh0"]!), nonce: ih.nonce)
+        r = try P.Operation(owner: ro, endpoint: endpoint, role: .responder, generation: rh.generation, policy: policy,
+            wallClock: { Date(timeIntervalSince1970: 1_800_000_000.250) }, ephemeral: .init(rawRepresentation: v["dh1"]!), nonce: rh.nonce)
+    }
+    func advance(to step: Int) async throws {
+        _ = try await i.begin(live: {})
+        for previous in 1..<step { _ = try await receive(previous, v["W\(previous)"]!) }
+    }
+    func receive(_ step: Int, _ data: Data) async throws -> BridgePeerRecordLayer? {
+        try await (step.isMultiple(of: 2) ? i : r).receive(data, live: {}, authenticate: { _,_ in },
+            recheck: {}, send: { try wire.append($0) })
+    }
+    func assertRejected(_ step: Int, _ data: Data, label: String, file: StaticString = #filePath, line: UInt = #line) async throws {
+        try await advance(to: step)
+        let before = wire.count
+        do { _ = try await receive(step, data); XCTFail("Accepted \(label)", file: file, line: line) } catch {}
+        XCTAssertEqual(wire.count, before, label, file: file, line: line)
+        do { _ = try await receive(step, v["W\(step)"]!); XCTFail("Reopened \(label)", file: file, line: line) } catch {}
+        if step == 2 { let count = await iv.signCount; XCTAssertEqual(count, 0, label, file: file, line: line) }
+    }
+}
+
+extension BridgePeerV3Tests {
+    private func json(_ bytes: Data) throws -> [String: Any] { try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any]) }
+    private func canonical(_ value: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys,.withoutEscapingSlashes]) }
+    private func changedEnvelope(_ bytes: Data, _ mutate: (inout [String: Any]) throws -> Void) throws -> Data {
+        var outer = try json(bytes), body = try json(Data((outer["&string"] as! String).utf8))
+        try mutate(&body); outer["&string"] = String(decoding: try canonical(body), as: UTF8.self)
+        return try canonical(outer)
+    }
+    // Models a legitimate DH participant: correct AEAD with attacker-selected
+    // Auth/Finished fields. Tag failure alone cannot test inner validation.
+    private func encryptedMutation(_ step: Int, v: [String: Data], repairMAC: Bool = true,
+                                   mutate: (inout [String: Any]) throws -> Void) throws -> Data {
+        let index = step.isMultiple(of: 2) ? 1 : 0
+        var value = try json(step < 4 ? v["Auth\(index)"]! : Data(v["pad\(step)"]!.dropFirst(4).prefix(
+            v["pad\(step)"]!.prefix(4).reduce(0) { ($0 << 8) | Int($1) })))
+        try mutate(&value)
+        if step < 4 && repairMAC {
+            let core = ["endpoint":value["endpoint"]!,"identity":value["identity"]!,"proof":value["proof"]!]
+            let context = v[step == 2 ? "T0" : "T2"]!
+            value["identityMAC"] = P.mac(SymmetricKey(data: v["identity-mac-key\(index)"]!),
+                P.framed("identity-mac", Data((index == 1 ? "responder" : "initiator").utf8), context, try canonical(core))).base64EncodedString()
+        }
+        let encoded = try canonical(value), size = step < 4 ? 8192 : 1024
+        let padded = P.integer(UInt32(encoded.count)) + encoded + Data(repeating: 0, count: size-4-encoded.count)
+        let box = try ChaChaPoly.seal(padded, using: SymmetricKey(data: v["handshake-key\(index)"]!),
+            nonce: P.nonce(step < 4 ? 0 : 1), authenticating: v["aad\(step)"]!)
+        return try changedEnvelope(v["W\(step)"]!) { $0["sealed"] = (box.ciphertext+box.tag).base64EncodedString() }
+    }
+
+    func testEveryHelloFieldAndLegacyProfileFailsBeforeDisclosure() async throws {
+        let v = try Self.vectors()
+        for step in [1,2] {
+            for field in ["profile","role","ephemeralPublicKey","nonce","generation","issuedAtMilliseconds","missing","extra"] {
+                let changed = try changedEnvelope(v["W\(step)"]!) { body in
+                    var hello = step == 1 ? body : body["hello"] as! [String: Any]
+                    switch field {
+                    case "profile": hello[field] = "org.haven.bridge-peer-channel.v2"
+                    case "role": hello[field] = step == 1 ? "responder" : "initiator"
+                    case "ephemeralPublicKey", "nonce": hello[field] = Data(repeating: 0, count: 31).base64EncodedString()
+                    case "generation": hello[field] = step == 1 ? "22222222-2222-4222-8222-222222222222" : "11111111-1111-4111-8111-111111111111"
+                    case "issuedAtMilliseconds": hello[field] = Int64.max
+                    case "missing": hello.removeValue(forKey: "nonce")
+                    default: hello["identity"] = "cleartext-forbidden"
+                    }
+                    if step == 1 { body = hello } else { body["hello"] = hello }
+                }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/\(field)")
+            }
+            for time: Int64 in [-1, Int64.min, 1_799_999_990_125, 1_800_000_005_126] {
+                let changed = try changedEnvelope(v["W\(step)"]!) { body in
+                    if step == 1 { body["issuedAtMilliseconds"] = time }
+                    else { var hello = body["hello"] as! [String: Any]; hello["issuedAtMilliseconds"] = time; body["hello"] = hello }
+                }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/time/\(time)")
+            }
+        }
+        for old in ["channelAuthPeerHello","channelAuthPeerProof","channelAuthPeerAccepted","channelAuthHello"] {
+            var outer = try json(v["W1"]!); outer["cmd"] = old
+            try await V3VectorExchange().assertRejected(1, canonical(outer), label: old)
+        }
+        try await V3VectorExchange().assertRejected(1, Data("HPC2".utf8)+Data(repeating: 0,count: 90), label: "HPC2")
+    }
+
+    func testAuthenticatedInnerFieldMutationsRequireMACSignatureAndFrozenContext() async throws {
+        let v = try Self.vectors()
+        for step in [2,3] {
+            for group in ["endpoint","identity","proof"] {
+                let fields = group == "endpoint" ? ["initiator","responder","setupID","domain"]
+                    : group == "identity" ? ["uuid","algorithm","curve","publicKey"] : ["sessionID","generation","signature"]
+                for field in fields {
+                    let changed = try encryptedMutation(step, v: v) { value in
+                        var object = value[group] as! [String: Any]
+                        if field == "publicKey" { object[field] = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString() }
+                        else if field == "signature" { object[field] = Data(repeating: 0, count: 64).base64EncodedString() }
+                        else { object[field] = field == "algorithm" ? "ECDSA" : field == "curve" ? "P256" : UUID().uuidString }
+                        value[group] = object
+                    }
+                    try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/\(group)/\(field)/valid-AEAD-MAC")
+                }
+            }
+            for bad in [Data(), Data(repeating: 0, count: 31), Data(repeating: 0, count: 32), v["identityMAC\(step == 2 ? 0 : 1)"]!] {
+                let changed = try encryptedMutation(step, v: v, repairMAC: false) { $0["identityMAC"] = bad.base64EncodedString() }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/MAC/valid-signature-AEAD")
+            }
+            for field in ["sessionID","generation","transcriptDigest"] {
+                // Proof challenge is independently signed over a wrong local
+                // claim, while AEAD+identity MAC are repaired by the DH attacker.
+                let index = step == 2 ? 1 : 0
+                var challenge = try json(v["challenge\(index)"]!)
+                let name = field == "sessionID" ? "resource" : field == "generation" ? "audience" : "domain"
+                challenge[name] = "wrong-" + (challenge[name] as! String)
+                let signature = try Curve25519.Signing.PrivateKey(rawRepresentation: v["seed\(index)"]!).signature(for: canonical(challenge))
+                let changed = try encryptedMutation(step, v: v) { value in
+                    var proof = value["proof"] as! [String: Any]; proof["signature"] = signature.base64EncodedString(); value["proof"] = proof
+                }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/signed-wrong-\(name)")
+            }
+        }
+        for step in [4,5] {
+            for field in ["sessionID","generation","transcriptDigest","verifyData"] {
+                let changed = try encryptedMutation(step, v: v) { value in
+                    if field == "verifyData" { value[field] = Data(repeating: 0, count: 32).base64EncodedString() }
+                    else { var ack = value["ack"] as! [String: Any]; ack[field] = UUID().uuidString; value["ack"] = ack }
+                }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/\(field)/valid-AEAD")
+            }
+        }
+    }
+
+    func testEveryOutOfOrderHandshakeMessageAndTamperedTagIsTerminal() async throws {
+        let v = try Self.vectors()
+        for step in 1...5 {
+            for wrong in 1...5 where step != wrong {
+                try await V3VectorExchange().assertRejected(step, v["W\(wrong)"]!, label: "M\(wrong) at M\(step)")
+            }
+            if step > 1 {
+                let changed = try changedEnvelope(v["W\(step)"]!) { body in
+                    var sealed = Data(base64Encoded: body["sealed"] as! String)!
+                    sealed[sealed.count-1] ^= 1; body["sealed"] = sealed.base64EncodedString()
+                }
+                try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/tag")
+            }
+        }
+    }
+
+    func testActiveInitiatorCanReadResponderButUnrelatedRelayDHCannot() async throws {
+        let exchange = try V3VectorExchange(), v = exchange.v
+        try await exchange.advance(to: 2)
+        let envelope = try P.decodeEnvelope(XCTUnwrap(exchange.wire.last))
+        let offer = try A.decode(P.ResponderAuth.self, from: Data(envelope.body.utf8))
+        // M intentionally starts DH as I and knows its own private DH key.
+        let prk = try P.extract(.init(rawRepresentation: v["dh0"]!), remote: offer.hello.ephemeralPublicKey, salt: v["T0"]!)
+        let box = try ChaChaPoly.SealedBox(nonce: P.nonce(0), ciphertext: offer.sealed.dropLast(16), tag: offer.sealed.suffix(16))
+        let plain = try ChaChaPoly.open(box, using: P.key(prk,"handshake-key",.responder,v["T0"]!), authenticating: v["aad2"]!)
+        XCTAssertEqual(try A.encode(P.unpad(P.Authentication.self, plain, size: 8192).identity), v["identity1"])
+        let calls = await exchange.iv.signCount; XCTAssertEqual(calls, 0)
+        let unrelated = try P.extract(.init(), remote: offer.hello.ephemeralPublicKey, salt: v["T0"]!)
+        XCTAssertThrowsError(try ChaChaPoly.open(box, using: P.key(unrelated,"handshake-key",.responder,v["T0"]!), authenticating: v["aad2"]!))
+    }
+}
+
+extension BridgePeerV3Tests {
+    func testLiveMixedAlgorithmsFixedLengthsAndSameKeyReflection() async throws {
+        for family in ["vectors","p256","mixed-i","mixed-r"] {
+            for same in [true,false] {
+                let pair = try V3GatePair(family: family, sameIdentity: same)
+                let task = try await pair.start()
+                for step in 1...5 {
+                    if step > 1 {
+                        let sender = step.isMultiple(of: 2) ? pair.rt : pair.it
+                        let body = try json(Data(P.decodeEnvelope(XCTUnwrap(sender.wire.last)).body.utf8))
+                        XCTAssertEqual(Data(base64Encoded: body["sealed"] as! String)?.count, step < 4 ? 8208 : 1040)
+                    }
+                    try await pair.step(step)
+                }
+                try await task.value
+                XCTAssertEqual(pair.i.session.publicIdentity, try A.PublicIdentity(pair.ro))
+                XCTAssertEqual(pair.r.session.publicIdentity, try A.PublicIdentity(pair.io))
+                XCTAssertEqual(pair.i.peerRecordCounts?.sent, 0); XCTAssertEqual(pair.r.peerRecordCounts?.sent, 0)
+                try await pair.i.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("same-key-data"), cid: 1)))
+                let record = try XCTUnwrap(pair.it.wire.last)
+                try await pair.rt.receive(record)
+                XCTAssertEqual(pair.rd.counts.delivery, 1)
+                do { try await pair.it.receive(record); XCTFail("Reflection with same signing key") } catch {}
+                XCTAssertEqual(pair.id.counts.delivery, 0)
+                await pair.stop(task)
+            }
+        }
+    }
+
+    func testIndependentDHLegsCannotSpliceProofOrFinishedEvenWithSameIdentities() async throws {
+        for targetStep in [2,3,4,5] {
+            let a = try V3GatePair(), b = try V3GatePair()
+            let ta = try await a.start(), tb = try await b.start()
+            for step in 1..<targetStep { try await a.step(step); try await b.step(step) }
+            let wrong = try XCTUnwrap((targetStep.isMultiple(of: 2) ? a.rt : a.it).wire.last)
+            let receiver = targetStep.isMultiple(of: 2) ? b.it : b.rt
+            do { try await receiver.receive(wrong); XCTFail("Spliced M\(targetStep)") } catch {}
+            XCTAssertFalse(receiver.gate!.canSendPeerData)
+            XCTAssertEqual((targetStep.isMultiple(of: 2) ? b.id : b.rd).counts.factory, 0)
+            XCTAssertEqual(b.id.counts.delivery + b.rd.counts.delivery, 0)
+            // The other independent leg still completes.
+            for step in targetStep...5 { try await a.step(step) }
+            try await ta.value; try a.i.session.check(); try a.r.session.check()
+            await a.stop(ta); await b.stop(tb)
+        }
+    }
+
+    func testRegisteredRemoteRevocationAndSuspendedPolicyPreventLocalDisclosure() async throws {
+        let barrier = V3Barrier()
+        let pair = try V3GatePair(recheck: { _ in await barrier.wait() })
+        let task = try await pair.start(); try await pair.step(1)
+        let pending = Task { try await pair.step(2) }
+        await barrier.reached()
+        let remote = try XCTUnwrap(pair.i.session.publicIdentity)
+        pair.limits.revoke(identity: remote, domain: "nearby")
+        await barrier.release()
+        do { try await pending.value; XCTFail("Revoked policy continued") } catch {}
+        let count = await pair.iv.signCount
+        XCTAssertEqual(count, 0); XCTAssertEqual(pair.it.wire.count, 1)
+        XCTAssertEqual(pair.id.counts.factory, 0)
+        await pair.stop(task)
+        XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+    }
+
+    func testHandshakeQuotasStayBoundedAndFinalFinishedWaitsForAuthenticatedProgress() async throws {
+        var configuration = BridgeChannelLimits.Configuration()
+        configuration.maximumPendingSendBytesPerConnection = 14_000
+        let pair = try V3GatePair(limits: .init(configuration: configuration))
+        let task = try await pair.start()
+        for step in 1...5 { try await pair.step(step) }
+        try await task.value
+        // I's M5 still occupies bytes, although physical send returned.
+        XCTAssertThrowsError(try pair.i.session.acquireSend(bytes: 13_000))
+        try pair.r.session.acquireSend(bytes: 13_000); pair.r.session.releaseSend(bytes: 13_000)
+        try await pair.r.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("progress"), cid: 1)))
+        try await pair.it.receive(XCTUnwrap(pair.rt.wire.last))
+        try pair.i.session.acquireSend(bytes: 13_000); pair.i.session.releaseSend(bytes: 13_000)
+        await pair.stop(task)
+        XCTAssertEqual(pair.limits.retainedConnectionCount, 0)
+    }
+}
+
+extension BridgePeerV3Tests {
+    func testLateM1SendCompletionCannotUndoAuthenticatedProgress() async throws {
+        let pair = try V3GatePair(), barrier = V3Barrier()
+        pair.it.afterFirstSubmission = { await barrier.wait() }
+        let task = try await pair.start()
+        await barrier.reached()
+        for step in 1...5 { try await pair.step(step) }
+        XCTAssertTrue(pair.i.canSendPeerData); XCTAssertTrue(pair.r.canSendPeerData)
+        await barrier.release()
+        try await task.value
+        try pair.i.session.check(); try pair.r.session.check()
+        await pair.stop(task)
     }
 }

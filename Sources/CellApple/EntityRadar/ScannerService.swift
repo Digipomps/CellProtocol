@@ -100,7 +100,7 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         do {
             // Non-suspending critical section: counter allocation and MC send
             // have the same order, even when several Cell tasks send at once.
-            try sendLock.withLock { try gate.submitPeerFrame(data) { try service.sendPeerData($0, on: self) } }
+            try sendLock.withLock { try service.sendPeerData(data, on: self) }
         } catch { await gate.close(); throw error }
     }
 
@@ -450,12 +450,16 @@ class ScannerService :  NSObject, ObservableObject {
     fileprivate func sendPeerData(_ data: Data, on transport: ScannerPeerTransport) throws {
         try withState {
             guard bridgeTransportsByRemoteUUID[transport.remoteUUID] === transport else { throw CancellationError() }
-            if let peerSend { try peerSend(data, transport.peerID, transport.mcSession) }
-            else {
-                guard transport.mcSession.connectedPeers.contains(transport.peerID) else {
-                    throw ScannerServiceError.peerNotConnected(transport.remoteUUID)
+            // Lock order: Scanner binding -> gate -> session -> MC submission.
+            // Other Scanner state paths read session state in this same order.
+            try transport.gate.submitPeerFrame(data) { wire in
+                if let peerSend { try peerSend(wire, transport.peerID, transport.mcSession) }
+                else {
+                    guard transport.mcSession.connectedPeers.contains(transport.peerID) else {
+                        throw ScannerServiceError.peerNotConnected(transport.remoteUUID)
+                    }
+                    try transport.mcSession.send(wire, toPeers: [transport.peerID], with: .reliable)
                 }
-                try transport.mcSession.send(data, toPeers: [transport.peerID], with: .reliable)
             }
         }
     }

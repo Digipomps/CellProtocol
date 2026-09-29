@@ -3,7 +3,7 @@
 Synthetic keys only. No Swift output is an input to this generator.
 Run: python3 reference.py > vectors.json
 """
-import base64, ctypes as c, ctypes.util, hashlib, hmac, json
+import base64, ctypes as c, ctypes.util, hashlib, hmac, json, sys
 from pathlib import Path
 for library in [ctypes.util.find_library('crypto'), '/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib']:
     try:
@@ -26,10 +26,10 @@ update = fn('EVP_EncryptUpdate',c.c_int,[ptr,ptr,ip,ptr,c.c_int])
 final = fn('EVP_EncryptFinal_ex',c.c_int,[ptr,ptr,ip]); ctrl = fn('EVP_CIPHER_CTX_ctrl',c.c_int,[ptr,c.c_int,c.c_int,ptr])
 def pub(key):
     out=c.create_string_buffer(32); n=c.c_size_t(32); assert getpub(key,out,c.byref(n))==1; return out.raw[:n.value]
-def sign(key,data):
-    ctx=mdnew(); out=c.create_string_buffer(64); n=c.c_size_t(64)
+def sign(key,data,algorithm='EdDSA'):
+    ctx=mdnew(); out=c.create_string_buffer(256); n=c.c_size_t(256)
     try:
-        assert signinit(ctx,None,None,None,key)==1
+        assert signinit(ctx,None,None if algorithm=='EdDSA' else sha256(),None,key)==1
         assert signfn(ctx,out,c.byref(n),data,len(data))==1
         return out.raw[:n.value]
     finally: mdfree(ctx)
@@ -44,6 +44,22 @@ def seal(key,nonce,aad,data):
         assert ctrl(ctx,0x10,16,tag)==1
         return ciphertext+tag.raw
     finally: ctxfree(ctx)
+sha256 = fn('EVP_sha256',ptr,[])
+decodekey = fn('d2i_AutoPrivateKey',ptr,[ptr,c.POINTER(ptr),c.c_long])
+octets = fn('EVP_PKEY_get_octet_string_param',c.c_int,[ptr,c.c_char_p,ptr,c.c_size_t,zp])
+def ec_key(seed):
+    # SEC1 ECPrivateKey, private scalar plus explicit named-curve OID P-256.
+    der=bytes.fromhex('30310201010420')+seed+bytes.fromhex('a00a06082a8648ce3d030107')
+    buf=c.create_string_buffer(der); cursor=ptr(c.addressof(buf))
+    key=decodekey(None,c.byref(cursor),len(der)); assert key
+    return key
+def ec_pub(key,compressed):
+    buf=c.create_string_buffer(65); n=c.c_size_t()
+    assert octets(key,b'pub',buf,65,c.byref(n))==1
+    raw=buf.raw[:n.value]; assert len(raw)==65
+    return bytes([2+(raw[-1]&1)])+raw[1:33] if compressed else raw
+signature_path=Path(__file__).with_name('p256-signatures.json')
+fixed_signatures=json.loads(signature_path.read_text()) if signature_path.exists() else {}
 def C(v): return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
 def B(v): return base64.b64encode(v).decode()
 def H(v): return hashlib.sha256(v).digest()
@@ -60,12 +76,13 @@ def pad(value,size):
     data=C(value); assert 0<len(data)<=size-4
     return U(len(data))+data+b'\0'*(size-4-len(data))
 def mac(key,data): return hmac.digest(key,data,'sha256')
-def make_vectors():
+def make_vectors(algorithms=("EdDSA","EdDSA"), compressed=(True,False)):
+    V.clear()
     seeds=[bytes(range(32)),bytes(range(32,64))]
-    keys=[newkey(None,b'ED25519',None,x,32) for x in seeds]
+    keys=[newkey(None,b'ED25519',None,x,32) if algorithms[i]=='EdDSA' else ec_key(x) for i,x in enumerate(seeds)]
     dh=[bytes.fromhex(x) for x in ['77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a','5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb']]
     dhpub=[pub(newkey(None,b'X25519',None,x,32)) for x in dh]
-    ids=[{'uuid':s,'algorithm':'EdDSA','curve':'Curve25519','publicKey':B(pub(k))} for s,k in zip(['synthetic-I/æ\n"','synthetic-R/ø\t"'],keys)]
+    ids=[{'uuid':name,'algorithm':algorithms[i],'curve':'Curve25519' if algorithms[i]=='EdDSA' else 'P-256','publicKey':B(pub(keys[i]) if algorithms[i]=='EdDSA' else ec_pub(keys[i],compressed[i]))} for i,name in enumerate(['synthetic-I/æ\n"','synthetic-R/ø\t"'])]
     endpoint={'initiator':'endpoint-I/æ\n"','responder':'endpoint-R/ø\t"','setupID':'33333333-3333-4333-8333-333333333333','domain':'nearby/é\n"'}
     hellos=[{'profile':P,'role':role,'ephemeralPublicKey':B(dhpub[i]),'nonce':B(bytes([0x11*(i+1)])*32),'generation':generation,'issuedAtMilliseconds':1800000000125+125*i} for i,(role,generation) in enumerate([('initiator','11111111-1111-4111-8111-111111111111'),('responder','22222222-2222-4222-8222-222222222222')])]
     for i in range(2):
@@ -84,8 +101,14 @@ def make_vectors():
         role=hellos[i]['role']; d={'profile':P,'signer':role,'helloDigest':t0.hex(),'endpoint':endpoint,'identity':ids[i]}
         if i==0: d.update(previousDigest=previous.hex(),peerIdentity=ids[1])
         encoded=record('D'+str(i),C(d)); digest=H(encoded).hex()
-        ch={'type':'org.haven.cellprotocol.identity-signing-challenge','version':1,'purpose':'identity-origin-proof','identityUUID':ids[i]['uuid'],'publicKeyFingerprint':'EdDSA:Curve25519:'+ids[i]['publicKey'],'domain':endpoint['domain'],'resource':P+':'+digest,'action':'openPeerBridgeChannel','audience':P+':'+H(C(endpoint)).hex(),'nonce':hellos[1-i]['nonce'],'issuedAt':1800000000.125,'expiresAt':1800000030.125}
-        signing=record('challenge'+str(i),C(ch)); signature=record('signature'+str(i),sign(keys[i],signing))
+        ch={'type':'org.haven.cellprotocol.identity-signing-challenge','version':1,'purpose':'identity-origin-proof','identityUUID':ids[i]['uuid'],'publicKeyFingerprint':ids[i]['algorithm']+':'+ids[i]['curve']+':'+ids[i]['publicKey'],'domain':endpoint['domain'],'resource':P+':'+digest,'action':'openPeerBridgeChannel','audience':P+':'+H(C(endpoint)).hex(),'nonce':hellos[1-i]['nonce'],'issuedAt':1800000000.125,'expiresAt':1800000030.125}
+        signing=record('challenge'+str(i),C(ch))
+        if algorithms[i]=='EdDSA': signature=sign(keys[i],signing)
+        else:
+            cachekey=H(ids[i]['publicKey'].encode()+signing).hex()
+            if cachekey not in fixed_signatures: fixed_signatures[cachekey]=B(sign(keys[i],signing,algorithms[i]))
+            signature=base64.b64decode(fixed_signatures[cachekey])
+        record('signature'+str(i),signature)
         core={'endpoint':endpoint,'identity':ids[i],'proof':{'sessionID':endpoint['setupID'],'generation':hellos[1-i]['generation'],'signature':B(signature)}}
         record('Core'+str(i),C(core)); authmac=record('identityMAC'+str(i),mac(kid[i],record('F-identity'+str(i),F('identity-mac',role.encode(),t0 if i else previous,C(core)))))
         a=dict(core,identityMAC=B(authmac)); record('Auth'+str(i),C(a)); return a,digest
@@ -117,4 +140,9 @@ def make_vectors():
             aad=(P+'\0record\0').encode()+header
             record('record'+str(i)+str(counter),header+seal(kapp[i],b'\0'*4+U(counter,8),aad,message))
     return V
-if __name__=='__main__': print(json.dumps(make_vectors(),sort_keys=True,indent=2))
+if __name__=='__main__':
+    if '--all' in sys.argv:
+        for name,algorithms,compressed in [('vectors',('EdDSA','EdDSA'),(True,False)),('p256',('ECDSA','ECDSA'),(True,False)),('mixed-i',('ECDSA','EdDSA'),(False,True)),('mixed-r',('EdDSA','ECDSA'),(True,True))]:
+            Path(__file__).with_name(name+'.json').write_text(json.dumps(make_vectors(algorithms,compressed),sort_keys=True,indent=2)+'\n')
+        signature_path.write_text(json.dumps(fixed_signatures,sort_keys=True,indent=2)+'\n')
+    else: print(json.dumps(make_vectors(),sort_keys=True,indent=2))

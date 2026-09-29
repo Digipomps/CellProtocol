@@ -323,33 +323,35 @@ do not certify either consumer. Host ingress fragment/CPU limits,
 drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evidence.
 
 
-## Multipeer peer profile (R3, N07 v2)
+## Multipeer peer profile (R3, N22 v3)
 
-`org.haven.bridge-peer-channel.v3` is a separate profile, not a WSS-origin alias.
-An explicitly accepted Scanner invitation supplies an immutable endpoint containing
-both session-scoped discovery peer identifiers, the invitation/setup UUID and the
-`nearby` domain. Scanner binds those identifiers to the observed `MCPeerID` objects
-and checks the source peer before dispatch. Display names, UUIDs and possession of
-an MCSession alone confer no identity or Cell authority. MCSession encryption is
-required; this proves keys for the accepted peer route, not a real-world identity
-or an independently attested device certificate.
+`org.haven.bridge-peer-channel.v3` is separate from the WS profile. The accepted
+invitation supplies E (both endpoint names, setup UUID and domain). The physical
+adapter retains its peer/session instance; pending invitation ownership still has
+the separate N11 limitation. Discovery names and MCSession possession grant no
+identity or Cell authority. MCSession encryption remains required.
 
-The initiator sends a public identity, fresh ephemeral X25519 key, nonce, role, generation and timestamp.
-The responder signs a transcript containing both hellos and its signer role; the
-initiator verifies that proof and returns its own role-bound signature. The
-responder verifies and acknowledges with its first sealed record; the initiator
-returns its own sealed acknowledgement. Each side waits for valid key confirmation
-before activation. The audience hashes the complete endpoint;
-the signing resource hashes the complete transcript under the peer profile.
-Both signatures therefore bind both peer identifiers, setup ID, roles, both
-nonces, both public identities, both ephemeral keys and both connection generations. The existing
-`Proof`, `Authenticated`, canonical encoding, public-key verifier and
-`IdentitySigningChallenge` format are reused. Private vaults remain local.
-X25519/HKDF-SHA256 derives two directional keys; ChaCha20-Poly1305 protects every
-subsequent frame. Generation, direction and exact-next counter are authenticated;
-invalid, replayed, reordered or plaintext records close the channel. There is no
-v1 downgrade. The complete [v2 wire and security contract](../Documentation/BridgePeerChannelV3.md)
-defines transcript, KDF info, AAD, bounds, claims and non-claims.
+The identity-free M1 and M2 hello fields bind fresh X25519 keys, nonces, roles,
+generations and times. Authentication identities, endpoint and signatures are
+inside fixed-size encrypted M2/M3 blocks, with separate identity MACs. The
+initiator verifies and accepts the responder before its local vault signs M3.
+Scanner explicitly chooses first contact with any proven identity. An active
+initiator can learn the responder in M2; an accepted active responder can learn
+the initiator in M3. This is not discovery anonymity or a trusted person binding.
+
+Both Finished messages must be locally validated at their specified stages.
+Initiator activates after submitting M5; responder activates after receiving M5.
+Separate application keys derive from the complete T5 transcript; HPC3 record
+counters start at zero after the handshake. All app frames use authenticated
+ChaCha20-Poly1305, exact direction/generation/counter checks and terminal failure.
+Both signatures bind both hello/DH values, while only I's signature contains both
+identities. Finished and application keys bind the whole exchange. Peer v1/v2,
+HPC2, ready, plaintext fallback and cross-profile messages are rejected.
+
+The authoritative [v3 wire and security contract](../Documentation/BridgePeerChannelV3.md)
+defines the five messages, exact encodings, key schedule, disclosure policies,
+padding, limits and remaining application/resource findings. Local vault signing
+and Cell authorization remain separate; no remote signer or dependency is added.
 
 `BridgeChannelSession.reserveOpen` consumes the same pending state before public
 verification for both profiles. Its deadline, absolute expiry, principal binding,
