@@ -44,7 +44,8 @@ final class ScannerNearbyInteractionTests: XCTestCase {
         let original = try f.token(from: f.pair.b, token: Data("synthetic-token".utf8))
         for (field, value) in ["userUuid": ValueType.string(f.pair.c!.owner.uuid),
                                "setupID": .string(UUID().uuidString), "targetSession": .string("another-device"),
-                               "niVersion": .integer(0), "niGeneration": .string("invalid")] {
+                               "niVersion": .integer(0), "niGeneration": .string("invalid"), "token": .data(Data()),
+                               "unknown": .bool(true)] {
             var changed = original; changed[field] = value
             do { try await f.receive(changed); XCTFail("Bad \(field) accepted") } catch {}
             XCTAssertEqual(f.aDrivers.count, 0)
@@ -55,6 +56,23 @@ final class ScannerNearbyInteractionTests: XCTestCase {
         XCTAssertEqual(f.aDrivers.count, 0)
         try await f.connect(f.pair.b)
         XCTAssertEqual(f.aDrivers.count, 1)
+    }
+
+    @MainActor func testWrongTokenBindingOnRealWireClosesOnlyOffendingChannel() async throws {
+        let f = try await NIFixture(third: true); defer { f.pair.stop() }
+        try await f.connect(f.pair.b); try await f.connect(f.pair.c!)
+        var forged = try f.token(from: f.pair.b)
+        forged["userUuid"] = .string(f.pair.c!.owner.uuid)
+        let flow = FlowElement(title: "DiscoveryToken", content: .object(forged), properties: .init(type: .event, contentType: .object))
+        try await f.pair.b.sendScannerFlowElement(flow, context: f.pair.b.consumerContext(remoteUUID: f.pair.a.mySessionUUID))
+        do { try await f.pair.deliverNext(); XCTFail("Authenticated B relabelled its token as C") } catch {}
+        XCTAssertThrowsError(try f.pair.pa.gate.session.check())
+        XCTAssertEqual(f.aDrivers[0].invalidations, 1)
+        XCTAssertEqual(f.aDrivers[0].runs.count, 1)
+        try f.pair.ac!.gate.session.check()
+        f.aDrivers[1].emit(.measurement(.init(distance: 2, x: nil, y: nil, z: nil)))
+        f.pair.a.drainEventsForTesting()
+        XCTAssertEqual(f.observer.results.map(\.0), [f.pair.c!.mySessionUUID])
     }
 
     @MainActor func testCloseRevokeDisconnectAndStopInvalidateAndDiscardQueuedAndLateCallbacks() async throws {

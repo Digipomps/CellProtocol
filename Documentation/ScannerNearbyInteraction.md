@@ -66,7 +66,12 @@ close/revoke/disconnect/stop, suspension and terminal invalidation with fake dri
 It exercises the real peer-v3 gate and send path; radio and native token creation
 are not simulated claims of hardware verification. Existing token quota tests now
 select an explicit authenticated context and still prove encrypted targeting and
-send-budget enforcement. The same NI tests are included in macOS TSAN CI.
+send-budget enforcement. A forged token label sent through the real wire closes
+only the offending peer while its sibling keeps measuring. Wire fixtures must
+preserve each direction's record order when automatic token replies and receipts
+interleave; opening a later receipt ahead of an earlier application record is an
+invalid fixture, not a reason to weaken the production counter check. The same
+NI tests are included in macOS TSAN CI.
 
 The iOS-only malformed-archive test needs no UWB hardware. Successful native token
 archive/decode and physical measurements require the operator's two supported
