@@ -12,7 +12,7 @@ public enum ReplayGuaranteeMode: String, Codable, Sendable {
 /// Declarative contract term for replay obligations.
 /// This is policy metadata and does not block connection admission by itself.
 public struct ReplayGuaranteeCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var mode: ReplayGuaranteeMode
     public var minimumRetentionTicks: UInt64

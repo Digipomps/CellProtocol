@@ -67,7 +67,8 @@ public class AnyCell: Emit, Codable {
         throw AnyCellError.unsupportedOperation("state")
     }
     
-    public var uuid: String
+    @UUIDText public var uuid: String
+    public var identifier: CellIdentifier { $uuid }
     public var agreementTemplate: Agreement
     public var name: String
     var owner: Identity?

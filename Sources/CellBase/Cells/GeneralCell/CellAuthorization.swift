@@ -14,11 +14,11 @@ public enum CellAuthorizationPath: String, Codable, Sendable {
 }
 
 public struct CellAuthorizationRequest: Codable, Sendable {
-    public var cellUUID: String
+    @UUIDText public var cellUUID: String
     public var identityDomain: String
     public var keypath: String
     public var requestedAccess: String
-    public var requesterUUID: String
+    @UUIDText public var requesterUUID: String
     public var requesterSigningKeyFingerprint: String?
 
     public init(

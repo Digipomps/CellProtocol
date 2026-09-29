@@ -15,7 +15,7 @@ public struct IdentityDomainBinding: Codable, Equatable, Sendable {
     public let schema: String
     public let bindingKind: String
     public let domain: String
-    public let identityUUID: String
+    @UUIDText public private(set) var identityUUID: String
     public let signingKeyFingerprint: String
     public let grantsAuthority: Bool
 

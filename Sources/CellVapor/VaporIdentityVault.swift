@@ -57,7 +57,8 @@ public struct VaporIdentityVaultRevision: Codable, Equatable, Sendable {
 /// key material, but UUID/context/fingerprint tuples can correlate domains and
 /// must not be exposed on a public route or written to unsanitized logs.
 public struct VaporIdentityVaultBindingSummary: Codable, Equatable, Sendable {
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
+    var identifier: CellIdentifier { $uuid }
     public let context: String
     public let signingKeyFingerprint: String
 
@@ -137,7 +138,8 @@ public struct VaporIdentityVaultStrictLoadResult: Codable, Equatable, Sendable {
 }
 
 public struct VaporIdentityProvisioningRequest: Codable, Equatable, Sendable {
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
+    var identifier: CellIdentifier { $uuid }
     public let context: String
     public let displayName: String
 
@@ -304,8 +306,8 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     private var initialized = false
     private var loadedDocumentRootPath: String?
     private var identitiesDictionary = [String : String]()
-    private var visitingIdentitiesDictionary = [String : Identity]()
-    private var identitiesUUIDDictionary = [String : VaultIdentity]()
+    private var visitingIdentitiesDictionary = [CellIdentifier : Identity]()
+    private var identitiesUUIDDictionary = [CellIdentifier : VaultIdentity]()
     private var persistedFileVersion: UInt64 = 0
     /// Once set, production code cannot unset or replace this path. This keeps
     /// every legacy runtime entry point bound to the vault that was strictly
@@ -376,7 +378,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                        identityContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                         identitiesDictionary[identityContext] = identity.uuid
                     }
-                    identitiesUUIDDictionary[identity.uuid] = identity // Also add with uuid for uuid lookups
+                    identitiesUUIDDictionary[identity.identifier] = identity // Also add with uuid for uuid lookups
                 }
 
                 CellBase.diagnosticLog(
@@ -500,7 +502,8 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
 
     private struct StrictVaultIdentityRecord: Codable {
-        let uuid: String
+        @UUIDText private(set) var uuid: String
+        var identifier: CellIdentifier { $uuid }
         let displayName: String
         let identityContext: String
         let publicKey: Data
@@ -2263,7 +2266,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             return
         }
         if identity.uuid == identityContext { // visiting identities will have same uuid as identityContext
-            visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
+            visitingIdentitiesDictionary[identity.identifier] = identity // Evaluate whether this should use reference counting
             CellBase.diagnosticLog("VaporIdentityVault added visitor identity uuid=\(identity.uuid)", domain: .identity)
         } else {
             guard strictRuntimeDocumentRootPath == nil else {
@@ -2281,12 +2284,12 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     identitiesUUIDDictionary[targetUUid] = vaultIdentity
                     identity.publicSecureKey = vaultIdentity.publicSecureKey
                     identity.publicKeyAgreementSecureKey = vaultIdentity.publicKeyAgreementSecureKey
-                } else if var existingVaultIdentity = identitiesUUIDDictionary[identity.uuid] {
+                } else if var existingVaultIdentity = identitiesUUIDDictionary[identity.identifier] {
                     existingVaultIdentity = healedVaultIdentityIfNeeded(existingVaultIdentity, saveAfterHealing: false)
                     existingVaultIdentity.update(with: identity)
                     existingVaultIdentity.identityContext = identityContext
                     rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                    identitiesUUIDDictionary[identity.uuid] = existingVaultIdentity
+                    identitiesUUIDDictionary[identity.identifier] = existingVaultIdentity
                     identitiesUUIDDictionary.removeValue(forKey: targetUUid)
                     identity.publicSecureKey = existingVaultIdentity.publicSecureKey
                     identity.publicKeyAgreementSecureKey = existingVaultIdentity.publicKeyAgreementSecureKey
@@ -2298,20 +2301,20 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     }
                     reboundVaultIdentity.identityContext = identityContext
                     rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                    identitiesUUIDDictionary[identity.uuid] = reboundVaultIdentity
+                    identitiesUUIDDictionary[identity.identifier] = reboundVaultIdentity
                     identity.publicSecureKey = reboundVaultIdentity.publicSecureKey
                     identity.publicKeyAgreementSecureKey = reboundVaultIdentity.publicKeyAgreementSecureKey
                 } else {
                     var vaultIdentity = VaultIdentity(identity: &identity)
                     vaultIdentity.identityContext = identityContext
                     rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                    identitiesUUIDDictionary[identity.uuid] = vaultIdentity
+                    identitiesUUIDDictionary[identity.identifier] = vaultIdentity
                 }
             } else {
                 var vaultIdentity = VaultIdentity(identity: &identity)
                 vaultIdentity.identityContext = identityContext
                 self.identitiesDictionary[identityContext] = identity.uuid // ????
-                self.identitiesUUIDDictionary[identity.uuid] = vaultIdentity // Also add with uuid for uuid lookups
+                self.identitiesUUIDDictionary[identity.identifier] = vaultIdentity // Also add with uuid for uuid lookups
                 
             }
             saveIdentities()
@@ -2328,7 +2331,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         guard await ensureInitializedForCurrentDocumentRoot() else {
             return
         }
-        visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
+        visitingIdentitiesDictionary[identity.identifier] = identity // Evaluate whether this should use reference counting
         CellBase.diagnosticLog("VaporIdentityVault added visitor identity uuid=\(identity.uuid)", domain: .identity)
     }
 
@@ -2337,7 +2340,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             return
         }
         let identity = snapshot.makeIdentity()
-        visitingIdentitiesDictionary[identity.uuid] = identity // Evaluate whether this should use reference counting
+        visitingIdentitiesDictionary[identity.identifier] = identity // Evaluate whether this should use reference counting
         CellBase.diagnosticLog("Visiting identity \(identity.uuid) added to Vapor vault", domain: .bridge)
     }
     
@@ -2433,7 +2436,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         }
         if var vaultIdentity = vaultIdentityWithUUID(identity.uuid) {
             vaultIdentity.update(with: identity)
-            identitiesUUIDDictionary[identity.uuid] = vaultIdentity
+            identitiesUUIDDictionary[identity.identifier] = vaultIdentity
         }
     }
     
@@ -2507,7 +2510,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         guard await ensureInitializedForCurrentDocumentRoot() else {
             return false
         }
-        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid] else {
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.identifier] else {
             return false
         }
         return signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity)
@@ -2517,7 +2520,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         guard await ensureInitializedForCurrentDocumentRoot() else {
             return nil
         }
-        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid],
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.identifier],
               signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity),
               let identityContext = vaultIdentity.identityContext?.trimmingCharacters(in: .whitespacesAndNewlines),
               identityContext.isEmpty == false else {
@@ -2661,7 +2664,8 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
     }
     
     struct VaultIdentity: Codable {
-        var uuid: String
+        @UUIDText var uuid: String
+        var identifier: CellIdentifier { $uuid }
         var displayName: String
         
         var identityContext: String?
@@ -2747,7 +2751,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
         
         init() {
             self.uuid = UUID().uuidString
-            self.displayName = self.uuid
+            self.displayName = _uuid.wrappedValue
             
             if self.properties == nil {
                 self.properties = [String: ValueType]()

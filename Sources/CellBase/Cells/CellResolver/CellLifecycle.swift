@@ -69,9 +69,9 @@ public enum CellLifecycleEventType: String, Codable {
 
 public struct CellLifecycleEvent: Codable {
     public let type: CellLifecycleEventType
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
     public let endpoint: String?
-    public let identityUUID: String?
+    @OptionalUUIDText public private(set) var identityUUID: String?
     public let recipientIdentityUUIDs: [String]?
     public let timestamp: Date
     public let secondsRemaining: TimeInterval?

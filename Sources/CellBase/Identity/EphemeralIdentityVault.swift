@@ -10,7 +10,7 @@ import Crypto
 
 public actor EphemeralIdentityVault: IdentityVaultProtocol {
     private var identitiesByContext: [String: Identity] = [:]
-    private var privateKeysByUUID: [String: Curve25519.Signing.PrivateKey] = [:]
+    private var privateKeysByUUID: [CellIdentifier: Curve25519.Signing.PrivateKey] = [:]
     private var idCounter = 1
     private let vaultReference = "ephemeral:\(UUID().uuidString)"
 
@@ -59,14 +59,14 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
 
     public func identityExistInVault(_ identity: Identity) async -> Bool {
         identitiesByContext.values.contains { storedIdentity in
-            guard storedIdentity.uuid == identity.uuid else { return false }
+            guard storedIdentity.identifier == identity.identifier else { return false }
             return publicSigningKeyMatches(requested: identity, stored: storedIdentity)
         }
     }
 
     public func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding? {
         let matchingContexts = identitiesByContext.compactMap { context, storedIdentity -> String? in
-            guard storedIdentity.uuid == identity.uuid,
+            guard storedIdentity.identifier == identity.identifier,
                   publicSigningKeyMatches(requested: identity, stored: storedIdentity) else {
                 return nil
             }
@@ -91,7 +91,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
         guard publicSigningKeyMatches(requested: identity, stored: storedIdentity) else {
             throw EphemeralIdentityVaultError.publicKeyMismatch
         }
-        guard let privateKey = privateKeysByUUID[identity.uuid] else {
+        guard let privateKey = privateKeysByUUID[identity.identifier] else {
             throw EphemeralIdentityVaultError.noPrivateKey
         }
         return try privateKey.signature(for: messageData)
@@ -114,9 +114,9 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     }
 
     private func ensureSigningKey(for identity: Identity) {
-        if privateKeysByUUID[identity.uuid] == nil, identity.publicSecureKey == nil {
+        if privateKeysByUUID[identity.identifier] == nil, identity.publicSecureKey == nil {
             let privateKey = Curve25519.Signing.PrivateKey()
-            privateKeysByUUID[identity.uuid] = privateKey
+            privateKeysByUUID[identity.identifier] = privateKey
             identity.publicSecureKey = SecureKey(
                 date: Date(),
                 privateKey: false,

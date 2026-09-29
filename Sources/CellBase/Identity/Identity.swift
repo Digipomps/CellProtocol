@@ -15,7 +15,8 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
 
     
 
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
+    public var identifier: CellIdentifier { $uuid }
     public var displayName: String
 //    public var publicKey: Data?
     
@@ -39,7 +40,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     let dispatchQueue = DispatchQueue.init(label: "Identity dispatch queue")
     
     public static func ==(lhs: Identity, rhs: Identity) -> Bool {
-        guard lhs.uuid == rhs.uuid else {
+        guard lhs.identifier == rhs.identifier else {
             return false
         }
         if lhs === rhs {
@@ -55,7 +56,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     }
 
     public func referencesSameSigningIdentity(as other: Identity) -> Bool {
-        guard uuid == other.uuid,
+        guard identifier == other.identifier,
               let fingerprint = signingPublicKeyFingerprint,
               let otherFingerprint = other.signingPublicKeyFingerprint else {
             return false
@@ -112,7 +113,7 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     
     public init() {
         self.uuid = UUID().uuidString
-        self.displayName = self.uuid
+        self.displayName = _uuid.wrappedValue
         
         if self.properties == nil {
             self.properties = [String: ValueType]()
@@ -316,7 +317,8 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
 
 
 public final class  WebIdentity: Sendable {
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
+    public var identifier: CellIdentifier { $uuid }
     public let displayName: String
     public let sessionId: String
     

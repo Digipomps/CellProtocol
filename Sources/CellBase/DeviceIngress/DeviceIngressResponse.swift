@@ -15,10 +15,10 @@ public struct DeviceIngressResponseExpectation: Codable, Equatable, Sendable {
     public let requestSHA256: Data
     public let challengeSHA256: Data
     public let bodySHA256: Data
-    public let subjectIdentityUUID: String
+    @UUIDText public private(set) var subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
-    public let targetCellUUID: String
-    public let targetOwnerIdentityUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
+    @UUIDText public private(set) var targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64
@@ -114,7 +114,7 @@ public struct DeviceIngressRegistrationReceipt: Codable, Equatable, Sendable {
 
     public let schema: String
     public let registrationID: String
-    public let deviceIdentityUUID: String
+    @UUIDText public private(set) var deviceIdentityUUID: String
     public let registrationGeneration: UInt64
     public let durableSequence: UInt64
     public let state: DeviceIngressRegistrationState
@@ -169,7 +169,7 @@ public struct DeviceIngressResolvedTicket: Codable, Equatable, Sendable {
     public let schema: String
     public let ticketID: String
     public let ticketSequence: UInt64
-    public let recipientDeviceIdentityUUID: String
+    @UUIDText public private(set) var recipientDeviceIdentityUUID: String
     public let payloadSchema: String
     public let payloadContentContractSHA256: Data
     public let privacyPolicy: DeviceIngressResolvedPayloadPrivacyPolicy
@@ -344,10 +344,10 @@ public struct DeviceIngressOperationResponse: Codable, Equatable, Sendable,
     public let bodySHA256: Data
     public let mutationReceiptSHA256: Data
     public let operationResultSHA256: Data
-    public let targetCellUUID: String
-    public let targetOwnerIdentityUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
+    @UUIDText public private(set) var targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
-    public let subjectIdentityUUID: String
+    @UUIDText public private(set) var subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64

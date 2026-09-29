@@ -27,7 +27,7 @@ public enum EntityBindingMode: String, Codable, Sendable {
 }
 
 public struct IdentityPublicKeyDescriptor: Codable, Equatable, Sendable {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var displayName: String?
     public var publicKey: Data
     public var algorithm: CurveAlgorithm
@@ -69,7 +69,7 @@ public struct EntityBindingDescriptor: Codable, Equatable, Sendable {
 
 public struct IdentityEnrollmentRequestProof: Codable, Equatable, Sendable {
     public var type: String
-    public var byIdentityUUID: String
+    @UUIDText public var byIdentityUUID: String
     public var algorithm: CurveAlgorithm
     public var curveType: CurveType
     public var signature: Data?
@@ -150,7 +150,7 @@ public struct IdentityEnrollmentRequest: Codable, Equatable, Sendable, Canonical
 
 public struct IdentityEnrollmentApprovalProof: Codable, Equatable, Sendable {
     public var type: String
-    public var issuerIdentityUUID: String
+    @UUIDText public var issuerIdentityUUID: String
     public var issuerType: IdentityLinkIssuerType
     public var algorithm: CurveAlgorithm
     public var curveType: CurveType
@@ -183,7 +183,7 @@ public struct IdentityEnrollmentApproval: Codable, Equatable, Sendable, Canonica
     public var approvedDomains: [String]
     public var approvedIdentityContexts: [String]
     public var approvedScopes: [String]
-    public var issuerIdentityUUID: String
+    @UUIDText public var issuerIdentityUUID: String
     public var issuerType: IdentityLinkIssuerType
     public var audience: String
     public var origin: String
@@ -294,7 +294,7 @@ public struct IdentityLinkRecord: Codable, Equatable, Sendable {
     public var approvedDomains: [String]
     public var approvedIdentityContexts: [String]
     public var approvedScopes: [String]
-    public var issuerIdentityUUID: String
+    @UUIDText public var issuerIdentityUUID: String
     public var issuerType: IdentityLinkIssuerType
     public var status: IdentityLinkStatus
     public var linkedAt: String
@@ -338,7 +338,7 @@ public struct IdentityLinkRevocation: Codable, Equatable, Sendable, CanonicalPay
     public var linkID: String
     public var reason: String
     public var revokedAt: String
-    public var revokedByIdentityUUID: String
+    @UUIDText public var revokedByIdentityUUID: String
     public var issuerType: IdentityLinkIssuerType
     public var proof: IdentityEnrollmentApprovalProof?
 

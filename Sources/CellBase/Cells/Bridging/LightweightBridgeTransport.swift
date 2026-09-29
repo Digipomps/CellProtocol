@@ -710,7 +710,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     private var delegate: BridgeDelegateProtocol?
     private var connection: (any LightweightWebSocketClient)?
     private var activeConnectionIdentifier: ObjectIdentifier?
-    private var localIdentityUUID: String?
+    @OptionalUUIDText private var localIdentityUUID: String?
     private var localIdentityVault: IdentityVaultProtocol?
     private let connectionFactory: @Sendable (URL) -> any LightweightWebSocketClient
     private let keepAliveIntervalNanoseconds: UInt64

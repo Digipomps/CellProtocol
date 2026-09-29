@@ -30,7 +30,7 @@ public struct TrustedIssuerEvaluationReceipt: Codable {
     private struct SigningPayload: Codable {
         var receiptFormat: String
         var evaluation: Object
-        var verifierUUID: String
+        @UUIDText var verifierUUID: String
         var verifierSigningKeyFingerprint: String
         var verifierCellEndpoint: String
         var evidenceBinding: Object

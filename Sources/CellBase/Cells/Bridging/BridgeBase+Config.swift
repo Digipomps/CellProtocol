@@ -13,7 +13,7 @@ extension BridgeBase {
         let owner: Identity
         let agreementTemplate: Agreement?
         let identityDomain: String
-        let uuid: String
+        @UUIDText private(set) var uuid: String
         let cellRepresentation: AnyCell? = nil
         let transport: BridgeTransportProtocol
         let connection: Connection

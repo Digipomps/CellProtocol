@@ -27,7 +27,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/krzyzanowskim/CryptoSwift.git", from: "1.4.1"),
         .package(url: "https://github.com/OpenCombine/OpenCombine.git", from: "0.13.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0" ..< "4.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.15.1" ..< "4.0.0"),
         .package(url: "https://github.com/GiacomoLeopizzi/random-swift", from: "1.0.0"),
         .package(url: "https://github.com/vapor/vapor.git", from: "4.0.1"),
         .package(

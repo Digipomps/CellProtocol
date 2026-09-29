@@ -64,7 +64,7 @@ private enum ScannerServiceError: Error {
 
 private final class ScannerPeerTransport: BridgeTransportProtocol {
     private weak var service: ScannerService?
-    private let remoteUUID: String
+    @UUIDText private var remoteUUID: String
     fileprivate let setupID: UUID
     private weak var delegate: BridgeDelegateProtocol?
 
@@ -252,7 +252,7 @@ class ScannerService :  NSObject, ObservableObject {
     private var pendingInvitations = [MCPeerID: PendingInvitation]()
     private let invitationTimeout: TimeInterval
 
-    let mySessionUUID: String
+    @UUIDText private(set) var mySessionUUID: String
 
     var transportMode: String {
         "multipeerconnectivity"
@@ -294,7 +294,7 @@ class ScannerService :  NSObject, ObservableObject {
 //    var currentDistanceDirectionState: DistanceDirectionState = .unknown
 //    var mpc: MPCSession?
     private var _connectedPeer: MCPeerID?
-    private var _connectedRemoteUUID: String?
+    @OptionalUUIDText private var _connectedRemoteUUID: String?
 
     var connectedPeer: MCPeerID? {
         get { withState { _connectedPeer } }
@@ -394,7 +394,7 @@ class ScannerService :  NSObject, ObservableObject {
         self.invitationTimeout = invitationTimeout
         
         var serviceDicoveryInfo = serviceDicoveryInfoDict
-        serviceDicoveryInfo["uuid"] = mySessionUUID
+        serviceDicoveryInfo["uuid"] = resolvedSessionUUID
         serviceDicoveryInfo["ad"] = "1" // Preserve public-read discovery for older clients.
         serviceDicoveryInfo["adp"] = "2" // Proof capability only; no chosen details in discovery metadata.
         

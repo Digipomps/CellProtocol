@@ -84,7 +84,7 @@ public class Purpose: PerspectiveNodeImpl {
 //        print("facilitator: \(facilitator)")
         // Seed the register before any child is encoded, including standalone roots.
         if let facilitator = encoder.userInfo[CodingUserInfoKey(rawValue: "purposeFacilitator")!] as? Facilitator<Purpose> {
-            facilitator.referenceablesDict[reference] = self
+            facilitator.referenceablesDict[referenceIdentifier] = self
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)

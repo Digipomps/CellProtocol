@@ -19,7 +19,7 @@ private enum VaporBridgeTransportEventLoops {
 
 struct VaporBridgeIdentitySnapshot: Sendable {
     private let encodedIdentity: Data?
-    private let fallbackUUID: String
+    @UUIDText private var fallbackUUID: String
     private let fallbackDisplayName: String
 
     var uuid: String {

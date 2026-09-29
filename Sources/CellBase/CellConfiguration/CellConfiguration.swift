@@ -146,7 +146,7 @@ public struct CellReference: Hashable {
 
 public struct CellConfiguration {
     public var name: String
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var description: String?
     public var discovery: CellConfigurationDiscovery?
     public var localization: SkeletonLocalizationConfiguration?

@@ -36,7 +36,7 @@ import Crypto
 /// residency receipts — both need the same "who signed this, with what" record.
 public struct HavenSignatureProof: Codable, Equatable, Sendable {
     public var type: String
-    public var byIdentityUUID: String
+    @UUIDText public var byIdentityUUID: String
     public var algorithm: CurveAlgorithm
     public var curveType: CurveType
     public var signature: Data?
@@ -387,7 +387,7 @@ public enum HavenInviteVerifier {
         public var code: String
         public var ticketID: String
         public var issuerDisplayName: String
-        public var issuerIdentityUUID: String
+        @UUIDText public var issuerIdentityUUID: String
 
         public init(
             isValid: Bool,

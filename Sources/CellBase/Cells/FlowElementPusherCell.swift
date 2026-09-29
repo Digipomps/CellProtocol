@@ -42,7 +42,8 @@ public class FlowElementPusherCell: Emit {
     }
     
     let owner: Identity
-    public let uuid = UUID().uuidString
+    @UUIDText public private(set) var uuid: String = UUID().uuidString
+    public var identifier: CellIdentifier { $uuid }
     public let identityDomain = "private"
     public var agreementTemplate: Agreement
     

@@ -154,7 +154,7 @@ public struct UserOwnedBackupManifest: Codable, Equatable {
     public var erasureSet: UserDataErasureSetDescriptor
     /// Hash commitments to opaque recipient key IDs. No stable Identity UUID is stored.
     public var recoveryRecipientKeyCommitments: [String]
-    public var ownerIdentityUUID: String
+    @UUIDText public var ownerIdentityUUID: String
     public var ownerSigningKeyFingerprint: String
     public var createdAtEpochMilliseconds: Int
     public var signature: Data
@@ -393,7 +393,7 @@ private struct UnsignedUserOwnedBackupManifest: Codable {
     var encryptedEnvelopeHash: String
     var erasureSet: UserDataErasureSetDescriptor
     var recoveryRecipientKeyCommitments: [String]
-    var ownerIdentityUUID: String
+    @UUIDText var ownerIdentityUUID: String
     var ownerSigningKeyFingerprint: String
     var createdAtEpochMilliseconds: Int
 

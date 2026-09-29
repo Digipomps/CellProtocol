@@ -4,7 +4,7 @@
 import Foundation
 
 public struct CellStorageWriteOptions: Sendable, Equatable {
-    public var ownerIdentityUUID: String?
+    @OptionalUUIDText public var ownerIdentityUUID: String?
     public var encryptedAtRestRequired: Bool
 
     public init(

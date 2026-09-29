@@ -33,7 +33,7 @@ public struct CorrespondenceRetentionPolicy: Codable, Equatable, Sendable {
 }
 
 private struct CorrespondenceInvitationLedgerRecord: Codable, Equatable, Sendable {
-    var identityUUID: String
+    @UUIDText var identityUUID: String
     var status: String
     var invitedAt: String
 }

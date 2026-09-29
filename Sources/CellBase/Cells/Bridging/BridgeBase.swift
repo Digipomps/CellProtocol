@@ -41,7 +41,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public var cellScope: CellUsageScope
     public var persistancy: Persistancy
     
-    public var uuid = UUID().uuidString
+    @UUIDText public var uuid: String = UUID().uuidString
+    public var identifier: CellIdentifier { $uuid }
     public var agreementTemplate: Agreement
     public var identityDomain: String
     
@@ -49,7 +50,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     var experiences: [CellConfiguration]?
     var owner: Identity?
     var name: String?
-    var publisherUuid: String?
+    @OptionalUUIDText var publisherUuid: String?
     
     private var connectCancellable: AnyCancellable?
     private var feedCancellable: AnyCancellable?

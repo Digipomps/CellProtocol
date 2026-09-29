@@ -11,7 +11,7 @@
 import Foundation
 
 public class Facilitator<T> where T: Referenceable {
-    var referenceablesDict = [String : T]()
+    var referenceablesDict = [CellIdentifier : T]()
     var interestNameReferences = [String : [String]]() // Name of interests pointing to references
 //    var context: Interests? // Change to generics to get Purposes support
 //    var context2: IntPurContext? // Change to generics to get Purposes support
@@ -21,7 +21,7 @@ public class Facilitator<T> where T: Referenceable {
     }
     
      func add(_ interest: T) where T: Referenceable {
-        let key = interest.reference
+        let key = interest.referenceIdentifier
         referenceablesDict[key] = interest
         
          if var interestRefList = interestNameReferences[interest.name] {
@@ -40,7 +40,7 @@ public class Facilitator<T> where T: Referenceable {
         return referenceablesDict[key] != nil
     }
     func exists(_ interest: T) -> Bool {
-        let key = interest.reference
+        let key = interest.referenceIdentifier
         return referenceablesDict[key] != nil
     }
 }

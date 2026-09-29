@@ -220,7 +220,7 @@ public final class ChatCell: GeneralCell {
     private struct ChatInvitationConsumptionRecord: Codable {
         var invitationID: String
         var acceptanceID: String
-        var inviteeIdentityUUID: String
+        @UUIDText var inviteeIdentityUUID: String
         var artifactHash: Data
         var consumedAt: String
 
@@ -234,7 +234,7 @@ public final class ChatCell: GeneralCell {
 
     private struct ChatInvitationArtifactLedgerRecord: Codable {
         var invitationID: String
-        var invitedIdentityUUID: String
+        @UUIDText var invitedIdentityUUID: String
         var artifactHash: Data
         var createdAt: String
         var expiresAt: String
@@ -248,7 +248,7 @@ public final class ChatCell: GeneralCell {
     }
 
     private struct PreparedEnvelopeDraftRecord: Codable {
-        var senderIdentityUUID: String
+        @UUIDText var senderIdentityUUID: String
         var senderDisplayName: String
         var contentType: String
         var recipients: [IdentityRolePublicKeyDescriptor]
@@ -339,7 +339,7 @@ public final class ChatCell: GeneralCell {
 
     private struct PersistedEncryptedMessageRecord: Codable {
         var messageID: String
-        var senderIdentityUUID: String
+        @UUIDText var senderIdentityUUID: String
         var senderDisplayName: String
         var contentType: String
         var topic: String
@@ -349,7 +349,7 @@ public final class ChatCell: GeneralCell {
         var persistedAt: String
         var openStatus: String
         var lastOpenedAt: String?
-        var lastOpenRecipientUUID: String?
+        @OptionalUUIDText var lastOpenRecipientUUID: String?
         var lastSenderVerified: Bool?
         var lastOpenError: String?
     }

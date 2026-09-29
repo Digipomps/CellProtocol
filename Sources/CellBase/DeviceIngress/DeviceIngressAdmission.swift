@@ -492,13 +492,13 @@ public enum DeviceIngressAuthorityDecision: Sendable {
 
 public struct DeviceIngressResolvedAuthority: Sendable {
     public let path: DeviceIngressAuthorityPath
-    public let targetCellUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
     public let targetOwner: IdentityPublicKeyDescriptor
     public let authorityID: String
     public let agreementID: String
     public let signedAgreementSHA256: Data
     public let agreementGrantKeypath: String
-    public let subjectIdentityUUID: String
+    @UUIDText public private(set) var subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
     public let authorityGeneration: UInt64
     public let revocationLedgerID: String
@@ -566,10 +566,10 @@ public struct DeviceIngressMutationReceipt: Codable, Equatable, Sendable {
     public let requestSHA256: Data
     public let challengeSHA256: Data
     public let bodySHA256: Data
-    public let targetCellUUID: String
-    public let targetOwnerIdentityUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
+    @UUIDText public private(set) var targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
-    public let subjectIdentityUUID: String
+    @UUIDText public private(set) var subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64
@@ -894,8 +894,8 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
     public let challengeSHA256: Data
     public let bodySHA256: Data
     public let nonceSHA256: Data
-    public let targetCellUUID: String
-    public let targetOwnerIdentityUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
+    @UUIDText public private(set) var targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
     public let authorityID: String
     public let authorityGeneration: UInt64
@@ -903,7 +903,7 @@ public struct DeviceIngressAdmissionRecord: Codable, Equatable, Sendable {
     public let signedAgreementSHA256: Data
     public let revocationLedgerID: String
     public let revocationGeneration: UInt64
-    public let subjectIdentityUUID: String
+    @UUIDText public private(set) var subjectIdentityUUID: String
     public let subjectSigningKeyFingerprint: String
     public let contentPolicy: DeviceIngressContentPolicy
     public let operation: DeviceIngressOperation
@@ -955,8 +955,8 @@ public struct DeviceIngressAdmissionReceipt: Codable, Equatable, Sendable {
     public let admissionID: String
     public let recordSHA256: Data
     public let requestSHA256: Data
-    public let targetCellUUID: String
-    public let targetOwnerIdentityUUID: String
+    @UUIDText public private(set) var targetCellUUID: String
+    @UUIDText public private(set) var targetOwnerIdentityUUID: String
     public let targetOwnerSigningKeyFingerprint: String
     public let signedAgreementSHA256: Data
     public let authorityGeneration: UInt64

@@ -77,7 +77,7 @@ public struct SignedAgreementEntityCommitReceipt: Codable {
         var receiptID: String
         var recordID: String
         var entityKeypath: String
-        var entityOwnerUUID: String
+        @UUIDText var entityOwnerUUID: String
         var entityOwnerSigningKeyFingerprint: String
         var contractHash: String
         var recordHash: String

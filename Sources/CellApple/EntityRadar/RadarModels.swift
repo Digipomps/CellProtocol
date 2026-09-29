@@ -21,7 +21,7 @@ public struct RadarDirection3D: Codable, Hashable {
 }
 
 public struct RadarEntityUpdate: Hashable {
-    public var remoteUUID: String?
+    @OptionalUUIDText public var remoteUUID: String?
     public var displayName: String?
     public var status: String?
     public var connected: Bool?
@@ -80,7 +80,7 @@ public enum RadarScannerEvent: Hashable {
 public struct NearbyEntity: Identifiable, Hashable {
     public var id: String { remoteUUID }
 
-    public var remoteUUID: String
+    @UUIDText public var remoteUUID: String
     public var displayName: String
     public var status: String
     public var connected: Bool
@@ -393,7 +393,7 @@ public struct RadarEntityLedger: Equatable {
     public private(set) var entitiesById: [String: NearbyEntity] = [:]
     public private(set) var connectedDevices: [String] = []
     public private(set) var scannerStatus: String = "idle"
-    public private(set) var selectedRemoteUUID: String?
+    @OptionalUUIDText public private(set) var selectedRemoteUUID: String?
 
     /// Metres at the outer ring. Everything beyond is clamped to the edge.
     public var rangeMeters: Double = 8.0

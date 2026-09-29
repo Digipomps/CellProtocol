@@ -9,7 +9,7 @@ import OpenCombine
 #endif
 
 public struct DummyCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var queryEndpoint: String // should be Endpoint, URL or GURL
     public var expectation: String

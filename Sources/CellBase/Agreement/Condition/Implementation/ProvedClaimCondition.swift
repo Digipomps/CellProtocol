@@ -9,7 +9,7 @@ import OpenCombine
 #endif
 
 public struct ProvedClaimCondition : Equatable, Codable, Condition, ConnectChallengeProvidingCondition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     /*
      The Prove condition embeds a statement that has to resolve to true
      F.ex identity.person.age > 18

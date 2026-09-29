@@ -6,9 +6,9 @@ import Foundation
 public struct AdmissionSession: Codable, Hashable {
     public var id: String
     public var label: String
-    public var requesterUUID: String
-    public var targetCellUUID: String
-    public var agreementUUID: String
+    @UUIDText public var requesterUUID: String
+    @UUIDText public var targetCellUUID: String
+    @UUIDText public var agreementUUID: String
     public var agreementName: String
     public var connectState: String
     public var primaryReasonCode: String?

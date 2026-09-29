@@ -30,8 +30,8 @@ public struct CellResolverResolveSnapshot: Codable, Equatable {
 
 public struct CellResolverNamedInstanceSnapshot: Codable, Equatable {
     public var name: String
-    public var uuid: String
-    public var identityUUID: String?
+    @UUIDText public var uuid: String
+    @OptionalUUIDText public var identityUUID: String?
 
     public init(name: String, uuid: String, identityUUID: String? = nil) {
         self.name = name

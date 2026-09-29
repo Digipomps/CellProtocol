@@ -31,6 +31,7 @@ public protocol Emit: AnyObject {
     func advertise(for requester: Identity) async throws -> AnyCell
     func state(requester: Identity) async throws -> ValueType
     var uuid: String { get }
+    var identifier: CellIdentifier { get }
     var agreementTemplate: Agreement { get set } // Must be protected with access control
     var identityDomain: String { get }
     var cellScope: CellUsageScope { get set } // Must be protected with access control
@@ -59,4 +60,9 @@ public protocol Explore {
 
 public protocol GroupProtocol {
     func isMember(identity: Identity, requester: Identity) async -> Bool
+}
+
+// Compatibility for external Emit implementations with a textual identifier.
+extension Emit {
+    public var identifier: CellIdentifier { CellIdentifier(rawValue: uuid) }
 }

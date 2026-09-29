@@ -4,9 +4,9 @@
 import Foundation
 
 struct TrackedCellLifecycleRecord {
-    var uuid: String
+    @UUIDText var uuid: String
     var endpoint: String?
-    var identityUUID: String?
+    @OptionalUUIDText var identityUUID: String?
     var persistancy: Persistancy
     var cellTypeName: String
     var alertRecipientIdentityUUIDs: [String]
@@ -21,9 +21,9 @@ struct TrackedCellLifecycleRecord {
 }
 
 struct TrackedPersistedCellRecord {
-    var uuid: String
+    @UUIDText var uuid: String
     var endpoint: String?
-    var identityUUID: String?
+    @OptionalUUIDText var identityUUID: String?
     var alertRecipientIdentityUUIDs: [String]
     var deleteIfUnfunded: Bool
     var fundedUntilTick: UInt64?
@@ -42,8 +42,8 @@ enum CellLifecycleDueEvent {
 }
 
 actor ResolverLifecycleTracker {
-    private var trackedCells = [String: TrackedCellLifecycleRecord]()
-    private var trackedPersistedCells = [String: TrackedPersistedCellRecord]()
+    private var trackedCells = [CellIdentifier: TrackedCellLifecycleRecord]()
+    private var trackedPersistedCells = [CellIdentifier: TrackedPersistedCellRecord]()
 
     func trackCell(
         uuid: String,

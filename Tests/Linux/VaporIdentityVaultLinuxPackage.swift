@@ -7,7 +7,7 @@ import PackageDescription
 /// Dependency-minimal Linux gate for the production Vapor identity vault.
 ///
 /// The workflow copies this manifest, the exact production Sources tree, and
-/// VaporIdentityVaultStrictTests into a disposable package root. CellVapor is
+/// vault, UUID storage, and wire compatibility tests into a disposable package root. CellVapor is
 /// deliberately limited to VaporIdentityVault.swift because that source has no
 /// CFileUtils dependency. This lets Linux CI execute the actual vault storage
 /// tests without granting this repository access to the private FileUtils-c
@@ -83,7 +83,8 @@ let package = Package(
         .testTarget(
             name: "VaporIdentityVaultLinuxTests",
             dependencies: ["CellBase", "CellVapor"],
-            path: "Tests/VaporIdentityVaultLinuxTests"
+            path: "Tests/VaporIdentityVaultLinuxTests",
+            exclude: ["Fixtures"]
         ),
     ]
 )

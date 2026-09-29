@@ -105,6 +105,7 @@ extension Perspective {
             entityRepresentationReferencesDict
                 .filter { $0.value.projectionSource == source }
                 .keys
+                .map(\.rawValue)
         )
     }
 

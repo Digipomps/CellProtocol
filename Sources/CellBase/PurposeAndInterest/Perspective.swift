@@ -120,17 +120,17 @@ public actor Perspective {
     //Interests
 //    var interestsList = [String]()
     var interestNameReferences = [String : [String]]() // Name of interests pointing to references
-    var interestReferencesDict = [String : Interest]()
+    var interestReferencesDict = [CellIdentifier : Interest]()
     var interests = [Interest]()
     
     var storageURL: URL?
     //Purposes
     var purposeNameReferences = [String : [String]]() // Name of purpose pointing to references
-    var purposeReferencesDict = [String : Purpose]()
+    var purposeReferencesDict = [CellIdentifier : Purpose]()
     var purposes = [Purpose]()
     
     var entityRepresentationNameReferences = [String : [String]]() // Name of entity pointing to references
-    var entityRepresentationReferencesDict = [String : EntityRepresentation]()
+    var entityRepresentationReferencesDict = [CellIdentifier : EntityRepresentation]()
     var entityRepresentation = [EntityRepresentation]()
 
     /// Last applied projection epoch per projecting cell. Keeps a delayed write
@@ -139,7 +139,7 @@ public actor Perspective {
     var projectionEpochs = [String : Int]()
     
     var stateNameReferences = [String : [String]]() // Name of purpose pointing to references
-    var stateRepresentationReferencesDict = [String : Interest]()
+    var stateRepresentationReferencesDict = [CellIdentifier : Interest]()
     var stateRepresentation = [Purpose]()
     
     private var jsonData: Data?
@@ -239,7 +239,7 @@ public actor Perspective {
         }
         entityRepresentationNameReferences[entityRepresentation.name] = references
 
-        entityRepresentationReferencesDict[reference] = entityRepresentation
+        entityRepresentationReferencesDict[entityRepresentation.referenceIdentifier] = entityRepresentation
 
         if let index = entityRepresentation_index(of: reference) {
             self.entityRepresentation[index] = entityRepresentation

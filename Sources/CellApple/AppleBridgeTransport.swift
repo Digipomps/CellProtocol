@@ -24,7 +24,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     
     private var delegate: BridgeDelegateProtocol?
     private var closeCleanupCompleted = false
-    private var localIdentityUUID: String?
+    @OptionalUUIDText private var localIdentityUUID: String?
     private var localIdentityVault: IdentityVaultProtocol?
     
     public init(webSocketConnection: WebSocketConnection2? = nil, delegateSource: (() async throws -> BridgeDelegateProtocol?)? = nil) {

@@ -138,7 +138,7 @@ public class EntityRepresentation:  PerspectiveNodeImpl {
     public override func encode(to encoder: Encoder) throws { // TODO: Check this override
         // The root may also be reached by a reference farther down the graph.
         if let facilitator = encoder.userInfo[CodingUserInfoKey(rawValue: "entityRepresentationsFacilitator")!] as? Facilitator<EntityRepresentation> {
-            facilitator.referenceablesDict[reference] = self
+            facilitator.referenceablesDict[referenceIdentifier] = self
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.name, forKey: .name)

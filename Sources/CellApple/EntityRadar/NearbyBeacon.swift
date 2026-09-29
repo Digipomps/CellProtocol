@@ -30,7 +30,7 @@ public struct NearbyBeacon: Codable, Equatable, Sendable {
     public static let maximumDiscoveryInfoBytes = 200
     public static let maximumTokensPerAxis = 6
 
-    public let sessionUUID: String
+    @UUIDText public private(set) var sessionUUID: String
     public let entityKind: NearbyEntityKind
     public let contextToken: String?
     public let purposeTokens: [String]

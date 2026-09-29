@@ -99,7 +99,7 @@ public struct AdmissionChallengePayload: Codable {
 
 public struct AdmissionRetryRequest: Codable, Hashable {
     public var sessionId: String
-    public var requesterUUID: String?
+    @OptionalUUIDText public var requesterUUID: String?
     public var note: String?
 
     public init(sessionId: String, requesterUUID: String? = nil, note: String? = nil) {

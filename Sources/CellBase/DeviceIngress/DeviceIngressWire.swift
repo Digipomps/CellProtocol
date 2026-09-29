@@ -124,11 +124,11 @@ public struct DeviceIngressAuthorityReference: Codable, Equatable, Sendable {
     public var schema: String
     public var authorityID: String
     public var agreementID: String
-    public var targetCellUUID: String
-    public var targetOwnerIdentityUUID: String
+    @UUIDText public var targetCellUUID: String
+    @UUIDText public var targetOwnerIdentityUUID: String
     public var targetOwnerSigningKeyFingerprint: String
     public var signedAgreementSHA256: Data
-    public var subjectIdentityUUID: String
+    @UUIDText public var subjectIdentityUUID: String
     public var subjectSigningKeyFingerprint: String
     public var authorityGeneration: UInt64
     public var revocationLedgerID: String
@@ -179,7 +179,7 @@ public struct DeviceIngressIdentityProof: Codable, Equatable, Sendable {
 
     public var schema: String
     public var type: String
-    public var signerIdentityUUID: String
+    @UUIDText public var signerIdentityUUID: String
     public var signature: Data
 
     public init(

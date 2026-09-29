@@ -32,7 +32,7 @@ extension CodingUserInfoKey {
 
 public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol, IdentityKeyRoleProviderProtocol {
     private var identitiesDictionary = [String : String]()
-    private var identitiesUUIDDictionary = [String : VaultIdentity]()
+    private var identitiesUUIDDictionary = [CellIdentifier : VaultIdentity]()
     
     
     static let identitiesFileName = "Identities.crypt"
@@ -273,12 +273,12 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 identitiesUUIDDictionary[targetUUid] = vaultIdentity
                 identity.publicSecureKey = vaultIdentity.publicSecureKey
                 identity.publicKeyAgreementSecureKey = vaultIdentity.publicKeyAgreementSecureKey
-            } else if var existingVaultIdentity = identitiesUUIDDictionary[identity.uuid] {
+            } else if var existingVaultIdentity = identitiesUUIDDictionary[identity.identifier] {
                 existingVaultIdentity = await healedVaultIdentityIfNeeded(existingVaultIdentity, saveAfterHealing: false)
                 existingVaultIdentity.update(with: identity)
                 existingVaultIdentity.identityContext = identityContext
                 rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                identitiesUUIDDictionary[identity.uuid] = existingVaultIdentity
+                identitiesUUIDDictionary[identity.identifier] = existingVaultIdentity
                 identitiesUUIDDictionary.removeValue(forKey: targetUUid)
                 identity.publicSecureKey = existingVaultIdentity.publicSecureKey
                 identity.publicKeyAgreementSecureKey = existingVaultIdentity.publicKeyAgreementSecureKey
@@ -290,14 +290,14 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 }
                 reboundVaultIdentity.identityContext = identityContext
                 rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                identitiesUUIDDictionary[identity.uuid] = reboundVaultIdentity
+                identitiesUUIDDictionary[identity.identifier] = reboundVaultIdentity
                 identity.publicSecureKey = reboundVaultIdentity.publicSecureKey
                 identity.publicKeyAgreementSecureKey = reboundVaultIdentity.publicKeyAgreementSecureKey
             } else {
                 var vaultIdentity = VaultIdentity(identity: &identity)
                 vaultIdentity.identityContext = identityContext
                 rebindIdentityContexts(from: targetUUid, to: identity.uuid)
-                identitiesUUIDDictionary[identity.uuid] = vaultIdentity
+                identitiesUUIDDictionary[identity.identifier] = vaultIdentity
             }
         } else {
             var vaultIdentity = VaultIdentity(identity: &identity)
@@ -309,7 +309,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
                 identity.publicSecureKey = migratedIdentity.publicSecureKey
             }
             self.identitiesDictionary[identityContext] = identity.uuid
-            self.identitiesUUIDDictionary[identity.uuid] = vaultIdentity // Also add with uuid for uuid lookups
+            self.identitiesUUIDDictionary[identity.identifier] = vaultIdentity // Also add with uuid for uuid lookups
             
         }
         await saveIdentities()
@@ -332,14 +332,14 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
     }
     
     public func identityExistInVault(_ identity: Identity) async -> Bool {
-        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid] else {
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.identifier] else {
             return false
         }
         return signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity)
     }
 
     public func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding? {
-        guard let vaultIdentity = identitiesUUIDDictionary[identity.uuid],
+        guard let vaultIdentity = identitiesUUIDDictionary[identity.identifier],
               signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity),
               let identityContext = vaultIdentity.identityContext?.trimmingCharacters(in: .whitespacesAndNewlines),
               identityContext.isEmpty == false else {
@@ -406,7 +406,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         identity.homeVaultReference = vaultReference
         if var vaultIdentity = vaultIdentityWithUUID(identity.uuid) {
             vaultIdentity.update(with: identity)
-            identitiesUUIDDictionary[identity.uuid] = vaultIdentity
+            identitiesUUIDDictionary[identity.identifier] = vaultIdentity
         }
     }
 
@@ -510,7 +510,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         if let identities = identities {
             for identity in identities {
                 identitiesDictionary[identity.identityContext!] = identity.uuid
-                identitiesUUIDDictionary[identity.uuid] = identity
+                identitiesUUIDDictionary[identity.identifier] = identity
             }
 
             CellBase.diagnosticLog("Identity Vault loaded \(identitiesDictionary.count) identities", domain: .identity)
@@ -550,7 +550,7 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
 //                        if let identities = identities {
 //                            for identity in identities {
 //                                identitiesDictionary[identity.identityContext!] = identity.uuid
-//                                identitiesUUIDDictionary[identity.uuid] = identity // Also add with uuid for uuid lookups
+//                                identitiesUUIDDictionary[identity.identifier] = identity // Also add with uuid for uuid lookups
 //                            }
 //
 //                            print("identitiesDictionary: \(identitiesDictionary)")
@@ -1463,7 +1463,8 @@ func createKeyPairForDomainv3(domainString: String) throws -> (publicKey: Data, 
  */
 
 struct VaultIdentity: Codable {
-    var uuid: String
+    @UUIDText var uuid: String
+    var identifier: CellIdentifier { $uuid }
     var displayName: String
     
     var identityContext: String?
@@ -1532,7 +1533,7 @@ struct VaultIdentity: Codable {
     
     init() {
         self.uuid = UUID().uuidString
-        self.displayName = self.uuid
+        self.displayName = _uuid.wrappedValue
         
         if self.properties == nil {
             self.properties = [String: ValueType]()
@@ -1640,13 +1641,13 @@ struct VaultIdentity: Codable {
             self.properties = identity.properties
             self.grants = identity.grants
             self.entityAnchorReference = identity.entityAnchorReference
-        let keyMaterial = Self.makeSigningKeyMaterial(for: uuid)
+        let keyMaterial = Self.makeSigningKeyMaterial(for: identity.uuid)
         publicKey = keyMaterial.publicKey
         privateKey = keyMaterial.privateKey
         privateKeyApplicationTag = keyMaterial.privateKeyApplicationTag
         self.publicSecureKey = keyMaterial.publicSecureKey
         self.privateSecureKey = keyMaterial.privateSecureKey
-        let keyAgreementMaterial = Self.makeKeyAgreementKeyMaterial(for: uuid)
+        let keyAgreementMaterial = Self.makeKeyAgreementKeyMaterial(for: identity.uuid)
         keyAgreementPublicKey = keyAgreementMaterial.publicKey
         keyAgreementPrivateKey = keyAgreementMaterial.privateKey
         keyAgreementPrivateKeyApplicationTag = keyAgreementMaterial.privateKeyApplicationTag

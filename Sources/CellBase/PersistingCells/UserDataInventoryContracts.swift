@@ -81,7 +81,7 @@ public struct UserDataStorageGrant: Codable, Equatable {
     public var custodianIdentity: IdentityPublicKeyDescriptor
     public var custodianSigningKeyFingerprint: String
     public var capability: String
-    public var ownerIdentityUUID: String
+    @UUIDText public var ownerIdentityUUID: String
     public var ownerSigningKeyFingerprint: String
     public var issuedAtEpochMilliseconds: Int
     public var expiresAtEpochMilliseconds: Int
@@ -250,7 +250,7 @@ public struct UserDataStorageReceipt: Codable, Equatable {
     public var representationID: String
     public var contentHash: String
     public var byteCount: Int
-    public var custodianIdentityUUID: String
+    @UUIDText public var custodianIdentityUUID: String
     public var custodianSigningKeyFingerprint: String
     public var durabilityLevel: EntityAuthorityReplicaDurabilityLevel
     public var storedAtEpochMilliseconds: Int
@@ -625,7 +625,7 @@ public struct UserDataInventorySnapshot: Codable, Equatable {
     public var inventoryID: String
     public var revision: Int
     public var previousSnapshotHash: String?
-    public var ownerIdentityUUID: String
+    @UUIDText public var ownerIdentityUUID: String
     public var ownerSigningKeyFingerprint: String
     public var policy: UserDataResiliencePolicy
     public var representations: [UserDataRepresentationRecord]
@@ -1065,7 +1065,7 @@ public struct UserDataRecoveryRoot: Codable, Equatable {
     public var inventorySnapshotHash: String
     public var policyHash: String
     public var inventoryReplicaLocators: [UserDataRecoveryLocator]
-    public var ownerIdentityUUID: String
+    @UUIDText public var ownerIdentityUUID: String
     public var ownerSigningKeyFingerprint: String
     public var createdAtEpochMilliseconds: Int
     public var signature: Data
@@ -1250,7 +1250,7 @@ private struct UnsignedUserDataStorageGrant: Codable {
     var custodianIdentity: IdentityPublicKeyDescriptor
     var custodianSigningKeyFingerprint: String
     var capability: String
-    var ownerIdentityUUID: String
+    @UUIDText var ownerIdentityUUID: String
     var ownerSigningKeyFingerprint: String
     var issuedAtEpochMilliseconds: Int
     var expiresAtEpochMilliseconds: Int
@@ -1285,7 +1285,7 @@ private struct UnsignedUserDataStorageReceipt: Codable {
     var representationID: String
     var contentHash: String
     var byteCount: Int
-    var custodianIdentityUUID: String
+    @UUIDText var custodianIdentityUUID: String
     var custodianSigningKeyFingerprint: String
     var durabilityLevel: EntityAuthorityReplicaDurabilityLevel
     var storedAtEpochMilliseconds: Int
@@ -1316,7 +1316,7 @@ private struct UnsignedUserDataInventorySnapshot: Codable {
     var inventoryID: String
     var revision: Int
     var previousSnapshotHash: String?
-    var ownerIdentityUUID: String
+    @UUIDText var ownerIdentityUUID: String
     var ownerSigningKeyFingerprint: String
     var policy: UserDataResiliencePolicy
     var representations: [UserDataRepresentationRecord]
@@ -1346,7 +1346,7 @@ private struct UnsignedUserDataRecoveryRoot: Codable {
     var inventorySnapshotHash: String
     var policyHash: String
     var inventoryReplicaLocators: [UserDataRecoveryLocator]
-    var ownerIdentityUUID: String
+    @UUIDText var ownerIdentityUUID: String
     var ownerSigningKeyFingerprint: String
     var createdAtEpochMilliseconds: Int
 

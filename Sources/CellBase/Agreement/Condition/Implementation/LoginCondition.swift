@@ -10,7 +10,7 @@ import OpenCombine
 
 // The condition is that one have to be logged in...
 public struct LoginCondition : Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public func resolve(context: ConnectContext) async {
         
     }

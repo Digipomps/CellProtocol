@@ -62,7 +62,7 @@ public struct EntityAuthorityReplicaAdmission: Codable, Equatable {
     public var replicaIdentity: IdentityPublicKeyDescriptor
     public var replicaSigningKeyFingerprint: String
     public var capability: String
-    public var authorityIdentityUUID: String
+    @UUIDText public var authorityIdentityUUID: String
     public var authoritySigningKeyFingerprint: String
     public var issuedAtEpochMilliseconds: Int
     public var expiresAtEpochMilliseconds: Int
@@ -201,7 +201,7 @@ public struct EntityAuthorityReplicaQuorumPolicy: Codable, Equatable {
     public var admittedAdmissionHashes: [String: String]
     public var acceptedDurabilityLevels: [String]
     public var requireDistinctFaultDomains: Bool
-    public var authorityIdentityUUID: String
+    @UUIDText public var authorityIdentityUUID: String
     public var authoritySigningKeyFingerprint: String
     public var issuedAtEpochMilliseconds: Int
     public var expiresAtEpochMilliseconds: Int
@@ -468,7 +468,7 @@ public struct EntityAuthorityReplicaAcknowledgement: Codable, Equatable {
     public var status: String
     public var admissionID: String
     public var replicaID: String
-    public var replicaIdentityUUID: String
+    @UUIDText public var replicaIdentityUUID: String
     public var replicaSigningKeyFingerprint: String
     public var mutationID: String
     public var partitionID: String
@@ -673,7 +673,7 @@ public struct EntityAuthorityReplicaQuorumCertificate: Codable, Equatable {
     public var acceptedFaultDomainIDs: [String]
     public var acceptedAcknowledgementHashes: [String]
     public var distributedCommit: Bool
-    public var authorityIdentityUUID: String
+    @UUIDText public var authorityIdentityUUID: String
     public var authoritySigningKeyFingerprint: String
     public var certifiedAtEpochMilliseconds: Int
     public var signature: Data
@@ -1234,7 +1234,7 @@ private struct UnsignedEntityAuthorityReplicaAdmission: Codable {
     var replicaIdentity: IdentityPublicKeyDescriptor
     var replicaSigningKeyFingerprint: String
     var capability: String
-    var authorityIdentityUUID: String
+    @UUIDText var authorityIdentityUUID: String
     var authoritySigningKeyFingerprint: String
     var issuedAtEpochMilliseconds: Int
     var expiresAtEpochMilliseconds: Int
@@ -1266,7 +1266,7 @@ private struct UnsignedEntityAuthorityReplicaQuorumPolicy: Codable {
     var admittedAdmissionHashes: [String: String]
     var acceptedDurabilityLevels: [String]
     var requireDistinctFaultDomains: Bool
-    var authorityIdentityUUID: String
+    @UUIDText var authorityIdentityUUID: String
     var authoritySigningKeyFingerprint: String
     var issuedAtEpochMilliseconds: Int
     var expiresAtEpochMilliseconds: Int
@@ -1294,7 +1294,7 @@ private struct UnsignedEntityAuthorityReplicaAcknowledgement: Codable {
     var status: String
     var admissionID: String
     var replicaID: String
-    var replicaIdentityUUID: String
+    @UUIDText var replicaIdentityUUID: String
     var replicaSigningKeyFingerprint: String
     var mutationID: String
     var partitionID: String
@@ -1346,7 +1346,7 @@ private struct UnsignedEntityAuthorityReplicaQuorumCertificate: Codable {
     var acceptedFaultDomainIDs: [String]
     var acceptedAcknowledgementHashes: [String]
     var distributedCommit: Bool
-    var authorityIdentityUUID: String
+    @UUIDText var authorityIdentityUUID: String
     var authoritySigningKeyFingerprint: String
     var certifiedAtEpochMilliseconds: Int
 

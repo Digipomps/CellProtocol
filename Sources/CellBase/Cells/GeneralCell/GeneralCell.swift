@@ -298,7 +298,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return label
     }
     
-    public var uuid: String = UUID().uuidString
+    @UUIDText public var uuid: String = UUID().uuidString
+    public var identifier: CellIdentifier { $uuid }
     public var name: String
     internal var owner: Identity
     public var agreementTemplate: Agreement
@@ -329,7 +330,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         self.agreementAdmissionPolicy = .ownerApprovalRequired
         self.cellScopeInternal = .template
         self.persistancy = .ephemeral
-        self.name = self.uuid
+        self.name = _uuid.wrappedValue
     }
     
     public func doneInitializing() {
@@ -402,7 +403,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         CellBase.diagnosticLog("Created GeneralCell for owner \(owner.uuid)", domain: .lifecycle)
         self.cellScopeInternal = .template
         self.persistancy = .ephemeral
-        self.name = self.uuid
+        self.name = _uuid.wrappedValue
     }
     
     deinit {
@@ -461,7 +462,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         if let tmpName = try values.decodeIfPresent(String.self, forKey: .name) {
             name = tmpName
         } else {
-            name = String(describing: uuid)
+            name = _uuid.wrappedValue
         }
         
     }

@@ -70,11 +70,13 @@ enum WeightError: Error {
 
 public protocol Referenceable: Codable {
     var reference: String { get }
+    var referenceIdentifier: CellIdentifier { get }
     var name: String { get }
 }
 
 public struct Reference: Referenceable, Codable {
-    public var reference: String
+    @UUIDText public var reference: String
+    public var referenceIdentifier: CellIdentifier { $reference }
     public var name: String
 }
 
@@ -99,3 +101,7 @@ protocol InterestConstraint: Codable {
 }
 
 
+
+extension Referenceable {
+    public var referenceIdentifier: CellIdentifier { CellIdentifier(rawValue: reference) }
+}

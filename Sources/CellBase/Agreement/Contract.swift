@@ -21,7 +21,7 @@ public struct Contract: Codable {
     public static let issuerOnlySubjectBoundSemantics = "issuer_only_subject_bound_v1"
     public static let maximumDuration: TimeInterval = 60 * 60 * 24 * 365
     public static let allowedClockSkew: TimeInterval = 300
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var agreement: Agreement
     public var issuer: Identity
     public var subject: Identity
@@ -72,11 +72,11 @@ public struct Contract: Codable {
     }
 
     private struct SigningPayload: Codable {
-        var uuid: String
+        @UUIDText var uuid: String
         var agreement: Agreement
-        var issuerUUID: String
+        @UUIDText var issuerUUID: String
         var issuerSigningKeyFingerprint: String?
-        var subjectUUID: String
+        @UUIDText var subjectUUID: String
         var subjectSigningKeyFingerprint: String?
         var domain: String
         var issuedAt: TimeInterval

@@ -88,7 +88,7 @@ public struct EntityAuthorityCommitRequest: Codable, Equatable {
     public var expectedRevision: Int
     public var expectedPreviousHash: String?
     public var payloadHash: String
-    public var requesterIdentityUUID: String
+    @UUIDText public var requesterIdentityUUID: String
     public var requesterSigningKeyFingerprint: String
     public var purposeRef: String
     public var capability: String
@@ -213,8 +213,8 @@ public struct EntityAuthorityCommitReceipt: Codable, Equatable {
     public var previousHash: String?
     public var entryHash: String
     public var payloadHash: String
-    public var authorityCellUUID: String
-    public var authorityIdentityUUID: String
+    @UUIDText public var authorityCellUUID: String
+    @UUIDText public var authorityIdentityUUID: String
     public var authoritySigningKeyFingerprint: String
     public var committedAtEpochMilliseconds: Int
     public var durabilityLevel: String
@@ -632,7 +632,7 @@ private struct UnsignedEntityAuthorityCommitRequest: Codable {
     var expectedRevision: Int
     var expectedPreviousHash: String?
     var payloadHash: String
-    var requesterIdentityUUID: String
+    @UUIDText var requesterIdentityUUID: String
     var requesterSigningKeyFingerprint: String
     var purposeRef: String
     var capability: String
@@ -666,8 +666,8 @@ private struct UnsignedEntityAuthorityCommitReceipt: Codable {
     var previousHash: String?
     var entryHash: String
     var payloadHash: String
-    var authorityCellUUID: String
-    var authorityIdentityUUID: String
+    @UUIDText var authorityCellUUID: String
+    @UUIDText var authorityIdentityUUID: String
     var authoritySigningKeyFingerprint: String
     var committedAtEpochMilliseconds: Int
     var durabilityLevel: String

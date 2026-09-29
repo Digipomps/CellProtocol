@@ -107,7 +107,7 @@ private struct RemoteCellHostRouteSnapshot: Sendable {
 }
 
 private struct ProvenRemoteBridgePrincipal: Sendable {
-    let identityUUID: String
+    @UUIDText private(set) var identityUUID: String
     let signingKeyFingerprint: String
     let homeVaultReference: String
     let requester: Identity
@@ -150,7 +150,7 @@ public class CellResolver: CellResolverProtocol {
     var namedCellResolves = [String : CellResolve]()
     var loadCellFacilitators = [String : CellClusterFacilitator]()
     var resolverEmitter: FlowElementPusherCell? = nil
-    private var resolverEmittersByIdentityUUID = [String: FlowElementPusherCell]()
+    private var resolverEmittersByIdentityUUID = [CellIdentifier: FlowElementPusherCell]()
     var transports = [String : BridgeTransportProtocol.Type]() // TODO: move this to auditor?
     private var remoteCellHostRoutes = [String : RemoteCellHostRoute]()
     private var remoteCellHostRouteGenerations = [String : UInt64]()
@@ -215,7 +215,7 @@ public class CellResolver: CellResolverProtocol {
         // validate permissions
         withStateLock {
             self.resolverEmitter = emitter
-            resolverEmittersByIdentityUUID[requester.uuid] = emitter
+            resolverEmittersByIdentityUUID[requester.identifier] = emitter
             resolverEmittersByIdentityUUID[emitter.owner.uuid] = emitter
         }
         if runtimeShadowEnabled {

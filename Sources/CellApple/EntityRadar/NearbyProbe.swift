@@ -1,7 +1,8 @@
 import Foundation
+import CellBase
 
 public struct NearbyProbeRequest: Codable, Equatable, Sendable {
-    public var remoteUUID: String
+    @UUIDText public var remoteUUID: String
     public var requestId: String
     public var nonce: String
     public var reasonTokens: [String]

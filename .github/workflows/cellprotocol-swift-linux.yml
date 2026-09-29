@@ -27,6 +27,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  uuid-storage:
+    name: UUID text compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Test exact production UUID storage on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          gate_root="${RUNNER_TEMP}/uuid-storage-linux"
+          mkdir -p "${gate_root}/Sources/CellIdentifierSupport" \
+            "${gate_root}/Tests/CellIdentifierStorageTests/Fixtures"
+          cp Tests/Linux/UUIDStorageLinuxPackage.swift "${gate_root}/Package.swift"
+          cp Sources/CellBase/Utilities/CellIdentifier.swift "${gate_root}/Sources/CellIdentifierSupport/"
+          cp Tests/CellBaseTests/CellIdentifierStorageTests.swift "${gate_root}/Tests/CellIdentifierStorageTests/"
+          cp Tests/CellBaseTests/Fixtures/UUIDTextCompatibility.v1.json "${gate_root}/Tests/CellIdentifierStorageTests/Fixtures/"
+          swift test --package-path "${gate_root}" --jobs 2
+
   persisted-cell-file-bounds:
     name: Persisted Cell file bounds
     runs-on: ubuntu-latest

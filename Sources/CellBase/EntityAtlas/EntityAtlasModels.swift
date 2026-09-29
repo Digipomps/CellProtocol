@@ -95,7 +95,7 @@ public struct EntityAtlasCellRecord: Codable, Equatable {
     public var cellID: String
     public var name: String
     public var endpoint: String
-    public var runtimeUUID: String?
+    @OptionalUUIDText public var runtimeUUID: String?
     public var typeName: String?
     public var title: String?
     public var summary: String?

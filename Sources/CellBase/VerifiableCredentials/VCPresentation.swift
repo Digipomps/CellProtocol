@@ -11,7 +11,7 @@
 import Foundation
 
 public struct VCPresentation: Codable {
-    public let uuid: String
+    @UUIDText public private(set) var uuid: String
     public var context: [String]? // Future use - to be interoperable with vc standard
     public var id: String
     public var type: [String] // How to define/describe what type of claim this is
@@ -48,7 +48,7 @@ public struct VCPresentation: Codable {
         self.uuid = UUID().uuidString
         context = ["https://www.w3.org/2018/credentials/v1", "https://www.w3.org/2018/credentials/examples/v1"]
         //   "id": "http://example.edu/credentials/1872"
-        self.id = "cell:///identity/\(subjectIdentity.uuid)/claims/\(self.uuid)" // Id of claim?
+        self.id = "cell:///identity/\(subjectIdentity.uuid)/claims/\(_uuid.wrappedValue)" // Id of claim?
         self.type = ["VerifiableCredential", type]
         self.holder = .reference(try holderIdentity.did())
         self.challenge = nil
@@ -67,7 +67,7 @@ public struct VCPresentation: Codable {
     public init(holderIdentity: Identity, subjectIdentity: Identity, verifiableCredentials: [VCClaim]) {
         self.uuid = UUID().uuidString
         context = ["https://www.w3.org/2018/credentials/v1", "https://www.w3.org/2018/credentials/examples/v1"]
-        self.id = "cell:///identity/\(subjectIdentity.uuid)/claims/\(self.uuid)" // Id of claim?
+        self.id = "cell:///identity/\(subjectIdentity.uuid)/claims/\(_uuid.wrappedValue)" // Id of claim?
         self.type = ["VerifiableCredential", "type"]
         if let holderDID = try? holderIdentity.did() {
             self.holder = .reference(holderDID)

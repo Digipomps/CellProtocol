@@ -9,7 +9,7 @@ import OpenCombine
 #endif
 
 public struct ConditionalEngagement: Codable, Condition, ConnectChallengeProvidingCondition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     
     public var condition: GrantCondition

@@ -16,7 +16,7 @@ public enum CellPersistenceCrypto {
 
     private struct Envelope: Codable {
         let version: UInt8
-        let ownerIdentityUUID: String?
+        @OptionalUUIDText private(set) var ownerIdentityUUID: String?
         let combined: Data
     }
 

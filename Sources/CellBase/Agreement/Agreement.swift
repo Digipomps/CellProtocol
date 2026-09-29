@@ -4,7 +4,7 @@
 import Foundation
 
 public class Agreement: Codable, Grantable {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     var state: AgreementState
     var owner: Identity

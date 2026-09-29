@@ -18,7 +18,7 @@ public struct CorrespondenceOuterEnvelope: Codable, Equatable, Sendable {
     public var messageID: String
     public var sequence: Int
     public var cellID: String
-    public var senderIdentityUUID: String
+    @UUIDText public var senderIdentityUUID: String
     public var purposeRef: String
     public var createdAt: String
     public var expiresAt: String
@@ -108,13 +108,13 @@ public struct CorrespondenceInnerEnvelope: Codable {
         var contentType: String
         var content: String
         var clientMessageID: String
-        var ownerIdentityUUID: String
+        @UUIDText var ownerIdentityUUID: String
         var ownerSigningKeyFingerprint: String
     }
 }
 
 public struct CorrespondencePreparedEnvelope: Codable, Equatable, Sendable {
-    public var senderIdentityUUID: String
+    @UUIDText public var senderIdentityUUID: String
     public var membershipFingerprint: String
     public var envelope: EncryptedContentEnvelope
 
@@ -131,7 +131,7 @@ public struct CorrespondencePreparedEnvelope: Codable, Equatable, Sendable {
 
 public struct CorrespondenceSendRequest: Codable, Equatable, Sendable {
     public var envelope: EncryptedContentEnvelope
-    public var senderIdentityUUID: String
+    @UUIDText public var senderIdentityUUID: String
     public var membershipFingerprint: String
     public var purposeRef: String
     public var retentionSeconds: Int?

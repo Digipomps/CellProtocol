@@ -34,7 +34,7 @@ public struct RuntimeLifecycleAgreementResolution: Sendable, Equatable {
     public var policy: RuntimeLifecyclePolicy
     public var replayMode: ReplayGuaranteeMode
     public var allowEventLogGap: Bool
-    public var payerIdentityUUID: String?
+    @OptionalUUIDText public var payerIdentityUUID: String?
     public var billingTier: LifecycleBillingTier
     public var fundedUntilTick: UInt64?
     public var coldStorageAllowed: Bool

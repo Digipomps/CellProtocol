@@ -10,6 +10,9 @@ on:
       - "Sources/CellBase/**"
       - "Sources/CellVapor/VaporIdentityVault.swift"
       - "Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift"
+      - "Tests/CellBaseTests/CellIdentifier*Tests.swift"
+      - "Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift"
+      - "Tests/CellBaseTests/Fixtures/**"
   push:
     branches:
       - main
@@ -21,6 +24,9 @@ on:
       - "Sources/CellBase/**"
       - "Sources/CellVapor/VaporIdentityVault.swift"
       - "Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift"
+      - "Tests/CellBaseTests/CellIdentifier*Tests.swift"
+      - "Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift"
+      - "Tests/CellBaseTests/Fixtures/**"
   workflow_dispatch:
 
 permissions:
@@ -102,6 +108,14 @@ jobs:
           PY
           cp Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift \
             "${gate_root}/Tests/VaporIdentityVaultLinuxTests/VaporIdentityVaultStrictTests.swift"
+          cp Tests/CellBaseTests/CellIdentifierStorageTests.swift \
+            Tests/CellBaseTests/CellIdentifierIntegrationTests.swift \
+            Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift \
+            "${gate_root}/Tests/VaporIdentityVaultLinuxTests/"
+          mkdir -p "${gate_root}/Tests/VaporIdentityVaultLinuxTests/Fixtures"
+          cp Tests/CellBaseTests/Fixtures/UUIDTextCompatibility.v1.json \
+            Tests/CellBaseTests/Fixtures/DeviceIngress*.b64 \
+            "${gate_root}/Tests/VaporIdentityVaultLinuxTests/Fixtures/"
 
       - name: Build and test production vault source on Linux
         shell: bash
@@ -111,8 +125,7 @@ jobs:
             --package-path "${RUNNER_TEMP}/vapor-identity-vault-linux" \
             --disable-sandbox \
             --disable-automatic-resolution \
-            --jobs 2 \
-            --filter VaporIdentityVaultStrictTests
+            --jobs 2
 
       - name: Verify repository inputs remained unchanged
         shell: bash

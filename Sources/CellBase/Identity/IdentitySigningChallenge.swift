@@ -33,7 +33,7 @@ public struct IdentitySigningChallenge: Codable, Equatable, Sendable {
     public var type: String
     public var version: Int
     public var purpose: String
-    public var identityUUID: String
+    @UUIDText public var identityUUID: String
     public var publicKeyFingerprint: String?
     public var domain: String
     public var resource: String

@@ -32,24 +32,24 @@ actor ResolverAuditor {
     }
     
     private var namedCellResolves = [String : CellResolve]()
-    private var loadCellFacilitators = [String : CellClusterFacilitator]()
+    private var loadCellFacilitators = [CellIdentifier : CellClusterFacilitator]()
     
 //    private var cellInstances = [CellInstanceWrapper]()
     
-    private var personalCellReferences = [String: [CellInstanceWrapper]]() // keys are Identity.uuid
+    private var personalCellReferences = [CellIdentifier: [CellInstanceWrapper]]() // keys are Identity.uuid
     
-    private var cellInstanceDict = [String : CellInstanceWrapper]()
-    private var namedCellsDict = [String: String]() // ["name" : "uuid"]
-    private var reversedNamedCellsDict = [String: String]() // ["uuid" : "name"]
+    private var cellInstanceDict = [CellIdentifier : CellInstanceWrapper]()
+    private var namedCellsDict = [String: CellIdentifier]() // ["name" : "uuid"]
+    private var reversedNamedCellsDict = [CellIdentifier: String]() // ["uuid" : "name"]
     
-    private var personalCellReferenceDict = [String : [String : String]]()
+    private var personalCellReferenceDict = [CellIdentifier : [String : CellIdentifier]]()
     
     func registerReference(_ cell: Emit, endpoint: String? = nil) throws {
-        let refCount = cellInstanceDict[cell.uuid]?.increment()
+        let refCount = cellInstanceDict[cell.identifier]?.increment()
         if refCount == nil {
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper( emit: cell)
+            cellInstanceDict[cell.identifier] = CellInstanceWrapper( emit: cell)
             if let endpoint = endpoint {
-                try register(name: endpoint, for: cell.uuid)
+                try register(name: endpoint, for: cell.identifier)
             }
         }
     }
@@ -60,25 +60,26 @@ actor ResolverAuditor {
     /// replaces a live endpoint or an in-memory instance with an ambiguous
     /// decoded object.
     func registerPersistedNamedReference(_ cell: Emit, endpoint: String) throws {
-        if let existingUUID = namedCellsDict[endpoint], existingUUID != cell.uuid {
+        if let existingUUID = namedCellsDict[endpoint], existingUUID != cell.identifier {
             throw AuditorError.registerAtAlreadyTakenEndpoint
         }
-        if let existingEndpoint = reversedNamedCellsDict[cell.uuid],
+        if let existingEndpoint = reversedNamedCellsDict[cell.identifier],
            existingEndpoint != endpoint {
             throw AuditorError.registerAtAlreadyTakenEndpoint
         }
-        if let existing = cellInstanceDict[cell.uuid] {
+        if let existing = cellInstanceDict[cell.identifier] {
             guard existing.emit === cell else {
                 throw AuditorError.persistedInstanceAlreadyRegistered
             }
         } else {
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+            cellInstanceDict[cell.identifier] = CellInstanceWrapper(emit: cell)
         }
-        namedCellsDict[endpoint] = cell.uuid
-        reversedNamedCellsDict[cell.uuid] = endpoint
+        namedCellsDict[endpoint] = cell.identifier
+        reversedNamedCellsDict[cell.identifier] = endpoint
     }
 
     func canRegisterPersistedNamedReference(uuid: String, endpoint: String) -> Bool {
+        let uuid = CellIdentifier(rawValue: uuid)
         if let existingUUID = namedCellsDict[endpoint], existingUUID != uuid {
             return false
         }
@@ -92,6 +93,10 @@ actor ResolverAuditor {
     }
     
     func register(name: String, for uuid: String) throws {
+        try register(name: name, for: CellIdentifier(rawValue: uuid))
+    }
+
+    private func register(name: String, for uuid: CellIdentifier) throws {
         if let existing = namedCellsDict[name] {
             if existing == uuid {
                 reversedNamedCellsDict[uuid] = name
@@ -162,49 +167,49 @@ actor ResolverAuditor {
             "registerPersonalReference endpoint=\(endpoint) identity=\(identity.uuid) cell=\(cell.uuid)",
             domain: .resolver
         )
-        if let registeredUUID = personalCellReferenceDict[identity.uuid]?[endpoint] {
-            guard registeredUUID == cell.uuid else {
+        if let registeredUUID = personalCellReferenceDict[identity.identifier]?[endpoint] {
+            guard registeredUUID == cell.identifier else {
                 throw AuditorError.registerAtAlreadyTakenEndpoint
             }
-            if let registered = cellInstanceDict[cell.uuid] {
+            if let registered = cellInstanceDict[cell.identifier] {
                 guard registered.emit === cell else {
                     throw AuditorError.personalInstanceAlreadyRegistered
                 }
-                _ = cellInstanceDict[cell.uuid]?.increment()
+                _ = cellInstanceDict[cell.identifier]?.increment()
             } else {
                 // The identity/endpoint mapping is the already elected winner.
                 // Reattach its decoded instance only after the live object has
                 // been evicted; never replace a live object claiming that UUID.
-                cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+                cellInstanceDict[cell.identifier] = CellInstanceWrapper(emit: cell)
             }
             return
         }
 
-        if personalCellReferenceDict[identity.uuid] == nil {
-            guard cellInstanceDict[cell.uuid] == nil else {
+        if personalCellReferenceDict[identity.identifier] == nil {
+            guard cellInstanceDict[cell.identifier] == nil else {
                 throw AuditorError.personalInstanceAlreadyRegistered
             }
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
-            personalCellReferenceDict[identity.uuid] = [endpoint: cell.uuid]
+            cellInstanceDict[cell.identifier] = CellInstanceWrapper(emit: cell)
+            personalCellReferenceDict[identity.identifier] = [endpoint: cell.identifier]
             return
         }
 
-        if let registered = cellInstanceDict[cell.uuid] {
+        if let registered = cellInstanceDict[cell.identifier] {
             guard registered.emit === cell else {
                 throw AuditorError.personalInstanceAlreadyRegistered
             }
-            _ = cellInstanceDict[cell.uuid]?.increment()
+            _ = cellInstanceDict[cell.identifier]?.increment()
         } else {
-            cellInstanceDict[cell.uuid] = CellInstanceWrapper(emit: cell)
+            cellInstanceDict[cell.identifier] = CellInstanceWrapper(emit: cell)
         }
 
-        personalCellReferenceDict[identity.uuid]?[endpoint] = cell.uuid
+        personalCellReferenceDict[identity.identifier]?[endpoint] = cell.identifier
     }
     
 
     func celluuid(for name: String) -> String? {
         
-        return self.namedCellsDict[ name]
+        return self.namedCellsDict[name]?.rawValue
     }
     
     func cellname(for uuid: String) -> String? {
@@ -221,7 +226,7 @@ actor ResolverAuditor {
     }
     
     func loadIdentityCellInstance(uuid: String? = nil, name: String, identity: Identity) -> Emit? {
-        guard let uuid = personalCellReferenceDict[identity.uuid]?[name] else {
+        guard let uuid = personalCellReferenceDict[identity.identifier]?[name] else {
             return nil
         }
         
@@ -229,25 +234,25 @@ actor ResolverAuditor {
     }
     
     func loadIdentityCellUuid(uuid: String? = nil, name: String, identity: Identity) -> String? {
-        guard let uuid = personalCellReferenceDict[identity.uuid]?[name] else {
+        guard let uuid = personalCellReferenceDict[identity.identifier]?[name] else {
             return nil
         }
         
-        return uuid
+        return uuid.rawValue
     }
     
     func unregisterIdentityReference(uuid: String? = nil, name: String, identity: Identity) {
-        guard let registeredUUID = personalCellReferenceDict[identity.uuid]?[name],
-              uuid == nil || uuid == registeredUUID else {
+        guard let registeredUUID = personalCellReferenceDict[identity.identifier]?[name],
+              uuid == nil || uuid.map { CellIdentifier(rawValue: $0) } == registeredUUID else {
             return
         }
 
         // Remove the identity-to-cell mapping even when the decoded Cell has
         // not entered the in-memory instance table yet. This is required when
         // rejecting corrupt or cross-identity persisted metadata.
-        personalCellReferenceDict[identity.uuid]?[name] = nil
-        if personalCellReferenceDict[identity.uuid]?.isEmpty == true {
-            personalCellReferenceDict[identity.uuid] = nil
+        personalCellReferenceDict[identity.identifier]?[name] = nil
+        if personalCellReferenceDict[identity.identifier]?.isEmpty == true {
+            personalCellReferenceDict[identity.identifier] = nil
         }
 
         let refCount = cellInstanceDict[registeredUUID]?.decrement()
@@ -255,7 +260,7 @@ actor ResolverAuditor {
             cellInstanceDict[registeredUUID] = nil
         }
 
-//        guard var instances = personalCellReferences[identity.uuid],
+//        guard var instances = personalCellReferences[identity.identifier],
 //              let index = indexOfInstance(uuid: uuid, endpoint: endpoint, instances: instances) else {return}
 //        var instance = cellInstances[index]
 //        instance.refCount -= 1
@@ -306,14 +311,14 @@ actor ResolverAuditor {
     
     
     func namedCells() -> [String: String] {
-        return namedCellsDict
+        return namedCellsDict.mapValues(\.rawValue)
     }
     
     func setNamedCells(_ namedCells: [String: String]) {
         // generate reversed
         
-        self.namedCellsDict = namedCells
-        self.reversedNamedCellsDict = [String : String]()
+        self.namedCellsDict = namedCells.mapValues { CellIdentifier(rawValue: $0) }
+        self.reversedNamedCellsDict = [CellIdentifier : String]()
         for (name, uuid) in namedCells {
             self.reversedNamedCellsDict[uuid] = name
         }
@@ -322,24 +327,28 @@ actor ResolverAuditor {
     }
     
     func identityNamedCells() -> [String: [String: String]] {
-        return personalCellReferenceDict
+        return Dictionary(uniqueKeysWithValues: personalCellReferenceDict.map {
+            ($0.key.rawValue, $0.value.mapValues(\.rawValue))
+        })
     }
     
     func setIdentityNamedCells(_ identityNamedCells: [String: [String: String]]) {
-        self.personalCellReferenceDict = identityNamedCells
+        self.personalCellReferenceDict = Dictionary(uniqueKeysWithValues: identityNamedCells.map {
+            (CellIdentifier(rawValue: $0.key), $0.value.mapValues { CellIdentifier(rawValue: $0) })
+        })
         
         // 
     }
 
     func replaceIdentityNamedCells(_ namedCells: [String: String], for identityUUID: String) {
-        personalCellReferenceDict[identityUUID] = namedCells
+        personalCellReferenceDict[identityUUID] = namedCells.mapValues { CellIdentifier(rawValue: $0) }
     }
 
     func restoreIdentityNamedCellsFillingGaps(
         _ restored: [String: [String: String]]
     ) -> [String: [String: String]] {
         var merged = restored
-        for (identityUUID, liveReferences) in personalCellReferenceDict {
+        for (identityUUID, liveReferences) in identityNamedCells() {
             var references = merged[identityUUID] ?? [:]
             for (endpoint, cellUUID) in liveReferences {
                 references[endpoint] = cellUUID
@@ -348,7 +357,7 @@ actor ResolverAuditor {
                 merged[identityUUID] = references
             }
         }
-        personalCellReferenceDict = merged
+        setIdentityNamedCells(merged)
         return merged
     }
 
@@ -384,7 +393,7 @@ actor ResolverAuditor {
     func sharedNamedInstanceSnapshots() -> [CellResolverNamedInstanceSnapshot] {
         namedCellsDict.compactMap { name, uuid in
             guard cellInstanceDict[uuid] != nil else { return nil }
-            return CellResolverNamedInstanceSnapshot(name: name, uuid: uuid)
+            return CellResolverNamedInstanceSnapshot(name: name, uuid: uuid.rawValue)
         }
     }
 
@@ -392,7 +401,7 @@ actor ResolverAuditor {
         personalCellReferenceDict.flatMap { identityUUID, names in
             names.compactMap { name, uuid in
                 guard cellInstanceDict[uuid] != nil else { return nil }
-                return CellResolverNamedInstanceSnapshot(name: name, uuid: uuid, identityUUID: identityUUID)
+                return CellResolverNamedInstanceSnapshot(name: name, uuid: uuid.rawValue, identityUUID: identityUUID.rawValue)
             }
         }
     }

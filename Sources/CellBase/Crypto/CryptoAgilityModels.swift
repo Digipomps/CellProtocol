@@ -163,7 +163,7 @@ public struct ContentCryptoPolicy: Codable, Equatable, Sendable {
 }
 
 public struct WrappedContentKeyDescriptor: Codable, Equatable, Sendable {
-    public var recipientIdentityUUID: String?
+    @OptionalUUIDText public var recipientIdentityUUID: String?
     public var recipientKeyID: String
     public var algorithm: ContentKeyWrappingAlgorithm
     public var wrappedKeyMaterial: Data
@@ -228,7 +228,7 @@ public struct EncryptedContentEnvelopeHeader: Codable, Equatable, Sendable {
 }
 
 public struct IdentityRolePublicKeyDescriptor: Codable, Equatable, Sendable {
-    public var identityUUID: String
+    @UUIDText public var identityUUID: String
     public var displayName: String
     public var role: IdentityKeyRole
     public var keyID: String
@@ -274,7 +274,7 @@ public struct EncryptedContentEnvelope: Codable, Equatable, Sendable {
 public struct OpenedContentEnvelope: Codable, Equatable, Sendable {
     public var plaintext: Data
     public var suiteID: String
-    public var recipientIdentityUUID: String
+    @UUIDText public var recipientIdentityUUID: String
     public var recipientKeyID: String
     public var senderVerified: Bool
     public var associatedDataContext: String?

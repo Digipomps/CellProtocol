@@ -150,7 +150,7 @@ public struct HavenInvitePublication: Codable, Equatable, Sendable, CanonicalPay
     /// scaffold stores it verbatim and serves it back on a short-code lookup.
     public var ticketToken: String
     public var audienceToken: String
-    public var issuerIdentityUUID: String
+    @UUIDText public var issuerIdentityUUID: String
     public var expiresAt: Int
     public var publishedAt: Int
     /// Cap on how many contact requests this ticket may collect. A forwarded
@@ -213,7 +213,7 @@ public struct HavenInviteRevocationNotice: Codable, Equatable, Sendable, Canonic
     public var ticketID: String
     public var reason: String
     public var revokedAt: Int
-    public var issuerIdentityUUID: String
+    @UUIDText public var issuerIdentityUUID: String
     public var proof: HavenSignatureProof?
 
     public init(

@@ -67,17 +67,15 @@ public class PerspectiveNodeImpl: PerspectiveNode, Referenceable {
     /// name, and a graph keyed on names both collides them and turns the
     /// persisted perspective into a plaintext list of everyone you know.
     /// Anything representing a person sets this to a salted, local identifier.
-    public var nodeIdentifier: String?
+    @OptionalUUIDText public var nodeIdentifier: String?
 
-    public var reference: String {
-        get {
-            if let nodeIdentifier, !nodeIdentifier.isEmpty {
-                return nodeIdentifier
-            }
-            return name
-        }
+    public var referenceIdentifier: CellIdentifier {
+        if let identifier = $nodeIdentifier, !identifier.isEmpty { return identifier }
+        return CellIdentifier(rawValue: name)
     }
-    
+
+    public var reference: String { referenceIdentifier.rawValue }
+
     public init() {
         
     }

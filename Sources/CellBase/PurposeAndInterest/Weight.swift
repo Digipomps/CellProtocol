@@ -19,7 +19,7 @@ public struct Weight<T: PerspectiveNode & Codable> :  Weighted, Codable {
     
     public var value: PerspectiveNode?
     
-    public var reference: String?
+    @OptionalUUIDText public var reference: String?
     
     // Resolved within a decoded graph. Keep reference edges weak so back edges
     // do not retain the graph forever; inline `value` owns the node.

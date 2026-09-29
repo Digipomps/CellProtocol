@@ -6,7 +6,7 @@ import Foundation
 
 public struct FlowElement : Codable, /*Hashable, */Identifiable {
     
-    public var id = UUID.init().uuidString // Just to yank it in... maybe consider removing this...
+    @UUIDText public var id = UUID.init().uuidString // Just to yank it in... maybe consider removing this...
     public var title: String
     public var topic: String
     public var content: FlowElementValueType

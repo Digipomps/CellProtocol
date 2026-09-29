@@ -13,9 +13,9 @@ public enum LifecycleBillingTier: String, Codable, Sendable {
 /// Declarative contract term for who pays and what lifecycle tier is funded.
 /// This does not enforce payment state directly; runtime maps it into TTL policy.
 public struct LifecycleFundingCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
-    public var payerIdentityUUID: String
+    @UUIDText public var payerIdentityUUID: String
     public var billingTier: LifecycleBillingTier
     public var maxHotTTLTicks: UInt64?
     public var maxColdTTLTicks: UInt64?

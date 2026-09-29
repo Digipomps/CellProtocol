@@ -25,7 +25,7 @@ public enum CellSecurityEventKind: String, Codable, Sendable {
 }
 
 public struct CellSecurityActor: Codable, Equatable, Sendable {
-    public var identityUUID: String?
+    @OptionalUUIDText public var identityUUID: String?
     public var signingKeyFingerprint: String?
     public var domain: String?
 

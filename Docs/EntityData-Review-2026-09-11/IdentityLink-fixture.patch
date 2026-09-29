@@ -1,0 +1,60 @@
+diff --git a/Binding/IdentityLinkFlow.swift b/Binding/IdentityLinkFlow.swift
+index 70fc343b..fc7fecac 100644
+--- a/Binding/IdentityLinkFlow.swift
++++ b/Binding/IdentityLinkFlow.swift
+@@ -239,6 +239,7 @@ nonisolated enum IdentityLinkFlowState: Equatable, @unchecked Sendable {
+ 
+ nonisolated enum IdentityLinkFlowError: Error, Equatable {
+     case noLocalIdentity
++    case presentationFixtureOnly
+     case noSigningKey
+     case signingFailed
+     case ticketExpired
+@@ -379,6 +380,10 @@ actor IdentityLinkFlowCoordinator {
+     /// Steg 1–3: signer forespørselen, send den, vis koden. Kalles ved deep-link eller skann.
+     func start(deepLink: String, now: Date = Date()) async {
+         guard !completionInFlight else { return }
++        if IdentityLinkUIFixture.enabled {
++            set(.failed(message: Self.message(for: IdentityLinkFlowError.presentationFixtureOnly)))
++            return
++        }
+         reset()
+         if await showPendingCompletion() { return }
+         let token = generation
+@@ -641,9 +646,10 @@ actor IdentityLinkFlowCoordinator {
+ 
+     static func message(for error: Error) -> String {
+         switch error {
+-        case IdentityLinkFlowError.noLocalIdentity: return "HAVEN har ingen egen identitet på denne telefonen ennå."
+-        case IdentityLinkFlowError.noSigningKey: return "Telefonens identitet mangler signeringsnøkkel."
+-        case IdentityLinkFlowError.signingFailed: return "Telefonen kunne ikke signere forespørselen."
++        case IdentityLinkFlowError.presentationFixtureOnly: return "Dette er HAVEN UI-test. Dette bygget kan ikke koble enheter. Åpne det vanlige HAVEN-bygget for å koble til."
++        case IdentityLinkFlowError.noLocalIdentity: return "HAVEN har ingen egen identitet på denne enheten ennå."
++        case IdentityLinkFlowError.noSigningKey: return "Enhetens identitet mangler signeringsnøkkel."
++        case IdentityLinkFlowError.signingFailed: return "Enheten kunne ikke signere forespørselen."
+         case IdentityLinkFlowError.ticketExpired: return "Koden er utløpt. Lag en ny."
+         case let IdentityLinkFlowError.packageMismatch(detail): return "Avbrutt: \(detail)."
+         case let IdentityLinkFlowError.localVerificationFailed(detail): return "Godkjenningen besto ikke telefonens egen kontroll (\(detail)). Ingenting ble lagret."
+@@ -777,6 +783,10 @@ struct IdentityLinkFlowView: View {
+         NavigationStack {
+             ScrollView {
+                 VStack(alignment: .leading, spacing: 16) {
++                    if IdentityLinkUIFixture.enabled {
++                        Text("HAVEN UI-test – kan ikke koble enheter")
++                            .font(.headline)
++                    }
+                     if nearby.publication != nil || nearby.state == .advertising {
+                         IdentityLinkNearbyPanel(model: nearby)
+                     } else {
+diff --git a/Binding/IdentityLinkUIFixture.swift b/Binding/IdentityLinkUIFixture.swift
+index b466251e..9129f033 100644
+--- a/Binding/IdentityLinkUIFixture.swift
++++ b/Binding/IdentityLinkUIFixture.swift
+@@ -8,6 +8,7 @@ nonisolated enum IdentityLinkUIFixture {
+     static var enabled: Bool {
+         #if DEBUG && os(macOS)
+         ProcessInfo.processInfo.arguments.contains("--binding-person-link-ui-test")
++            || Bundle.main.bundleIdentifier == "org.digipomps.haven.person-link-ui-test"
+         #else
+         false
+         #endif

@@ -9,7 +9,7 @@ import Foundation
 /// identity-bound Agreement/Contract; it is not a technical copy-prevention
 /// mechanism and does not by itself authorize forwarding or redistribution.
 public struct Permission : Codable, Equatable {
-    public var uuid: String
+    @UUIDText public var uuid: String
     
     
     static let r = 0b00000100 // read 4

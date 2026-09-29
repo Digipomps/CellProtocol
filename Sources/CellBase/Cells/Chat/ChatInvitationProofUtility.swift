@@ -29,7 +29,7 @@ public enum ChatInvitationProofUtilityError: Error, Equatable {
 
 public struct ChatInvitationArtifactProof: Codable, Equatable, Sendable {
     public var type: String
-    public var byIdentityUUID: String
+    @UUIDText public var byIdentityUUID: String
     public var algorithm: CurveAlgorithm
     public var curveType: CurveType
     public var signature: Data?
@@ -53,7 +53,7 @@ public struct ChatInvitationArtifact: Codable, Equatable, Sendable, CanonicalPay
     public var version: Int
     public var invitationID: String
     public var purpose: String
-    public var chatCellUUID: String
+    @UUIDText public var chatCellUUID: String
     public var topic: String
     public var audienceMode: String
     public var suiteID: String
@@ -104,7 +104,7 @@ public struct ChatInvitationArtifact: Codable, Equatable, Sendable, CanonicalPay
 
 public struct ChatInvitationAcceptanceProof: Codable, Equatable, Sendable {
     public var type: String
-    public var byIdentityUUID: String
+    @UUIDText public var byIdentityUUID: String
     public var algorithm: CurveAlgorithm
     public var curveType: CurveType
     public var signature: Data?
@@ -130,8 +130,8 @@ public struct ChatInvitationAcceptance: Codable, Equatable, Sendable, CanonicalP
     public var purpose: String
     public var invitationID: String
     public var invitationHash: Data
-    public var chatCellUUID: String
-    public var inviterIdentityUUID: String
+    @UUIDText public var chatCellUUID: String
+    @UUIDText public var inviterIdentityUUID: String
     public var inviteeIdentity: IdentityPublicKeyDescriptor
     public var createdAt: String
     public var nonce: Data

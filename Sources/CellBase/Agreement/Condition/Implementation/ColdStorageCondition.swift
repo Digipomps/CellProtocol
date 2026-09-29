@@ -5,7 +5,7 @@ import Foundation
 
 /// Declarative term for cold-storage behavior when a cell is no longer active in RAM.
 public struct ColdStorageCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var allowPersistedColdTier: Bool
     public var encryptedAtRestRequired: Bool

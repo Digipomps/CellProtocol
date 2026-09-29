@@ -5,7 +5,7 @@ import Foundation
 
 public enum CellConfigurationPayloadSupport {
     public struct Lookup: Equatable {
-        public let uuid: String?
+        @OptionalUUIDText public private(set) var uuid: String?
         public let name: String?
         public let sourceCellEndpoint: String?
 

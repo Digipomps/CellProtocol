@@ -9,7 +9,7 @@ import OpenCombine
 #endif
 
 public struct GrantCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var grant: Grant
     

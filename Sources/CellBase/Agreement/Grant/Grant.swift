@@ -9,7 +9,7 @@ public struct Grant: Codable, Equatable {
         return lhs.keypath == rhs.keypath
     }
     
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var permission: Permission
     public var keypath: String

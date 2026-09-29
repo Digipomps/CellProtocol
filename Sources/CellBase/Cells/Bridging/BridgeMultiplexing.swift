@@ -125,7 +125,7 @@ public final class BridgeFlowContinuityTracker: @unchecked Sendable {
 /// pooled across signing identities or home vaults, even when their host is equal.
 public struct BridgeConnectionPoolKey: Hashable, Sendable {
     public let sessionEndpoint: String
-    public let identityUUID: String
+    @UUIDText public private(set) var identityUUID: String
     public let signingKeyFingerprint: String
     public let homeVaultReference: String
     public let routeGeneration: UInt64
@@ -245,7 +245,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         }
     }
 
-    public let uuid = UUID().uuidString
+    @UUIDText public private(set) var uuid: String = UUID().uuidString
     public let protocolVersion = 2
 
     private let physicalTransport: BridgeTransportProtocol
@@ -779,7 +779,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         case closed
     }
 
-    public let uuid = UUID().uuidString
+    @UUIDText public private(set) var uuid: String = UUID().uuidString
     public let protocolVersion = 2
 
     private let physicalTransport: BridgeTransportProtocol

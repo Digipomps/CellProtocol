@@ -95,7 +95,7 @@ public struct ExploreManifest: Codable {
     public var manifestVersion: Int
     public var contractVersion: Int
     public var cellType: String
-    public var cellUUID: String
+    @UUIDText public var cellUUID: String
     public var identityDomain: String
     public var exportedAt: String
     public var intent: Intent

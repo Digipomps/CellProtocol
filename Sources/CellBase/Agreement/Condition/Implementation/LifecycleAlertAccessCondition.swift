@@ -6,7 +6,7 @@ import Foundation
 /// Declarative lifecycle alert routing policy.
 /// Controls who can receive lifecycle alarms in addition to the owner.
 public struct LifecycleAlertAccessCondition: Codable, Condition {
-    public var uuid: String
+    @UUIDText public var uuid: String
     public var name: String
     public var allowedIdentityUUIDs: [String]
     public var includeSignatories: Bool
