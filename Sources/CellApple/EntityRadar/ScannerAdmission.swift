@@ -7,7 +7,7 @@ import MultipeerConnectivity
 /// context, NOT a verified device or person; a Sybil can exhaust the global cap.
 /// No attacker-supplied UUID/displayName creates a quota bucket.
 final class ScannerAdmission {
-    enum Kind: CaseIterable { case discovery, invitation, task, event }
+    enum Kind: CaseIterable { case discovery, invitation, task, event, physical }
     struct Budget {
         var count: Int
         var bytes: Int
@@ -20,13 +20,14 @@ final class ScannerAdmission {
         var invitation = Budget(count: 32, bytes: 64 * 1024, perSourceCount: 1, perSourceBytes: 4096, lifetime: 30)
         var task = Budget(count: 16, bytes: 64 * 1024, perSourceCount: 2, perSourceBytes: 8192, lifetime: 10)
         var event = Budget(count: 64, bytes: 64 * 1024, perSourceCount: 8, perSourceBytes: 8192, lifetime: 5)
+        var physical = Budget(count: 32, bytes: 8192, perSourceCount: 2, perSourceBytes: 512, lifetime: 300)
         var maximumSources = 256
         var rateWindow: TimeInterval = 10
         var sourceLifetime: TimeInterval = 60
         var rate = 256
         var perSourceRate = 24
         func budget(_ kind: Kind) -> Budget {
-            switch kind { case .discovery: return discovery; case .invitation: return invitation; case .task: return task; case .event: return event }
+            switch kind { case .discovery: return discovery; case .invitation: return invitation; case .task: return task; case .event: return event; case .physical: return physical }
         }
     }
     struct Usage { var count = 0; var bytes = 0 }

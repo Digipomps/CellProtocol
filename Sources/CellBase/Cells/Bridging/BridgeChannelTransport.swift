@@ -23,6 +23,17 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private var peerOperation: BridgePeerChannelAuthentication.Operation?
     private var peerReady = false
     private var peerRecords: BridgePeerRecordLayer?
+    private let peerFlow = BridgePeerFlowControl()
+    private var flowTimer: Task<Void, Never>?
+    var peerFlowClock: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    public var peerOutstandingUsage: (records: Int, bytes: Int) {
+        lock.withLock { (peerFlow.outstanding.count, peerFlow.bytes) }
+    }
+    public func checkPeerProgress() async {
+        let expired = lock.withLock { peerFlow.oldest.map { peerFlowClock() >= $0 + 10 } ?? false }
+        if expired { await close() }
+    }
+
     // Only internal auth-send can reserve one exact envelope for physical send.
     private var peerAuthSend: Data?
     private var peerAuthSendBytes = 0
@@ -198,7 +209,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         underlying?.setDelegate(self)
         scheduleExpiry(seconds: 10)
     }
-    deinit { timer?.cancel(); session.close(); session.releaseTransport() }
+    deinit { flowTimer?.cancel(); timer?.cancel(); session.close(); session.releaseTransport() }
 
     public static func new() -> BridgeTransportProtocol {
         // A configured origin and physical transport are mandatory.
@@ -266,6 +277,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         try lock.withLock {
             guard !stopped, peerRecords == nil else { records.close(); throw Auth.Failure.closed }
             peerRecords = records
+            flowTimer = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                    await self?.checkPeerProgress()
+                    if self == nil { return }
+                }
+            }
         }
     }
 
@@ -293,7 +311,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         try session.check()
         let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
         guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
-        return try peerRecords.seal(plaintext)
+        let body = try peerFlow.prepare(plaintext, counter: peerRecords.nextSend, now: peerFlowClock()) {
+            try session.acquireSend(bytes: $0)
+        }
+        let counter = peerRecords.nextSend
+        let wire = try peerRecords.seal(body)
+        peerFlow.sealed(counter: counter, wire: wire)
+        return wire
     }
     public func openPeerFrame(_ record: Data) throws -> Data {
         try lock.withLock {
@@ -313,15 +337,34 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             }
             guard peerReady else { throw Auth.Failure.unexpectedMessage }
             try session.check()
-            let plaintext = try peerRecords.open(record)
-            let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
-            guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
+            let counter = peerRecords.nextReceive
+            let plaintext = try peerFlow.receive(peerRecords.open(record), counter: counter, wire: record) { session.releaseSend(bytes: $0) }
+            if !plaintext.isEmpty {
+                let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
+                guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
+            }
             // First authenticated Kapp traffic acknowledges I's final Finished.
             if peerAuthSendBytes > 0 {
                 session.releaseSend(bytes: peerAuthSendBytes)
                 peerAuthSendBytes = 0; peerLastAuthBytes = 0
             }
             return plaintext
+        }
+    }
+
+    /// Same adapter ordering/physical admission as data. Receipts never pass
+    /// through public sendData, BridgeCommand, resolver or Cell dispatch.
+    public func submitPeerReceipts(submit: (Data) throws -> Void) throws {
+        try lock.withLock {
+            guard !stopped, peerReady, let records = peerRecords else { return }
+            guard peerFlow.shouldSendReceipt else { return }
+            let body = try peerFlow.prepare(nil, counter: records.nextSend, now: peerFlowClock()) {
+                try session.acquireSend(bytes: $0)
+            }
+            let counter = records.nextSend
+            let wire = try records.seal(body)
+            peerFlow.sealed(counter: counter, wire: wire)
+            try session.withPeerSendAdmission(authenticating: false) { try submit(wire) }
         }
     }
 
@@ -468,8 +511,11 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             guard reserved else { throw Auth.Failure.capacity }
             defer { lock.withLock { pendingSends -= 1 } }
             let wireBytes = data.count + lock.withLock { peerOperation != nil ? BridgePeerRecordLayer.overhead : 0 }
-            try session.acquireSend(bytes: wireBytes)
-            defer { session.releaseSend(bytes: wireBytes) }
+            let peer = lock.withLock { peerOperation != nil }
+            if !peer { try session.acquireSend(bytes: wireBytes) }
+            defer { if !peer { session.releaseSend(bytes: wireBytes) } }
+            // Peer wire bytes are reserved at sealing and retained through MC
+            // enqueue until a token receipt or completed physical retirement.
             try session.check()
             try await trackedWork { [data] in try await self.physicalTransport().sendData(data) }
             try session.check()
@@ -485,7 +531,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     public func close() async {
         let cleanup = lock.withLock { () -> (BridgeDelegateProtocol?, BridgeChannelClientOperation?, BridgeTransportProtocol?)? in
             guard !stopped else { return nil }
-            stopped = true; timer?.cancel(); timer = nil
+            stopped = true; timer?.cancel(); timer = nil; flowTimer?.cancel(); flowTimer = nil
             peerRecords?.close(); peerRecords = nil; peerReady = false; peerAuthSend = nil
             inFlight.values.forEach { $0.cancel() }
             let result = (delegate, operation, underlying); delegate = nil; operation = nil; underlying = nil
@@ -503,6 +549,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         }
         await cleanup.2?.close()
         releasePeerHandshakeBytes()
+        lock.withLock { peerFlow.retire { session.releaseSend(bytes: $0) } }
     }
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
         BridgeIdentityVault(cloudBridge: lock.withLock { delegate as? BridgeProtocol })

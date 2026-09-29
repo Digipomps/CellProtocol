@@ -185,6 +185,8 @@ private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     func receive(_ data: Data) async throws {
         do {
             let plain = try gate!.openPeerFrame(data)
+            if plain.isEmpty { return }
+            try gate!.submitPeerReceipts { try wire.append($0) }
             try gate!.validateInboundPayload(plain)
             try await gate!.consumeCommand(command: JSONDecoder().decode(BridgeCommand.self, from: plain))
         } catch { await gate!.close(); throw error }

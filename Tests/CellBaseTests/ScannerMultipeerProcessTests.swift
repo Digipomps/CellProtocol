@@ -42,10 +42,15 @@ final class ScannerMultipeerProcessTests: XCTestCase {
                 XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(role).passed").path), "Missing proof/function result; \(folder.path)")
             }
         }
+        try await runPhysicalIsolationProcesses()
     }
 
     func testMultipeerWorker() async throws {
         let env = ProcessInfo.processInfo.environment
+        if let role = env["CP53_ISOLATION_ROLE"], let path = env["CP53_PEER_DIRECTORY"] {
+            try await runPhysicalIsolationWorker(role: role, folder: URL(fileURLWithPath: path))
+            return
+        }
         guard let path = env["CP53_PEER_DIRECTORY"], let role = env["CP53_PEER_ROLE"], let inviter = env["CP53_PEER_INVITER"] else {
             throw XCTSkip("Child worker of real Multipeer process test")
         }
@@ -93,7 +98,7 @@ final class ScannerMultipeerProcessTests: XCTestCase {
         await sender.value
         XCTAssertFalse(observer.statuses.contains { $0.hasPrefix("bridgeFailed:") })
         let peerID = try XCTUnwrap(service.foundPeersDict[remoteID])
-        let physical = try service.capturePeerTransport(session: service.mcSession, peerID: peerID)
+        let physical = try service.capturePeerTransport(session: service.sessionForPeer(peerID), peerID: peerID)
         let records = try XCTUnwrap(physical.gate.peerRecordCounts)
         XCTAssertGreaterThan(records.sent, 1, "Real MC must send sealed application records after confirmation")
         XCTAssertGreaterThan(records.received, 1, "Real MC must receive sealed application records after confirmation")

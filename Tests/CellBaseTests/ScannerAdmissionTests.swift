@@ -20,6 +20,7 @@ final class ScannerAdmissionTests: XCTestCase {
                 case .invitation: config.invitation = budget
                 case .task: config.task = budget
                 case .event: config.event = budget
+                case .physical: config.physical = budget
                 }
                 let admission = ScannerAdmission(configuration: config)
                 let b = MCPeerID(displayName: "B"), c = MCPeerID(displayName: "C"), d = MCPeerID(displayName: "D")

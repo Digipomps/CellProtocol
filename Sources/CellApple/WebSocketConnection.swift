@@ -212,6 +212,8 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
             delegateLock.unlock()
         }
     }
+    typealias SendSubmission = (URLSessionWebSocketTask.Message, @escaping @Sendable (Error?) -> Void) -> Void
+    var sendSubmissionForTesting: SendSubmission?
     var webSocketTask: URLSessionWebSocketTask!
     var urlSession: URLSession!
     let delegateQueue = OperationQueue()
@@ -288,34 +290,21 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         }
     }
     
-    func send(text: String) async throws {
-        guard let webSocketTask = webSocketTask else {
-            throw WebSocketConnectionError.NoTask
-        }
-        webSocketTask.send(URLSessionWebSocketTask.Message.string(text)) { [weak self] error in
-            guard let self = self else { return }
-            Task {
-                if let error = error {
-                    await self.delegate?.onError(connection: self, error: error)
-                }
+    func send(text: String) async throws { try await sendMessage(.string(text)) }
+    func send(data: Data) async throws { try await sendMessage(.data(data)) }
+
+    private func sendMessage(_ message: URLSessionWebSocketTask.Message) async throws {
+        guard let webSocketTask else { throw WebSocketConnectionError.NoTask }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completed: @Sendable (Error?) -> Void = { error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
             }
+            if let submit = sendSubmissionForTesting { submit(message, completed) }
+            else { webSocketTask.send(message, completionHandler: completed) }
         }
     }
-    
-    func send(data: Data) async throws {
-        guard let webSocketTask = webSocketTask else {
-            throw WebSocketConnectionError.NoTask
-        }
-        webSocketTask.send(URLSessionWebSocketTask.Message.data(data)) { [weak self] error in
-            guard let self = self else { return }
-            Task {
-                if let error = error {
-                    await self.delegate?.onError(connection: self, error: error)
-                }
-            }
-        }
-    }
-    
+
     func ping() throws {
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask

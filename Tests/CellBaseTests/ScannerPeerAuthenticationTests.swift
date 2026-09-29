@@ -12,6 +12,58 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     override func setUp() { previousResolver = CellBase.defaultCellResolver }
     override func tearDown() { CellBase.defaultCellResolver = previousResolver }
 
+    func testUnusedResourcesAndStreamsCloseImmediatelyAcrossAuthRevokeAndReconnectWithSibling() async throws {
+        for phase in ["pending", "active", "revoked", "reconnected"] {
+            let pair = try await ScannerPair(); defer { pair.stop() }
+            if phase != "pending" { try await pair.finish(pair.start()) }
+            try await pair.addThirdPeer()
+            let sibling = try XCTUnwrap(pair.ac)
+            XCTAssertFalse(pair.pa.mcSession === sibling.mcSession)
+            if phase == "revoked" || phase == "reconnected" {
+                await pair.pa.gate.close(); await pair.pb.gate.close()
+            }
+            var fresh: (ScannerPeerTransport, ScannerPeerTransport)?
+            if phase == "reconnected" {
+                fresh = try pair.prepareReconnect()
+                try await pair.authenticateTransports(fresh!.0, fresh!.1)
+            }
+            for _ in 0..<512 {
+                let progress = Progress(totalUnitCount: 1024 * 1024 * 1024)
+                pair.a.session(pair.pa.mcSession, didStartReceivingResourceWithName: "untrusted", fromPeer: pair.bPeer, with: progress)
+                XCTAssertTrue(progress.isCancelled)
+                let stream = ScannerRejectedStream(data: Data())
+                pair.a.session(pair.pa.mcSession, didReceive: stream, withName: "untrusted", fromPeer: pair.bPeer)
+                XCTAssertEqual(stream.closeCount, 1)
+                pair.a.session(pair.pa.mcSession, didFinishReceivingResourceWithName: "untrusted", fromPeer: pair.bPeer, at: nil, withError: nil)
+            }
+            await pair.pa.gate.close()
+            XCTAssertNoThrow(try sibling.gate.session.check())
+            if let fresh { XCTAssertNoThrow(try fresh.0.gate.session.check()) }
+            XCTAssertEqual(pair.a.retainedPhysicalCount, phase == "reconnected" ? 2 : 1)
+            let observer = ScannerStatusObserver(); pair.c?.radarDelegate = observer
+            let pump = pair.pump(); defer { pump.cancel() }
+            try await pair.a.sendScannerFlowElement(FlowElement(title: "sibling-side-entrance", content: .string("alive"), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.c!.mySessionUUID)
+            for _ in 0..<200 where observer.flows.isEmpty { try await Task.sleep(nanoseconds: 1_000_000) }
+            XCTAssertEqual(observer.flows.map(\.title), ["sibling-side-entrance"])
+        }
+    }
+
+    func testMissingReceiptBoundsSequentialFeedAndCloseReleasesOnlyAfterPhysicalClose() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start()); try await pair.addThirdPeer()
+        let before = pair.wire.history.count
+        for i in 0..<32 {
+            try await pair.a.sendScannerFlowElement(FlowElement(title: "held-\(i)", content: .string(String(repeating: "q", count: 1024)), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID)
+        }
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.records, 32)
+        XCTAssertGreaterThan(pair.pa.gate.peerOutstandingUsage.bytes, 32 * 1024)
+        XCTAssertEqual(pair.wire.history.count - before, 32)
+        do { try await pair.a.sendScannerFlowElement(FlowElement(title: "overflow", content: .string("x"), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID); XCTFail() } catch {}
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.bytes, 0)
+        XCTAssertEqual(pair.a.retainedPhysicalCount, 1)
+        XCTAssertNoThrow(try pair.ac!.gate.session.check())
+    }
+
     func testScannerMutualProofPrecedesBaseLookupAndRegistration() async throws {
         let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
         let pair = try await ScannerPair()
@@ -297,7 +349,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let pump = pair.pump(); defer { pump.cancel() }
         let remote = Task { try await pair.pb.gate.startPeer() }
         // Production physical callback, not a direct unbudgeted test setup.
-        pair.a.session(pair.a.mcSession, peer: pair.bPeer, didChange: .connected)
+        pair.a.session(pair.pa.mcSession, peer: pair.bPeer, didChange: .connected)
         await fulfillment(of: [entered], timeout: 2)
         try await remote.value
         XCTAssertEqual(admission.snapshot(.task).count, 1)
@@ -352,8 +404,8 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertEqual(pair.a.foundPeersDict[pair.b.mySessionUUID], pair.bPeer)
         XCTAssertEqual(pair.a.reversedFoundPeersDict[pair.cPeer], c.mySessionUUID)
         XCTAssertThrowsError(try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.cPeer))
-        XCTAssertTrue(try pair.a.capturePeerTransport(session: pair.a.mcSession, peerID: pair.bPeer) === pair.pa)
-        XCTAssertTrue(try pair.a.capturePeerTransport(session: pair.a.mcSession, peerID: pair.cPeer) === ac)
+        XCTAssertTrue(try pair.a.capturePeerTransport(session: pair.pa.mcSession, peerID: pair.bPeer) === pair.pa)
+        XCTAssertTrue(try pair.a.capturePeerTransport(session: ac.mcSession, peerID: pair.cPeer) === ac)
         XCTAssertThrowsError(try pair.a.capturePeerTransport(session: MCSession(peer: pair.aPeer), peerID: pair.bPeer))
 
         // Keep a real B request pending in Base. C knows B's public descriptor,
@@ -440,8 +492,8 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         await fulfillment(of: [entered], timeout: 2)
         // Actual MC delegate entry point retires the captured generation before
         // its main-queue UI callback can run through a reconnect.
-        pair.a.session(pair.a.mcSession, peer: pair.bPeer, didChange: .notConnected)
-        pair.b.session(pair.b.mcSession, peer: pair.aPeer, didChange: .notConnected)
+        pair.a.session(pair.pa.mcSession, peer: pair.bPeer, didChange: .notConnected)
+        pair.b.session(pair.pb.mcSession, peer: pair.aPeer, didChange: .notConnected)
         await pair.pa.gate.close(); await pair.pb.gate.close()
         let fresh = try pair.prepareReconnect()
         try await pair.authenticateTransports(fresh.0, fresh.1)
@@ -774,6 +826,11 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     }
 }
 
+private final class ScannerRejectedStream: InputStream {
+    var closeCount = 0
+    override func close() { closeCount += 1 }
+}
+
 private final class ScannerPair {
     let a: ScannerService, b: ScannerService
     let aPeer = MCPeerID(displayName: "test-a"), bPeer = MCPeerID(displayName: "test-b")
@@ -799,11 +856,11 @@ private final class ScannerPair {
         pa = try a.prepareBridge(remoteUUID: b.mySessionUUID, peerID: bPeer)
         pb = try b.prepareBridge(remoteUUID: a.mySessionUUID, peerID: aPeer)
         a.peerSend = { [wire, aPeer, weak a] data, peer, session in
-            XCTAssertTrue(session === a?.mcSession)
+            XCTAssertTrue(session === (try a?.sessionForPeer(peer)))
             try wire.append(data, from: aPeer, to: peer)
         }
         b.peerSend = { [wire, bPeer, weak b] data, peer, session in
-            XCTAssertTrue(session === b?.mcSession)
+            XCTAssertTrue(session === (try b?.sessionForPeer(peer)))
             try wire.append(data, from: bPeer, to: peer)
         }
     }
@@ -824,12 +881,15 @@ private final class ScannerPair {
         ac = try a.prepareBridge(remoteUUID: c.mySessionUUID, peerID: cPeer)
         pc = try c.prepareBridge(remoteUUID: a.mySessionUUID, peerID: aPeer)
         c.peerSend = { [wire, cPeer, weak c] data, peer, session in
-            XCTAssertTrue(session === c?.mcSession)
+            XCTAssertTrue(session === (try c?.sessionForPeer(peer)))
             try wire.append(data, from: cPeer, to: peer)
         }
         if authenticate { try await authenticateTransports(ac!, pc!) }
     }
     func prepareReconnect() throws -> (ScannerPeerTransport, ScannerPeerTransport) {
+        // The real per-peer MCSession discards its old delivery queue on close.
+        // Captured adversarial frames remain available to explicit replay tests.
+        wire.discard(between: aPeer, and: bPeer)
         // Rediscovery after a physical disconnect, retaining the same MCPeerIDs.
         a.foundPeersDict[b.mySessionUUID] = bPeer; a.reversedFoundPeersDict[bPeer] = b.mySessionUUID
         b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID
@@ -849,10 +909,18 @@ private final class ScannerPair {
         if frame.to == aPeer { destination = a }
         else if frame.to == bPeer { destination = b }
         else { destination = try XCTUnwrap(c); XCTAssertEqual(frame.to, cPeer) }
-        return try destination.capturePeerTransport(session: destination.mcSession, peerID: frame.from)
+        return try destination.capturePeerTransport(session: destination.sessionForPeer(frame.from), peerID: frame.from)
     }
     func deliver(_ frame: ScannerControlledWire.Frame) async throws {
+        let before = wire.history.count
         try await receiver(frame).receiveData(frame.data)
+        if frame.sealed, let receipt = wire.history.dropFirst(before).first(where: { $0.from == frame.to && $0.to == frame.from }) {
+            // Scanner emits its internal receipt synchronously before dispatch.
+            // Consume that exact queued frame, leaving application responses for
+            // the test. Assert the real gate classifies it as receipt-only.
+            XCTAssertTrue(wire.remove(receipt))
+            XCTAssertEqual(try receiver(receipt).gate.openPeerFrame(receipt.data), Data())
+        }
     }
     func pump() -> Task<Void, Never> {
         Task {
@@ -907,6 +975,15 @@ private final class ScannerControlledWire: @unchecked Sendable {
     func append(_ data: Data, from: MCPeerID, to: MCPeerID) throws {
         let frame = Frame(data: data, from: from, to: to)
         lock.withLock { pending.append(frame); recorded.append(frame) }
+    }
+    func discard(between a: MCPeerID, and b: MCPeerID) {
+        lock.withLock { pending.removeAll { ($0.from == a && $0.to == b) || ($0.from == b && $0.to == a) } }
+    }
+    func remove(_ frame: Frame) -> Bool {
+        lock.withLock {
+            guard let index = pending.firstIndex(where: { $0.data == frame.data && $0.from == frame.from && $0.to == frame.to }) else { return false }
+            pending.remove(at: index); return true
+        }
     }
     func take() -> Frame? { lock.withLock { pending.isEmpty ? nil : pending.removeFirst() } }
 }

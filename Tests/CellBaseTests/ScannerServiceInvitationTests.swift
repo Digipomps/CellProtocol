@@ -119,7 +119,7 @@ extension ScannerServiceInvitationTests {
             let b = MCPeerID(displayName: "B"), c = MCPeerID(displayName: "C")
             let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "local"), serviceType: "haven-radar")
             service.browser(browser, foundPeer: b, withDiscoveryInfo: ["uuid": "remote"])
-            let session = service.mcSession
+            var session: MCSession?
             var replies: [Bool] = []
             let endpoint: BridgePeerChannelAuthentication.Endpoint
             if state == "outgoing" { endpoint = try service.makeInvitation(remoteUUID: "remote") }
@@ -129,16 +129,18 @@ extension ScannerServiceInvitationTests {
                     replies.append(accepted)
                     if accepted { XCTAssertTrue(captured === session) }
                 }
+                session = try service.sessionForPeer(b)
                 if state == "accepted" { XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)) }
             }
+            session = try service.sessionForPeer(b)
             service.browser(browser, lostPeer: b)
             service.browser(browser, foundPeer: c, withDiscoveryInfo: ["uuid": "remote"])
             service.browser(browser, foundPeer: b, withDiscoveryInfo: ["uuid": "retargeted"])
             XCTAssertNil(service.foundPeersDict["remote"])
             XCTAssertNil(service.foundPeersDict["retargeted"])
-            XCTAssertThrowsError(try service.capturePeerTransport(session: session, peerID: c, prepare: true))
+            XCTAssertThrowsError(try service.capturePeerTransport(session: try XCTUnwrap(session), peerID: c, prepare: true))
             if state == "pending" { XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)) }
-            let physical = try service.capturePeerTransport(session: session, peerID: b, prepare: true)
+            let physical = try service.capturePeerTransport(session: try XCTUnwrap(session), peerID: b, prepare: true)
             XCTAssertEqual(physical.peerID, b); XCTAssertTrue(physical.mcSession === session)
             XCTAssertEqual(physical.channelSession?.peerEndpoint, endpoint)
             XCTAssertEqual(physical.role, state == "outgoing" ? .initiator : .responder)
@@ -182,7 +184,7 @@ extension ScannerServiceInvitationTests {
             XCTAssertEqual(replies, [true])
             XCTAssertNil(service.foundPeersDict["remote"])
             if race == "collision" {
-                XCTAssertEqual(try service.capturePeerTransport(session: service.mcSession, peerID: b, prepare: true).peerID, b)
+                XCTAssertEqual(try service.capturePeerTransport(session: service.sessionForPeer(b), peerID: b, prepare: true).peerID, b)
             } else {
                 XCTAssertEqual(service.retainedInvitationCount, 0)
                 XCTAssertThrowsError(try service.prepareBridge(remoteUUID: "remote", peerID: b))
@@ -221,7 +223,7 @@ extension ScannerServiceInvitationTests {
         let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "local"), serviceType: "haven-radar")
         service.browser(browser, foundPeer: b, withDiscoveryInfo: ["uuid": "remote"])
         _ = try service.makeInvitation(remoteUUID: "remote")
-        let oldSession = service.mcSession
+        let oldSession = try service.sessionForPeer(b)
         now = 110; service.expireInvitations()
         let fresh = try BridgePeerChannelAuthentication.Endpoint(initiator: "remote", responder: "local", setupID: UUID().uuidString, domain: "nearby")
         var replies = [Bool]()
@@ -251,9 +253,9 @@ extension ScannerServiceInvitationTests {
             service.browser(browser, lostPeer: b)
             now = 110; service.expireInvitations()
             XCTAssertEqual(service.retainedInvitationCount, 0)
-            XCTAssertThrowsError(try service.capturePeerTransport(session: service.mcSession, peerID: b, prepare: true))
+            XCTAssertThrowsError(try service.capturePeerTransport(session: service.sessionForPeer(b), peerID: b, prepare: true))
             if state == "pending" { XCTAssertEqual(replies, [false]) }
-            if state == "accepted" { XCTAssertEqual(replies, [true]) }
+                if state == "accepted" { XCTAssertEqual(replies, [true]) }
             service.browser(browser, foundPeer: c, withDiscoveryInfo: ["uuid": "remote"])
             let fresh = try service.makeInvitation(remoteUUID: "remote")
             XCTAssertEqual(fresh.responder, "remote")

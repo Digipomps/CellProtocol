@@ -158,8 +158,9 @@ a physical submission that already won admission cannot be recalled.
 
 Handshake reservations are retained until authenticated progress; I's M5 remains
 reserved until authenticated Kapp traffic or close. This does not prove OS buffer
-release or honest remote processing. General delivery receipts/flow control and
-physical isolated Multipeer retirement remain N18/N15 work, not v3 claims.
+release or honest remote processing. [Physical flow control](PeerPhysicalFlowControl.md) specifies the bounded receipt
+window and per-peer MC retirement added by N14/N15/N18, including the remaining
+pre-callback OS reassembly boundary.
 
 ## Application records
 
@@ -172,6 +173,9 @@ Counters start at 0 after Finished; `UInt64.max` is never used. Plaintext is
 is required. Replay, gap, reflection, wrong magic, tag, length or plaintext is
 terminal. Inner peerGeneration/session/principal checks remain mandatory.
 All app commands, responses, flows, NI data and origin-signing RPCs use this path.
+Record plaintext now contains the mandatory binary application/receipt wrapper
+described in [Physical flow control](PeerPhysicalFlowControl.md); the 1 MiB limit
+includes that wrapper.
 
 ## Evidence and limits
 
@@ -194,7 +198,8 @@ proof, independent crypto audit or production approval is claimed.
 
 [Scanner admission and ordering](ScannerAdmissionAndOrdering.md) describes the
 N10/N11/N16 consumer, invitation and pre-authentication budgets. NI/contact
-binding and physical resource bounds remain separate findings N12–N15/N18/N20.
+binding remains separate N12/N13/N20 work. See the physical flow-control document
+for measured resource bounds and the remaining MC reassembly limitation.
 [Shared bridge lifecycle rules](BridgeLifecycle.md) describe the N23–N26 response,
 mux-send, factory and signing protections. A controlled inner-wire relay is not a three-process MC MITM or a radio/NI device test.
 
