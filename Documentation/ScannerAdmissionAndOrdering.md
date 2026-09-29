@@ -7,7 +7,8 @@ run independently so an operation can receive the proof it is waiting for.
 A signature-shaped payload alone never selects that lane. Both lanes retain all
 normal gate/session/permit checks. WebSocket framing and dispatch are unchanged.
 This orders received records; it cannot repair reordering by an application
-producer before physical submission. EntityScanner's async delegate retains this
+producer before physical submission. BridgeBase now uses a bounded ordered feed
+drain before that boundary; see [outgoing feed ordering](BridgeLifecycle.md#outgoing-feed-ordering-n27). EntityScanner's async delegate retains this
 lease through actual consumer completion; see [consumer security](ScannerConsumerSecurity.md).
 
 Each pending, accepted or outgoing invitation owns a fixed MCPeerID, MCSession,

@@ -114,6 +114,7 @@ final class BridgePeerV3Tests: XCTestCase {
 final class V3Wire: @unchecked Sendable {
     private let lock = NSLock(); private var values: [Data] = []
     var last: Data? { lock.withLock { values.last } }
+    var all: [Data] { lock.withLock { values } }
     var count: Int { lock.withLock { values.count } }
     func append(_ data: Data) throws { lock.withLock { values.append(data) } }
 }
@@ -167,7 +168,7 @@ actor V3Vault: IdentityVaultProtocol {
 private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     weak var gate: BridgeChannelTransport?
     let wire = V3Wire()
-    var beforeSubmission: (@Sendable (Data) async -> Void)?
+    var beforeSubmission: (@Sendable (Data) async throws -> Void)?
     var submitted: (@Sendable (Data) -> Void)?
     var beforeFirstSubmission: (@Sendable () async -> Void)?
     var afterFirstSubmission: (@Sendable () async -> Void)?
@@ -177,7 +178,7 @@ private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
     func sendData(_ data: Data) async throws {
         if wire.count == 0 { await beforeFirstSubmission?() }
-        await beforeSubmission?(data)
+        try await beforeSubmission?(data)
         try gate!.submitPeerFrame(data) { try wire.append($0) }
         submitted?(data)
         if wire.count == 1 { await afterFirstSubmission?() }
@@ -1220,3 +1221,60 @@ extension BridgePeerV3Tests {
     }
 }
 #endif
+
+extension BridgePeerV3Tests {
+    func testPeerFeedPreservesOrderDrainsCompletionAndSynchronousPublisher() async throws {
+        let owner = await MockIdentityVault().identity(for: "feed", makeNewIfNotFound: true)!
+        let bridge = BridgeBase(owner: owner), probe = BridgeOrderingProbe()
+        let cell = await BridgeOrderingFeedCell(owner: owner)
+        let pair = try V3GatePair(factoryRole: .responder, factory: { transport, _ in
+            try await bridge.setTransport(transport, connection: .outbound)
+            bridge.emitCellAtEndpoint = cell
+            return bridge
+        })
+        let startup = try await pair.start()
+        for n in 1...5 { try await pair.step(n) }
+        try await startup.value
+        let handshakeFrames = pair.rt.wire.count
+        pair.rt.beforeSubmission = { data in
+            try await probe.submit(JSONDecoder().decode(BridgeCommand.self, from: data))
+        }
+        try await exerciseOrderedFeed(bridge: bridge, cell: cell, requester: pair.io, probe: probe) { command in
+            try await pair.i.sendData(A.encode(command))
+            try await pair.rt.receive(XCTUnwrap(pair.it.wire.last))
+        }
+        // Open actual records in send order: AEAD ordering must preserve the
+        // publisher order, including both synchronous final values.
+        var values: [String] = []
+        for data in pair.rt.wire.all.dropFirst(handshakeFrames) {
+            let plain = try pair.i.openPeerFrame(data)
+            if let command = try? JSONDecoder().decode(BridgeCommand.self, from: plain),
+               case let .flowElement(value) = command.payload { values.append(value.title ?? "") }
+        }
+        XCTAssertEqual(values, ["1", "2", "1", "2"])
+        await pair.stop(startup)
+        XCTAssertEqual(pair.limits.retainedConnectionCount, 0)
+    }
+
+    func testPeerSetAndDescriptionOwnCIDAndPreserveImmediateRepliesAndTimeoutIsolation() async throws {
+        let owner = await MockIdentityVault().identity(for: "rpc", makeNewIfNotFound: true)!
+        let bridge = BridgeBase(owner: owner), probe = BridgeOrderingProbe()
+        let pair = try V3GatePair(factoryRole: .initiator, factory: { transport, _ in
+            try await bridge.setTransport(transport, connection: .outbound)
+            return bridge
+        })
+        let startup = try await pair.start()
+        for n in 1...5 { try await pair.step(n) }
+        try await startup.value
+        pair.it.beforeSubmission = { data in
+            if let command = try? JSONDecoder().decode(BridgeCommand.self, from: data) { try await probe.submit(command) }
+        }
+        try await exerciseRPCOwnership(bridge: bridge, requester: pair.io, probe: probe) { command in
+            // Real encrypted peer response arrives before the request's physical
+            // submission returns. No ready exception or synthetic session.
+            try await pair.r.sendData(A.encode(command))
+            try await pair.it.receive(XCTUnwrap(pair.rt.wire.last))
+        }
+        await pair.stop(startup)
+    }
+}

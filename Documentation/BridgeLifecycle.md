@@ -5,7 +5,7 @@ unchanged. These shared lifecycle rules apply to WS and peer v3, including mux.
 There is one authentication gate/session; none of the rules allow a `ready` frame
 or a remote vault to bypass it.
 
-## Response publication (N23)
+## Response publication (N23, N34)
 
 BridgeBase and its bounded auditor share one recursive lifecycle lock. After
 initial lookup, response consumption rechecks the captured session and the live
@@ -16,8 +16,36 @@ never held across an async operation. Get completion belongs to cid, not keypath
 an old timeout or response cannot consume another get on the same path. A Future
 also preserves a response delivered before the caller starts awaiting it.
 
-Feed setup and post-send state changes recheck their captured session and lease.
-This does not establish N10's complete application delivery ordering guarantee.
+Set and description calls also register a cid-owned Future before sending, with
+an explicit captured session. Send admission must still belong to that session.
+A malformed reply fails only that waiter; close fails all of that Base's waiters.
+Timeout/send-error cleanup removes only its cid and proof permit. Concurrent
+same-keypath sets and descriptions therefore cannot overwrite or complete one
+another. The old keypath-only `sendSetValueResponse` helper was removed; protocol
+responses must use `consumeResponse` with the registered cid and session checks.
+
+## Outgoing feed ordering (N27)
+
+One worker drains each Base feed in publisher delivery order. Admission happens
+synchronously under the lifecycle lock, before a task can reorder values. At
+most 32 queued/in-flight values per Base retain the existing per-key/global
+operation budgets and pending-send byte budgets, including through completion.
+The transport separately charges its wire copy; no quota is bypassed. There is
+no persistent replay or remote processing acknowledgement implied by send return.
+
+Upstream completion is a terminal marker behind all admitted values, including
+for a synchronous finite publisher. Successful drain releases the feed lease and
+marks the sender inactive. The existing wire protocol has no feed-finished frame;
+this change does not claim remote subscriber completion. An upstream failure
+may signal revoked authorization, so it immediately fails queued values and
+closes the captured transport. Encoding, admission or send failure also explicitly
+fails the remaining queue and closes that transport;
+a logical mux close preserves siblings. Stop/retirement discards queued values,
+while an already admitted physical send keeps its operation, bytes and feed lease
+until return. Late work cannot reactivate a replacement generation.
+
+These guarantees order one publisher's values before WS/mux/peer submission.
+Scanner's receive-side dispatch ordering remains a separate guarantee.
 
 ## Mux send ownership (N24)
 
@@ -66,6 +94,6 @@ the same scope cannot revive a captured permit. Feed permits can stay active,
 but cannot extend an individual signing challenge.
 
 Regression evidence lives in `BridgeResponseLifetimeTests`,
-`BridgeMuxSendLifetimeTests`, `BridgeFactoryLifetimeTests`,
+`BridgeFeedAndRPCOrderingTests`, `BridgeMuxSendLifetimeTests`, `BridgeFactoryLifetimeTests`,
 `BridgeSigningLifetimeTests` and `BridgePeerV3Tests`. The barriers deliberately
 ignore task cancellation and hold work at the relevant lifetime boundary.

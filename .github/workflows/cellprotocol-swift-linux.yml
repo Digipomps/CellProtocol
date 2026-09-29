@@ -97,7 +97,7 @@ jobs:
             FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
             EphemeralIdentityVaultConcurrencyTests PublisherAsyncLifetimeTests BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
-            BridgeResponseLifetimeTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
+            BridgeResponseLifetimeTests BridgeFeedAndRPCOrderingTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
             BridgeDiagnosticPrivacyTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests; do
