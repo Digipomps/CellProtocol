@@ -227,6 +227,7 @@ private final class V3GatePair {
     let io: Identity, ro: Identity
     init(policy: P.DisclosurePolicy? = nil, responderPolicy: P.DisclosurePolicy? = nil,
          family: String = "vectors", sameIdentity: Bool = false, limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil, factoryRole: P.Role = .initiator,
+         responderRecheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in },
          recheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in }) throws {
         self.limits = limits
         let v = try BridgePeerV3Tests.vectors(family)
@@ -244,7 +245,7 @@ private final class V3GatePair {
             }
         r = try BridgeChannelTransport(underlying: rt, peerEndpoint: endpoint, role: .responder, owner: ro,
             limits: limits, source: UUID().uuidString, disclosurePolicy: responderPolicy ?? .anyProvenIdentity(allowUnauthenticatedInitiator: true),
-            wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, _ in
+            recheckPolicy: responderRecheck, wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, _ in
                 rd.created(); gate.setDelegate(rd)
                 if factoryRole == .responder { await factoryBarrier?.wait() }
                 return rd
@@ -631,6 +632,44 @@ extension BridgePeerV3Tests {
 }
 
 extension BridgePeerV3Tests {
+    func testPolicyChangeDuringVaultLookupOrSigningStopsDisclosure() async throws {
+        for existence in [true, false] {
+            let policy = V3MutablePolicy(), barrier = V3Barrier()
+            let pair = try V3GatePair(recheck: { _ in try await policy.check() })
+            if existence { await pair.iv.setBarriers(exist: { await barrier.wait() }) }
+            else { await pair.iv.setBarriers(sign: { await barrier.wait() }) }
+            let task = try await pair.start(); try await pair.step(1)
+            let pending = Task { try await pair.step(2) }
+            await barrier.reached(); await policy.deny(); await barrier.release()
+            do { try await pending.value; XCTFail("Changed policy permitted disclosure") } catch {}
+            let count = await pair.iv.signCount
+            XCTAssertEqual(count, existence ? 0 : 1)
+            XCTAssertEqual(pair.it.wire.count, 1)
+            XCTAssertEqual(pair.id.counts.factory, 0)
+            await pair.stop(task)
+            XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+        }
+    }
+
+    func testPolicyChangeDuringEitherFactoryRetiresResultWithoutReady() async throws {
+        for role in [P.Role.initiator, .responder] {
+            let policy = V3MutablePolicy(), barrier = V3Barrier()
+            let pair = try V3GatePair(factoryBarrier: barrier, factoryRole: role,
+                responderRecheck: { _ in try await policy.check() }, recheck: { _ in try await policy.check() })
+            let task = try await pair.start(), finalStep = role == .initiator ? 4 : 5
+            for step in 1..<finalStep { try await pair.step(step) }
+            let pending = Task { try await pair.step(finalStep) }
+            await barrier.reached(); await policy.deny(); await barrier.release()
+            do { try await pending.value; XCTFail("Changed policy published factory") } catch {}
+            let gate = role == .initiator ? pair.i : pair.r, delegate = role == .initiator ? pair.id : pair.rd
+            XCTAssertFalse(gate.canSendPeerData)
+            XCTAssertEqual(delegate.counts.close, 1)
+            await pair.stop(task)
+            XCTAssertEqual(delegate.counts.close, 1)
+            XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+        }
+    }
+
     func testCloseAndDirectRevokeWinBeforePhysicalSendAdmission() async throws {
         for role in [P.Role.initiator,.responder] {
             for revoke in [true,false] {
@@ -676,5 +715,13 @@ extension BridgePeerV3Tests {
         await fresh.stop(next)
         XCTAssertEqual(limits.outstandingWorkCount, 0)
         XCTAssertEqual(limits.retainedConnectionCount, 0)
+    }
+}
+
+private actor V3MutablePolicy {
+    private var allowed = true
+    func deny() { allowed = false }
+    func check() throws {
+        guard allowed else { throw BridgeChannelAuthentication.Failure.identityMismatch }
     }
 }

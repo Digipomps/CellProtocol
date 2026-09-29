@@ -171,11 +171,21 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             async let aSetup: Void = pair.a.setupBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer)
             async let bSetup: Void = pair.b.setupBridge(remoteUUID: pair.a.mySessionUUID, peerID: pair.aPeer)
             try await aSetup; try await bSetup
+            try assertPrivateHandshake(pair.wire.history.filter { !$0.sealed }, identities: [pair.a.owner, pair.b.owner])
+            XCTAssertEqual(pair.pa.gate.session.publicIdentity, try BridgeChannelAuthentication.PublicIdentity(pair.b.owner))
+            XCTAssertEqual(pair.pb.gate.session.publicIdentity, try BridgeChannelAuthentication.PublicIdentity(pair.a.owner))
             XCTAssertEqual(pair.pb.bridge?.uuid, lobby.uuid, "Description installs actual Lobby UUID")
             let aRegistered = await resolver.cellUUID(for: pair.a.mySessionUUID), bRegistered = await resolver.cellUUID(for: pair.b.mySessionUUID)
             XCTAssertNotNil(aRegistered); XCTAssertNotNil(bRegistered)
             for _ in 0..<1000 where lobby.subscriptionCount < 2 { try await Task.sleep(nanoseconds: 1_000_000) }
             XCTAssertEqual(lobby.subscriptionCount, 2, "Both real feed subscriptions are installed before emission")
+            let vaultA = try XCTUnwrap(pair.a.owner.identityVault as? MockIdentityVault)
+            let vaultB = try XCTUnwrap(pair.b.owner.identityVault as? MockIdentityVault)
+            let signedA = await vaultA.signedMessages, signedB = await vaultB.signedMessages
+            // Agreement signatures share the vault but are not origin challenges.
+            let challenges = (signedA + signedB).compactMap { try? JSONDecoder().decode(IdentitySigningChallenge.self, from: $0) }
+            XCTAssertTrue(challenges.contains { $0.action == "checkIdentityOrigin" && $0.resource == lobby.uuid },
+                          "Actual Lobby setup must round-trip an origin-signing RPC under Kapp")
             lobby.pushFlowElement(FlowElement(title: "lobby", content: .string(marker), properties: .init(type: .content, contentType: .string)), requester: pair.a.owner)
             await fulfillment(of: [localFlow, remoteFlow], timeout: 3)
             XCTAssertGreaterThan(pair.wire.history.filter { $0.sealed }.count, 6)

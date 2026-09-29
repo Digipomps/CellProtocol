@@ -253,7 +253,8 @@ public enum BridgePeerChannelAuthentication {
             return try unpad(type, ChaChaPoly.open(box, using: key("handshake-key", hello.role.opposite, t0),
                 authenticating: framed("handshake-aead", Data(String(step).utf8), context)), size: size)
         }
-        private func sign(live: @Sendable () throws -> Void) async throws -> Authentication {
+        private func sign(live: @Sendable () throws -> Void,
+                          recheck: @Sendable () async throws -> Void) async throws -> Authentication {
             try check(live); try policy.check(remoteIdentity, endpoint: endpoint, role: hello.role)
             guard !signingStarted, let vault = owner.identityVault, !(vault is BridgeIdentityVault), let t0 else { throw Auth.Failure.invalidProof }
             let challenge = try context(for: hello.role, identity: identity)
@@ -262,9 +263,11 @@ public enum BridgePeerChannelAuthentication {
             let exists = await vault.identityExistInVault(owner)
             try check(live)
             guard exists else { throw Auth.Failure.identityMismatch }
+            try await recheck(); try check(live)
             _ = try IdentitySigningChallenge.validateSigningData(challenge.signingData, for: owner, now: wallClock())
             let signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner)
             try check(live)
+            try await recheck(); try check(live)
             _ = try IdentitySigningChallenge.validateSigningData(challenge.signingData, for: owner, now: wallClock())
             guard signature.count <= 256, IdentityPublicKeySignatureVerifier.verify(signature: signature,
                 messageData: challenge.signingData, identity: owner) else { throw Auth.Failure.invalidProof }
@@ -314,7 +317,7 @@ public enum BridgePeerChannelAuthentication {
                     let remote = try Auth.decode(Hello.self, from: body)
                     try prepare(remote, first: hash(framed("wire-1", wire)))
                     try await recheck(); try check(live)
-                    let auth = try await sign(live: live)
+                    let auth = try await sign(live: live, recheck: recheck)
                     let w2 = try BridgePeerChannelAuthentication.envelope(.responderAuth,
                         ResponderAuth(hello: hello, sealed: seal(auth, step: 2, context: t0!, size: 8192)))
                     transcript = hash(framed("wire-2", t0!, w2)); t2 = transcript; state = .waitM3
@@ -328,8 +331,7 @@ public enum BridgePeerChannelAuthentication {
                     try await authenticate(challenge, auth.proof); try check(live)
                     try policy.check(auth.identity, endpoint: endpoint, role: hello.role)
                     try await recheck(); try check(live)
-                    let own = try await sign(live: live)
-                    try await recheck(); try check(live)
+                    let own = try await sign(live: live, recheck: recheck)
                     let w3 = try BridgePeerChannelAuthentication.envelope(.initiatorAuth,
                         Sealed(profile: profile, sealed: seal(own, step: 3, context: t2!, size: 8192)))
                     transcript = hash(framed("wire-3", t2!, w3)); t3 = transcript; state = .waitM4

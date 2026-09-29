@@ -104,6 +104,9 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         var adopted = false
         do {
             try session.check()
+            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
+            try await recheckPolicy(identity)
+            try session.check()
             try lock.withLock {
                 guard !stopped else { throw Auth.Failure.closed }
                 try session.check()
