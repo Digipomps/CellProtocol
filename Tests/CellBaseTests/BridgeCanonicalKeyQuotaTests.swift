@@ -34,12 +34,13 @@ final class BridgeCanonicalKeyQuotaTests: XCTestCase {
             let localIdentity = try Key(ed: false).identity(999)
             session = try BridgeChannelSession(peerEndpoint: endpoint, localIdentity: localIdentity, limits: limits, source: "peer-\(index)")
             func hello(_ role: P.Role, _ identity: A.PublicIdentity, _ generation: String) -> P.Hello {
-                .init(profile: P.profile, endpoint: endpoint, role: role, identity: identity,
+                .init(profile: P.profile, role: role,
                       ephemeralPublicKey: Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation,
                       nonce: A.randomNonce(), generation: generation, issuedAtMilliseconds: A.milliseconds(Date()))
             }
-            let challenge = try P.challenge(local: hello(.responder, localIdentity, session.generation),
-                remote: hello(.initiator, identity, UUID().uuidString), signer: .initiator)
+            let challenge = try P.challenge(endpoint: endpoint, identity: identity, signer: .initiator,
+                local: hello(.responder, localIdentity, session.generation), remote: hello(.initiator, identity, UUID().uuidString),
+                t0: Data(repeating: 1, count: 32), t2: Data(repeating: 2, count: 32), responder: localIdentity)
             try session.issuePeerChallenge(challenge)
             proof = .init(sessionID: challenge.sessionID, generation: challenge.generation, signature: try key.sign(challenge.signingData))
         } else {

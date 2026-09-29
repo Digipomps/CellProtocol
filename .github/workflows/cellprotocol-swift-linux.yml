@@ -84,6 +84,7 @@ jobs:
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp -R Tests/CellBaseTests/Fixtures/PeerV3 "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/Fixtures/DeviceIngress*.b64 \
             "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/Fixtures/EntityRelation*.json \
@@ -95,7 +96,7 @@ jobs:
           for suite in AgreementSecurityTests FileCryptoSecurityTests \
             FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
-            BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgeCanonicalKeyQuotaTests \
+            BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgeCanonicalKeyQuotaTests \
             BridgeDiagnosticPrivacyTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests; do

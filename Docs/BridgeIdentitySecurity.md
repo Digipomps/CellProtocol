@@ -325,7 +325,7 @@ drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evide
 
 ## Multipeer peer profile (R3, N07 v2)
 
-`org.haven.bridge-peer-channel.v2` is a separate profile, not a WSS-origin alias.
+`org.haven.bridge-peer-channel.v3` is a separate profile, not a WSS-origin alias.
 An explicitly accepted Scanner invitation supplies an immutable endpoint containing
 both session-scoped discovery peer identifiers, the invitation/setup UUID and the
 `nearby` domain. Scanner binds those identifiers to the observed `MCPeerID` objects
@@ -348,7 +348,7 @@ nonces, both public identities, both ephemeral keys and both connection generati
 X25519/HKDF-SHA256 derives two directional keys; ChaCha20-Poly1305 protects every
 subsequent frame. Generation, direction and exact-next counter are authenticated;
 invalid, replayed, reordered or plaintext records close the channel. There is no
-v1 downgrade. The complete [v2 wire and security contract](../Documentation/BridgePeerChannelV2.md)
+v1 downgrade. The complete [v2 wire and security contract](../Documentation/BridgePeerChannelV3.md)
 defines transcript, KDF info, AAD, bounds, claims and non-claims.
 
 `BridgeChannelSession.reserveOpen` consumes the same pending state before public

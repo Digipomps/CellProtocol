@@ -1,3 +1,6 @@
+> Superseded by [Peer channel v3](BridgePeerChannelV3.md). Peer v2 and HPC2 are rejected.
+> The following text is historical and does not describe the active implementation.
+
 # Peer channel v2
 
 Status: unreleased profile `org.haven.bridge-peer-channel.v2`. This replaces the

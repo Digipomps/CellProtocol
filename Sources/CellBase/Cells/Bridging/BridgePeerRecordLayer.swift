@@ -17,29 +17,17 @@ final class BridgePeerRecordLayer {
     var nextSend: UInt64 = 0
     var nextReceive: UInt64 = 0
 
-    init(local: P.Hello, remote: P.Hello, privateKey: Curve25519.KeyAgreement.PrivateKey) throws {
-        guard local.ephemeralPublicKey == privateKey.publicKey.rawRepresentation,
-              local.role != remote.role, local.endpoint == remote.endpoint,
-              local.profile == P.profile, remote.profile == P.profile,
-              local.generation.utf8.count == 36, remote.generation.utf8.count == 36 else { throw A.Failure.invalidProof }
-        let secret = try privateKey.sharedSecretFromKeyAgreement(with: Curve25519.KeyAgreement.PublicKey(rawRepresentation: remote.ephemeralPublicKey))
-        // Providers normally reject small-order points themselves; also reject
-        // any all-zero result, without an early-exit comparison (RFC 7748 §6.1).
-        guard secret.withUnsafeBytes({ $0.reduce(UInt8(0)) { $0 | $1 } }) != 0 else { throw A.Failure.invalidProof }
-        let transcripts = try [P.Role.initiator, .responder].map { try P.challenge(local: local, remote: remote, signer: $0).transcript }
-        let salt = Data(SHA256.hash(data: try A.encode(transcripts)))
-        func key(_ direction: P.Role) -> SymmetricKey {
-            let name = direction == .initiator ? "initiator-to-responder" : "responder-to-initiator"
-            return secret.hkdfDerivedSymmetricKey(using: SHA256.self, salt: salt,
-                sharedInfo: Data((P.profile + "\0key\0" + name).utf8), outputByteCount: 32)
-        }
-        sendKey = key(local.role); receiveKey = key(remote.role)
+    init(local: P.Hello, remote: P.Hello, sendKey: SymmetricKey, receiveKey: SymmetricKey) throws {
+        guard local.role != remote.role, local.profile == P.profile, remote.profile == P.profile,
+              P.canonicalUUID(local.generation), P.canonicalUUID(remote.generation),
+              local.generation != remote.generation else { throw A.Failure.invalidProof }
+        self.sendKey = sendKey; self.receiveKey = receiveKey
         sendPrefix = Self.prefix(generation: local.generation, role: local.role)
         receivePrefix = Self.prefix(generation: remote.generation, role: remote.role)
     }
 
     private static func prefix(generation: String, role: P.Role) -> Data {
-        Data("HPC2".utf8) + Data(generation.utf8) + Data([role == .initiator ? 0 : 1])
+        Data("HPC3".utf8) + Data(generation.utf8) + Data([role == .initiator ? 0 : 1])
     }
     private static func counter(_ value: UInt64) -> Data {
         var encoded = value.bigEndian

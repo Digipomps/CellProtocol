@@ -23,8 +23,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private var peerOperation: BridgePeerChannelAuthentication.Operation?
     private var peerReady = false
     private var peerRecords: BridgePeerRecordLayer?
-    private var peerPlainSends: [String] = []
-    private var peerPlainReceives: [String] = []
+    // Only internal auth-send can reserve one exact envelope for physical send.
+    private var peerAuthSend: Data?
+    private var peerAuthSendBytes = 0
+    private var peerLastAuthBytes = 0
     private var remotePeerGeneration: String?
     private var timer: Task<Void, Never>?
     private var stopped = false
@@ -54,13 +56,15 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
     public init(underlying: BridgeTransportProtocol, peerEndpoint: BridgePeerChannelAuthentication.Endpoint,
                 role: BridgePeerChannelAuthentication.Role, owner: Identity, limits: BridgeChannelLimits,
-                source: String, recheckPolicy: @escaping @Sendable (Auth.PublicIdentity) async throws -> Void = { _ in },
+                source: String, disclosurePolicy: BridgePeerChannelAuthentication.DisclosurePolicy,
+                recheckPolicy: @escaping @Sendable (Auth.PublicIdentity) async throws -> Void = { _ in },
+                wallClock: @escaping @Sendable () -> Date = { Date() },
+                monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
                 factory: @escaping ServerFactory) throws {
         self.underlying = underlying; newPhysicalTransport = { type(of: underlying).new() }
-        session = try BridgeChannelSession(peerEndpoint: peerEndpoint, localIdentity: Auth.PublicIdentity(owner), limits: limits, source: source)
-        peerOperation = try .init(owner: owner, endpoint: peerEndpoint, role: role, generation: session.generation)
-        peerPlainSends = role == .initiator ? ["channelAuthPeerHello", "channelAuthPeerProof"] : ["channelAuthPeerChallenge"]
-        peerPlainReceives = role == .initiator ? ["channelAuthPeerChallenge"] : ["channelAuthPeerHello", "channelAuthPeerProof"]
+        session = try BridgeChannelSession(peerEndpoint: peerEndpoint, localIdentity: Auth.PublicIdentity(owner), limits: limits, source: source, wallClock: wallClock, monotonic: monotonic)
+        peerOperation = try .init(owner: owner, endpoint: peerEndpoint, role: role, generation: session.generation,
+                                  policy: disclosurePolicy, wallClock: wallClock, monotonic: monotonic)
         self.factory = factory; self.recheckPolicy = recheckPolicy; isServer = true
         install()
     }
@@ -68,7 +72,11 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         guard let peer = lock.withLock({ peerOperation }),
               lock.withLock({ if started || stopped { return false }; started = true; return true }) else { throw Auth.Failure.unexpectedMessage }
         do {
-            if peer.hello.role == .initiator { try await sendAuth("channelAuthPeerHello", peer.hello) }
+            if peer.hello.role == .initiator {
+                try await trackedWork(admission: true) {
+                    try await self.sendPeerAuthentication(peer.begin(live: self.checkPeerHandshake))
+                }
+            }
             while !lock.withLock({ peerReady }) {
                 guard !lock.withLock({ stopped }) else { throw Auth.Failure.closed }
                 try Task.checkCancellation()
@@ -77,54 +85,90 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.check()
         } catch { await close(); throw error }
     }
+    private func checkPeerHandshake() throws {
+        try lock.withLock {
+            guard !stopped else { throw Auth.Failure.closed }
+            try session.checkPeerHandshake()
+        }
+    }
+    private func recheckPeerPolicy() async throws {
+        try checkPeerHandshake()
+        if let identity = session.publicIdentity { try await recheckPolicy(identity) }
+        try checkPeerHandshake()
+    }
     private func activatePeer() async throws {
         try session.recheckBeforeActivation()
         _ = try session.activate()
         guard let factory else { throw Auth.Failure.unavailable }
-        let delegate = try await factory(self, session)
-        try session.check()
-        lock.withLock { self.delegate = delegate }
-        if let bridge = delegate as? BridgeBase { try bridge.activateAuthenticatedChannel() }
-        scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+        let result = try await factory(self, session)
+        var adopted = false
+        do {
+            try session.check()
+            try lock.withLock {
+                guard !stopped else { throw Auth.Failure.closed }
+                try session.check()
+                delegate = result; adopted = true
+            }
+            if let bridge = result as? BridgeBase { try bridge.activateAuthenticatedChannel() }
+            try lock.withLock {
+                guard !stopped else { throw Auth.Failure.closed }
+                try session.check(); peerReady = true
+            }
+            scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+        } catch {
+            let ownsCleanup = lock.withLock { () -> Bool in
+                if !adopted { return true }
+                guard delegate === result else { return false }
+                delegate = nil; return true
+            }
+            if ownsCleanup {
+                if let bridge = result as? BridgeBase { await bridge.channelDidClose(session) }
+                else { await result.pushError(errorMessage: "bridge_channel_closed", error: Auth.Failure.closed) }
+            }
+            throw error
+        }
     }
     private func consumePeerAuthentication(_ command: BridgeCommand, bytes: Data,
         peer: BridgePeerChannelAuthentication.Operation) async throws {
-        typealias P = BridgePeerChannelAuthentication
-        switch (peer.hello.role, command.cmd) {
-        case (.responder, "channelAuthPeerHello"):
-            let remote = try Auth.decode(P.Hello.self, from: bytes)
-            try session.issuePeerChallenge(await peer.prepare(remote))
-            lock.withLock { remotePeerGeneration = remote.generation }
-            try await sendAuth("channelAuthPeerChallenge", P.Offer(hello: peer.hello, proof: await peer.sign()))
-        case (.initiator, "channelAuthPeerChallenge"):
-            let offer = try Auth.decode(P.Offer.self, from: bytes)
-            try session.issuePeerChallenge(await peer.prepare(offer.hello))
-            lock.withLock { remotePeerGeneration = offer.hello.generation }
-            try session.reserveOpen(offer.proof)
-            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
-            try await recheckPolicy(identity); try session.recheckBeforeActivation()
-            let proof = try await peer.sign()
-            let records = try await peer.deriveRecordLayer()
+        let wire = try Auth.encode(command)
+        let records = try await peer.receive(wire, live: checkPeerHandshake,
+            authenticate: { [self] challenge, proof in
+                try checkPeerHandshake()
+                try session.issuePeerChallenge(challenge)
+                try session.reserveOpen(proof)
+                try await recheckPeerPolicy()
+            }, recheck: recheckPeerPolicy, send: sendPeerAuthentication)
+        // The operation has validated the exact expected, transcript-bound step.
+        // M5's reservation remains until an authenticated application record.
+        if let records {
+            if peer.hello.role == .responder { releasePeerHandshakeBytes() }
             try installPeerRecords(records)
-            try await sendAuth("channelAuthPeerProof", proof)
-        case (.responder, "channelAuthPeerProof"):
-            try session.reserveOpen(Auth.decode(Auth.Proof.self, from: bytes))
-            guard let identity = session.publicIdentity else { throw Auth.Failure.invalidProof }
-            try await recheckPolicy(identity)
-            try session.recheckBeforeActivation()
-            let records = try await peer.deriveRecordLayer()
-            try installPeerRecords(records)
-            try await sendAuth("channelAuthPeerAccepted", session.peerAcknowledgement())
-        case (_, "channelAuthPeerAccepted"):
-            // This command can only arrive through the first authenticated record.
-            guard lock.withLock({ peerRecords?.nextReceive == 1 && !peerReady }) else { throw Auth.Failure.invalidProof }
-            try await peer.finish(Auth.decode(Auth.Authenticated.self, from: bytes))
-            if peer.hello.role == .initiator {
-                try await sendAuth("channelAuthPeerAccepted", session.peerAcknowledgement())
-            }
             try await activatePeer()
-            lock.withLock { peerReady = true }
-        default: throw Auth.Failure.unexpectedMessage
+        }
+    }
+    private func sendPeerAuthentication(_ data: Data) async throws {
+        try checkPeerHandshake()
+        _ = try BridgePeerChannelAuthentication.decodeEnvelope(data)
+        let previous = try lock.withLock { () throws -> Int in
+            guard !stopped, peerAuthSend == nil else { throw Auth.Failure.closed }
+            try session.acquireSend(bytes: data.count, authenticating: true)
+            let old = peerLastAuthBytes
+            peerAuthSend = data; peerAuthSendBytes += data.count; peerLastAuthBytes = data.count
+            return old
+        }
+        // Reaching the next locally generated step requires authenticated remote
+        // progress; initial M1/M2 have no previous reservation.
+        if previous > 0 { releasePeerHandshakeBytes(previous) }
+        try await physicalTransport().sendData(data)
+        try checkPeerHandshake()
+        guard lock.withLock({ peerAuthSend == nil }) else { throw Auth.Failure.unavailable }
+    }
+    private func releasePeerHandshakeBytes(_ bytes: Int? = nil) {
+        lock.withLock {
+            let released = min(bytes ?? peerAuthSendBytes, peerAuthSendBytes)
+            peerAuthSendBytes -= released
+            session.releaseSend(bytes: released)
+            if peerAuthSendBytes == 0 { peerLastAuthBytes = 0 }
         }
     }
     private func install() {
@@ -142,7 +186,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         // A configured origin and physical transport are mandatory.
         UnconfiguredBridgeChannelTransport()
     }
-    public func setDelegate(_ delegate: BridgeDelegateProtocol) { lock.withLock { self.delegate = delegate } }
+    public func setDelegate(_ delegate: BridgeDelegateProtocol) {
+        lock.withLock {
+            // Peer factories may bind BridgeBase while suspended. Adoption is
+            // owned by activatePeer, never by a provisional setTransport call.
+            if !stopped && (peerOperation == nil || peerReady) { self.delegate = delegate }
+        }
+    }
 
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
         guard !isServer, let endpoint = session.endpoint, endpointURL.absoluteString == endpoint.audience,
@@ -180,7 +230,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private func sendAuth<T: Encodable>(_ name: String, _ value: T) async throws {
         let command = BridgeCommand(cmd: name, payload: .string(String(decoding: try Auth.encode(value), as: UTF8.self)), cid: 0)
         let data = try Auth.encode(command)
-        let wireBytes = data.count + lock.withLock { peerOperation != nil && peerPlainSends.isEmpty ? BridgePeerRecordLayer.overhead : 0 }
+        let wireBytes = data.count
         try session.acquireSend(bytes: wireBytes, authenticating: true)
         defer { session.releaseSend(bytes: wireBytes) }
         try await trackedWork { try await self.physicalTransport().sendData(data) }
@@ -198,40 +248,60 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         }
     }
 
-    /// Only the immutable physical peer adapter calls these at its byte boundary.
-    /// The adapter serializes seal + physical send, and opens in arrival order.
-    public func sealPeerFrame(_ plaintext: Data) throws -> Data {
+    /// Adapter holds its send-order lock; this lock spans final gate admission,
+    /// sealing and synchronous physical submission. Close cannot win in between.
+    public func submitPeerFrame(_ plaintext: Data, submit: (Data) throws -> Void) throws {
         try lock.withLock {
-            guard !stopped, peerOperation != nil else { throw Auth.Failure.closed }
-            if let expected = peerPlainSends.first {
-                try validatePlainPeerHandshake(plaintext, expected: expected)
-                peerPlainSends.removeFirst()
-                return plaintext
-            }
-            guard let peerRecords else { throw Auth.Failure.invalidProof }
-            if peerRecords.nextSend == 0 { try validatePlainPeerHandshake(plaintext, expected: "channelAuthPeerAccepted") }
-            return try peerRecords.seal(plaintext)
+            let authenticating = peerAuthSend != nil
+            let wire = try sealPeerFrameLocked(plaintext)
+            try session.withPeerSendAdmission(authenticating: authenticating) { try submit(wire) }
         }
+    }
+    public func sealPeerFrame(_ plaintext: Data) throws -> Data {
+        try lock.withLock { try sealPeerFrameLocked(plaintext) }
+    }
+    private func sealPeerFrameLocked(_ plaintext: Data) throws -> Data {
+        guard !stopped, peerOperation != nil else { throw Auth.Failure.closed }
+        if let reserved = peerAuthSend {
+            guard plaintext == reserved else { throw Auth.Failure.unexpectedMessage }
+            try session.checkPeerHandshake()
+            peerAuthSend = nil
+            return plaintext
+        }
+        guard peerReady, let peerRecords else { throw Auth.Failure.invalidProof }
+        try session.check()
+        let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
+        guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
+        return try peerRecords.seal(plaintext)
     }
     public func openPeerFrame(_ record: Data) throws -> Data {
         try lock.withLock {
             guard !stopped, peerOperation != nil else { throw Auth.Failure.closed }
-            if let expected = peerPlainReceives.first {
-                try validatePlainPeerHandshake(record, expected: expected)
-                peerPlainReceives.removeFirst()
+            guard let peerRecords else {
+                try session.checkPeerHandshake()
+                let envelope = try BridgePeerChannelAuthentication.decodeEnvelope(record)
+                // Remote generation is public and checked again by the operation.
+                if envelope.cmd == .hello {
+                    remotePeerGeneration = try Auth.decode(BridgePeerChannelAuthentication.Hello.self,
+                        from: Data(envelope.body.utf8)).generation
+                } else if envelope.cmd == .responderAuth {
+                    remotePeerGeneration = try Auth.decode(BridgePeerChannelAuthentication.ResponderAuth.self,
+                        from: Data(envelope.body.utf8)).hello.generation
+                }
                 return record
             }
-            guard let peerRecords else { throw Auth.Failure.invalidProof }
+            guard peerReady else { throw Auth.Failure.unexpectedMessage }
+            try session.check()
             let plaintext = try peerRecords.open(record)
-            if peerRecords.nextReceive == 1 { try validatePlainPeerHandshake(plaintext, expected: "channelAuthPeerAccepted") }
-            else { guard peerReady else { throw Auth.Failure.unexpectedMessage } }
+            let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
+            guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
+            // First authenticated Kapp traffic acknowledges I's final Finished.
+            if peerAuthSendBytes > 0 {
+                session.releaseSend(bytes: peerAuthSendBytes)
+                peerAuthSendBytes = 0; peerLastAuthBytes = 0
+            }
             return plaintext
         }
-    }
-    private func validatePlainPeerHandshake(_ data: Data, expected: String) throws {
-        guard data.count <= Auth.maximumEnvelopeBytes,
-              let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),
-              command.cmd == expected, try Auth.encode(command) == data else { throw Auth.Failure.malformed }
     }
 
     /// Optional broadcasts skip pending/closed peers without submitting a send
@@ -398,7 +468,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         let cleanup = lock.withLock { () -> (BridgeDelegateProtocol?, BridgeChannelClientOperation?, BridgeTransportProtocol?)? in
             guard !stopped else { return nil }
             stopped = true; timer?.cancel(); timer = nil
-            peerRecords?.close(); peerRecords = nil
+            peerRecords?.close(); peerRecords = nil; peerReady = false; peerAuthSend = nil
             inFlight.values.forEach { $0.cancel() }
             let result = (delegate, operation, underlying); delegate = nil; operation = nil; underlying = nil
             return result
@@ -414,6 +484,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             await cleanup.0?.pushError(errorMessage: "bridge_channel_closed", error: Auth.Failure.closed)
         }
         await cleanup.2?.close()
+        releasePeerHandshakeBytes()
     }
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
         BridgeIdentityVault(cloudBridge: lock.withLock { delegate as? BridgeProtocol })

@@ -100,7 +100,7 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         do {
             // Non-suspending critical section: counter allocation and MC send
             // have the same order, even when several Cell tasks send at once.
-            try sendLock.withLock { try service.sendPeerData(gate.sealPeerFrame(data), on: self) }
+            try sendLock.withLock { try gate.submitPeerFrame(data) { try service.sendPeerData($0, on: self) } }
         } catch { await gate.close(); throw error }
     }
 
@@ -660,7 +660,8 @@ class ScannerService :  NSObject, ObservableObject {
             do {
                 physical.gate = try BridgeChannelTransport(underlying: physical, peerEndpoint: endpoint,
                     role: physical.role,
-                    owner: owner, limits: channelLimits, source: remoteUUID) { [weak self, weak physical] transport, _ in
+                    owner: owner, limits: channelLimits, source: remoteUUID,
+                    disclosurePolicy: .anyProvenIdentity(allowUnauthenticatedInitiator: true)) { [weak self, weak physical] transport, _ in
                         guard let self, let physical else { throw CancellationError() }
                         try self.checkCurrent(physical, remoteUUID: remoteUUID)
                         let config = BridgeBase.Config(owner: self.owner, identityDomain: "nearby", transport: transport)

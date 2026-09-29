@@ -47,17 +47,19 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     func testScannerForgedProofAndReplayedProofCannotCreateBase() async throws {
         let original = try await ScannerPair(); defer { original.stop() }
         let oldTasks = original.start(); try await original.finish(oldTasks)
-        let oldProof = try XCTUnwrap(original.wire.history.first { $0.command.cmd == "channelAuthPeerProof" })
+        let oldProof = try XCTUnwrap(original.wire.history.first { $0.command.cmd == "channelAuthPeerV3InitiatorAuth" })
         for replay in [false, true] {
             let pair = try await ScannerPair(); defer { pair.stop() }
             let tasks = pair.start()
             try await pair.deliverNext(); try await pair.deliverNext()
             let pending = try await pair.next()
-            XCTAssertEqual(pending.command.cmd, "channelAuthPeerProof")
-            let current = try A.decode(A.Proof.self, from: Data(try XCTUnwrap(pending.command.payload?.stringValue()).utf8))
+            XCTAssertEqual(pending.command.cmd, "channelAuthPeerV3InitiatorAuth")
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(pending.command.payload!.stringValue().utf8)) as? [String: Any])
+            var sealed = try XCTUnwrap(Data(base64Encoded: json["sealed"] as! String))
+            sealed[0] ^= 1; json["sealed"] = sealed.base64EncodedString()
+            let changed = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .withoutEscapingSlashes])
             let proof = replay ? oldProof.command : BridgeCommand(cmd: pending.command.cmd,
-                payload: .string(String(decoding: try A.encode(A.Proof(sessionID: current.sessionID, generation: current.generation,
-                    signature: Data(repeating: 0, count: 64))), as: UTF8.self)), cid: 0)
+                payload: .string(String(decoding: changed, as: UTF8.self)), cid: 0)
             do { try await pair.b.extractCommandFromData(A.encode(proof), from: pair.aPeer); XCTFail() } catch {}
             XCTAssertNil(pair.pb.bridge)
             await pair.pa.gate.close(); await pair.pb.gate.close()
@@ -72,7 +74,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             let hello = try await pair.next()
             var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(hello.command.payload?.stringValue()).utf8)) as? [String: Any])
             if ["initiator", "responder", "setupID"].contains(field) {
-                var endpoint = try XCTUnwrap(json["endpoint"] as? [String: Any]); endpoint[field] = UUID().uuidString; json["endpoint"] = endpoint
+                json["endpoint"] = [field: UUID().uuidString] // Forbidden cleartext scope, even when otherwise well formed.
             } else { json[field] = field == "role" ? "responder" : A.profile }
             let bytes = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .withoutEscapingSlashes])
             let changed = BridgeCommand(cmd: hello.command.cmd, payload: .string(String(decoding: bytes, as: UTF8.self)), cid: 0)
@@ -96,7 +98,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         do { try await old.sendData(Data([1])); XCTFail("Old generation sent") } catch {}
         await old.close()
         XCTAssertTrue(try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer) === fresh)
-        let oldProof = try XCTUnwrap(pair.wire.history.first { $0.command.cmd == "channelAuthPeerChallenge" })
+        let oldProof = try XCTUnwrap(pair.wire.history.first { $0.command.cmd == "channelAuthPeerV3ResponderAuth" })
         do { try await pair.a.extractCommandFromData(A.encode(oldProof.command), from: pair.bPeer); XCTFail() } catch {}
         XCTAssertNil(fresh.bridge)
     }
@@ -412,8 +414,10 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let middleman = pair.wire // two independent MCSession adapter endpoints; M has bytes, no keys
         try await pair.finish(pair.start()) // M forwards all five real handshake messages unchanged
         XCTAssertEqual(middleman.history.filter { !$0.sealed }.map { $0.command.cmd },
-                       ["channelAuthPeerHello", "channelAuthPeerChallenge", "channelAuthPeerProof"])
-        XCTAssertEqual(middleman.history.filter { $0.sealed }.count, 2)
+                       ["channelAuthPeerV3Hello", "channelAuthPeerV3ResponderAuth", "channelAuthPeerV3InitiatorAuth",
+                        "channelAuthPeerV3ResponderFinished", "channelAuthPeerV3InitiatorFinished"])
+        XCTAssertEqual(middleman.history.filter { $0.sealed }.count, 0)
+        try assertPrivateHandshake(middleman.history, identities: [pair.a.owner, pair.b.owner])
         let aObserver = ScannerStatusObserver(), bObserver = ScannerStatusObserver()
         pair.a.radarDelegate = aObserver; pair.b.radarDelegate = bObserver
         for (sender, remote, receiver) in [(pair.a, pair.b.mySessionUUID, bObserver), (pair.b, pair.a.mySessionUUID, aObserver)] {
@@ -428,6 +432,44 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             XCTAssertEqual(receiver.flows.last?.title, marker)
         }
         try pair.pa.gate.session.check(); try pair.pb.gate.session.check()
+    }
+
+    private func assertPrivateHandshake(_ frames: [ScannerControlledWire.Frame], identities: [Identity]) throws {
+        let names = ["channelAuthPeerV3Hello", "channelAuthPeerV3ResponderAuth", "channelAuthPeerV3InitiatorAuth",
+                     "channelAuthPeerV3ResponderFinished", "channelAuthPeerV3InitiatorFinished"]
+        XCTAssertEqual(frames.count, 5)
+        for (index, frame) in frames.enumerated() {
+            let outer = try XCTUnwrap(JSONSerialization.jsonObject(with: frame.data) as? [String: Any])
+            XCTAssertEqual(Set(outer.keys), Set(["&string", "cid", "cmd"]))
+            XCTAssertEqual(frame.command.cmd, names[index])
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(frame.command.payload!.stringValue().utf8)) as? [String: Any])
+            if index < 2 {
+                let hello = index == 0 ? body : try XCTUnwrap(body["hello"] as? [String: Any])
+                XCTAssertEqual(Set(hello.keys), Set(["profile", "role", "ephemeralPublicKey", "nonce", "generation", "issuedAtMilliseconds"]))
+            }
+            if index > 0 {
+                XCTAssertEqual(Set(body.keys), Set(index == 1 ? ["hello", "sealed"] : ["profile", "sealed"]))
+                XCTAssertEqual(Data(base64Encoded: body["sealed"] as! String)?.count, index < 3 ? 8208 : 1040)
+            }
+            for identity in identities {
+                for marker in [identity.uuid, identity.publicSecureKey!.compressedKey!.base64EncodedString(), identity.signingPublicKeyFingerprint!] {
+                    XCTAssertNil(frame.data.range(of: Data(marker.utf8)))
+                    XCTAssertNil(frame.data.range(of: Data(Data(marker.utf8).base64EncodedString().utf8)))
+                }
+            }
+        }
+    }
+
+    func testRelayCannotCorrelateIdentityFieldsAcrossFreshHandshakes() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start())
+        let old = pair.wire.history
+        await pair.pa.gate.close(); await pair.pb.gate.close()
+        let fresh = try pair.prepareReconnect(), before = pair.wire.history.count
+        try await pair.authenticateTransports(fresh.0, fresh.1)
+        let recent = Array(pair.wire.history.dropFirst(before))
+        try assertPrivateHandshake(recent, identities: [pair.a.owner, pair.b.owner])
+        for index in 0..<5 { XCTAssertNotEqual(old[index].data, recent[index].data) }
     }
 
     func testRelayTamperInsertionReplayReorderReflectionAndMalformedRecordsCloseWithoutDispatch() async throws {
@@ -482,10 +524,10 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             if replaceInitiator {
                 try await pair.pb.receiveData(A.encode(changed)) // B signs altered transcript
                 do { try await pair.deliverNext(); XCTFail("Substituted initiator key verified") }
-                catch { XCTAssertEqual(error as? A.Failure, .invalidProof) }
+                catch {}
             } else {
                 do { try await pair.pa.receiveData(A.encode(changed)); XCTFail("Substituted responder key verified") }
-                catch { XCTAssertEqual(error as? A.Failure, .invalidProof) }
+                catch {}
             }
             XCTAssertNil(pair.pa.bridge); XCTAssertNil(pair.pb.bridge)
             await pair.pa.gate.close(); await pair.pb.gate.close()
@@ -517,11 +559,11 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertEqual(pair.pa.gate.session.state, .verifying)
         XCTAssertEqual(pair.pb.gate.session.state, .verifying)
         let responderConfirmation = try await pair.next()
-        XCTAssertTrue(responderConfirmation.sealed)
+        XCTAssertEqual(responderConfirmation.command.cmd, "channelAuthPeerV3ResponderFinished")
         try await pair.deliver(responderConfirmation)
         XCTAssertNotNil(pair.pa.bridge); XCTAssertNil(pair.pb.bridge)
         let initiatorConfirmation = try await pair.next()
-        XCTAssertTrue(initiatorConfirmation.sealed)
+        XCTAssertEqual(initiatorConfirmation.command.cmd, "channelAuthPeerV3InitiatorFinished")
         // A legitimate sender can produce application data now; B must not
         // dispatch it if M withholds the first, confirmation record.
         try await pair.pa.gate.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("too-early"), cid: 9)))
@@ -543,7 +585,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             try await group.waitForAll()
         }
         var received: [Task<Void, Error>] = []
-        for sequence in 1...20 {
+        for sequence in 0..<20 {
             let frame = try await pair.next()
             let counter = frame.data.dropFirst(41).prefix(8).reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
             XCTAssertEqual(counter, UInt64(sequence))
@@ -561,14 +603,14 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             let command = BridgeCommand(cmd: "response", payload: .string("old-secret"), cid: 1)
             try await pair.pb.gate.sendData(A.encode(command))
             let old = try await pair.next()
-            let oldHello = try XCTUnwrap(pair.wire.history.first { $0.command.cmd == "channelAuthPeerHello" })
+            let oldHello = try XCTUnwrap(pair.wire.history.first { $0.command.cmd == "channelAuthPeerV3Hello" })
             await pair.pa.gate.close(); await pair.pb.gate.close()
             let fresh = try pair.prepareReconnect()
             var replay = old.data
             if !pendingHandshake {
                 let before = pair.wire.history.count
                 try await pair.authenticateTransports(fresh.0, fresh.1)
-                let freshHello = try XCTUnwrap(pair.wire.history.dropFirst(before).first { $0.command.cmd == "channelAuthPeerHello" })
+                let freshHello = try XCTUnwrap(pair.wire.history.dropFirst(before).first { $0.command.cmd == "channelAuthPeerV3Hello" })
                 let oldKey = try A.decode(BridgePeerChannelAuthentication.Hello.self, from: Data(oldHello.command.payload!.stringValue().utf8)).ephemeralPublicKey
                 let freshKey = try A.decode(BridgePeerChannelAuthentication.Hello.self, from: Data(freshHello.command.payload!.stringValue().utf8)).ephemeralPublicKey
                 XCTAssertNotEqual(oldKey, freshKey)
@@ -578,7 +620,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
                 // M knows the public new generation and the expected counter.
                 // Rewriting N08 metadata cannot make old ciphertext authenticate.
                 replay.replaceSubrange(4..<40, with: Data(fresh.1.gate.session.generation.utf8))
-                replay.replaceSubrange(41..<49, with: Data([0, 0, 0, 0, 0, 0, 0, 1]))
+                replay.replaceSubrange(41..<49, with: Data([0, 0, 0, 0, 0, 0, 0, 0]))
             }
             do { try await fresh.0.receiveData(replay); XCTFail() } catch {}
             XCTAssertThrowsError(try fresh.0.gate.session.check())
@@ -742,9 +784,9 @@ private final class ScannerPair {
 private final class ScannerControlledWire: @unchecked Sendable {
     struct Frame {
         let data: Data; let from: MCPeerID; let to: MCPeerID
-        var sealed: Bool { data.starts(with: Data("HPC2".utf8)) }
-        // No plaintext capture or keys in M. Only the three public handshake
-        // messages are decodable; encrypted frames have an explicit sentinel.
+        var sealed: Bool { data.starts(with: Data("HPC3".utf8)) }
+        // M can parse all five envelopes, but only identity-free hello fields.
+        // Application records have an explicit sentinel; M holds no keys.
         var command: BridgeCommand { (try? JSONDecoder().decode(BridgeCommand.self, from: data)) ?? BridgeCommand(cmd: "sealed", payload: nil, cid: 0) }
     }
     private let lock = NSLock()

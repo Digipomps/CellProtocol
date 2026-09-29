@@ -248,25 +248,52 @@ public final class BridgeChannelSession: @unchecked Sendable {
         try limits?.reserve(generation, source: source) { [weak self] in self?.revoke() }
     }
     init(peerEndpoint: BridgePeerChannelAuthentication.Endpoint, localIdentity: Auth.PublicIdentity,
-         limits: BridgeChannelLimits, source: String) throws {
+         limits: BridgeChannelLimits, source: String,
+         wallClock: @escaping @Sendable () -> Date = { Date() },
+         monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         try peerEndpoint.validate()
         endpoint = nil; self.peerEndpoint = peerEndpoint; localPeerIdentity = localIdentity
-        self.limits = limits; wallClock = { Date() }; monotonic = { ProcessInfo.processInfo.systemUptime }
-        deadline = ProcessInfo.processInfo.systemUptime + 10
+        self.limits = limits; self.wallClock = wallClock; self.monotonic = monotonic
+        deadline = monotonic() + 10
         try limits.reserve(generation, source: source) { [weak self] in self?.revoke() }
     }
     func issuePeerChallenge(_ challenge: BridgePeerChannelAuthentication.Challenge) throws {
         try lock.withLock {
             guard stateValue == .unauthenticated, monotonic() < deadline,
-                  challenge.transcript.initiator.endpoint == peerEndpoint,
+                  challenge.endpoint == peerEndpoint,
                   challenge.generation == generation else { throw Auth.Failure.unexpectedMessage }
             pending = Pending(sessionID: challenge.sessionID, identity: challenge.identity,
-                signingData: challenge.signingData, digest: Auth.digest(try Auth.encode(challenge.transcript)),
-                issued: challenge.transcript.issued, expires: challenge.transcript.issued + Int64(Auth.channelLifetime * 1000))
-            handshakeExpiry = Date(timeIntervalSince1970: Double(challenge.transcript.issued) / 1000 + Auth.challengeLifetime)
+                signingData: challenge.signingData, digest: challenge.digest,
+                issued: challenge.issued, expires: challenge.issued + Int64(Auth.channelLifetime * 1000))
+            handshakeExpiry = Date(timeIntervalSince1970: Double(challenge.issued) / 1000 + Auth.challengeLifetime)
             stateValue = .challengeIssued
         }
     }
+    /// Includes direct revoke before a remote principal exists, and keeps the
+    /// original monotonic deadline throughout all five handshake messages.
+    func checkPeerHandshake() throws {
+        try lock.withLock {
+            guard peerEndpoint != nil, stateValue != .closed, stateValue != .revoked,
+                  stateValue != .authenticated, monotonic() < deadline,
+                  handshakeExpiry.map({ wallClock() < $0 }) ?? true else { throw Auth.Failure.expired }
+        }
+    }
+
+    /// Physical send admission and direct session revoke share this lock. No
+    /// asynchronous work is permitted inside the adapter submission closure.
+    func withPeerSendAdmission<T>(authenticating: Bool, _ submit: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard peerEndpoint != nil, stateValue != .closed, stateValue != .revoked,
+                  monotonic() < deadline else { throw Auth.Failure.closed }
+            if authenticating {
+                guard stateValue != .authenticated, handshakeExpiry.map({ wallClock() < $0 }) ?? true else { throw Auth.Failure.expired }
+            } else {
+                guard stateValue == .authenticated, let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+            }
+            return try submit()
+        }
+    }
+
     /// Peer requests originate locally; incoming requests remain bound to the remote proof.
     func checkOutbound(identity: Identity?, requiresIdentity: Bool = false) throws {
         guard let localPeerIdentity else { return try check(identity: identity, requiresIdentity: requiresIdentity) }
