@@ -1850,6 +1850,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     
     // This is the processing of responses of commands sent over the websocket
+    /// Scheduling hint for an ordered physical adapter, never authorization.
+    /// Use the locally registered request, including failure responses, rather
+    /// than trusting a remote signature-shaped payload to bypass flow ordering.
+    public func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+        connectionStateLock.withLock {
+            command.command == .response && auditor.loadBridgeCommandForCommandId(command.cid)?.command == .sign
+        }
+    }
+
     public func consumeResponse(command: BridgeCommand) async throws {
         guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
         try channelSession.checkInbound(command)

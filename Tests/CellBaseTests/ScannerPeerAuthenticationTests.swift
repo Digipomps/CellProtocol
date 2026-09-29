@@ -190,6 +190,75 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
             await fulfillment(of: [localFlow, remoteFlow], timeout: 3)
             XCTAssertGreaterThan(pair.wire.history.filter { $0.sealed }.count, 6)
             XCTAssertFalse(pair.wire.history.contains { $0.data.range(of: Data(marker.utf8)) != nil })
+            // Hold ordinary dispatch on BOTH sides after opening the records.
+            // The existing live feed permits an actual origin-signature RPC;
+            // both its request and registered response must overtake these holds.
+            let heldA = ScannerWorkBarrier(), heldB = ScannerWorkBarrier()
+            let enteredA = expectation(description: "first A dispatch"), enteredB = expectation(description: "first B dispatch")
+            let observedA = ScannerStatusObserver(), observedB = ScannerStatusObserver()
+            pair.a.radarDelegate = observedA; pair.b.radarDelegate = observedB
+            pair.pa.beforeOrderedDispatch = { command in
+                if case let .flowElement(flow) = command.payload, flow.title == "ordered-first" {
+                    enteredA.fulfill(); await heldA.wait()
+                }
+            }
+            pair.pb.beforeOrderedDispatch = { command in
+                if case let .flowElement(flow) = command.payload, flow.title == "ordered-first" {
+                    enteredB.fulfill(); await heldB.wait()
+                }
+            }
+            for title in ["ordered-first", "ordered-second"] {
+                let flow = FlowElement(title: title, content: .string(title), properties: .init(type: .event, contentType: .string))
+                try await pair.a.sendScannerFlowElement(flow)
+                try await pair.b.sendScannerFlowElement(flow)
+            }
+            await fulfillment(of: [enteredA, enteredB], timeout: 2)
+            let originScope = try XCTUnwrap(challenges.first { $0.action == "checkIdentityOrigin" && $0.resource == lobby.uuid })
+            let challenge = IdentitySigningChallenge(identityUUID: pair.b.owner.uuid,
+                publicKeyFingerprint: pair.b.owner.signingPublicKeyFingerprint, domain: originScope.domain, resource: lobby.uuid,
+                action: "checkIdentityOrigin", audience: "GeneralCell", nonce: Data(repeating: 7, count: 32))
+            let challengeData = try A.encode(challenge)
+            let signed = expectation(description: "origin RPC passes held dispatch in both directions")
+            let signer = pair.pa.bridge!.signMessageForIdentity(messageData: challengeData, identity: pair.b.owner)
+                .sink(receiveCompletion: { completion in
+                    if case let .failure(error) = completion { XCTFail("Origin RPC failed: \(error)") }
+                }, receiveValue: { signature in
+                    XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: challengeData, identity: pair.b.owner))
+                    signed.fulfill()
+                })
+            await fulfillment(of: [signed], timeout: 3)
+            XCTAssertTrue(observedA.flows.isEmpty); XCTAssertTrue(observedB.flows.isEmpty)
+            await heldA.resume(); await heldB.resume()
+            for _ in 0..<1000 where observedA.flows.count < 2 || observedB.flows.count < 2 { try await Task.sleep(nanoseconds: 1_000_000) }
+            XCTAssertEqual(observedA.flows.map(\.title), ["ordered-first", "ordered-second"])
+            XCTAssertEqual(observedB.flows.map(\.title), ["ordered-first", "ordered-second"])
+            signer.cancel()
+
+            // Real feed delivery: hold the first response AFTER the auditor
+            // lookup, where a second response used to overtake publication.
+            let feedBarrier = ScannerWorkBarrier(), feedEntered = expectation(description: "feed after lookup")
+            let feedOnce = ScannerOnce(), feedValues = ScannerTitles()
+            pair.pb.bridge!.afterResponseLookup = { request in
+                if request.command == .feed, feedOnce.take() { feedEntered.fulfill(); await feedBarrier.wait() }
+            }
+            let orderedFeed = remoteScanner.getFeedPublisher().sink(receiveCompletion: { _ in }, receiveValue: { flow in
+                if flow.title.hasPrefix("ordered-feed-") { feedValues.append(flow.title) }
+            })
+            for title in ["ordered-feed-1", "ordered-feed-2"] {
+                lobby.pushFlowElement(FlowElement(title: title, content: .string(title), properties: .init(type: .content, contentType: .string)), requester: pair.a.owner)
+                if title == "ordered-feed-1" { await fulfillment(of: [feedEntered], timeout: 2) }
+            }
+            // A sign response is a deterministic fence proving later records
+            // have been opened while first feed publication is held.
+            let secondChallenge = IdentitySigningChallenge(identityUUID: pair.b.owner.uuid,
+                publicKeyFingerprint: pair.b.owner.signingPublicKeyFingerprint, domain: originScope.domain, resource: lobby.uuid,
+                action: "checkIdentityOrigin", audience: "GeneralCell", nonce: Data(repeating: 8, count: 32))
+            _ = try await pair.pa.bridge!.signMessageForIdentity(messageData: A.encode(secondChallenge), identity: pair.b.owner).getOneWithTimeout(3)
+            XCTAssertEqual(feedValues.values, [])
+            await feedBarrier.resume()
+            for _ in 0..<1000 where feedValues.values.count < 2 { try await Task.sleep(nanoseconds: 1_000_000) }
+            XCTAssertEqual(feedValues.values, ["ordered-feed-1", "ordered-feed-2"])
+            orderedFeed.cancel(); pair.pb.bridge!.afterResponseLookup = nil
             XCTAssertTrue(pair.wire.errors.isEmpty, "\(pair.wire.errors)")
         }
     }
@@ -842,4 +911,14 @@ private actor ScannerWorkBarrier {
     private var released = false
     func wait() async { if !released { await withCheckedContinuation { continuation = $0 } } }
     func resume() { released = true; continuation?.resume(); continuation = nil }
+}
+
+private final class ScannerOnce: @unchecked Sendable {
+    private let lock = NSLock(); private var available = true
+    func take() -> Bool { lock.withLock { defer { available = false }; return available } }
+}
+private final class ScannerTitles: @unchecked Sendable {
+    private let lock = NSLock(); private var titles: [String] = []
+    var values: [String] { lock.withLock { titles } }
+    func append(_ title: String) { lock.withLock { titles.append(title) } }
 }
