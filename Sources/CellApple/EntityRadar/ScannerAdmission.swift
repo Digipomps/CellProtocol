@@ -7,7 +7,7 @@ import MultipeerConnectivity
 /// context, NOT a verified device or person; a Sybil can exhaust the global cap.
 /// No attacker-supplied UUID/displayName creates a quota bucket.
 final class ScannerAdmission {
-    enum Kind: CaseIterable { case discovery, invitation, task, event, physical }
+    enum Kind: CaseIterable { case discovery, consumer, invitation, task, event, physical }
     struct Budget {
         var count: Int
         var bytes: Int
@@ -27,7 +27,7 @@ final class ScannerAdmission {
         var rate = 256
         var perSourceRate = 24
         func budget(_ kind: Kind) -> Budget {
-            switch kind { case .discovery: return discovery; case .invitation: return invitation; case .task: return task; case .event: return event; case .physical: return physical }
+            switch kind { case .discovery, .consumer: return discovery; case .invitation: return invitation; case .task: return task; case .event: return event; case .physical: return physical }
         }
     }
     struct Usage { var count = 0; var bytes = 0 }
@@ -46,11 +46,13 @@ final class ScannerAdmission {
         fileprivate var bytes: Int
         fileprivate var released = false
         fileprivate var deadline: TimeInterval
+        var retainedBytes: Int { owner.lock.withLock { bytes } }
         let source: String
         var isLive: Bool { owner.lock.withLock { !released && owner.now() < deadline } }
         fileprivate init(owner: ScannerAdmission, peer: MCPeerID, kind: Kind, bytes: Int, source: String, deadline: TimeInterval) {
             self.owner = owner; self.peer = peer; self.kind = kind; self.bytes = bytes; self.source = source; self.deadline = deadline
         }
+        func retainForConsumer() -> Lease? { owner.reserve(.consumer, peer: peer, bytes: retainedBytes) }
         func release() { owner.release(self) }
         deinit { release() }
     }

@@ -60,7 +60,6 @@ private enum EntityScannerContactProtocol {
 
 @MainActor
 class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
-    private static let probeResponseTimeoutNanoseconds: UInt64 = 15_000_000_000
 
     var connectService: ScannerService?
     var requester: Identity?
@@ -73,13 +72,18 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private var deferredConsumerEvents: [FlowElement]?
     private var disclosurePolicy = NearbyDisclosurePolicy.strict
     private var localBeacon: NearbyBeacon?
+    func configureProbeForTesting(_ policy: NearbyDisclosurePolicy) {
+        disclosurePolicy = policy
+        localBeacon = policy.beacon
+    }
     private var peerBeacons = [String: NearbyBeacon]()
     private var peerOverlaps = [String: NearbyBeaconOverlap]()
     private var peerStates = [String: NearbyPeerStateMachine]()
+    private var peerStateLeases = [String: (source: ScannerAdmission.Lease, retention: ScannerAdmission.Lease)]()
+    var retainedPeerStateForTesting: (states: Int, beacons: Int, overlaps: Int, bytes: Int) {
+        (peerStates.count, peerBeacons.count, peerOverlaps.count, peerStateLeases.values.reduce(0) { $0 + $1.retention.retainedBytes })
+    }
     private var probeSession = NearbyProbeSession()
-    private var outgoingProbeRequests = [String: (remoteUUID: String, nonce: String)]()
-    private var probeResponseTimeoutTasks = [String: Task<Void, Never>]()
-    private var outgoingDetailRequests = [String: String]()
     private var automaticProbeRemoteUUIDs = Set<String>()
     private var policyExpiryTask: Task<Void, Never>?
     /// The current picture, kept by the cell itself so a skeleton can draw a
@@ -533,16 +537,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         peerBeacons.removeAll()
         peerOverlaps.removeAll()
         peerStates.removeAll()
+        peerStateLeases.removeAll()
         radarLedger.clear()
         selectedAdvertisement = nil
         selectedAccessChallenge = nil
         advertisementSelectionID = UUID()
         advertisementStatus = "Velg et treff for å lese det som er annonsert."
         probeSession.reset()
-        probeResponseTimeoutTasks.values.forEach { $0.cancel() }
-        probeResponseTimeoutTasks.removeAll()
-        outgoingProbeRequests.removeAll()
-        outgoingDetailRequests.removeAll()
         automaticProbeRemoteUUIDs.removeAll()
         localBeacon = nil
         policyExpiryTask?.cancel()
@@ -1149,6 +1150,32 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         pushScannerEvent(topic: EntityScannerTopics.connected, title: "Connected Devices Changed", payload: payload, requesterOverride: requester)
     }
 
+    func scannerPeerStateChanged(manager: ScannerService) {
+        guard manager === connectService else { return }
+        for (remote, lease) in peerStateLeases where !lease.source.isLive || !lease.retention.isLive || manager.peerStateLease(remoteUUID: remote) !== lease.source {
+            retirePeerState(remote)
+        }
+    }
+
+    private func retirePeerState(_ remoteUUID: String) {
+        peerStates[remoteUUID] = nil; peerBeacons[remoteUUID] = nil; peerOverlaps[remoteUUID] = nil
+        peerStateLeases[remoteUUID] = nil; automaticProbeRemoteUUIDs.remove(remoteUUID)
+        probeSession.removeResult(for: remoteUUID)
+    }
+
+    @discardableResult private func retainPeerState(_ remoteUUID: String, manager: ScannerService) -> Bool {
+        scannerPeerStateChanged(manager: manager)
+        guard manager === connectService, let lease = manager.peerStateLease(remoteUUID: remoteUUID), lease.isLive else { return false }
+        if peerStateLeases[remoteUUID]?.source === lease { return true }
+        let budget = manager.admission.configuration.discovery
+        guard peerStateLeases.count < budget.count,
+              lease.retainedBytes <= budget.bytes - peerStateLeases.values.reduce(0, { $0 + $1.retention.retainedBytes }) else { return false }
+        guard let retention = lease.retainForConsumer() else { return false }
+        peerStateLeases[remoteUUID] = (lease, retention)
+        peerStates[remoteUUID] = NearbyPeerStateMachine()
+        return true
+    }
+
     func foundDevicesChanged(
         manager: ScannerService,
         foundDevice: MCPeerID,
@@ -1156,10 +1183,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         discoveryInfo: [String: String]?
     ) {
         let requester = activeLocalIdentity(service: manager)
+        scannerPeerStateChanged(manager: manager)
         let isNewPeer = peerStates[remoteUUID] == nil
-        if isNewPeer {
-            peerStates[remoteUUID] = NearbyPeerStateMachine()
-        }
+        guard retainPeerState(remoteUUID, manager: manager) else { return }
         let peerBeacon = discoveryInfo.flatMap(NearbyBeacon.init(discoveryInfo:))
         if let peerBeacon { peerBeacons[remoteUUID] = peerBeacon }
         let overlap = localBeacon.flatMap { local in peerBeacon.map { local.overlap(with: $0) } }
@@ -1194,19 +1220,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {
         let requester = activeLocalIdentity(service: manager)
-        if peerStates[remoteUUID] != nil {
-            do {
-                try peerStates[remoteUUID]?.transition(to: .lost)
-            } catch {
-                emitStateTransitionError(error, remoteUUID: remoteUUID)
-            }
-        }
-        peerBeacons[remoteUUID] = nil
-        peerOverlaps[remoteUUID] = nil
-        automaticProbeRemoteUUIDs.remove(remoteUUID)
-        cancelOutgoingProbes(for: remoteUUID)
+        // Loss is a retirement, not a permanent dictionary entry in .lost.
+        retirePeerState(remoteUUID)
         pendingRequests.prune()
-        outgoingDetailRequests = outgoingDetailRequests.filter { $0.value != remoteUUID }
         let payload = makeScannerEventObject(
             event: "lost",
             remoteUUID: remoteUUID,
@@ -1219,9 +1235,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) {
         let requester = activeLocalIdentity(service: manager)
-        if peerStates[remoteUUID] == nil {
-            peerStates[remoteUUID] = NearbyPeerStateMachine()
-        }
+        guard retainPeerState(remoteUUID, manager: manager) else { return }
         var payload = makeScannerEventObject(
             event: "invitationReceived",
             remoteUUID: remoteUUID,
@@ -1305,6 +1319,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func scannerChannelRetired(manager: ScannerService, generation: String) {
         pendingRequests.retire(generation)
+        scannerPeerStateChanged(manager: manager)
     }
 
     func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws {
@@ -1318,11 +1333,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         case EntityScannerTopics.probeRequest:
             try await handleIncomingProbeRequest(manager: manager, flowElement: flowElement, context: context)
         case EntityScannerTopics.probeAggregate:
-            try consumerEffect(context) { handleIncomingProbeAggregate(flowElement: flowElement, remoteUUID: context.remoteUUID) }
+            try handleIncomingProbeAggregate(flowElement: flowElement, context: context)
         case EntityScannerTopics.probeDetailRequest:
             handleIncomingProbeDetailRequest(flowElement: flowElement, context: context)
         case EntityScannerTopics.probeDetail:
-            try consumerEffect(context) { handleIncomingProbeDetail(flowElement: flowElement, remoteUUID: context.remoteUUID) }
+            try handleIncomingProbeDetail(flowElement: flowElement, context: context)
         default: break
         }
         try context.check()
@@ -1348,9 +1363,19 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                   (try? JSONEncoder().encode(request).count) ?? .max <= NearbyProbeSession.maximumPayloadBytes else {
                 throw NearbyProbeSession.ProbeError.payloadTooLarge
             }
-            outgoingProbeRequests[request.requestId] = (remoteUUID, request.nonce)
+            let context = try service.consumerContext(remoteUUID: remoteUUID)
+            pendingRequests.expired = { [weak self] kind, record in
+                guard kind == .outgoingAggregate, let self else { return }
+                try? record.context.perform {
+                    if self.peerStates[record.context.remoteUUID]?.state == .probing {
+                        try? self.transitionPeer(record.context.remoteUUID, to: .beaconMatched)
+                    }
+                }
+            }
+            try pendingRequests.insert(.outgoingAggregate, id: request.requestId,
+                payload: ["nonce": .string(request.nonce)], context: context, lifetime: 15)
             do {
-                try transitionPeer(remoteUUID, to: .probing)
+                try context.perform { try transitionPeer(remoteUUID, to: .probing) }
                 var element = FlowElement(
                     title: "Nearby Aggregate Probe",
                     content: content,
@@ -1358,12 +1383,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 )
                 element.topic = EntityScannerTopics.probeRequest
                 element.origin = uuid
-                try await service.sendScannerFlowElement(element, remoteUUID: remoteUUID)
-                scheduleProbeResponseTimeout(requestId: request.requestId, remoteUUID: remoteUUID)
+                try await service.sendScannerFlowElement(element, context: context)
             } catch {
-                outgoingProbeRequests.removeValue(forKey: request.requestId)
-                if peerStates[remoteUUID]?.state == .probing {
-                    try? transitionPeer(remoteUUID, to: .beaconMatched)
+                pendingRequests.remove(.outgoingAggregate, id: request.requestId, context: context)
+                try? context.perform {
+                    if peerStates[remoteUUID]?.state == .probing {
+                        try? transitionPeer(remoteUUID, to: .beaconMatched)
+                    }
                 }
                 throw error
             }
@@ -1410,59 +1436,22 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
     }
 
-    private func handleIncomingProbeAggregate(flowElement: FlowElement, remoteUUID: String?) {
+    private func handleIncomingProbeAggregate(flowElement: FlowElement, context: ScannerConsumerContext) throws {
         guard disclosurePolicy.isActive(),
-              let remoteUUID,
               let aggregate = decode(NearbyProbeAggregate.self, from: flowElement.content),
-              let outgoing = outgoingProbeRequests.removeValue(forKey: aggregate.requestId),
-              outgoing.remoteUUID == remoteUUID,
-              outgoing.nonce == aggregate.nonce else {
-            CellBase.diagnosticLog("Nearby aggregate probe response rejected due to requestId/nonce mismatch", domain: .flow)
-            return
-        }
-        probeResponseTimeoutTasks.removeValue(forKey: aggregate.requestId)?.cancel()
-        do {
-            try probeSession.store(.aggregate(aggregate), for: remoteUUID)
-            try transitionPeer(remoteUUID, to: .probed)
-            var payload = makeScannerEventObject(event: "probeAggregate", remoteUUID: remoteUUID, status: "received")
+              let outgoing = pendingRequests.find(.outgoingAggregate, id: aggregate.requestId, context: context),
+              string(from: outgoing.payload["nonce"]) == aggregate.nonce else { return }
+        // Validate result size and the state transition on copies before consuming.
+        var nextSession = probeSession
+        try nextSession.store(.aggregate(aggregate), for: context.remoteUUID)
+        guard var nextState = peerStates[context.remoteUUID] else { return }
+        try nextState.transition(to: .probed)
+        _ = try pendingRequests.consume(.outgoingAggregate, id: aggregate.requestId, context: context)
+        try consumerEffect(context) {
+            probeSession = nextSession; peerStates[context.remoteUUID] = nextState
+            var payload = makeScannerEventObject(event: "probeAggregate", remoteUUID: context.remoteUUID, status: "received")
             payload["probeDisclosure"] = valueType(from: aggregate) ?? .null
             pushScannerEvent(topic: EntityScannerTopics.probeAggregate, title: "Nearby Aggregate Probe Result", payload: payload)
-        } catch {
-            CellBase.diagnosticLog("Nearby aggregate probe result rejected: \(error)", domain: .flow)
-        }
-    }
-
-    private func scheduleProbeResponseTimeout(requestId: String, remoteUUID: String) {
-        probeResponseTimeoutTasks[requestId]?.cancel()
-        probeResponseTimeoutTasks[requestId] = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: Self.probeResponseTimeoutNanoseconds)
-            } catch {
-                return
-            }
-            guard let self,
-                  !Task.isCancelled,
-                  self.outgoingProbeRequests[requestId]?.remoteUUID == remoteUUID else {
-                return
-            }
-            self.outgoingProbeRequests.removeValue(forKey: requestId)
-            self.probeResponseTimeoutTasks.removeValue(forKey: requestId)
-            guard self.peerStates[remoteUUID]?.state == .probing else { return }
-            do {
-                try self.transitionPeer(remoteUUID, to: .beaconMatched)
-            } catch {
-                self.emitStateTransitionError(error, remoteUUID: remoteUUID)
-            }
-        }
-    }
-
-    private func cancelOutgoingProbes(for remoteUUID: String) {
-        let requestIds = outgoingProbeRequests.compactMap { requestId, request in
-            request.remoteUUID == remoteUUID ? requestId : nil
-        }
-        for requestId in requestIds {
-            outgoingProbeRequests.removeValue(forKey: requestId)
-            probeResponseTimeoutTasks.removeValue(forKey: requestId)?.cancel()
         }
     }
 
@@ -1492,18 +1481,18 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         try? consumerEffect(context) { pushScannerEvent(topic: EntityScannerTopics.probeDetailRequest, title: "Nearby Detail Request", payload: payload) }
     }
 
-    private func handleIncomingProbeDetail(flowElement: FlowElement, remoteUUID: String?) {
+    private func handleIncomingProbeDetail(flowElement: FlowElement, context: ScannerConsumerContext) throws {
         guard disclosurePolicy.isActive(),
-              let remoteUUID,
               let detail = decode(NearbyProbeDetail.self, from: flowElement.content),
-              outgoingDetailRequests.removeValue(forKey: detail.requestId) == remoteUUID else { return }
-        do {
-            try probeSession.store(.detail(detail), for: remoteUUID)
-            var payload = makeScannerEventObject(event: "probeDetail", remoteUUID: remoteUUID, status: "received")
+              pendingRequests.find(.outgoingDetail, id: detail.requestId, context: context) != nil else { return }
+        var nextSession = probeSession
+        try nextSession.store(.detail(detail), for: context.remoteUUID)
+        _ = try pendingRequests.consume(.outgoingDetail, id: detail.requestId, context: context)
+        try consumerEffect(context) {
+            probeSession = nextSession
+            var payload = makeScannerEventObject(event: "probeDetail", remoteUUID: context.remoteUUID, status: "received")
             payload["probeDisclosure"] = valueType(from: detail) ?? .null
             pushScannerEvent(topic: EntityScannerTopics.probeDetail, title: "Nearby Detail Result", payload: payload)
-        } catch {
-            CellBase.diagnosticLog("Nearby detail result rejected: \(error)", domain: .flow)
         }
     }
 
@@ -1525,13 +1514,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             let content: FlowElementValueType
             switch action {
             case "request":
-                guard outgoingDetailRequests[requestId] == nil else {
-                    throw NearbyProbeSession.ProbeError.duplicateRequest
-                }
                 topic = EntityScannerTopics.probeDetailRequest
                 title = "Nearby Detail Request"
                 content = .object(["requestId": .string(requestId)])
-                outgoingDetailRequests[requestId] = remoteUUID
+                try pendingRequests.insert(.outgoingDetail, id: requestId, payload: ["requestId": .string(requestId)], context: context)
             case "approve":
                 _ = try pendingRequests.consume(.detail, id: requestId, context: context)
                 guard let overlap = peerOverlaps[remoteUUID] else {
@@ -1556,7 +1542,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 throw NearbyProbeSession.ProbeError.invalidRequest
             }
             guard (try? JSONEncoder().encode(content).count) ?? .max <= NearbyProbeSession.maximumPayloadBytes else {
-                if action == "request" { outgoingDetailRequests.removeValue(forKey: requestId) }
+                if action == "request" { pendingRequests.remove(.outgoingDetail, id: requestId, context: context) }
                 throw NearbyProbeSession.ProbeError.payloadTooLarge
             }
             var element = FlowElement(
@@ -1569,7 +1555,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             do {
                 try await service.sendScannerFlowElement(element, context: context)
             } catch {
-                if action == "request" { outgoingDetailRequests.removeValue(forKey: requestId) }
+                if action == "request" { pendingRequests.remove(.outgoingDetail, id: requestId, context: context) }
                 throw error
             }
             return .object(["status": .string("sent"), "requestId": .string(requestId)])
@@ -2587,7 +2573,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func transitionPeerToContactRequested(_ remoteUUID: String) throws {
         if peerStates[remoteUUID] == nil {
-            peerStates[remoteUUID] = NearbyPeerStateMachine()
+            guard let service = connectService, retainPeerState(remoteUUID, manager: service) else {
+                throw NearbyPeerStateMachine.TransitionError.unknownPeer(remoteUUID: remoteUUID)
+            }
         }
         guard peerStates[remoteUUID]?.state != .contactRequested else { return }
         try transitionPeer(remoteUUID, to: .contactRequested)

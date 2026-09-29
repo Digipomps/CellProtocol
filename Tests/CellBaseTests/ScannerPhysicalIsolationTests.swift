@@ -139,10 +139,14 @@ extension ScannerMultipeerProcessTests {
         } else {
             try await isolationWait { observer.flows > 0 }
             let baseline = isolationRSS()
+            let sibling = try XCTUnwrap(service.foundPeersDict[prefix + "c"])
+            let siblingNames = [sibling.displayName]
             for phase in ["resource", "streams", "expiry"] {
                 let before = observer.flows
                 try await isolationWait(seconds: 65) { isolationExists(folder, "\(phase).done") }
-                try await isolationWait { service.retainedPhysicalCount == 1 && observer.flows > before }
+                try await isolationWait { service.retainedPhysicalCount == 1 && observer.flows > before && observer.connectionNames == siblingNames }
+                let remainingNames = await MainActor.run { service.connectedDevices }
+                XCTAssertEqual(remainingNames, siblingNames)
                 XCTAssertTrue(service.isConnected(remoteUUID: prefix + "c"))
                 XCTAssertEqual(service.admission.snapshot(.physical).count, 1)
                 if phase == "resource" { XCTAssertGreaterThan(observer.cancelledResources, 0) }
@@ -154,7 +158,13 @@ extension ScannerMultipeerProcessTests {
                 let before = observer.flows
                 let peer = try XCTUnwrap(service.foundPeersDict[prefix + "b" + phase])
                 let physical = try service.capturePeerTransport(session: service.sessionForPeer(peer), peerID: peer)
-                try await isolationWait { physical.gate.peerOutstandingUsage.dataRecords == 0 }
+                let bothNames = [peer.displayName, sibling.displayName].sorted()
+                try await isolationWait { physical.gate.peerOutstandingUsage.dataRecords == 0 && observer.connectionNames == bothNames }
+                let publishedNames = await MainActor.run { service.connectedDevices }
+                XCTAssertEqual(publishedNames, bothNames)
+                XCTAssertTrue(physical.mcSession.connectedPeers.contains(peer))
+                XCTAssertTrue(try service.sessionForPeer(sibling).connectedPeers.contains(sibling))
+                try isolationMark(folder, "connections-" + phase, "two owned MC sessions; published=\(bothNames)")
                 try isolationMark(folder, "host-drained-" + phase, "startup application records receipted")
                 try await isolationWait { isolationExists(folder, phase + ".ready") }
                 if phase == "revoke" {
@@ -179,7 +189,9 @@ extension ScannerMultipeerProcessTests {
                     }
                     return isolationExists(folder, phase + ".done")
                 }
-                try await isolationWait { service.retainedPhysicalCount == 1 && observer.flows > before }
+                try await isolationWait { service.retainedPhysicalCount == 1 && observer.flows > before && observer.connectionNames == siblingNames }
+                let remainingNames = await MainActor.run { service.connectedDevices }
+                XCTAssertEqual(remainingNames, siblingNames)
                 XCTAssertTrue(physical.mcSession.connectedPeers.isEmpty)
                 XCTAssertEqual(physical.gate.peerOutstandingUsage.bytes, 0)
                 XCTAssertTrue(service.isConnected(remoteUUID: prefix + "c"))
@@ -247,6 +259,8 @@ private final class IsolationObserver: ConnectServiceDelegate {
     private let lock = NSLock(); private var ready = false; private var count = 0; private var invited = false
     init(prefix: String, host: Bool, autoInvite: Bool, folder: URL) { self.prefix = prefix; self.host = host; self.autoInvite = autoInvite; self.folder = folder }
     private var resources = 0, streams = 0
+    private var names: [String] = []
+    var connectionNames: [String] { lock.withLock { names } }
     var cancelledResources: Int { lock.withLock { resources } }
     var closedStreams: Int { lock.withLock { streams } }
     func disposed(_ kind: String) { lock.withLock { if kind == "resource" { resources += 1 } else { streams += 1 } } }
@@ -270,7 +284,7 @@ private final class IsolationObserver: ConnectServiceDelegate {
         }
     }
     func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws { if context.remoteUUID == prefix + "c" { lock.withLock { count += 1 } } }
-    func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {}
+    func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) { lock.withLock { names = connectedDevices } }
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
 }

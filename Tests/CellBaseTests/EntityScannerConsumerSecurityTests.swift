@@ -392,3 +392,151 @@ private actor ConsumerBarrier {
         request["requestSignature"] = .data(try XCTUnwrap(signature)); return request
     }
 }
+
+extension EntityScannerConsumerSecurityTests {
+    @MainActor func testOutgoingProbeRepliesValidateNoncePeerAndPayloadBeforeConsuming() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        try await f.pair.addThirdPeer()
+        var published: [String] = []
+        f.cell.consumerEventForTesting = { published.append($0) }
+        let request = try await f.aggregateRequest()
+        let id = request.0, nonce = request.1
+        let valid = NearbyProbeAggregate(requestId: id, nonce: nonce, entityKind: .person, purposeMatches: .one, interestMatches: nil)
+        let wrong = NearbyProbeAggregate(requestId: id, nonce: "wrong", entityKind: .person, purposeMatches: .one, interestMatches: nil)
+        try await f.receiveProbe(wrong, topic: "scanner.probe.aggregate")
+        let stranger = try f.pair.a.consumerContext(remoteUUID: f.pair.c!.mySessionUUID)
+        try await f.receiveProbe(valid, topic: "scanner.probe.aggregate", context: stranger)
+        XCTAssertNotNil(f.cell.pendingRequests.find(.outgoingAggregate, id: id, context: f.context))
+        XCTAssertFalse(published.contains("scanner.probe.aggregate"))
+        try await f.receiveProbe(valid, topic: "scanner.probe.aggregate")
+        try await f.receiveProbe(valid, topic: "scanner.probe.aggregate")
+        XCTAssertEqual(published.filter { $0 == "scanner.probe.aggregate" }.count, 1)
+
+        let detailID = try await f.detailRequest("detail-binding")
+        let detail = NearbyProbeDetail(requestId: detailID, references: ["purpose://test"])
+        try await f.receiveProbe(detail, topic: "scanner.probe.detail", context: stranger)
+        do {
+            try await f.receiveProbe(NearbyProbeDetail(requestId: detailID, references: [String(repeating: "x", count: 2048)]), topic: "scanner.probe.detail")
+            XCTFail("Oversized result accepted")
+        } catch {}
+        XCTAssertNotNil(f.cell.pendingRequests.find(.outgoingDetail, id: detailID, context: f.context))
+        try await f.receiveProbe(detail, topic: "scanner.probe.detail")
+        try await f.receiveProbe(detail, topic: "scanner.probe.detail")
+        XCTAssertEqual(published.filter { $0 == "scanner.probe.detail" }.count, 1)
+    }
+
+    @MainActor func testOutgoingProbesCannotCrossReconnectWithSameUUIDAndDifferentSigningKey() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        let aggregate = try await f.aggregateRequest()
+        let detailID = try await f.detailRequest("old-detail")
+        var published: [String] = []
+        f.cell.consumerEventForTesting = { published.append($0) }
+        await f.pair.pa.gate.close(); await f.pair.pb.gate.close()
+        XCTAssertEqual(f.cell.pendingRequests.retainedCountForTesting, 0)
+        let vault = MockIdentityVault()
+        var otherKey = Identity(f.pair.b.owner.uuid, displayName: "same UUID new key", identityVault: vault)
+        await vault.addIdentity(identity: &otherKey, for: "new-key")
+        f.pair.b.owner = otherKey
+        let fresh = try f.pair.prepareReconnect()
+        try await f.pair.authenticateTransports(fresh.0, fresh.1)
+        let context = try f.pair.a.consumerContext(remoteUUID: f.pair.b.mySessionUUID)
+        XCTAssertEqual(context.remoteUUID, f.context.remoteUUID)
+        XCTAssertEqual(context.identity.uuid, f.context.identity.uuid)
+        XCTAssertNotEqual(context.identity, f.context.identity)
+        XCTAssertNotEqual(context.generation, f.context.generation)
+        try await f.receiveProbe(NearbyProbeAggregate(requestId: aggregate.0, nonce: aggregate.1,
+            entityKind: .person, purposeMatches: .one, interestMatches: nil), topic: "scanner.probe.aggregate", context: context)
+        try await f.receiveProbe(NearbyProbeDetail(requestId: detailID, references: ["purpose://old"]), topic: "scanner.probe.detail", context: context)
+        XCTAssertFalse(published.contains("scanner.probe.aggregate")); XCTAssertFalse(published.contains("scanner.probe.detail"))
+        _ = try await f.detailRequest("fresh-detail")
+        try await f.receiveProbe(NearbyProbeDetail(requestId: "fresh-detail", references: ["purpose://fresh"]), topic: "scanner.probe.detail", context: context)
+        XCTAssertEqual(published.filter { $0 == "scanner.probe.detail" }.count, 1)
+    }
+
+    @MainActor func testOutgoingProbeTTLAndCombinedPendingCountAndBytesBoundUnfinishedRequests() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        var now = ProcessInfo.processInfo.systemUptime
+        f.cell.pendingRequests.clock = { now }
+        let aggregate = try await f.aggregateRequest()
+        for i in 0..<(ScannerPendingRequests.maximumPerPeer - 1) { _ = try await f.detailRequest("pending-\(i)") }
+        let result = try await f.cell.set(keypath: "probeDetail", value: .object([
+            "remoteUUID": .string(f.pair.b.mySessionUUID), "action": .string("request"), "requestId": .string("overflow")]), requester: f.pair.a.owner)
+        guard case let .object(object)? = result else { return XCTFail("Missing rejection") }
+        XCTAssertNotEqual(object["status"], .string("sent"))
+        XCTAssertEqual(f.cell.pendingRequests.snapshot.count, ScannerPendingRequests.maximumPerPeer)
+        XCTAssertLessThanOrEqual(f.cell.pendingRequests.snapshot.bytes, ScannerPendingRequests.maximumBytesPerPeer)
+        now += 16
+        XCTAssertNil(f.cell.pendingRequests.find(.outgoingAggregate, id: aggregate.0, context: f.context))
+        XCTAssertEqual(f.cell.pendingRequests.snapshot.count, ScannerPendingRequests.maximumPerPeer - 1)
+        // Timeout returns the peer to beaconMatched, allowing a real new request.
+        _ = try await f.aggregateRequest()
+        now += 61
+        f.cell.pendingRequests.prune()
+        XCTAssertEqual(f.cell.pendingRequests.retainedCountForTesting, 0)
+        _ = try await f.detailRequest("after-expiry")
+        var published = 0
+        f.cell.consumerEventForTesting = { if $0 == "scanner.probe.detail" { published += 1 } }
+        try await f.receiveProbe(NearbyProbeDetail(requestId: "pending-0", references: []), topic: "scanner.probe.detail")
+        XCTAssertEqual(published, 0)
+        try await f.receiveProbe(NearbyProbeDetail(requestId: "after-expiry", references: []), topic: "scanner.probe.detail")
+        XCTAssertEqual(published, 1)
+    }
+}
+
+private extension ConsumerFixture {
+    func prepareProbes() async throws {
+        cell.configureProbeForTesting(.approved(entityKind: .person, purposeRefs: ["purpose://test"], interestRefs: []))
+        pair.a.deferEventDrainForTesting = true
+        let browser = MCNearbyServiceBrowser(peer: pair.aPeer, serviceType: "haven-radar")
+        pair.a.browser(browser, foundPeer: pair.bPeer, withDiscoveryInfo: NearbyBeacon(sessionUUID: pair.b.mySessionUUID,
+            entityKind: .person, purposeTokens: [NearbyBeacon.token(forCanonicalReference: "purpose://test")]).encodeToDiscoveryInfo())
+        pair.a.drainEventsForTesting()
+    }
+    func aggregateRequest() async throws -> (String, String) {
+        let value = try await cell.set(keypath: "probeRequest", value: .string(pair.b.mySessionUUID), requester: pair.a.owner)
+        guard case let .object(reply)? = value, case let .string(id)? = reply["requestId"], reply["status"] == .string("sent") else {
+            throw NSError(domain: "Aggregate request failed: \(String(describing: value))", code: 1)
+        }
+        let observer = ProbeRequestObserver()
+        let previous = pair.b.radarDelegate; pair.b.radarDelegate = observer
+        defer { pair.b.radarDelegate = previous }
+        try await pair.deliverNext()
+        let requestFlow = try XCTUnwrap(observer.flow)
+        let request = try JSONDecoder().decode(NearbyProbeRequest.self, from: JSONEncoder().encode(requestFlow.content))
+        XCTAssertEqual(request.requestId, id)
+        let nonce = request.nonce
+        return (id, nonce)
+    }
+    func detailRequest(_ id: String) async throws -> String {
+        let value = try await cell.set(keypath: "probeDetail", value: .object([
+            "remoteUUID": .string(pair.b.mySessionUUID), "action": .string("request"), "requestId": .string(id)]), requester: pair.a.owner)
+        guard case let .object(reply)? = value, reply["status"] == .string("sent") else {
+            throw NSError(domain: "Detail request failed: \(String(describing: value))", code: 1)
+        }
+        try await pair.deliverNext()
+        return id
+    }
+    func receiveProbe<T: Encodable>(_ payload: T, topic: String, context: ScannerConsumerContext? = nil) async throws {
+        let value = try JSONDecoder().decode(FlowElementValueType.self, from: JSONEncoder().encode(payload))
+        var flow = FlowElement(title: "probe", content: value, properties: .init(type: .event, contentType: .object))
+        flow.topic = topic
+        let current = context ?? self.context
+        try await current.physical.gate.withAuthenticatedWork { @MainActor [self] in
+            try await cell.scannerFlowReceived(manager: pair.a, flowElement: flow, context: current)
+        }
+    }
+}
+
+@MainActor private final class ProbeRequestObserver: ConnectServiceDelegate {
+    var flow: FlowElement?
+    func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {}
+    func foundDevicesChanged(manager: ScannerService, foundDevice: MCPeerID, remoteUUID: String, discoveryInfo: [String: String]?) {}
+    func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
+    func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) {}
+    func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?) {}
+    func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws { flow = flowElement }
+}

@@ -40,13 +40,14 @@ heap or Multipeer OS allocation. Count limits also bound object overhead.
 | Resource | Global count / bytes | Per MCPeerID count / bytes | Lifetime |
 |---|---|---|---|
 | Discovery | 128 / 128 KiB | 1 / 4096 | 60 s, refreshed only by admitted discovery |
+| Consumer peer state | 128 / 128 KiB | 1 / 4096 | 60 s and the exact source-token lifetime; charged until cleanup |
 | Invitations (pending + accepted + outgoing) | 32 / 64 KiB | 1 / 4096 | min(local invitation timeout, 30 s) |
 | Context/setup work | 16 / 64 KiB | 2 / 8192 | 10 s |
 | Queued UI notification batches | 64 / 64 KiB | 8 / 8192 | 5 s |
 | Physical MCSession slots | 32 / 8192 | 2 / 512 | Held until physical retirement |
 
 One fixed ten-second rate window permits 256 reservations globally and 24 per
-MCPeerID, across all five resources. Capacity-rejected attempts consume rate;
+MCPeerID, across all six resources. Capacity-rejected attempts consume rate;
 oversized inputs are rejected before source bookkeeping. The source table has
 at most 256 entries and expires idle entries after 60 seconds on its next use.
 Active reservations keep their bucket alive. Discovery permits at most 32
@@ -75,3 +76,22 @@ No honest-admission guarantee is possible during full global saturation. Bounds
 limit retained application state and work; they do not bound allocations made by
 Multipeer before calling this delegate or establish N14/N15/N18 OS guarantees.
 After expiry or release, a fresh legitimate invitation can be handled again.
+
+## Terminal status and connected snapshots (N32/N33)
+
+Stop records one terminal status for the retired service generation and rejects
+its ordinary queued events. A single coalesced lifecycle wakeup delivers that
+terminal status exactly once, outside the discovery event admission budget.
+Repeated stop is idempotent. A requested restart waits for terminal publication;
+a subsequent stop can cancel that pending restart. This retains at most one
+terminal record and one restart bit, including when MainActor is blocked.
+Deinitialization does not create new publication work.
+
+Each physical slot records the latest accepted MC connection-state callback.
+The callback must identify the exact owned MCSession and peer before it changes
+state. Lifecycle publication derives a sorted list from all current connected,
+non-retiring slots. Closing B leaves C in the list, and an old B callback cannot
+publish its own session's list before a generation guard. This is connection
+status, not a claim that discovery identity or proximity is authenticated.
+`ScannerRetainedStateTests` forwards these callbacks to a real EntityScanner and
+holds an old callback through reconnect before draining it.

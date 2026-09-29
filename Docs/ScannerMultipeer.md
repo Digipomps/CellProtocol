@@ -106,3 +106,9 @@ If native discovery fails, inspect both worker logs and the process host's
 local-network access. App hosts need `NSLocalNetworkUsageDescription` and the
 `_haven-radar._tcp` Bonjour service; see [Apple Multipeer documentation](https://developer.apple.com/documentation/multipeerconnectivity)
 and [local-network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+
+Consumer discovery lifetime, outgoing probe reply binding, terminal status and
+per-peer aggregate connection snapshots are specified in
+[consumer security](../Documentation/ScannerConsumerSecurity.md#discovery-retention-and-outgoing-probes-n28n29)
+and [Scanner admission](../Documentation/ScannerAdmissionAndOrdering.md#terminal-status-and-connected-snapshots-n32n33).
+Their application-owned bounds do not establish a hard MC reassembly/RSS limit.

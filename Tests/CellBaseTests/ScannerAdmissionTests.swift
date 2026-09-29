@@ -16,7 +16,7 @@ final class ScannerAdmissionTests: XCTestCase {
                     perSourceCount: dimension == "sourceCount" ? 1 : 10,
                     perSourceBytes: dimension == "sourceBytes" ? 100 : 1000, lifetime: 10)
                 switch kind {
-                case .discovery: config.discovery = budget
+                case .discovery, .consumer: config.discovery = budget
                 case .invitation: config.invitation = budget
                 case .task: config.task = budget
                 case .event: config.event = budget
