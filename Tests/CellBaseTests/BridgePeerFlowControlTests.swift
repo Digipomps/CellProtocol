@@ -27,8 +27,8 @@ final class BridgePeerFlowControlTests: XCTestCase {
             _ = try fresh.prepare(Data([9]), counter: 0, now: 1) { _ in }
             XCTAssertEqual(try receiver.receive(data, counter: 0) { _ in XCTFail() }, Data([9]))
             var ack = try receiver.prepare(nil, counter: 0, now: 2) { _ in }
-            if variant == "guess" { ack[42] ^= 1 }
-            if variant == "future" { ack[41] = 1 }
+            if variant == "guess" { ack[10] ^= 1 }
+            if variant == "future" { ack[9] = 1 }
             let original = charged
             if variant == "generation" { XCTAssertThrowsError(try fresh.receive(ack, counter: 0) { _ in XCTFail() }) }
             else if variant == "duplicate" {

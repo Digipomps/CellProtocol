@@ -33,14 +33,15 @@ select a new connection by discovery UUID. These MC side channels are unsupporte
 Integers are unsigned big endian. Each plaintext is:
 
 ```
-kind:u8 || random:32 || receiptCount:u8 || receipts:(counter:u64 || digest:32)* || payload
+kind:u8 || receiptCount:u8 || receipts:(counter:u64 || digest:32)* || payload || random:32
 ```
 
 Kind 1 is application data with a nonempty BridgeCommand payload. Kind 2 is
 an internal receipt, with at least one receipt and no trailing payload. Unknown
 kinds, malformed sizes, more than 64 receipts, duplicates, nonexistent/future
 counters and mismatched digests are terminal. The random 32 bytes are generated
-locally by Crypto for EVERY record, independently of Kapp. A receipt's digest
+locally by Crypto for EVERY record, independently of Kapp, at the tail so that
+an early ciphertext prefix does not disclose all receipt entropy. A receipt's digest
 is SHA-256 of the **entire sealed wire record**, including header, ciphertext
 and tag. The generation and direction are therefore bound both by AEAD and by
 the digest; the acknowledged counter belongs only to this gate's send map.
@@ -56,8 +57,11 @@ receipt submission path creates kind 2.
 Data records retain exact wire-byte reservations after MCSession.send returns.
 Release requires a valid receipt, or physical retirement completing. There are
 at most 32 outstanding data records and 2 MiB of data wire bytes per connection,
-in addition to existing shared send quotas. Overflow closes that peer; producers
-do not accumulate an unbounded waiting queue. Lack of a data receipt for 10
+in addition to existing shared send quotas. A full window suspends the producer
+inside its existing work/send slot; at most 32 producers can wait. Receipt progress
+wakes waiters using a revision check that prevents lost wakeups. Cancellation and
+close fail those waiters. An individual oversize frame or exhausted shared quota
+still fails closed. Lack of a data receipt for 10
 monotonic seconds retires the peer, checked by one timer per gate.
 
 Receipt records have a separate count limit of 64 and still consume existing
@@ -82,6 +86,8 @@ Scanner admits at most 64 complete callbacks and 4 MiB of their wire Data per
 adapter before asynchronous work, with maximum frame 1 MiB + 65. With the
 32-slot physical cap this bounds retained callback Data to 128 MiB, excluding
 decoder/plaintext/object overhead, executing Cell work and framework allocations.
+Overflow revokes once and reuses one rejection task for every later callback;
+an oversize-message burst cannot create one error task per rejected message.
 The per-record cap also bounds the flow decoder; the pending/outstanding receipt
 tables are bounded independently of attacker counters. Existing gate/work quotas
 and Scanner admission still apply.

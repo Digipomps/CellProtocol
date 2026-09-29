@@ -12,6 +12,20 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
     override func setUp() { previousResolver = CellBase.defaultCellResolver }
     override func tearDown() { CellBase.defaultCellResolver = previousResolver }
 
+    func testIngressOverflowReusesOneRejectionTaskAndPreservesSibling() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start()); try await pair.addThirdPeer()
+        let oversized = Data(repeating: 0, count: BridgeChannelTransport.maximumPeerFrameBytes + 1)
+        let rejected = pair.pa.enqueueReceive(oversized)
+        for _ in 0..<10000 {
+            XCTAssertEqual(pair.pa.enqueueReceive(oversized), rejected, "Rejection must not spawn work for every callback")
+        }
+        do { try await rejected.value; XCTFail("Oversize frame admitted") }
+        catch { XCTAssertEqual(error as? A.Failure, .capacity) }
+        XCTAssertEqual(pair.a.retainedPhysicalCount, 1)
+        XCTAssertNoThrow(try pair.ac!.gate.session.check())
+    }
+
     func testUnusedResourcesAndStreamsCloseImmediatelyAcrossAuthRevokeAndReconnectWithSibling() async throws {
         for phase in ["pending", "active", "revoked", "reconnected"] {
             let pair = try await ScannerPair(); defer { pair.stop() }
@@ -52,15 +66,82 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let pair = try await ScannerPair(); defer { pair.stop() }
         try await pair.finish(pair.start()); try await pair.addThirdPeer()
         let before = pair.wire.history.count
+#if os(macOS)
+        let baselineRSS = isolationRSS()
+#endif
         for i in 0..<32 {
             try await pair.a.sendScannerFlowElement(FlowElement(title: "held-\(i)", content: .string(String(repeating: "q", count: 1024)), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID)
         }
         XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.records, 32)
         XCTAssertGreaterThan(pair.pa.gate.peerOutstandingUsage.bytes, 32 * 1024)
         XCTAssertEqual(pair.wire.history.count - before, 32)
-        do { try await pair.a.sendScannerFlowElement(FlowElement(title: "overflow", content: .string("x"), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID); XCTFail() } catch {}
+        pair.a.holdPhysicalRetirementForTesting = true
+        let overflow = Task {
+            do { try await pair.a.sendScannerFlowElement(FlowElement(title: "overflow", content: .string("x"), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID); XCTFail() } catch {}
+        }
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.records, 32)
+        // Close while a bounded producer is waiting for the full window.
+        pair.pa.gate.session.close()
+        for _ in 0..<200 where pair.pa.gate.session.state != .closed { try await Task.sleep(nanoseconds: 1_000_000) }
+        XCTAssertEqual(pair.pa.gate.session.state, .closed)
+        XCTAssertEqual(pair.a.retainedPhysicalCount, 2)
+        XCTAssertGreaterThan(pair.pa.gate.peerOutstandingUsage.bytes, 32 * 1024, "Logical close cannot release queued bytes")
+#if os(macOS)
+        let heldRSS = isolationRSS()
+        print("CP53 held feed RSS baseline=\(baselineRSS) held=\(heldRSS); records=32 bytes=\(pair.pa.gate.peerOutstandingUsage.bytes)")
+        XCTAssertLessThan(heldRSS, baselineRSS + 64 * 1024 * 1024)
+#endif
+        pair.a.holdPhysicalRetirementForTesting = false; pair.a.expireInvitations()
+        await overflow.value
+        for _ in 0..<1000 where pair.pa.gate.peerOutstandingUsage.bytes != 0 { try await Task.sleep(nanoseconds: 1_000_000) }
         XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.bytes, 0)
         XCTAssertEqual(pair.a.retainedPhysicalCount, 1)
+        XCTAssertNoThrow(try pair.ac!.gate.session.check())
+    }
+
+    func testMissingReceiptDeadlinePhysicallyRetiresOnlyExpiredPeer() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start()); try await pair.addThirdPeer()
+        let clock = ScannerReceiptClock()
+        pair.pa.gate.peerFlowClock = { clock.now }
+        try await pair.a.sendScannerFlowElement(FlowElement(title: "no-receiver", content: .string("held"), properties: .init(type: .event, contentType: .string)), remoteUUID: pair.b.mySessionUUID)
+        clock.set(9.999); await pair.pa.gate.checkPeerProgress()
+        XCTAssertNoThrow(try pair.pa.gate.session.check())
+        clock.set(10)
+        for _ in 0..<3000 where pair.pa.gate.session.state != .closed { try await Task.sleep(nanoseconds: 1_000_000) }
+        XCTAssertGreaterThan(pair.pa.gate.peerProgressDiagnostics.checks, 1, "The installed timer must tick without receive/send callbacks")
+        XCTAssertEqual(pair.pa.gate.session.state, .closed)
+        XCTAssertEqual(pair.a.retainedPhysicalCount, 1)
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.bytes, 0)
+        XCTAssertNoThrow(try pair.ac!.gate.session.check())
+    }
+
+    func testSlowReceiverResumesFullWindowProducerWhileSiblingContinues() async throws {
+        let pair = try await ScannerPair(); defer { pair.stop() }
+        try await pair.finish(pair.start()); try await pair.addThirdPeer()
+        let observer = ScannerStatusObserver(); pair.c?.radarDelegate = observer
+        let flow = FlowElement(title: "window", content: .string("held"), properties: .init(type: .event, contentType: .string))
+        for _ in 0..<32 { try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.b.mySessionUUID) }
+        let before = pair.wire.history.count, finished = ScannerSendFinished()
+        let waiting = Task {
+            try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.b.mySessionUUID)
+            finished.mark()
+        }
+        for _ in 0..<100 { await Task.yield() }
+        XCTAssertFalse(finished.value)
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.records, 32)
+        XCTAssertEqual(pair.wire.history.count, before, "No extra MC enqueue while the receiver is held")
+        try await pair.a.sendScannerFlowElement(flow, remoteUUID: pair.c!.mySessionUUID)
+        let sibling = try XCTUnwrap(pair.wire.history.last)
+        XCTAssertEqual(sibling.to, pair.cPeer); XCTAssertTrue(pair.wire.remove(sibling))
+        try await pair.deliver(sibling)
+        XCTAssertEqual(observer.flows.count, 1)
+        try await pair.deliverNext() // first held data plus its genuine sealed receipt
+        try await waiting.value
+        XCTAssertTrue(finished.value)
+        XCTAssertEqual(pair.pa.gate.peerOutstandingUsage.records, 32)
+        XCTAssertNoThrow(try pair.pa.gate.session.check())
         XCTAssertNoThrow(try pair.ac!.gate.session.check())
     }
 
@@ -824,6 +905,18 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         await unsigned.pa.gate.close(); await unsigned.pb.gate.close()
         _ = try? await tasks.0.value; _ = try? await tasks.1.value
     }
+}
+
+private final class ScannerSendFinished: @unchecked Sendable {
+    private let lock = NSLock(); private var done = false
+    var value: Bool { lock.withLock { done } }
+    func mark() { lock.withLock { done = true } }
+}
+
+private final class ScannerReceiptClock: @unchecked Sendable {
+    private let lock = NSLock(); private var time: TimeInterval = 0
+    var now: TimeInterval { lock.withLock { time } }
+    func set(_ value: TimeInterval) { lock.withLock { time = value } }
 }
 
 private final class ScannerRejectedStream: InputStream {

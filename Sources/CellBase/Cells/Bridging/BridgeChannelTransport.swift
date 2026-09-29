@@ -24,13 +24,22 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private var peerReady = false
     private var peerRecords: BridgePeerRecordLayer?
     private let peerFlow = BridgePeerFlowControl()
+    private var peerCapacityRevision: UInt64 = 0
+    private var peerCapacityWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var flowTimer: Task<Void, Never>?
     var peerFlowClock: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
-    public var peerOutstandingUsage: (records: Int, bytes: Int) {
-        lock.withLock { (peerFlow.outstanding.count, peerFlow.bytes) }
+    public var peerOutstandingUsage: (records: Int, bytes: Int, dataRecords: Int) {
+        lock.withLock { (peerFlow.outstanding.count, peerFlow.bytes, peerFlow.outstanding.values.filter { !$0.control }.count) }
+    }
+    private var progressChecks = 0
+    var peerProgressDiagnostics: (checks: Int, age: TimeInterval?) {
+        lock.withLock { (progressChecks, peerFlow.oldest.map { peerFlowClock() - $0 }) }
     }
     public func checkPeerProgress() async {
-        let expired = lock.withLock { peerFlow.oldest.map { peerFlowClock() >= $0 + 10 } ?? false }
+        let expired = lock.withLock { () -> Bool in
+            progressChecks = min(1000, progressChecks + 1)
+            return peerFlow.oldest.map { peerFlowClock() >= $0 + 10 } ?? false
+        }
         if expired { await close() }
     }
 
@@ -296,6 +305,34 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.withPeerSendAdmission(authenticating: authenticating) { try submit(wire) }
         }
     }
+    /// nil means submitted; otherwise wait on the captured revision. A bounded
+    /// producer holds its existing work slot, never an unbounded payload queue.
+    public func submitPeerFrameWhenAvailable(_ plaintext: Data, submit: (Data) throws -> Void) throws -> UInt64? {
+        try lock.withLock {
+            do {
+                let authenticating = peerAuthSend != nil
+                let wire = try sealPeerFrameLocked(plaintext)
+                try session.withPeerSendAdmission(authenticating: authenticating) { try submit(wire) }
+                return nil
+            } catch is BridgePeerFlowControl.WindowFull { return peerCapacityRevision }
+        }
+    }
+    public func waitForPeerCapacity(after revision: UInt64) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                lock.withLock {
+                    if stopped || Task.isCancelled { continuation.resume(throwing: Auth.Failure.closed) }
+                    else if revision != peerCapacityRevision { continuation.resume() }
+                    else if peerCapacityWaiters.count >= 32 { continuation.resume(throwing: Auth.Failure.capacity) }
+                    else { peerCapacityWaiters[id] = continuation }
+                }
+            }
+        }, onCancel: { [self] in
+            lock.withLock { peerCapacityWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+        })
+    }
+
     public func sealPeerFrame(_ plaintext: Data) throws -> Data {
         try lock.withLock { try sealPeerFrameLocked(plaintext) }
     }
@@ -338,7 +375,13 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             guard peerReady else { throw Auth.Failure.unexpectedMessage }
             try session.check()
             let counter = peerRecords.nextReceive
-            let plaintext = try peerFlow.receive(peerRecords.open(record), counter: counter, wire: record) { session.releaseSend(bytes: $0) }
+            let before = peerFlow.outstanding.count
+            let plaintext = try peerFlow.receive(peerRecords.open(record), counter: counter, wire: record, now: peerFlowClock()) { session.releaseSend(bytes: $0) }
+            if peerFlow.outstanding.count < before {
+                peerCapacityRevision &+= 1
+                let waiters = peerCapacityWaiters.values; peerCapacityWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
             if !plaintext.isEmpty {
                 let command = try JSONDecoder().decode(BridgeCommand.self, from: plaintext)
                 guard !command.cmd.hasPrefix("channelAuth"), command.command != .ready else { throw Auth.Failure.unexpectedMessage }
@@ -529,17 +572,27 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     }
 
     public func close() async {
-        let cleanup = lock.withLock { () -> (BridgeDelegateProtocol?, BridgeChannelClientOperation?, BridgeTransportProtocol?)? in
+        let cleanup = lock.withLock { () -> (BridgeDelegateProtocol?, BridgeChannelClientOperation?, BridgeTransportProtocol?, [Task<Void, Error>])? in
             guard !stopped else { return nil }
             stopped = true; timer?.cancel(); timer = nil; flowTimer?.cancel(); flowTimer = nil
             peerRecords?.close(); peerRecords = nil; peerReady = false; peerAuthSend = nil
-            inFlight.values.forEach { $0.cancel() }
-            let result = (delegate, operation, underlying); delegate = nil; operation = nil; underlying = nil
+            let work = Array(inFlight.values)
+            let waiters = peerCapacityWaiters.values; peerCapacityWaiters.removeAll()
+            for waiter in waiters { waiter.resume(throwing: Auth.Failure.closed) }
+            let result = (delegate, operation, underlying, work); delegate = nil; operation = nil; underlying = nil
             return result
         }
         guard let cleanup else { return }
+        // Task cancellation may synchronously invoke a window waiter's handler;
+        // do not call it while holding the gate lock.
+        cleanup.3.forEach { $0.cancel() }
         defer { session.releaseTransport() }
         session.close()
+        // Peer eviction must not wait behind suspended Cell/factory cleanup.
+        // Authority is already revoked; physical reservations stay held until
+        // this exact adapter has observed retirement.
+        let peer = lock.withLock { peerOperation != nil }
+        if peer { await cleanup.2?.close() }
         await cleanup.1?.cancel()
         await lock.withLock({ peerOperation })?.cancel()
         if let bridge = cleanup.0 as? BridgeBase {
@@ -547,7 +600,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         } else {
             await cleanup.0?.pushError(errorMessage: "bridge_channel_closed", error: Auth.Failure.closed)
         }
-        await cleanup.2?.close()
+        if !peer { await cleanup.2?.close() }
         releasePeerHandshakeBytes()
         lock.withLock { peerFlow.retire { session.releaseSend(bytes: $0) } }
     }

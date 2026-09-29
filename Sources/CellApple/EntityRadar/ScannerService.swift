@@ -77,6 +77,8 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     private var dispatchTail: Task<Void, Error>?
     // Deterministic hold after record opening, before consumer dispatch.
     var beforeOrderedDispatch: ((BridgeCommand) async -> Void)?
+    private var closeTask: Task<Void, Never>?
+    private var receiveRejection: Task<Void, Error>?
     private var queuedReceives = 0
     private var queuedBytes = 0
     var gate: BridgeChannelTransport!
@@ -104,7 +106,9 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         do {
             // Non-suspending critical section: counter allocation and MC send
             // have the same order, even when several Cell tasks send at once.
-            try sendLock.withLock { try service.sendPeerData(data, on: self) }
+            while let revision = try sendLock.withLock({ try service.sendPeerData(data, on: self) }) {
+                try await gate.waitForPeerCapacity(after: revision)
+            }
         } catch { await gate.close(); throw error }
     }
 
@@ -121,10 +125,13 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     @discardableResult
     func enqueueReceive(_ data: Data) -> Task<Void, Error> {
         receiveLock.withLock {
+            if let receiveRejection { return receiveRejection }
             guard data.count <= BridgeChannelTransport.maximumPeerFrameBytes,
                   queuedReceives < 64, data.count <= 4 * 1024 * 1024 - queuedBytes else {
                 gate.session.close() // revoke dispatch immediately, before asynchronous cleanup
-                return Task { await gate.close(); throw BridgeChannelAuthentication.Failure.capacity }
+                let rejection = Task<Void, Error> { await gate.close(); throw BridgeChannelAuthentication.Failure.capacity }
+                receiveRejection = rejection
+                return rejection
             }
             queuedReceives += 1; queuedBytes += data.count
             let previous = receiveTail
@@ -173,7 +180,15 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
         }
     }
 
-    func close() async { await service?.peerChannelClosed(self) }
+    func close() async {
+        let task = receiveLock.withLock { () -> Task<Void, Never> in
+            if let closeTask { return closeTask }
+            let task = Task<Void, Never> { [service] in await service?.peerChannelClosed(self) }
+            closeTask = task
+            return task
+        }
+        await task.value
+    }
 
     static func new() -> any BridgeTransportProtocol {
         preconditionFailure("Radar transport must be obtained from a running ScannerService, not constructed.")
@@ -368,6 +383,7 @@ class ScannerService :  NSObject, ObservableObject {
     var channelLimits = ScannerService.peerLimits
     // Internal adapter seam: production always uses MCSession reliable delivery.
     var peerSend: ((Data, MCPeerID, MCSession) throws -> Void)?
+    var sideEntranceRejectedForTesting: ((String, Bool) -> Void)?
     var radarDelegate : ConnectServiceDelegate?
     private var bridgeTransportsByRemoteUUID = [String: ScannerPeerTransport]()
     private var registeredBridgeUUIDsByRemoteUUID = [String: String]()
@@ -441,6 +457,11 @@ class ScannerService :  NSObject, ObservableObject {
         }
     }
     private var physicalSlots: [ObjectIdentifier: PhysicalSlot] = [:]
+    private var heldRetirement = false
+    var holdPhysicalRetirementForTesting: Bool {
+        get { withState { heldRetirement } }
+        set { withState { heldRetirement = newValue } }
+    }
     var retainedPhysicalCount: Int { withState { physicalSlots.count } }
 
     func sessionForPeer(_ peer: MCPeerID) throws -> MCSession {
@@ -469,7 +490,7 @@ class ScannerService :  NSObject, ObservableObject {
         }
     }
     private func reapPhysicalSessions() {
-        for (id, slot) in physicalSlots where slot.retiring && slot.session.connectedPeers.isEmpty {
+        for (id, slot) in physicalSlots where slot.retiring && slot.session.connectedPeers.isEmpty && !holdPhysicalRetirementForTesting {
             physicalSlots[id] = nil
             slot.lease.release()
             slot.waiter?.resume(); slot.waiter = nil
@@ -576,12 +597,12 @@ class ScannerService :  NSObject, ObservableObject {
         for transport in transports { try await transport.gate.sendData(encodedElement) }
     }
 
-    fileprivate func sendPeerData(_ data: Data, on transport: ScannerPeerTransport) throws {
+    fileprivate func sendPeerData(_ data: Data, on transport: ScannerPeerTransport) throws -> UInt64? {
         try withState {
             guard bridgeTransportsByRemoteUUID[transport.remoteUUID] === transport else { throw CancellationError() }
             // Lock order: Scanner binding -> gate -> session -> MC submission.
             // Other Scanner state paths read session state in this same order.
-            try transport.gate.submitPeerFrame(data) { wire in
+            return try transport.gate.submitPeerFrameWhenAvailable(data) { wire in
                 if let peerSend { try peerSend(wire, transport.peerID, transport.mcSession) }
                 else {
                     guard transport.mcSession.connectedPeers.contains(transport.peerID) else {
@@ -1328,11 +1349,13 @@ extension ScannerService : MCSessionDelegate {
         // Always dispose the supplied object, even for a stale session callback.
         // Never select a replacement by discovery UUID or allocate failure Tasks.
         stream.close()
+        sideEntranceRejectedForTesting?("stream", [.closed, .notOpen, .error].contains(stream.streamStatus))
         rejectSideEntrance(session: session, peer: peerID)
     }
     
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
         progress.cancel()
+        sideEntranceRejectedForTesting?("resource", progress.isCancelled)
         rejectSideEntrance(session: session, peer: peerID)
     }
     
