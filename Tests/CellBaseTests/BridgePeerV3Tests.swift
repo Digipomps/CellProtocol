@@ -116,7 +116,22 @@ final class V3Wire: @unchecked Sendable {
     var last: Data? { lock.withLock { values.last } }
     var all: [Data] { lock.withLock { values } }
     var count: Int { lock.withLock { values.count } }
-    func append(_ data: Data) throws { lock.withLock { values.append(data) } }
+    private let firstSubmission = XCTestExpectation(description: "first physical peer frame")
+    func append(_ data: Data) throws {
+        let first = lock.withLock { () -> Bool in
+            let first = values.isEmpty
+            values.append(data)
+            return first
+        }
+        if first { firstSubmission.fulfill() }
+    }
+    func firstFrame() async throws -> Data {
+        // A fixed number of Task.yield calls is not a readiness condition: a
+        // loaded CI executor may not run the producer within that many turns.
+        let result = await XCTWaiter.fulfillment(of: [firstSubmission], timeout: 3)
+        XCTAssertEqual(result, .completed)
+        return try XCTUnwrap(lock.withLock { values.first })
+    }
 }
 actor V3Vault: IdentityVaultProtocol {
     let descriptor: BridgeChannelAuthentication.PublicIdentity
@@ -265,8 +280,8 @@ private final class V3GatePair {
     }
     func start() async throws -> Task<Void, Error> {
         let task = Task { try await i.startPeer() }
-        for _ in 0..<1000 { if it.wire.last != nil { return task }; await Task.yield() }
-        throw A.Failure.unavailable
+        do { _ = try await it.wire.firstFrame(); return task }
+        catch { await stop(task); throw error }
     }
     func step(_ step: Int) async throws {
         if step.isMultiple(of: 2) { try await it.receive(XCTUnwrap(rt.wire.last)) }
@@ -691,7 +706,7 @@ extension BridgePeerV3Tests {
                 let start = Task { try await pair.i.startPeer() }
                 let pending = Task {
                     if role == .responder {
-                        for _ in 0..<1000 { if pair.it.wire.last != nil { break }; await Task.yield() }
+                        _ = try await pair.it.wire.firstFrame()
                         try await pair.step(1)
                     }
                 }
@@ -833,8 +848,7 @@ private final class V3AdversarialGate {
         start = Task { try await gate.startPeer() }
         if role == .initiator { history[1] = try await operation.begin(live: {}) }
         else {
-            for _ in 0..<1000 { if physical.wire.last != nil { break }; await Task.yield() }
-            history[1] = try XCTUnwrap(physical.wire.last)
+            history[1] = try await physical.wire.firstFrame()
         }
         for previous in 1..<step {
             if previous.isMultiple(of: 2) == step.isMultiple(of: 2) {
