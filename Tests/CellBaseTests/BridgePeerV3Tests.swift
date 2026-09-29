@@ -744,6 +744,10 @@ extension BridgePeerV3Tests {
                     try await BridgeFactoryLifetimeSpy.make(owner: owner, transport: transport, stats: stats,
                         hold: hold, cleanup: cleanup, bindBeforeHold: bindBeforeHold)
                 })
+                let healthy = try V3GatePair(limits: pair.limits)
+                let healthyStartup = try await healthy.start()
+                for n in 1...5 { try await healthy.step(n) }
+                try await healthyStartup.value
                 let startup = try await pair.start(), step = role == .initiator ? 4 : 5
                 for n in 1..<step { try await pair.step(n) }
                 let pending = Task { try await pair.step(step) }
@@ -754,11 +758,16 @@ extension BridgePeerV3Tests {
                 await fulfillment(of: [cleanup.entered], timeout: 2)
                 XCTAssertGreaterThan(pair.limits.outstandingWorkCount, 0)
                 XCTAssertEqual(stats.snapshot.subscriptions, 1)
+                try await healthy.i.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("healthy"), cid: 1)))
+                try await healthy.rt.receive(XCTUnwrap(healthy.it.wire.last))
+                XCTAssertEqual(healthy.rd.counts.delivery, 1)
                 await cleanup.release(); _ = try? await pending.value
                 XCTAssertFalse(gate.hasDelegate); XCTAssertFalse(gate.canSendPeerData)
                 XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(stats.snapshot.subscriptions, 0)
                 XCTAssertEqual(stats.snapshot.deinitialized, 1)
                 await pair.stop(startup)
+                XCTAssertTrue(healthy.i.canSendPeerData); XCTAssertTrue(healthy.r.canSendPeerData)
+                await healthy.stop(healthyStartup)
                 XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
             }
         }

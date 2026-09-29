@@ -17,7 +17,7 @@ func authenticateBridgeFixture(_ bridge: BridgeBase, principal: Identity, signer
     if activate { try bridge.activateAuthenticatedChannel() }
 }
 
-func authenticatedSessionFixture(principal: Identity, signer: IdentityVaultProtocol? = nil, activate: Bool = true) async throws -> BridgeChannelSession {
+func authenticatedSessionFixture(principal: Identity, signer: IdentityVaultProtocol? = nil, activate: Bool = true, limits: BridgeChannelLimits? = nil) async throws -> BridgeChannelSession {
     let vault = signer ?? principal.identityVault ?? CellBase.defaultIdentityVault ?? MockIdentityVault()
     if principal.publicSecureKey == nil {
         if let stored = await vault.identity(forUUID: principal.uuid) { principal.publicSecureKey = stored.publicSecureKey }
@@ -27,7 +27,7 @@ func authenticatedSessionFixture(principal: Identity, signer: IdentityVaultProto
     }
     let descriptor = principal.publicIdentitySnapshot()
     let endpoint = try BridgeChannelAuthentication.Endpoint(url: URL(string: "wss://fixture.example/bridgehead/cell/test")!, domain: "bridge")
-    let session = try BridgeChannelSession(endpoint: endpoint)
+    let session = try BridgeChannelSession(endpoint: endpoint, limits: limits)
     let hello = BridgeChannelAuthentication.Hello(identity: try .init(descriptor))
     let challenge = try session.issueChallenge(hello)
     let signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: descriptor)

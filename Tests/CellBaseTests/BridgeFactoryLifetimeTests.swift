@@ -22,6 +22,13 @@ final class BridgeFactoryLifetimeTests: XCTestCase {
                         try await BridgeFactoryLifetimeSpy.make(owner: owner, transport: transport, stats: stats,
                             hold: hold, cleanup: cleanup, bindBeforeHold: bindBeforeHold)
                     }
+                let healthyWire = BridgeLifecycleWire()
+                let healthy = try BridgeChannelTransport(underlying: healthyWire, endpoint: endpoint, limits: limits, source: UUID().uuidString) { transport, _ in
+                    try await BridgeFactoryLifetimeSpy.make(owner: owner, transport: transport, stats: .init())
+                }
+                let healthyClient = try BridgeChannelClientOperation(owner: owner, endpoint: endpoint)
+                let healthyProof = try await healthyClient.sign(healthy.session.issueChallenge(healthyClient.hello))
+                try await healthy.consumeCommand(command: .init(cmd: "channelAuthProof", payload: .string(String(decoding: try A.encode(healthyProof), as: UTF8.self)), cid: 0))
                 let operation = try BridgeChannelClientOperation(owner: owner, endpoint: endpoint)
                 let proof = try await operation.sign(gate.session.issueChallenge(operation.hello))
                 let command = BridgeCommand(cmd: "channelAuthProof", payload: .string(String(decoding: try A.encode(proof), as: UTF8.self)), cid: 0)
@@ -36,6 +43,8 @@ final class BridgeFactoryLifetimeTests: XCTestCase {
                 XCTAssertGreaterThan(limits.outstandingWorkCount, 0)
                 XCTAssertEqual(stats.snapshot.retired, 1)
                 XCTAssertEqual(stats.snapshot.subscriptions, 1, "Cleanup has not finished")
+                try await healthy.consumeCommand(command: .init(cmd: "get", identity: owner, payload: .string("value"), cid: 1))
+                XCTAssertEqual(healthyWire.commands.last?.payload, .string("healthy"))
                 await cleanup.release()
                 _ = try? await opening.value
                 await gate.close()
@@ -45,7 +54,10 @@ final class BridgeFactoryLifetimeTests: XCTestCase {
                 do { try await gate.ready(); XCTFail("Stopped gate ready") } catch {}
                 XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(stats.snapshot.subscriptions, 0)
                 XCTAssertEqual(stats.snapshot.deinitialized, 1)
-                XCTAssertEqual(limits.outstandingWorkCount, 0); XCTAssertEqual(limits.retainedConnectionCount, 0)
+                XCTAssertEqual(limits.outstandingWorkCount, 0); XCTAssertEqual(limits.retainedConnectionCount, 1)
+                try await healthy.consumeCommand(command: .init(cmd: "get", identity: owner, payload: .string("value"), cid: 1))
+                XCTAssertEqual(healthyWire.commands.last?.payload, .string("healthy"))
+                await healthy.close(); XCTAssertEqual(limits.retainedConnectionCount, 0)
                 XCTAssertFalse(wire.commands.contains { $0.cmd == "channelAuthAccepted" })
             }
         }
@@ -54,7 +66,9 @@ final class BridgeFactoryLifetimeTests: XCTestCase {
     func testMuxLateFactoryRetiresResultWhenSessionCheckThrowsOrLogicalOpenIsCancelled() async throws {
         for reason in ["physical", "logical", "revoke"] {
             let owner = await MockIdentityVault().identity(for: "owner", makeNewIfNotFound: true)!
-            let wire = BridgeLifecycleWire(); wire.channelSession = try await authenticatedSessionFixture(principal: owner)
+            var configuration = BridgeChannelLimits.Configuration(); configuration.maximumChannels = 2
+            let limits = BridgeChannelLimits(configuration: configuration)
+            let wire = BridgeLifecycleWire(); wire.channelSession = try await authenticatedSessionFixture(principal: owner, limits: limits)
             let hold = BridgeLifecycleBarrier(), cleanup = BridgeLifecycleBarrier(), stats = BridgeFactoryLifetimeStats()
             let mux = BridgeMultiplexServerSession(physicalTransport: wire) { target, _, transport in
                 if target == "held" {
@@ -72,11 +86,18 @@ final class BridgeFactoryLifetimeTests: XCTestCase {
             await hold.release()
             await fulfillment(of: [cleanup.entered], timeout: 2)
             XCTAssertEqual(stats.snapshot.subscriptions, 1)
+            if reason == "logical" {
+                XCTAssertThrowsError(try wire.channelSession!.acquire(.channel))
+                try await mux.consumeCommand(command: lifecycleMuxCommand("get", owner, "healthy"))
+                XCTAssertEqual(wire.commands.last?.payload, .string("healthy"))
+            }
+            XCTAssertEqual(limits.retainedConnectionCount, 1)
             await cleanup.release(); _ = try? await opening.value
             XCTAssertEqual(stats.snapshot.retired, 1); XCTAssertEqual(stats.snapshot.subscriptions, 0)
             XCTAssertEqual(stats.snapshot.deinitialized, 1)
             XCTAssertFalse(wire.commands.contains { $0.cmd == "channelOpened" && $0.channelID == "held" })
             if reason == "logical" {
+                try wire.channelSession!.acquire(.channel); wire.channelSession!.release(.channel)
                 try await mux.consumeCommand(command: lifecycleMuxCommand("get", owner, "healthy"))
                 XCTAssertEqual(wire.commands.last?.payload, .string("healthy"))
             }

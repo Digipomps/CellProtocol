@@ -152,7 +152,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
-    var feedActive = false
+    private var feedActiveValue = false
+    var feedActive: Bool {
+        get { connectionStateLock.withLock { feedActiveValue } }
+        set { connectionStateLock.withLock { feedActiveValue = newValue } }
+    }
+    var pendingFeedDeliveries: Int { withCallbackStateLock { queuedFeedDeliveries } }
     let auditor: BridgeBaseAuditor
     // Deterministic seam after the initial lookup, before atomic consumption.
     var afterResponseLookup: (@Sendable (BridgeCommand) async -> Void)?
@@ -548,16 +553,21 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             throw StreamState.denied
         }
         try await ensureOutboundFeed(requester: requester)
-        return feedPublisher2
+        let (generation, publisher) = try withCallbackStateLock { () throws -> (BridgeChannelSession, PassthroughSubject<FlowElement, Error>) in
+            guard let generation = channelSessionValue else { throw BridgeChannelAuthentication.Failure.closed }
+            try generation.check()
+            return (generation, feedPublisher2)
+        }
+        return publisher
             .handleEvents(
                 receiveSubscription: { [weak self] _ in
-                    self?.retainLocalFeedSubscriber()
+                    self?.retainLocalFeedSubscriber(generation: generation)
                 },
                 receiveCompletion: { [weak self] _ in
-                    self?.releaseLocalFeedSubscriber()
+                    self?.releaseLocalFeedSubscriber(generation: generation)
                 },
                 receiveCancel: { [weak self] in
-                    self?.releaseLocalFeedSubscriber()
+                    self?.releaseLocalFeedSubscriber(generation: generation)
                 }
             )
             .eraseToAnyPublisher()
@@ -581,6 +591,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
         do {
             try await task.value
+            try withCallbackStateLock {
+                guard let generation, generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+                try generation.check()
+            }
         } catch {
             withCallbackStateLock {
                 guard generation === channelSessionValue else { return }
@@ -596,24 +610,23 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private func startOutboundFeed(requester: Identity) async throws {
         guard let generation = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
         let commandID = auditor.getNewCommandId()
-        flowElementCallbackCancellable = flowElementCallbackDataPublisher
-            .handleEvents(receiveCancel: {
-                bridgeLog("Cancelled remote feed forwarding")
-            })
-            .sink(receiveCompletion: { [weak self] _ in
-                bridgeLog("Bridge remote feed completed")
-                self?.markOutboundFeedInactive(commandID: commandID)
-            }, receiveValue: { [weak self] flowElement in
-                bridgeLog("Bridge received flow element")
-                self?.feedPublisher2.send(flowElement)
-            })
+        try withCallbackStateLock {
+            guard generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+            try generation.check()
+            let destination = feedPublisher2
+            flowElementCallbackCancellable = flowElementCallbackDataPublisher
+                .sink(receiveCompletion: { [weak self] _ in
+                    self?.markOutboundFeedInactive(commandID: commandID)
+                }, receiveValue: { flowElement in destination.send(flowElement) })
+        }
 
         do {
             try await sendCommandChecked(
                 command: .feed,
                 identity: requester,
                 payload: nil,
-                commandId: commandID
+                commandId: commandID,
+                expectedSession: generation
             )
             try withCallbackStateLock {
                 guard generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
@@ -648,15 +661,16 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func retainLocalFeedSubscriber() {
+    private func retainLocalFeedSubscriber(generation: BridgeChannelSession) {
         withCallbackStateLock {
+            guard generation === channelSessionValue else { return }
             localFeedSubscriberCount += 1
         }
     }
 
-    private func releaseLocalFeedSubscriber() {
-        let feedToStop = withCallbackStateLock { () -> (Int, Identity)? in
-            guard localFeedSubscriberCount > 0 else { return nil }
+    private func releaseLocalFeedSubscriber(generation: BridgeChannelSession) {
+        let feedToStop = withCallbackStateLock { () -> (Int, Identity, BridgeTransportProtocol?)? in
+            guard generation === channelSessionValue, localFeedSubscriberCount > 0 else { return nil }
             localFeedSubscriberCount -= 1
             guard localFeedSubscriberCount == 0,
                   let commandID = outboundFeedCommandID,
@@ -667,19 +681,20 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             outboundFeedCommandID = nil
             outboundFeedRequester = nil
             feedActive = false
-            return (commandID, requester)
+            identityProofAuthorization.complete(commandID)
+            auditor.removeBridgeCommand(for: commandID)
+            flowElementCallbackCancellable?.cancel()
+            flowElementCallbackCancellable = nil
+            return (commandID, requester, transportValue)
         }
         guard let feedToStop else { return }
-        identityProofAuthorization.complete(feedToStop.0)
-
-        flowElementCallbackCancellable?.cancel()
-        flowElementCallbackCancellable = nil
         Task { [weak self] in
-            await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1)
+            await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1, using: feedToStop.2, generation: generation)
         }
     }
 
-    private func sendStopFeed(commandID: Int, requester: Identity) async {
+    private func sendStopFeed(commandID: Int, requester: Identity, using transport: BridgeTransportProtocol?, generation: BridgeChannelSession) async {
+        guard (try? generation.check()) != nil else { return }
         defer {
             Task { [weak self] in
                 self?.auditor.removeBridgeCommand(for: commandID)
@@ -1305,7 +1320,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         command: Command,
         identity: Identity,
         payload: ValueType?,
-        commandId: Int? = nil
+        commandId: Int? = nil,
+        expectedSession: BridgeChannelSession? = nil
     ) async throws -> Int {
         bridgeLog("Send command: \(command.rawValue)")
         try await ready()
@@ -1313,6 +1329,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             guard let currentSession = channelSessionValue, let transport = transportValue else {
                 throw BridgeChannelAuthentication.Failure.closed
             }
+            guard expectedSession == nil || expectedSession === currentSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
             try currentSession.checkOutbound(identity: identity, requiresIdentity: true)
             let cid = commandId ?? auditor.getNewCommandId()
             let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: cid)

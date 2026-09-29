@@ -193,8 +193,9 @@ No general anonymity, DoS, post-compromise recovery, deniability, formal securit
 proof, independent crypto audit or production approval is claimed.
 
 Pending invitation binding, consumer ordering, NI/contact binding and physical
-resource bounds remain the separate findings N10–N16/N18/N20/N23–N26. A controlled
-inner-wire relay is not a three-process MC MITM or a radio/NI device test.
+resource bounds remain the separate findings N10–N16/N18/N20.
+[Shared bridge lifecycle rules](BridgeLifecycle.md) describe the N23–N26 response,
+mux-send, factory and signing protections. A controlled inner-wire relay is not a three-process MC MITM or a radio/NI device test.
 
 References: [SIGMA](https://iacr.org/cryptodb/archive/2003/CRYPTO/1495/1495.pdf),
 [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748),

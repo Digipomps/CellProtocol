@@ -95,6 +95,36 @@ final class BridgeResponseLifetimeTests: XCTestCase {
         await bridge.channelDidClose(try XCTUnwrap(freshWire.channelSession))
     }
 
+    func testHeldFeedSendCompletionCannotReactivateRenewedBase() async throws {
+        let previous = CellBase.defaultCellResolver
+        defer { CellBase.defaultCellResolver = previous }
+        let owner = await MockIdentityVault().identity(for: "owner", makeNewIfNotFound: true)!
+        let cell = await ResponseLifetimeFeedCell(owner: owner), resolver = MockCellResolver()
+        CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "feed-lifetime", emitCell: cell, scope: .template, identity: owner)
+        let bridge = BridgeBase(owner: owner), oldWire = try await install(bridge, owner: owner)
+        try await bridge.setTransport(oldWire, connection: .inbound(publisherUuid: "feed-lifetime"))
+        try bridge.activateAuthenticatedChannel()
+        try await bridge.consumeCommand(command: .init(cmd: "feed", identity: owner, payload: nil, cid: 1))
+        let hold = BridgeLifecycleBarrier()
+        oldWire.beforeAccept = { frame in if case .flowElement? = frame.payload { await hold.hold() } }
+        cell.values.send(FlowElement(title: "old", content: .string("old"), properties: .init(type: .event, contentType: .string)))
+        await fulfillment(of: [hold.entered], timeout: 2)
+        await bridge.channelDidClose(try XCTUnwrap(oldWire.channelSession))
+        let freshWire = try await install(bridge, owner: owner)
+        XCTAssertFalse(bridge.feedActive)
+        await hold.release()
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while bridge.pendingFeedDeliveries > 0 && ProcessInfo.processInfo.systemUptime < deadline { await Task.yield() }
+        XCTAssertEqual(bridge.pendingFeedDeliveries, 0)
+        XCTAssertFalse(bridge.feedActive, "Old send completion must not change the new generation")
+        let subscription = try await bridge.flow(requester: owner).sink(receiveCompletion: { _ in }, receiveValue: { _ in })
+        XCTAssertTrue(bridge.feedActive)
+        XCTAssertTrue(freshWire.commands.contains { $0.command == .feed })
+        subscription.cancel()
+        await bridge.channelDidClose(try XCTUnwrap(freshWire.channelSession))
+    }
+
     func testTwoConcurrentGetsOnSamePathKeepTheirOwnCommandAndImmediateResult() async throws {
         let owner = await MockIdentityVault().identity(for: "owner", makeNewIfNotFound: true)!
         let bridge = BridgeBase(owner: owner), wire = try await install(bridge, owner: owner)
@@ -116,4 +146,9 @@ private final class ResponseLifetimeValues: @unchecked Sendable {
     private let lock = NSLock(); private var stored: [ValueType] = []
     var values: [ValueType] { lock.withLock { stored } }
     func append(_ value: ValueType) { lock.withLock { stored.append(value) } }
+}
+
+private final class ResponseLifetimeFeedCell: GeneralCell {
+    let values = PassthroughSubject<FlowElement, Error>()
+    override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> { values.eraseToAnyPublisher() }
 }
