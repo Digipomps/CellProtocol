@@ -67,7 +67,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private let stateLock = NSLock()
     private var delegate: BridgeDelegateProtocol?
     private var webSocket: WebSocket?
-    private var closeCleanupCompleted = false
+    private var registrationCleanupTask: Task<Void, Never>?
     private var connectionGeneration = UUID()
     private var setupWaiter: VaporBridgeSetupWaiter?
     private var outgoingGroup: MultiThreadedEventLoopGroup?
@@ -133,7 +133,6 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private func setWebSocket(_ ws: WebSocket) {
         withStateLock {
             self.webSocket = ws
-            self.closeCleanupCompleted = false
         }
         self.setupWebSocketCallbacks(on: ws)
     }
@@ -177,7 +176,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
             guard let self else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
             let installed = self.withStateLock { () -> Bool in
                 guard self.connectionGeneration == generation, self.setupWaiter === waiter else { return false }
-                self.webSocket = socket; self.closeCleanupCompleted = false
+                self.webSocket = socket
                 return true
             }
             guard installed else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
@@ -307,13 +306,19 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
                             do {
                                 try checkReceiving()
                                 try await dispatchCommand(command)
-                            } catch { rejectReceive(error) }
+                            } catch { rejectReceive() }
                         }
                         if !control { dispatchTail = dispatch }
                     }
                 } catch {
+                    rejectReceive()
+                    // Auditing is work too. A non-cooperative event sink must
+                    // retain this admission rather than escape into close cleanup.
+                    if let error = error as? BridgeInboundPayloadError {
+                        await CellBase.recordSecurityEvent(.bridgePayloadRejected(
+                            transportIdentifier: "vapor-websocket", error: error))
+                    }
                     releaseReceive(bytes: bytes)
-                    rejectReceive(error)
                 }
             }
         }
@@ -338,20 +343,14 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         // Synchronous revocation, before asynchronous physical/delegate cleanup.
         (currentDelegate() as? BridgeChannelTransport)?.session.close()
     }
-    private func scheduleReceiveCloseLocked(_ error: Error? = nil) {
+    private func scheduleReceiveCloseLocked() {
         guard receiveCloseTask == nil else { return }
-        receiveCloseTask = Task { [self] in
-            await close()
-            if let error = error as? BridgeInboundPayloadError {
-                await CellBase.recordSecurityEvent(.bridgePayloadRejected(
-                    transportIdentifier: "vapor-websocket", error: error))
-            }
-        }
+        receiveCloseTask = Task { [self] in await close() }
     }
-    private func rejectReceive(_ error: Error? = nil) {
+    private func rejectReceive() {
         receiveLock.withLock {
             stopReceivingLocked()
-            scheduleReceiveCloseLocked(error)
+            scheduleReceiveCloseLocked()
         }
     }
 
@@ -363,15 +362,23 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     func cleanupClosedWebSocketRegistration() async {
-        guard let delegate = markCloseCleanupStartedAndGetDelegate() else {
-            return
+        let cleanup = withStateLock { () -> (Task<Void, Never>, BridgeDelegateProtocol?) in
+            if let registrationCleanupTask { return (registrationCleanupTask, nil) }
+            let target = delegate
+            let task = Task {
+                if let target { await CellBase.defaultCellResolver?.unregisterEmitCell(uuid: target.uuid) }
+            }
+            registrationCleanupTask = task
+            return (task, target)
         }
-        if delegate is BridgeChannelTransport {
-            await delegate.pushError(errorMessage: "bridge_transport_closed", error: TransportError.TransportNotFound)
+        // All close callers retain the gate slot through resolver cleanup too.
+        // Notify the gate afterward, outside the shared Task, to allow reentry.
+        await cleanup.0.value
+        if let gate = cleanup.1 as? BridgeChannelTransport {
+            await gate.pushError(errorMessage: "bridge_transport_closed", error: TransportError.TransportNotFound)
         }
-        await CellBase.defaultCellResolver?.unregisterEmitCell(uuid: delegate.uuid)
     }
-    
+
     func extractCommand(_ incomingData: Data) async throws {
         do {
             try BridgeInboundPayloadValidator().validate(incomingData)
@@ -431,16 +438,6 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private func currentWebSocket() -> WebSocket? {
         withStateLock {
             webSocket
-        }
-    }
-
-    private func markCloseCleanupStartedAndGetDelegate() -> BridgeDelegateProtocol? {
-        withStateLock {
-            guard closeCleanupCompleted == false else {
-                return nil
-            }
-            closeCleanupCompleted = true
-            return delegate
         }
     }
 

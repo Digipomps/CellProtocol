@@ -28,6 +28,11 @@ final class MockCellResolver: CellResolverProtocol {
 
     // Scanner retires sibling channels concurrently; registry access must match.
     private let stateLock = NSLock()
+    private var unregisterHook: (@Sendable () async -> Void)?
+    var beforeUnregister: (@Sendable () async -> Void)? {
+        get { stateLock.withLock { unregisterHook } }
+        set { stateLock.withLock { unregisterHook = newValue } }
+    }
     private var lookupCount = 0
     func lookupCountSnapshot() -> Int { stateLock.withLock { lookupCount } }
 
@@ -67,6 +72,7 @@ final class MockCellResolver: CellResolverProtocol {
     }
 
     func unregisterEmitCell(uuid: String) async {
+        await beforeUnregister?()
         stateLock.withLock {
             unregisteredUUIDs.append(uuid)
             if let name = nameByUUID[uuid] {

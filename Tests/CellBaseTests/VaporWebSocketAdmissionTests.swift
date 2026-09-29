@@ -160,6 +160,48 @@ final class VaporWebSocketAdmissionTests: XCTestCase {
         XCTAssertEqual(fixture.physicalCloses.value, 1)
     }
 
+    func testRejectedPayloadRetainsAdmissionUntilSecurityAuditReturns() async throws {
+        let previous = CellBase.securityEventSink
+        defer { CellBase.securityEventSink = previous }
+        let budget = VaporBridgeReceiveBudget(), sink = N30HeldSecuritySink()
+        let fixture = try await make(budget: budget)
+        addTeardownBlock { await sink.hold.release() }
+        try await fixture.authenticate()
+        CellBase.securityEventSink = sink
+        _ = try await fixture.inject([Data("{".utf8)])
+        try await n30Eventually { sink.entered.value == 1 }
+        try await fixture.waitForClose()
+        XCTAssertEqual(budget.snapshot.count, 1)
+        XCTAssertEqual(budget.snapshot.bytes, 1)
+        await sink.hold.release()
+        try await n30Eventually { budget.snapshot.count == 0 }
+        XCTAssertEqual(budget.snapshot.bytes, 0)
+    }
+
+    func testConcurrentCloseRetainsGateSlotUntilResolverCleanupReturns() async throws {
+        let previous = CellBase.defaultCellResolver
+        defer { CellBase.defaultCellResolver = previous }
+        let resolver = MockCellResolver(), entered = N30Counter(), hold = N30Barrier()
+        resolver.beforeUnregister = { entered.increment(); await hold.wait() }
+        CellBase.defaultCellResolver = resolver
+        let fixture = try await make()
+        addTeardownBlock { await hold.release() }
+        try await fixture.authenticate()
+        let first = Task { await fixture.transport.close() }
+        try await n30Eventually { entered.value == 1 }
+        let secondFinished = expectation(description: "resolver cleanup returned")
+        let second = Task { await fixture.transport.close(); secondFinished.fulfill() }
+        try await fixture.waitForClose()
+        let early = await XCTWaiter.fulfillment(of: [secondFinished], timeout: 0.05)
+        XCTAssertEqual(early, .timedOut)
+        XCTAssertEqual(fixture.limits.retainedConnectionCount, 1)
+        await hold.release()
+        await first.value; await second.value
+        try await n30Eventually { fixture.limits.retainedConnectionCount == 0 }
+        XCTAssertEqual(entered.value, 1)
+        XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), [fixture.gate.uuid])
+    }
+
     func testDefaultAdaptersUseTheSameProcessWideBudget() async throws {
         let baseline = VaporBridgeReceiveBudget.shared.snapshot
         let a = try await make(), b = try await make()
@@ -220,6 +262,10 @@ private func n30Eventually(_ check: () -> Bool, file: StaticString = #filePath, 
     guard check() else { XCTFail("Expected observed event before deadline", file: file, line: line); throw N30Error.timeout }
 }
 private enum N30Error: Error { case timeout }
+private final class N30HeldSecuritySink: CellSecurityEventSink, @unchecked Sendable {
+    let hold = N30Barrier(), entered = N30Counter()
+    func record(_ event: CellSecurityEvent) async { entered.increment(); await hold.wait() }
+}
 private final class N30Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0

@@ -20,7 +20,8 @@ the shared ledger also locks its global acquisition. Failed acquisition creates
 no payload copy or receive worker and never releases another frame's reservation.
 Each accepted frame has one preparation Task and at most one dispatch Task.
 The count and bytes remain charged through validation, queue waits, gate work,
-identity lookup and consumer completion. Closing does not release executing or
+identity lookup, consumer completion and awaited rejection auditing. A blocked
+security-event sink retains the accepted frame's reservation. Closing does not release executing or
 held queued work early. Existing gate/work/operation/send quotas also still apply.
 
 Preparation follows callback arrival order, including completion of each
@@ -41,8 +42,10 @@ ordinary dispatch checks retirement before entering the gate. Physical close
 uses the host-owned NIO channel callback (or the outgoing adapter's owned event
 loop group), without waiting for a peer close acknowledgement. Concurrent close
 callers await the same physical-close Task before gate transport accounting can
-be released. Delegate cleanup runs afterward so reentrant gate close cannot
-await its own Task. Public ingress
+be released. All callers also await one shared resolver-unregistration Task;
+otherwise a second close could release a slot while the first cleanup still
+retains work. The gate notification runs afterward, outside that Task, so
+reentrant close cannot await itself. Public ingress
 hosts must continue supplying `closeUnderlyingChannel`. A retired adapter is
 single-use; reconnect uses a fresh transport instance.
 
