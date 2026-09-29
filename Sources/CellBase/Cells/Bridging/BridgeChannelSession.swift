@@ -411,6 +411,16 @@ public final class BridgeChannelSession: @unchecked Sendable {
             } else if requiresIdentity { throw Auth.Failure.identityMismatch }
         }
     }
+    /// Linearizes a synchronous consumer effect with close/revoke. The closure
+    /// must not suspend or call back into this session. Authority is unchanged.
+    public func withAuthenticatedEffect<T>(_ effect: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard stateValue == .authenticated else { throw Auth.Failure.closed }
+            guard monotonic() < deadline, let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+            return try effect()
+        }
+    }
+
     /// Pool reuse includes a live handshake, never a terminal or expired lease.
     func canReuseConnection() -> Bool {
         lock.withLock {

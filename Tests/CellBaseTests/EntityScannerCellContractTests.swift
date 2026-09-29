@@ -37,7 +37,7 @@ final class EntityScannerCellContractTests: XCTestCase {
             reported.fulfill()
         })
         defer { subscription.cancel() }
-        cell.scannerStatusChanged(manager: service, status: "bridgeFailed:invalidProof", remoteUUID: "test-peer")
+        await cell.scannerStatusChanged(manager: service, status: "bridgeFailed:invalidProof", remoteUUID: "test-peer")
         await fulfillment(of: [reported], timeout: 2)
     }
 

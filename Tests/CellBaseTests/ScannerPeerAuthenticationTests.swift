@@ -924,13 +924,13 @@ private final class ScannerRejectedStream: InputStream {
     override func close() { closeCount += 1 }
 }
 
-private final class ScannerPair {
+final class ScannerPair {
     let a: ScannerService, b: ScannerService
     let aPeer = MCPeerID(displayName: "test-a"), bPeer = MCPeerID(displayName: "test-b")
     let pa: ScannerPeerTransport, pb: ScannerPeerTransport
     let wire = ScannerControlledWire()
     var c: ScannerService?
-    let cPeer = MCPeerID(displayName: "test-c")
+    var cPeer = MCPeerID(displayName: "test-c")
     var ac: ScannerPeerTransport?, pc: ScannerPeerTransport?
     init(limits: BridgeChannelLimits = BridgeChannelLimits(), ownerA: Identity? = nil, reverse: Bool = false, admissionA: ScannerAdmission = ScannerAdmission()) async throws {
         let resolvedOwnerA: Identity
@@ -1051,7 +1051,7 @@ private final class ScannerPair {
     }
     func stop() { a.stop(); b.stop(); c?.stop() }
 }
-private final class ScannerControlledWire: @unchecked Sendable {
+final class ScannerControlledWire: @unchecked Sendable {
     struct Frame {
         let data: Data; let from: MCPeerID; let to: MCPeerID
         var sealed: Bool { data.starts(with: Data("HPC3".utf8)) }
@@ -1091,7 +1091,7 @@ private final class ScannerStatusObserver: ConnectServiceDelegate {
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
     func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?) { lock.withLock { receivedFlows.append(flowElement) } }
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws { lock.withLock { receivedFlows.append(flowElement) } }
 }
 
 private final class ScannerObservedLobby: LobbyCell {

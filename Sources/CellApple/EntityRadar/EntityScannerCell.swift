@@ -58,14 +58,19 @@ private enum EntityScannerContactProtocol {
     static let endpoint = "cell:///EntityScanner"
 }
 
+@MainActor
 class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private static let probeResponseTimeoutNanoseconds: UInt64 = 15_000_000_000
 
     var connectService: ScannerService?
     var requester: Identity?
 
-    private var pendingOutgoingRequests = [String: Object]()
-    private var pendingIncomingRequests = [String: Object]()
+    let pendingRequests = ScannerPendingRequests()
+    // Deterministic barriers retain all real verification/resolver/storage work.
+    var consumerSuspension: ((String) async -> Void)?
+    var consumerEventForTesting: ((String) -> Void)?
+    private var emitScannerEvent: ((FlowElement) -> Void)?
+    private var deferredConsumerEvents: [FlowElement]?
     private var disclosurePolicy = NearbyDisclosurePolicy.strict
     private var localBeacon: NearbyBeacon?
     private var peerBeacons = [String: NearbyBeacon]()
@@ -74,7 +79,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private var probeSession = NearbyProbeSession()
     private var outgoingProbeRequests = [String: (remoteUUID: String, nonce: String)]()
     private var probeResponseTimeoutTasks = [String: Task<Void, Never>]()
-    private var pendingDetailRequests = [String: String]()
     private var outgoingDetailRequests = [String: String]()
     private var automaticProbeRemoteUUIDs = Set<String>()
     private var policyExpiryTask: Task<Void, Never>?
@@ -96,11 +100,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         try? await ensureRuntimeReady()
     }
 
-    required init(from decoder: any Decoder) throws {
+    nonisolated required init(from decoder: any Decoder) throws {
         try super.init(from: decoder)
     }
 
-    public override func installCellRuntimeBindingsForAccess() async throws {
+    nonisolated public override func installCellRuntimeBindingsForAccess() async throws {
         let bindingOwner = storedOwnerIdentity
         await setupPermissions(owner: bindingOwner)
         await setupKeys(owner: bindingOwner)
@@ -135,9 +139,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     private func setupKeys(owner: Identity) async {
+        emitScannerEvent = await makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
         await registerContracts(requester: owner)
 
-        await addIntercept(requester: owner, intercept: { [weak self] flowElement, requester in
+        await addIntercept(requester: owner, intercept: { @MainActor [weak self] flowElement, requester in
             CellBase.diagnosticLog("EntityScannerCell feed item title=\(flowElement.title) topic=\(flowElement.topic)", domain: .flow)
 
             if flowElement.properties?.type == .event && flowElement.topic == "radar.service" {
@@ -151,7 +156,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return flowElement
         })
 
-        await addInterceptForGet(requester: owner, key: "verificationMethods", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "verificationMethods", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "verificationMethods", for: requester) {
                 return .string("notImplemented")
@@ -159,7 +164,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForGet(requester: owner, key: "capabilities", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "capabilities", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "capabilities", for: requester) {
                 return .object(self.currentCapabilityPayload())
@@ -167,7 +172,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForGet(requester: owner, key: "radar", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "radar", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self = self else { return .null }
             if self.isAdvertisementOwner(requester),
                await self.validateAccess("r---", at: "radar", for: requester) {
@@ -189,13 +194,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForGet(requester: owner, key: "advertisement", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "advertisement", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self, self.isAdvertisementOwner(requester),
                   await self.validateAccess("r---", at: "advertisement", for: requester) else { return .string("denied") }
             let value = await self.advertisementExchange.currentPublication
             return value.flatMap { self.valueType(from: $0) } ?? .null
         })
-        await addInterceptForSet(requester: owner, key: "publishAdvertisement", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "publishAdvertisement", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self, self.isAdvertisementOwner(requester),
                   await self.validateAccess("-w--", at: "publishAdvertisement", for: requester) else { return .string("denied") }
             guard let ad = self.decode(NearbyAdvertisement.self, from: value) else { throw SetValueError.paramErr }
@@ -206,7 +211,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 payload: ["active": .bool(true)], requesterOverride: requester)
             return self.valueType(from: ad)
         })
-        await addInterceptForSet(requester: owner, key: "withdrawAdvertisement", setValueIntercept: { [weak self] _, _, requester in
+        await addInterceptForSet(requester: owner, key: "withdrawAdvertisement", setValueIntercept: { @MainActor [weak self] _, _, requester in
             guard let self, self.isAdvertisementOwner(requester),
                   await self.validateAccess("-w--", at: "withdrawAdvertisement", for: requester) else { return .string("denied") }
             try await self.advertisementExchange.publish(nil)
@@ -215,7 +220,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .bool(true)
         })
 
-        await addInterceptForSet(requester: owner, key: "submitAdvertisementProof", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "submitAdvertisementProof", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self, self.isAdvertisementOwner(requester),
                   await self.validateAccess("-w--", at: "submitAdvertisementProof", for: requester) else { return .string("denied") }
             guard case let .object(payload) = value,
@@ -234,7 +239,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
         // A tap on a blip. Records the choice so the radar can ring it and
         // the surrounding surface can read only the peer's explicitly published excerpt.
-        await addInterceptForSet(requester: owner, key: "select", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "select", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self = self else { return .string("failure") }
             guard self.isAdvertisementOwner(requester) else { return .string("denied") }
             if await self.validateAccess("-w--", at: "select", for: requester) {
@@ -261,7 +266,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForGet(requester: owner, key: "encounters", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "encounters", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self = self else { return .list([]) }
             if await self.validateAccess("r---", at: "encounters", for: requester) {
                 return await self.loadEncounterSummaries(requester: requester)
@@ -269,7 +274,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForSet(requester: owner, key: "start", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "start", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "start", for: requester) {
                 guard case .bool = value else {
@@ -282,7 +287,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForSet(requester: owner, key: "stop", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "stop", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "stop", for: requester) {
                 guard case .bool = value else {
@@ -295,7 +300,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForSet(requester: owner, key: "invite", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "invite", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "invite", for: requester) {
                 guard self.remoteUUID(from: value) != nil else {
@@ -308,7 +313,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForSet(requester: owner, key: "requestContact", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "requestContact", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "requestContact", for: requester) {
                 self.requester = requester
@@ -318,7 +323,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForSet(requester: owner, key: "acceptContact", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "acceptContact", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "acceptContact", for: requester) {
                 self.requester = requester
@@ -328,7 +333,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForSet(requester: owner, key: "exportEncounter", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "exportEncounter", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "exportEncounter", for: requester) {
                 self.requester = requester
@@ -338,7 +343,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForSet(requester: owner, key: "exportEncounterJSON", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "exportEncounterJSON", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "exportEncounterJSON", for: requester) {
                 self.requester = requester
@@ -348,7 +353,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .string("denied")
         })
 
-        await addInterceptForSet(requester: owner, key: "sharedToken", setValueIntercept: { [weak self] keypath, value, requester in
+        await addInterceptForSet(requester: owner, key: "sharedToken", setValueIntercept: { @MainActor [weak self] keypath, value, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("-w--", at: "sharedToken", for: requester) {
                 switch value {
@@ -364,7 +369,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return nil
         })
 
-        await addInterceptForGet(requester: owner, key: "disclosurePolicy", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "disclosurePolicy", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("r---", at: "disclosurePolicy", for: requester) else {
                 return .string("denied")
@@ -372,7 +377,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return self.valueType(from: self.disclosurePolicy) ?? .string("failure")
         })
 
-        await addInterceptForGet(requester: owner, key: "probeResult", getValueIntercept: { [weak self] _, requester in
+        await addInterceptForGet(requester: owner, key: "probeResult", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self else { return .object([:]) }
             guard await self.validateAccess("r---", at: "probeResult", for: requester) else {
                 return .string("denied")
@@ -384,7 +389,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return .object(results)
         })
 
-        await addInterceptForSet(requester: owner, key: "setDisclosurePolicy", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "setDisclosurePolicy", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "setDisclosurePolicy", for: requester) else {
                 return .string("denied")
@@ -400,7 +405,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return self.valueType(from: policy)
         })
 
-        await addInterceptForSet(requester: owner, key: "approveBeacon", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "approveBeacon", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "approveBeacon", for: requester) else {
                 return .string("denied")
@@ -408,7 +413,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return try await self.approveBeacon(from: value, requester: requester)
         })
 
-        await addInterceptForSet(requester: owner, key: "respondToInvitation", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "respondToInvitation", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "respondToInvitation", for: requester),
                   case let .object(object) = value,
@@ -431,7 +436,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ])
         })
 
-        await addInterceptForSet(requester: owner, key: "probeRequest", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "probeRequest", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "probeRequest", for: requester) else {
                 return .string("denied")
@@ -439,7 +444,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             return await self.sendProbeRequest(payload: value)
         })
 
-        await addInterceptForSet(requester: owner, key: "probeDetail", setValueIntercept: { [weak self] _, value, requester in
+        await addInterceptForSet(requester: owner, key: "probeDetail", setValueIntercept: { @MainActor [weak self] _, value, requester in
             guard let self else { return .string("failure") }
             guard await self.validateAccess("-w--", at: "probeDetail", for: requester) else {
                 return .string("denied")
@@ -534,8 +539,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         let service = connectService
         connectService = nil
         service?.stop()
-        pendingOutgoingRequests.removeAll()
-        pendingIncomingRequests.removeAll()
+        pendingRequests.reset()
         peerBeacons.removeAll()
         peerOverlaps.removeAll()
         peerStates.removeAll()
@@ -548,7 +552,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         probeResponseTimeoutTasks.values.forEach { $0.cancel() }
         probeResponseTimeoutTasks.removeAll()
         outgoingProbeRequests.removeAll()
-        pendingDetailRequests.removeAll()
         outgoingDetailRequests.removeAll()
         automaticProbeRemoteUUIDs.removeAll()
         localBeacon = nil
@@ -575,7 +578,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private func schedulePolicyExpiry(policy: NearbyDisclosurePolicy, requester: Identity) {
         guard let expiresAt = policy.expiresAt else { return }
         let delay = max(0, expiresAt - Date().timeIntervalSince1970)
-        policyExpiryTask = Task { [weak self] in
+        policyExpiryTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: UInt64(min(delay, 365 * 24 * 60 * 60) * 1_000_000_000))
             } catch {
@@ -618,143 +621,71 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func requestContact(payload: ValueType, requester: Identity) async -> ValueType? {
         do {
-            guard let connectService = connectService else {
-                throw EntityScannerContactError.scannerNotStarted
+            guard let service = connectService else { throw EntityScannerContactError.scannerNotStarted }
+            guard let remote = remoteUUID(from: payload) else { throw EntityScannerContactError.missingRemoteUUID }
+            guard let context = try? service.consumerContext(remoteUUID: remote) else {
+                service.invitePeer(remote)
+                return .object(["status": .string("pendingConnection"), "remoteUUID": .string(remote)])
             }
-            guard let remoteUUID = remoteUUID(from: payload) else {
-                throw EntityScannerContactError.missingRemoteUUID
+            var result: ValueType?
+            try await context.physical.gate.withAuthenticatedWork { @MainActor [self] in
+                try context.check()
+                let request = try await buildSignedContactRequest(remoteUUID: remote, requester: requester, context: context)
+                try context.check()
+                let id = try requiredString(request, "requestId")
+                try pendingRequests.insert(.outgoing, id: id, payload: request, context: context)
+                var element = FlowElement(title: "Contact Request", content: .object(request), properties: .init(type: .event, contentType: .object))
+                element.topic = EntityScannerTopics.transportRequest; element.origin = uuid
+                try await service.sendScannerFlowElement(element, context: context)
+                try consumerEffect(context) {
+                    try transitionPeerToContactRequested(remote)
+                    var event = makeOutgoingContactEventPayload(requestObject: request, remoteUUID: remote)
+                    event["status"] = .string("sent")
+                    pushScannerEvent(topic: EntityScannerTopics.outgoingContact, title: "Contact Request Sent", payload: event)
+                    result = .object(["status": .string("sent"), "requestId": .string(id), "remoteUUID": .string(remote)])
+                }
             }
-
-            try transitionPeerToContactRequested(remoteUUID)
-
-            if !connectService.isConnected(remoteUUID: remoteUUID) {
-                connectService.invitePeer(remoteUUID)
-                var pendingPayload = makeScannerEventObject(
-                    event: "contactPending",
-                    remoteUUID: remoteUUID,
-                    displayName: connectService.foundPeersDict[remoteUUID]?.displayName,
-                    status: "inviteSent"
-                )
-                pendingPayload["message"] = .string("Connect to the peer before exchanging signed contact proofs")
-                addPeerActions(to: &pendingPayload, remoteUUID: remoteUUID)
-                pushScannerEvent(topic: EntityScannerTopics.pendingContact, title: "Contact Request Pending", payload: pendingPayload)
-                return .object([
-                    "status": .string("pendingConnection"),
-                    "remoteUUID": .string(remoteUUID)
-                ])
-            }
-
-            let requestObject = try await buildSignedContactRequest(remoteUUID: remoteUUID, requester: requester)
-            guard let requestId = string(from: requestObject["requestId"]) else {
-                throw EntityScannerContactError.invalidPayload("requestId")
-            }
-            pendingOutgoingRequests[requestId] = requestObject
-
-            var flowElement = FlowElement(
-                title: "Contact Request",
-                content: .object(requestObject),
-                properties: FlowElement.Properties(type: .event, contentType: .object)
-            )
-            flowElement.topic = EntityScannerTopics.transportRequest
-            flowElement.origin = self.uuid
-            try await connectService.sendScannerFlowElement(flowElement, remoteUUID: remoteUUID)
-
-            var eventPayload = makeOutgoingContactEventPayload(requestObject: requestObject, remoteUUID: remoteUUID)
-            eventPayload["status"] = .string("sent")
-            pushScannerEvent(topic: EntityScannerTopics.outgoingContact, title: "Contact Request Sent", payload: eventPayload)
-
-            return .object([
-                "status": .string("sent"),
-                "requestId": .string(requestId),
-                "remoteUUID": .string(remoteUUID)
-            ])
-        } catch {
-            let errorPayload = makeErrorPayload(error: error, payload: payload)
-            pushScannerEvent(topic: EntityScannerTopics.status, title: "Contact Request Failed", payload: errorPayload)
-            return .object(errorPayload)
-        }
+            return result
+        } catch { return .object(["status": .string("rejected")]) }
     }
 
     private func acceptContact(payload: ValueType, requester: Identity) async -> ValueType? {
         do {
-            guard let connectService = connectService else {
-                throw EntityScannerContactError.scannerNotStarted
+            guard let service = connectService, let supplied = object(from: payload),
+                  let remote = string(from: supplied["requesterSessionUUID"]) else { throw EntityScannerContactError.invalidPayload("request") }
+            let context = try service.consumerContext(remoteUUID: remote)
+            let id = try requiredString(supplied, "requestId")
+            // The UI payload is only a selector. The verified, channel-bound record
+            // is the source of truth; it is reserved exactly once before any await.
+            let record = try pendingRequests.consume(.incoming, id: id, context: context)
+            var result: ValueType?
+            try await context.physical.gate.withAuthenticatedWork { @MainActor [self] in
+                let request = record.payload
+                try context.check()
+                let acceptance = try await buildSignedContactAcceptance(for: request, remoteUUID: remote, requester: requester, context: context)
+                try context.check()
+                var element = FlowElement(title: "Contact Acceptance", content: .object(acceptance), properties: .init(type: .event, contentType: .object))
+                element.topic = EntityScannerTopics.transportAcceptance; element.origin = uuid
+                try await service.sendScannerFlowElement(element, context: context)
+                let encounter = try await buildEncounterRecord(requestObject: request,
+                    requestVerification: localSignatureVerificationPayload(identity: context.identity.makeIdentity(), isLocal: false),
+                    acceptanceObject: acceptance, acceptanceVerification: localSignatureVerificationPayload(identity: requester),
+                    requester: requester, remoteUUID: remote, context: context)
+                try await persistEncounterRecord(encounter, requester: requester, context: context)
+                try consumerEffect(context) {
+                    try transitionPeerThroughAcceptedConnection(remote)
+                    try transitionPeer(remote, to: .agreementSigned)
+                    result = .object(["status": .string("accepted"), "requestId": .string(id), "remoteUUID": .string(remote)])
+                }
             }
-            guard let requestObject = object(from: payload) else {
-                throw EntityScannerContactError.invalidPayload("contact request object")
-            }
-            guard let requestId = string(from: requestObject["requestId"]) else {
-                throw EntityScannerContactError.invalidPayload("requestId")
-            }
-            let remoteUUID = string(from: requestObject["requesterSessionUUID"])
-                ?? string(from: requestObject["remoteUUID"])
-                ?? remoteUUID(from: payload)
-            guard let remoteUUID else {
-                throw EntityScannerContactError.missingRemoteUUID
-            }
-            guard connectService.isConnected(remoteUUID: remoteUUID) else {
-                throw EntityScannerContactError.notConnected(remoteUUID)
-            }
-
-            let requestVerification = await verifySignedPayload(
-                requestObject,
-                identityKey: "requesterIdentity",
-                signatureKey: "requestSignature"
-            )
-            guard bool(from: requestVerification["verified"]) == true else {
-                var verificationPayload = makeIncomingContactEventPayload(
-                    requestObject: requestObject,
-                    remoteUUID: remoteUUID,
-                    verification: requestVerification,
-                    includeAcceptAction: false
-                )
-                verificationPayload["status"] = .string("rejected")
-                verificationPayload["message"] = .string("Signature verification failed for incoming contact request")
-                pushScannerEvent(topic: EntityScannerTopics.incomingContact, title: "Contact Request Rejected", payload: verificationPayload)
-                return .object(verificationPayload)
-            }
-
-            pendingIncomingRequests[requestId] = requestObject
-            try transitionPeerThroughAcceptedConnection(remoteUUID)
-            let acceptanceObject = try await buildSignedContactAcceptance(for: requestObject, remoteUUID: remoteUUID, requester: requester)
-
-            var flowElement = FlowElement(
-                title: "Contact Acceptance",
-                content: .object(acceptanceObject),
-                properties: FlowElement.Properties(type: .event, contentType: .object)
-            )
-            flowElement.topic = EntityScannerTopics.transportAcceptance
-            flowElement.origin = self.uuid
-            try await connectService.sendScannerFlowElement(flowElement, remoteUUID: remoteUUID)
-
-            let acceptanceVerification = localSignatureVerificationPayload(identity: requester)
-            let encounter = try await buildEncounterRecord(
-                requestObject: requestObject,
-                requestVerification: requestVerification,
-                acceptanceObject: acceptanceObject,
-                acceptanceVerification: acceptanceVerification,
-                requester: requester,
-                remoteUUID: remoteUUID
-            )
-            try await persistEncounterRecord(encounter, requester: requester)
-            try transitionPeer(remoteUUID, to: .agreementSigned)
-            pendingIncomingRequests.removeValue(forKey: requestId)
-
-            return .object([
-                "status": .string("accepted"),
-                "requestId": .string(requestId),
-                "remoteUUID": .string(remoteUUID)
-            ])
-        } catch {
-            let errorPayload = makeErrorPayload(error: error, payload: payload)
-            pushScannerEvent(topic: EntityScannerTopics.status, title: "Accept Contact Failed", payload: errorPayload)
-            return .object(errorPayload)
-        }
+            return result
+        } catch { return .object(["status": .string("rejected")]) }
     }
 
-    private func buildSignedContactRequest(remoteUUID: String, requester: Identity) async throws -> Object {
+    private func buildSignedContactRequest(remoteUUID: String, requester: Identity, context: ScannerConsumerContext) async throws -> Object {
         let requestId = UUID().uuidString
-        let perspective = await perspectiveSnapshot(requester: requester)
+        let perspective = await perspectiveSnapshot(requester: requester, context: context)
+        try context.check()
         var payload: Object = [
             "protocolVersion": .string(EntityScannerContactProtocol.version),
             "messageType": .string("request"),
@@ -763,7 +694,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "createdAt": .float(Date().timeIntervalSince1970),
             "transportMode": .string(connectService?.transportMode ?? "multipeerconnectivity"),
             "precisionMode": .string(connectService?.precisionMode ?? "multipeer-only"),
-            "requesterSessionUUID": .string(connectService?.mySessionUUID ?? requester.uuid),
+            "requesterSessionUUID": .string(context.localUUID),
             "remoteUUID": .string(remoteUUID),
             "requesterIdentity": .identity(requester),
             "requesterIdentityUUID": .string(requester.uuid),
@@ -772,11 +703,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "capabilities": .object(currentCapabilityPayload())
         ]
         payload["requestHash"] = .string(try hash(of: payload))
-        return try await signPayload(payload, signatureKey: "requestSignature", signer: requester)
+        return try await signPayload(payload, signatureKey: "requestSignature", signer: requester, context: context)
     }
 
-    private func buildSignedContactAcceptance(for requestObject: Object, remoteUUID: String, requester: Identity) async throws -> Object {
-        let perspective = await perspectiveSnapshot(requester: requester)
+    private func buildSignedContactAcceptance(for requestObject: Object, remoteUUID: String, requester: Identity, context: ScannerConsumerContext) async throws -> Object {
+        let perspective = await perspectiveSnapshot(requester: requester, context: context)
+        try context.check()
         var payload: Object = [
             "protocolVersion": .string(EntityScannerContactProtocol.version),
             "messageType": .string("accept"),
@@ -787,7 +719,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "precisionMode": .string(connectService?.precisionMode ?? "multipeer-only"),
             "requestHash": .string(try hash(of: requestObject)),
             "requesterSessionUUID": requestObject["requesterSessionUUID"] ?? .string(remoteUUID),
-            "responderSessionUUID": .string(connectService?.mySessionUUID ?? requester.uuid),
+            "responderSessionUUID": .string(context.localUUID),
             "remoteUUID": .string(remoteUUID),
             "responderIdentity": .identity(requester),
             "responderIdentityUUID": .string(requester.uuid),
@@ -796,30 +728,39 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "capabilities": .object(currentCapabilityPayload())
         ]
         payload["acceptanceHash"] = .string(try hash(of: payload))
-        return try await signPayload(payload, signatureKey: "acceptanceSignature", signer: requester)
+        return try await signPayload(payload, signatureKey: "acceptanceSignature", signer: requester, context: context)
     }
 
-    private func signPayload(_ payload: Object, signatureKey: String, signer: Identity) async throws -> Object {
+    private func signPayload(_ payload: Object, signatureKey: String, signer: Identity, context: ScannerConsumerContext) async throws -> Object {
+        let payload = try JSONDecoder().decode(Object.self, from: JSONEncoder().encode(payload))
+        try context.check()
+        guard signer.referencesSameSigningIdentity(as: storedOwnerIdentity),
+              try BridgeChannelAuthentication.PublicIdentity(signer) == context.localIdentity,
+              let vault = signer.identityVault, !(vault is BridgeIdentityVault),
+              await vault.identityExistInVault(signer) else { throw EntityScannerContactError.signingFailed }
+        try context.check()
         let signatureData = try canonicalData(for: payload)
-        guard let signature = try await signer.sign(data: signatureData) else {
+        let signature = try await vault.signMessageForIdentity(messageData: signatureData, identity: signer)
+        try context.check()
+        guard IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: signatureData, identity: signer) else {
             throw EntityScannerContactError.signingFailed
         }
         var signedPayload = payload
-        signedPayload[signatureKey] = .data(signature)
+        signedPayload[signatureKey] = .string(signature.base64EncodedString())
         return signedPayload
     }
 
-    private func verifySignedPayload(_ payload: Object, identityKey: String, signatureKey: String) async -> Object {
+    private func verifySignedPayload(_ payload: Object, identityKey: String, signatureKey: String, context: ScannerConsumerContext) async throws -> Object {
         var verification: Object = [
             "verified": .bool(false),
             "status": .string("invalid")
         ]
 
-        guard let identityValue = payload[identityKey], case let .identity(identity) = identityValue else {
+        guard let identity = identity(from: payload[identityKey]) else {
             verification["status"] = .string("missingIdentity")
             return verification
         }
-        guard let signatureValue = payload[signatureKey], case let .data(signatureData) = signatureValue else {
+        guard let signatureData = signatureBytes(payload[signatureKey]) else {
             verification["status"] = .string("missingSignature")
             verification["signerIdentityUUID"] = .string(identity.uuid)
             return verification
@@ -828,7 +769,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         do {
             let signaturePayload = removing(keys: [signatureKey], from: payload)
             let messageData = try canonicalData(for: signaturePayload)
+            try context.check()
             let verified = await identity.verify(signature: signatureData, for: messageData)
+            await consumerSuspension?("verification")
+            try context.check()
             verification["verified"] = .bool(verified)
             verification["status"] = .string(verified ? "verified" : "invalidSignature")
             verification["signerIdentityUUID"] = .string(identity.uuid)
@@ -839,6 +783,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             verification["signerIdentityUUID"] = .string(identity.uuid)
         }
 
+        try context.check()
         return verification
     }
 
@@ -848,13 +793,16 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         acceptanceObject: Object,
         acceptanceVerification: Object,
         requester: Identity,
-        remoteUUID: String
+        remoteUUID: String,
+        context: ScannerConsumerContext
     ) async throws -> Object {
+        try context.check()
         let localIsRequester = string(from: requestObject["requesterIdentityUUID"]) == requester.uuid
         let remoteIdentity: Identity?
         let remotePerspective: ValueType
         let localPerspective: ValueType
-        let fallbackPerspective = await perspectiveSnapshot(requester: requester)
+        let fallbackPerspective = await perspectiveSnapshot(requester: requester, context: context)
+        try context.check()
 
         if localIsRequester {
             remoteIdentity = identity(from: acceptanceObject["responderIdentity"])
@@ -866,7 +814,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             localPerspective = acceptanceObject["responderPerspective"] ?? fallbackPerspective
         }
 
-        let match = await perspectiveMatchSummary(remotePerspective: remotePerspective, requester: requester)
+        let match = await perspectiveMatchSummary(remotePerspective: remotePerspective, requester: requester, context: context)
+        try context.check()
         let matchCount = int(from: object(from: match)?["count"]) ?? 0
         let encounterId = string(from: requestObject["encounterId"]) ?? string(from: acceptanceObject["encounterId"]) ?? UUID().uuidString
 
@@ -882,7 +831,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "localRole": .string(localIsRequester ? "requester" : "responder"),
             "localIdentityUUID": .string(requester.uuid),
             "localDisplayName": .string(requester.displayName),
-            "localSessionUUID": .string(connectService?.mySessionUUID ?? requester.uuid),
+            "localSessionUUID": .string(context.localUUID),
             "remoteSessionUUID": .string(remoteUUID),
             "remoteUUID": .string(remoteUUID),
             "localPerspective": localPerspective,
@@ -905,20 +854,21 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         return encounter
     }
 
-    private func persistEncounterRecord(_ encounter: Object, requester: Identity) async throws {
-        guard let entityAnchor = try await entityAnchorCell(requester: requester) else {
+    private func persistEncounterRecord(_ encounter: Object, requester: Identity, context: ScannerConsumerContext) async throws {
+        try context.check()
+        guard let anchor = try await entityAnchorCell(requester: requester) as? EntityAnchorCell else {
             throw EntityScannerContactError.storageUnavailable
         }
-        let encounterId = string(from: encounter["encounterId"]) ?? UUID().uuidString
-        _ = try await entityAnchor.set(keypath: "proofs.encounters.\(encounterId)", value: .object(encounter), requester: requester)
-
-        if let remoteIdentity = identity(from: encounter["remoteIdentity"]) {
-            _ = try? await entityAnchor.set(keypath: "relations.identities.\(remoteIdentity.uuid)", value: .identity(remoteIdentity), requester: requester)
+        await consumerSuspension?("storageResolved")
+        try context.check()
+        // The local EntityAnchor owns authorization, encrypted persistence and
+        // its commit gate. No arbitrary Meddle backend can lose the final guard.
+        try await anchor.persistScannerEncounter(encounter, requester: requester, context: context, beforeCommit: consumerSuspension)
+        try consumerEffect(context) {
+            let summary = encounterSummary(from: encounter)
+            pushScannerEvent(topic: EntityScannerTopics.establishedContact, title: "Contact Established", payload: summary)
+            pushScannerEvent(topic: EntityScannerTopics.savedEncounter, title: "Encounter Saved", payload: summary)
         }
-
-        let summary = encounterSummary(from: encounter)
-        pushScannerEvent(topic: EntityScannerTopics.establishedContact, title: "Contact Established", payload: summary)
-        pushScannerEvent(topic: EntityScannerTopics.savedEncounter, title: "Encounter Saved", payload: summary)
     }
 
     private func exportEncounter(payload: ValueType, requester: Identity) async -> ValueType? {
@@ -1162,6 +1112,28 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
     }
 
+    private func publishScannerEvent(_ element: FlowElement) {
+        consumerEventForTesting?(element.topic)
+        emitScannerEvent?(element)
+    }
+
+    /// State and publication admission are guarded; arbitrary synchronous
+    /// subscribers run outside the session lock and can safely close the channel.
+    private func consumerEffect<T>(_ context: ScannerConsumerContext, _ body: () throws -> T) throws -> T {
+        var events: [FlowElement] = []
+        let result = try context.perform {
+            precondition(deferredConsumerEvents == nil)
+            deferredConsumerEvents = []
+            defer { events = deferredConsumerEvents ?? []; deferredConsumerEvents = nil }
+            return try body()
+        }
+        for event in events {
+            try context.check() // admission before invoking any subscriber, no await
+            publishScannerEvent(event)
+        }
+        return result
+    }
+
     private func pushScannerEvent(topic: String, title: String, payload: Object, requesterOverride: Identity? = nil) {
         var flowElement = FlowElement(
             title: title,
@@ -1171,10 +1143,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         flowElement.topic = topic
         flowElement.origin = self.uuid
         radarLedger.consume(flowElement)
-        guard let requester = requesterOverride ?? activeLocalIdentity() else {
-            return
-        }
-        pushFlowElement(flowElement, requester: requester)
+        if deferredConsumerEvents != nil { deferredConsumerEvents?.append(flowElement) }
+        else { publishScannerEvent(flowElement) }
     }
 
     func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {
@@ -1245,7 +1215,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         peerOverlaps[remoteUUID] = nil
         automaticProbeRemoteUUIDs.remove(remoteUUID)
         cancelOutgoingProbes(for: remoteUUID)
-        pendingDetailRequests = pendingDetailRequests.filter { $0.value != remoteUUID }
+        pendingRequests.prune()
         outgoingDetailRequests = outgoingDetailRequests.filter { $0.value != remoteUUID }
         let payload = makeScannerEventObject(
             event: "lost",
@@ -1311,7 +1281,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
               automaticProbeRemoteUUIDs.insert(remoteUUID).inserted else {
             return
         }
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
             let result = await self.sendProbeRequest(payload: .string(remoteUUID))
             if case let .object(object) = result,
@@ -1343,26 +1313,29 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         pushScannerEvent(topic: EntityScannerTopics.proximity, title: "Proximity Updated", payload: payload, requesterOverride: requester)
     }
 
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?) {
-        Task { [weak self] in
-            guard let self = self else { return }
-            switch flowElement.topic {
-            case EntityScannerTopics.transportRequest:
-                await self.handleIncomingContactRequest(flowElement: flowElement, remoteUUID: remoteUUID)
-            case EntityScannerTopics.transportAcceptance:
-                await self.handleIncomingContactAcceptance(flowElement: flowElement, remoteUUID: remoteUUID)
-            case EntityScannerTopics.probeRequest:
-                await self.handleIncomingProbeRequest(manager: manager, flowElement: flowElement, remoteUUID: remoteUUID)
-            case EntityScannerTopics.probeAggregate:
-                self.handleIncomingProbeAggregate(flowElement: flowElement, remoteUUID: remoteUUID)
-            case EntityScannerTopics.probeDetailRequest:
-                self.handleIncomingProbeDetailRequest(flowElement: flowElement, remoteUUID: remoteUUID)
-            case EntityScannerTopics.probeDetail:
-                self.handleIncomingProbeDetail(flowElement: flowElement, remoteUUID: remoteUUID)
-            default:
-                break
-            }
+    func scannerChannelRetired(manager: ScannerService, generation: String) {
+        pendingRequests.retire(generation)
+    }
+
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws {
+        guard manager === connectService else { throw CancellationError() }
+        try context.check()
+        switch flowElement.topic {
+        case EntityScannerTopics.transportRequest:
+            try await handleIncomingContactRequest(flowElement: flowElement, context: context)
+        case EntityScannerTopics.transportAcceptance:
+            try await handleIncomingContactAcceptance(flowElement: flowElement, context: context)
+        case EntityScannerTopics.probeRequest:
+            try await handleIncomingProbeRequest(manager: manager, flowElement: flowElement, context: context)
+        case EntityScannerTopics.probeAggregate:
+            try consumerEffect(context) { handleIncomingProbeAggregate(flowElement: flowElement, remoteUUID: context.remoteUUID) }
+        case EntityScannerTopics.probeDetailRequest:
+            handleIncomingProbeDetailRequest(flowElement: flowElement, context: context)
+        case EntityScannerTopics.probeDetail:
+            try consumerEffect(context) { handleIncomingProbeDetail(flowElement: flowElement, remoteUUID: context.remoteUUID) }
+        default: break
         }
+        try context.check()
     }
 
     private func sendProbeRequest(payload: ValueType) async -> ValueType {
@@ -1413,22 +1386,24 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private func handleIncomingProbeRequest(
         manager: ScannerService,
         flowElement: FlowElement,
-        remoteUUID: String?
-    ) async {
+        context: ScannerConsumerContext
+    ) async throws {
+        let remoteUUID = context.remoteUUID
         do {
-            guard let remoteUUID,
+            try context.check()
+            guard
                   let request = decode(NearbyProbeRequest.self, from: flowElement.content),
                   let localBeacon,
                   let remoteBeacon = peerBeacons[remoteUUID] else {
                 throw NearbyProbeSession.ProbeError.invalidRequest
             }
-            let aggregate = try probeSession.aggregateResponse(
+            let aggregate = try consumerEffect(context) { try probeSession.aggregateResponse(
                 to: request,
                 from: remoteUUID,
                 localBeacon: localBeacon,
                 remoteBeacon: remoteBeacon,
                 policy: disclosurePolicy
-            )
+            ) }
             guard let content = flowValue(from: aggregate) else {
                 throw NearbyProbeSession.ProbeError.invalidRequest
             }
@@ -1439,7 +1414,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             )
             response.topic = EntityScannerTopics.probeAggregate
             response.origin = uuid
-            try await manager.sendScannerFlowElement(response, remoteUUID: remoteUUID)
+            try await manager.sendScannerFlowElement(response, context: context)
         } catch {
             CellBase.diagnosticLog("Nearby aggregate probe rejected: \(error)", domain: .flow)
         }
@@ -1469,7 +1444,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func scheduleProbeResponseTimeout(requestId: String, remoteUUID: String) {
         probeResponseTimeoutTasks[requestId]?.cancel()
-        probeResponseTimeoutTasks[requestId] = Task { [weak self] in
+        probeResponseTimeoutTasks[requestId] = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: Self.probeResponseTimeoutNanoseconds)
             } catch {
@@ -1501,14 +1476,15 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
     }
 
-    private func handleIncomingProbeDetailRequest(flowElement: FlowElement, remoteUUID: String?) {
-        guard let remoteUUID, case let .object(object) = flowElement.content,
+    private func handleIncomingProbeDetailRequest(flowElement: FlowElement, context: ScannerConsumerContext) {
+        let remoteUUID = context.remoteUUID
+        guard case let .object(object) = flowElement.content,
               let requestId = string(from: object["requestId"]),
               !requestId.isEmpty,
               requestId.utf8.count <= 128,
               (try? JSONEncoder().encode(flowElement.content).count) ?? .max <= NearbyProbeSession.maximumPayloadBytes,
-              pendingDetailRequests[requestId] == nil else { return }
-        pendingDetailRequests[requestId] = remoteUUID
+              context.isLive else { return }
+        do { try pendingRequests.insert(.detail, id: requestId, payload: object, context: context) } catch { return }
         var payload = makeScannerEventObject(event: "probeDetailRequested", remoteUUID: remoteUUID, status: "pendingApproval")
         payload["requestId"] = .string(requestId)
         payload["message"] = .string("The peer asks for exact overlapping references. Approving reveals the selected references in cleartext.")
@@ -1523,7 +1499,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 ])
             ))
         ])
-        pushScannerEvent(topic: EntityScannerTopics.probeDetailRequest, title: "Nearby Detail Request", payload: payload)
+        try? consumerEffect(context) { pushScannerEvent(topic: EntityScannerTopics.probeDetailRequest, title: "Nearby Detail Request", payload: payload) }
     }
 
     private func handleIncomingProbeDetail(flowElement: FlowElement, remoteUUID: String?) {
@@ -1549,6 +1525,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                   let action = string(from: object["action"]) else {
                 throw NearbyProbeSession.ProbeError.invalidRequest
             }
+            let context = try service.consumerContext(remoteUUID: remoteUUID)
             let requestId = string(from: object["requestId"]) ?? UUID().uuidString
             guard !requestId.isEmpty, requestId.utf8.count <= 128 else {
                 throw NearbyProbeSession.ProbeError.invalidRequest
@@ -1566,8 +1543,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 content = .object(["requestId": .string(requestId)])
                 outgoingDetailRequests[requestId] = remoteUUID
             case "approve":
-                guard pendingDetailRequests.removeValue(forKey: requestId) == remoteUUID,
-                      let overlap = peerOverlaps[remoteUUID] else {
+                _ = try pendingRequests.consume(.detail, id: requestId, context: context)
+                guard let overlap = peerOverlaps[remoteUUID] else {
                     throw NearbyProbeSession.ProbeError.invalidRequest
                 }
                 let overlapTokens = Set(overlap.matchedPurposeTokens + overlap.matchedInterestTokens)
@@ -1600,7 +1577,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             element.topic = topic
             element.origin = uuid
             do {
-                try await service.sendScannerFlowElement(element, remoteUUID: remoteUUID)
+                try await service.sendScannerFlowElement(element, context: context)
             } catch {
                 if action == "request" { outgoingDetailRequests.removeValue(forKey: requestId) }
                 throw error
@@ -1611,87 +1588,89 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
     }
 
-    private func handleIncomingContactRequest(flowElement: FlowElement, remoteUUID: String?) async {
-        guard case let .object(requestObject) = flowElement.content else {
-            return
-        }
-        guard let remoteUUID = remoteUUID ?? string(from: requestObject["requesterSessionUUID"]) else {
-            return
-        }
-
+    private func handleIncomingContactRequest(flowElement: FlowElement, context: ScannerConsumerContext) async throws {
+        guard case let .object(request) = flowElement.content else { return }
         do {
-            try transitionPeerToContactRequested(remoteUUID)
-        } catch {
-            emitStateTransitionError(error, remoteUUID: remoteUUID)
-            return
-        }
-
-        let verification = await verifySignedPayload(
-            requestObject,
-            identityKey: "requesterIdentity",
-            signatureKey: "requestSignature"
-        )
-        if let requestId = string(from: requestObject["requestId"]) {
-            pendingIncomingRequests[requestId] = requestObject
-        }
-
-        let payload = makeIncomingContactEventPayload(
-            requestObject: requestObject,
-            remoteUUID: remoteUUID,
-            verification: verification,
-            includeAcceptAction: bool(from: verification["verified"]) == true
-        )
-        pushScannerEvent(topic: EntityScannerTopics.incomingContact, title: "Contact Request Received", payload: payload)
+            try validateContactRequest(request, context: context)
+            let verification = try await verifySignedPayload(request, identityKey: "requesterIdentity", signatureKey: "requestSignature", context: context)
+            guard bool(from: verification["verified"]) == true else { return }
+            try context.check()
+            try pendingRequests.insert(.incoming, id: requiredString(request, "requestId"), payload: request, context: context)
+            try consumerEffect(context) {
+                try transitionPeerToContactRequested(context.remoteUUID)
+                let payload = makeIncomingContactEventPayload(requestObject: request, remoteUUID: context.remoteUUID, verification: verification, includeAcceptAction: true)
+                pushScannerEvent(topic: EntityScannerTopics.incomingContact, title: "Contact Request Received", payload: payload)
+            }
+        } catch { try context.check() } // invalid proof is not retained or published
     }
 
-    private func handleIncomingContactAcceptance(flowElement: FlowElement, remoteUUID: String?) async {
-        guard case let .object(acceptanceObject) = flowElement.content else {
-            return
-        }
-        guard let requestId = string(from: acceptanceObject["requestId"]),
-              let requestObject = pendingOutgoingRequests[requestId] else {
-            let payload = makeErrorPayload(error: EntityScannerContactError.invalidPayload("requestId"), payload: .object(acceptanceObject))
-            pushScannerEvent(topic: EntityScannerTopics.status, title: "Contact Acceptance Failed", payload: payload)
-            return
-        }
-
-        let verification = await verifySignedPayload(
-            acceptanceObject,
-            identityKey: "responderIdentity",
-            signatureKey: "acceptanceSignature"
-        )
-        guard bool(from: verification["verified"]) == true else {
-            var payload = makeErrorPayload(error: EntityScannerContactError.invalidPayload("acceptanceSignature"), payload: .object(acceptanceObject))
-            payload["verification"] = .object(verification)
-            pushScannerEvent(topic: EntityScannerTopics.status, title: "Contact Acceptance Failed", payload: payload)
-            return
-        }
-
+    private func handleIncomingContactAcceptance(flowElement: FlowElement, context: ScannerConsumerContext) async throws {
+        guard case let .object(acceptance) = flowElement.content else { return }
+        var consumed = false
         do {
-            guard let localIdentity = activeLocalIdentity() else {
-                throw EntityScannerContactError.invalidPayload("localIdentity")
+            let id = try requiredString(acceptance, "requestId")
+            guard let record = pendingRequests.find(.outgoing, id: id, context: context) else { return }
+            let request = record.payload
+            try validateContactAcceptance(acceptance, request: request, context: context)
+            let verification = try await verifySignedPayload(acceptance, identityKey: "responderIdentity", signatureKey: "acceptanceSignature", context: context)
+            guard bool(from: verification["verified"]) == true else { return }
+            // Atomic one-shot after verification; another suspended verifier can
+            // never consume the same record after this point.
+            _ = try pendingRequests.consume(.outgoing, id: id, context: context)
+            consumed = true
+            guard let localIdentity = activeLocalIdentity(),
+                  try BridgeChannelAuthentication.PublicIdentity(localIdentity) == context.localIdentity else { throw EntityScannerContactError.signingFailed }
+            let encounter = try await buildEncounterRecord(requestObject: request,
+                requestVerification: localSignatureVerificationPayload(identity: localIdentity),
+                acceptanceObject: acceptance, acceptanceVerification: verification,
+                requester: localIdentity, remoteUUID: context.remoteUUID, context: context)
+            try await persistEncounterRecord(encounter, requester: localIdentity, context: context)
+            try consumerEffect(context) {
+                try transitionPeerThroughAcceptedConnection(context.remoteUUID)
+                try transitionPeer(context.remoteUUID, to: .agreementSigned)
             }
-            let localVerification = localSignatureVerificationPayload(identity: localIdentity)
-            let remoteUUID = remoteUUID
-                ?? string(from: acceptanceObject["responderSessionUUID"])
-                ?? string(from: requestObject["remoteUUID"])
-                ?? "unknown"
-            try transitionPeerThroughAcceptedConnection(remoteUUID)
-            let encounter = try await buildEncounterRecord(
-                requestObject: requestObject,
-                requestVerification: localVerification,
-                acceptanceObject: acceptanceObject,
-                acceptanceVerification: verification,
-                requester: localIdentity,
-                remoteUUID: remoteUUID
-            )
-            try await persistEncounterRecord(encounter, requester: localIdentity)
-            try transitionPeer(remoteUUID, to: .agreementSigned)
-            pendingOutgoingRequests.removeValue(forKey: requestId)
-        } catch {
-            let payload = makeErrorPayload(error: error, payload: .object(acceptanceObject))
-            pushScannerEvent(topic: EntityScannerTopics.status, title: "Encounter Persistence Failed", payload: payload)
+        } catch { try context.check(); if consumed { throw error } }
+    }
+
+    private func requiredString(_ object: Object, _ key: String) throws -> String {
+        guard let value = string(from: object[key]), !value.isEmpty, value.utf8.count <= 128 else { throw EntityScannerContactError.invalidPayload(key) }
+        return value
+    }
+    private func validateContactCommon(_ object: Object, type: String) throws {
+        guard string(from: object["protocolVersion"]) == EntityScannerContactProtocol.version,
+              string(from: object["messageType"]) == type,
+              (try canonicalData(for: object)).count <= ScannerPendingRequests.maximumPayloadBytes,
+              let created = double(from: object["createdAt"]), created.isFinite,
+              created > Date().timeIntervalSince1970 - ScannerPendingRequests.ttl,
+              created <= Date().timeIntervalSince1970 + 5 else { throw EntityScannerContactError.invalidPayload("scope/time") }
+        for key in ["requestId", "encounterId"] {
+            let value = try requiredString(object, key)
+            guard UUID(uuidString: value)?.uuidString == value else { throw EntityScannerContactError.invalidPayload(key) }
         }
+    }
+    private func validateContactRequest(_ request: Object, context: ScannerConsumerContext) throws {
+        try validateContactCommon(request, type: "request")
+        guard string(from: request["requesterSessionUUID"]) == context.remoteUUID,
+              string(from: request["remoteUUID"]) == context.localUUID,
+              let signer = identity(from: request["requesterIdentity"]),
+              try BridgeChannelAuthentication.PublicIdentity(signer) == context.identity,
+              string(from: request["requesterIdentityUUID"]) == context.identity.uuid,
+              string(from: request["requestHash"]) == (try hash(of: removing(keys: ["requestHash", "requestSignature"], from: request))) else { throw EntityScannerContactError.invalidPayload("request binding") }
+    }
+    private func validateContactAcceptance(_ acceptance: Object, request: Object, context: ScannerConsumerContext) throws {
+        try validateContactCommon(acceptance, type: "accept")
+        let expected: Object = [
+            "requestId": request["requestId"] ?? .null, "encounterId": request["encounterId"] ?? .null,
+            "requestHash": .string(try hash(of: request)), "requesterSessionUUID": .string(context.localUUID),
+            "responderSessionUUID": .string(context.remoteUUID), "remoteUUID": .string(context.localUUID),
+            "responderIdentityUUID": .string(context.identity.uuid),
+            "acceptanceHash": .string(try hash(of: removing(keys: ["acceptanceHash", "acceptanceSignature"], from: acceptance)))
+        ]
+        for (key, value) in expected where acceptance[key] != value { throw EntityScannerContactError.invalidPayload(key) }
+        guard string(from: request["requesterSessionUUID"]) == context.localUUID,
+              string(from: request["remoteUUID"]) == context.remoteUUID,
+              let signer = identity(from: acceptance["responderIdentity"]),
+              try BridgeChannelAuthentication.PublicIdentity(signer) == context.identity else { throw EntityScannerContactError.invalidPayload("principal") }
     }
 
     func foundDevicesChanged(manager: ScannerService, foundDevices: [String], requester: Identity) {
@@ -1750,7 +1729,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 #endif
     }
 
-    private func perspectiveSnapshot(requester: Identity) async -> ValueType {
+    private func perspectiveSnapshot(requester: Identity, context: ScannerConsumerContext? = nil) async -> ValueType {
         guard let resolver = CellBase.defaultCellResolver,
               let perspective = try? await resolver.cellAtEndpoint(endpoint: "cell:///Perspective", requester: requester) as? Meddle else {
             return .object([
@@ -1759,19 +1738,23 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             ])
         }
 
+        if context != nil { await consumerSuspension?("resolver") }
+        guard context?.isLive ?? true else { return .null }
         guard var state = object(from: try? await perspective.get(keypath: "perspective.state", requester: requester)) else {
             return .object([
                 "status": .string("unavailable"),
                 "activePurposes": .list([])
             ])
         }
+        guard context?.isLive ?? true else { return .null }
         if let advertisedPurpose = try? await perspective.get(keypath: "advertisedPurpose", requester: requester) {
+            guard context?.isLive ?? true else { return .null }
             state["advertisedPurpose"] = advertisedPurpose
         }
         return .object(state)
     }
 
-    private func perspectiveMatchSummary(remotePerspective: ValueType, requester: Identity) async -> ValueType {
+    private func perspectiveMatchSummary(remotePerspective: ValueType, requester: Identity, context: ScannerConsumerContext? = nil) async -> ValueType {
         guard let resolver = CellBase.defaultCellResolver,
               let perspective = try? await resolver.cellAtEndpoint(endpoint: "cell:///Perspective", requester: requester) as? Meddle else {
             return .object([
@@ -1779,6 +1762,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 "allHits": .list([])
             ])
         }
+        guard context?.isLive ?? true else { return .null }
         return (try? await perspective.set(keypath: "perspective.query.match", value: remotePerspective, requester: requester)) ?? .object([
             "count": .integer(0),
             "allHits": .list([])
@@ -1793,7 +1777,22 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     private func canonicalData(for payload: Object) throws -> Data {
-        try FlowCanonicalEncoder.canonicalData(for: .object(payload))
+        // Contact proofs sign the canonical wire representation. ValueType's
+        // JSON codec erases .identity/.data and integer-valued .float tags;
+        // normalizing BEFORE hashing/signing makes the exact request stable
+        // across transport and persisted proof reload, without changing that codec.
+        let wire = try JSONDecoder().decode(Object.self, from: JSONEncoder().encode(payload))
+        return try FlowCanonicalEncoder.canonicalData(for: .object(wire))
+    }
+
+    private func signatureBytes(_ value: ValueType?) -> Data? {
+        switch value {
+        case .data(let bytes): return bytes.count <= 256 ? bytes : nil
+        case .string(let text):
+            guard text.utf8.count <= 344, let bytes = Data(base64Encoded: text), bytes.base64EncodedString() == text else { return nil }
+            return bytes
+        default: return nil
+        }
     }
 
     private func loadEncounterExportObject(payload: ValueType, requester: Identity) async throws -> Object {
@@ -1820,10 +1819,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         try FlowHasher.sha256Hex(canonicalData(for: payload))
     }
 
-    private func localSignatureVerificationPayload(identity: Identity) -> Object {
+    private func localSignatureVerificationPayload(identity: Identity, isLocal: Bool = true) -> Object {
         [
             "verified": .bool(true),
-            "status": .string("localSignature"),
+            "status": .string(isLocal ? "localSignature" : "verified"),
             "signerIdentityUUID": .string(identity.uuid),
             "signerDisplayName": .string(identity.displayName)
         ]
@@ -1915,8 +1914,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         guard let value else {
             return nil
         }
-        if case let .identity(identity) = value {
-            return identity
+        if case let .identity(identity) = value { return identity }
+        if case .object = value, let bytes = try? JSONEncoder().encode(value), bytes.count <= ScannerPendingRequests.maximumPayloadBytes {
+            return try? JSONDecoder().decode(Identity.self, from: bytes)
         }
         return nil
     }
@@ -2255,7 +2255,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         advertisementSelectionID = selectionID
         selectedAdvertisement = nil
         advertisementStatus = evidence == nil ? "Henter annonserte detaljer …" : "Kontrollerer bevis …"
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
             let result = await self.connectService?.readAdvertisementResult(remoteUUID: remoteUUID,
                 evidence: evidence, consentedPolicy: consentedPolicy) ?? .unavailable

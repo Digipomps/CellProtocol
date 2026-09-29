@@ -7,8 +7,8 @@ run independently so an operation can receive the proof it is waiting for.
 A signature-shaped payload alone never selects that lane. Both lanes retain all
 normal gate/session/permit checks. WebSocket framing and dispatch are unchanged.
 This orders received records; it cannot repair reordering by an application
-producer before physical submission. EntityScanner's detached asynchronous
-consumer work remains the separate N13 contract.
+producer before physical submission. EntityScanner's async delegate retains this
+lease through actual consumer completion; see [consumer security](ScannerConsumerSecurity.md).
 
 Each pending, accepted or outgoing invitation owns a fixed MCPeerID, MCSession,
 service instance generation, endpoint, local instance ID and monotonic deadline.
@@ -61,8 +61,8 @@ registration/publication, but never frees quota for still-running noncooperative
 work. Continuations also check the captured setup deadline. Each physical
 setup gets at most one setup wrapper; each Data callback no longer creates one.
 Expiry resolution/status UI is best effort under the same event limits, while
-invitation handlers are always resolved. Downstream asynchronous EntityScanner
-work is still N13, not a claimed bound supplied by a synchronous UI callback.
+invitation handlers are always resolved. [EntityScanner consumer security](ScannerConsumerSecurity.md)
+specifies its own bounded pending records and retained asynchronous work.
 
 A source is the best physical handle MC exposes here: MCPeerID equality, with an
 opaque local token passed to the channel gate. Discovery UUIDs and display names

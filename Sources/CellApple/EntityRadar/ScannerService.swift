@@ -32,20 +32,20 @@ import CellBase
 
 protocol ConnectServiceDelegate {
 
-    func connectedDevicesChanged(manager : ScannerService, connectedDevices: [String])
-//    func colorChanged(manager : ConnectService, colorString: String)
-//    func foundDevicesChanged(manager: RadarService, foundDevices: [String])
+    @MainActor func connectedDevicesChanged(manager : ScannerService, connectedDevices: [String])
+//    @MainActor func colorChanged(manager : ConnectService, colorString: String)
+//    @MainActor func foundDevicesChanged(manager: RadarService, foundDevices: [String])
 
-    func foundDevicesChanged(
+    @MainActor func foundDevicesChanged(
         manager: ScannerService,
         foundDevice: MCPeerID,
         remoteUUID: String,
         discoveryInfo: [String: String]?
     )
-    func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String)
-    func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String)
-    func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?)
-    func proximityChanged(
+    @MainActor func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String)
+    @MainActor func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String)
+    @MainActor func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?)
+    @MainActor func proximityChanged(
         manager: ScannerService,
         remoteUUID: String,
         distanceMeters: Float?,
@@ -53,7 +53,12 @@ protocol ConnectServiceDelegate {
         directionY: Float?,
         directionZ: Float?
     )
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?)
+    @MainActor func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws
+    @MainActor func scannerChannelRetired(manager: ScannerService, generation: String)
+}
+
+extension ConnectServiceDelegate {
+    @MainActor func scannerChannelRetired(manager: ScannerService, generation: String) {}
 }
 
 private enum ScannerServiceError: Error {
@@ -83,6 +88,7 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     private var queuedBytes = 0
     var gate: BridgeChannelTransport!
     var bridge: BridgeBase?
+    fileprivate var setupScheduled = false // accessed only on service stateQueue
     var channelSession: BridgeChannelSession? { gate?.session }
 
     init(service: ScannerService, remoteUUID: String, peerID: MCPeerID,
@@ -384,7 +390,11 @@ class ScannerService :  NSObject, ObservableObject {
     // Internal adapter seam: production always uses MCSession reliable delivery.
     var peerSend: ((Data, MCPeerID, MCSession) throws -> Void)?
     var sideEntranceRejectedForTesting: ((String, Bool) -> Void)?
-    var radarDelegate : ConnectServiceDelegate?
+    private var _radarDelegate: ConnectServiceDelegate?
+    var radarDelegate: ConnectServiceDelegate? {
+        get { withState { _radarDelegate } }
+        set { withState { _radarDelegate = newValue } }
+    }
     private var bridgeTransportsByRemoteUUID = [String: ScannerPeerTransport]()
     private var registeredBridgeUUIDsByRemoteUUID = [String: String]()
     private var bridgeSetupTasks = [String: BridgeSetupOperation]()
@@ -629,6 +639,7 @@ class ScannerService :  NSObject, ObservableObject {
                 reportBridgeFailure(BridgeChannelAuthentication.Failure.closed, remoteUUID: transport.remoteUUID)
             }
         }
+        await radarDelegate?.scannerChannelRetired(manager: self, generation: transport.gate.session.generation)
         // Keep gate transport/send reservations until the actual session empties.
         // Cancellation is not evidence of physical retirement.
         await withCheckedContinuation { continuation in
@@ -645,7 +656,10 @@ class ScannerService :  NSObject, ObservableObject {
         }
     }
     private func reportBridgeFailure(_ error: Error, remoteUUID: String?) {
-        radarDelegate?.scannerStatusChanged(manager: self, status: "bridgeFailed:\(error)", remoteUUID: remoteUUID)
+        let code = (error as? StreamState) == .denied ? "denied" : "channel"
+        enqueueEvent(peer: myPeerId, bytes: 256) { service in
+            service.radarDelegate?.scannerStatusChanged(manager: service, status: "bridgeFailed:\(code)", remoteUUID: remoteUUID)
+        }
     }
 
     func disconnect() {
@@ -699,7 +713,7 @@ class ScannerService :  NSObject, ObservableObject {
         withState { stopped = false }
         self.serviceAdvertiser.startAdvertisingPeer()
         self.serviceBrowser.startBrowsingForPeers()
-        radarDelegate?.scannerStatusChanged(manager: self, status: "started", remoteUUID: nil)
+        enqueueEvent(peer: myPeerId, bytes: 256) { service in service.radarDelegate?.scannerStatusChanged(manager: service, status: "started", remoteUUID: nil) }
 //       startup()
     }
     
@@ -729,7 +743,7 @@ class ScannerService :  NSObject, ObservableObject {
             advertisementPeers.removeAll(); advertisementProofPeers.removeAll()
             _connectedPeersDict.removeAll(); _reversedConnectedPeersDict.removeAll()
         }
-        radarDelegate?.scannerStatusChanged(manager: self, status: "stopped", remoteUUID: nil)
+        enqueueEvent(peer: myPeerId, bytes: 256) { service in service.radarDelegate?.scannerStatusChanged(manager: service, status: "stopped", remoteUUID: nil) }
     }
 
     var pendingInvitationCount: Int { withState { invitations.values.filter { $0.state == .pending }.count } }
@@ -880,6 +894,29 @@ class ScannerService :  NSObject, ObservableObject {
         }
         try transport.gate.session.check()
     }
+    func consumerContext(remoteUUID: String) throws -> ScannerConsumerContext {
+        try withState {
+            guard let physical = bridgeTransportsByRemoteUUID[remoteUUID] else { throw CancellationError() }
+            return try consumerContext(on: physical)
+        }
+    }
+    private func consumerContext(on physical: ScannerPeerTransport) throws -> ScannerConsumerContext {
+        try checkCurrent(physical, remoteUUID: physical.remoteUUID)
+        return try ScannerConsumerContext(service: self, physical: physical)
+    }
+    func consumerEffect<T>(on physical: ScannerPeerTransport, _ body: () throws -> T) throws -> T {
+        try withState {
+            guard !stopped, bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical else { throw CancellationError() }
+            return try physical.gate.session.withAuthenticatedEffect(body)
+        }
+    }
+    func sendScannerFlowElement(_ element: FlowElement, context: ScannerConsumerContext) async throws {
+        try context.check()
+        let command = BridgeCommand(cmd: "response", payload: .flowElement(element), cid: -1)
+        try await context.physical.gate.sendData(BridgeChannelAuthentication.encode(command))
+        try context.check()
+    }
+
     func setupBridge(remoteUUID: String, peerID: MCPeerID) async throws {
         try await setupBridge(prepareBridge(remoteUUID: remoteUUID, peerID: peerID))
     }
@@ -933,8 +970,9 @@ class ScannerService :  NSObject, ObservableObject {
         withState {
             guard !stopped, bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical,
                   registeredBridgeUUIDsByRemoteUUID[physical.remoteUUID] == nil,
-                  scheduledSetups[physical.setupID] == nil,
+                  !physical.setupScheduled, scheduledSetups[physical.setupID] == nil,
                   let lease = admission.reserve(.task, peer: physical.peerID, bytes: 256) else { return }
+            physical.setupScheduled = true
             scheduledSetups[physical.setupID] = (physical, lease)
             Task { [weak self, physical] in
                 defer { self?.withState { _ = self?.scheduledSetups.removeValue(forKey: physical.setupID) }; lease.release() }
@@ -1120,7 +1158,9 @@ class ScannerService :  NSObject, ObservableObject {
 #if os(iOS)
         guard supportsNearbyPrecision else {
             updateInformationLabel(description: "Nearby precision unavailable. Using Multipeer Connectivity only")
-            radarDelegate?.scannerStatusChanged(manager: self, status: "precisionUnavailable", remoteUUID: connectedRemoteUUID)
+            enqueueEvent(peer: myPeerId, bytes: 256) { service in
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "precisionUnavailable", remoteUUID: service.connectedRemoteUUID)
+            }
             return
         }
         niSession = NISession()
@@ -1288,8 +1328,11 @@ extension ScannerService : MCSessionDelegate {
                     self.connectedPeerIdDisplayname = nil
                 }
             }
-            radarDelegate?.lostDeviceChanged(manager: self, lostDevice: physical.peerID, remoteUUID: physical.remoteUUID)
-            radarDelegate?.scannerStatusChanged(manager: self, status: "disconnected", remoteUUID: physical.remoteUUID)
+            enqueueEvent(peer: physical.peerID, bytes: 256) { service in
+                guard service.withState({ service.bridgeTransportsByRemoteUUID[physical.remoteUUID] == nil }) else { return }
+                service.radarDelegate?.lostDeviceChanged(manager: service, lostDevice: physical.peerID, remoteUUID: physical.remoteUUID)
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "disconnected", remoteUUID: physical.remoteUUID)
+            }
         }
     }
 
@@ -1374,9 +1417,10 @@ extension ScannerService {
         return BridgeIdentityVault(cloudBridge: bridge)
     }
     
-    func handleOutOfBandFlowElement(_ flowElement: FlowElement, remoteUUID: String?) {
+    func handleOutOfBandFlowElement(_ flowElement: FlowElement, context: ScannerConsumerContext) async throws {
+        try context.check()
         guard case let .object(contentObject) = flowElement.content else {
-            radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, remoteUUID: remoteUUID)
+            try await radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, context: context)
             return
         }
 
@@ -1402,7 +1446,7 @@ extension ScannerService {
             }
         }
 
-        radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, remoteUUID: remoteUUID)
+        try await radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, context: context)
     }
     func extractCommandFromData(_ data: Data, from peerID: MCPeerID) async throws {
         let physical = try capturePeerTransport(session: sessionForPeer(peerID), peerID: peerID)
@@ -1424,7 +1468,8 @@ extension ScannerService {
             if command.cid < 0 {
                 try gate.session.check(identity: command.identity)
                 guard command.command == .response, case let .flowElement(flowElement) = command.payload else { throw BridgeChannelAuthentication.Failure.malformed }
-                try await gate.withAuthenticatedWork { self.handleOutOfBandFlowElement(flowElement, remoteUUID: physical.remoteUUID) }
+                let context = try consumerContext(on: physical)
+                try await gate.withAuthenticatedWork { try await self.handleOutOfBandFlowElement(flowElement, context: context) }
             } else if command.command == .response { try await gate.consumeResponse(command: command) }
             else { try await gate.consumeCommand(command: command) }
         } catch {
@@ -1487,14 +1532,10 @@ extension ScannerService: NISessionDelegate {
         let directionX = nearbyObjectUpdate.direction?.x
         let directionY = nearbyObjectUpdate.direction?.y
         let directionZ = nearbyObjectUpdate.direction?.z
-        radarDelegate?.proximityChanged(
-            manager: self,
-            remoteUUID: remoteUUID,
-            distanceMeters: distanceMeters,
-            directionX: directionX,
-            directionY: directionY,
-            directionZ: directionZ
-        )
+        enqueueEvent(peer: myPeerId, bytes: 256) { service in
+            service.radarDelegate?.proximityChanged(manager: service, remoteUUID: remoteUUID,
+                distanceMeters: distanceMeters, directionX: directionX, directionY: directionY, directionZ: directionZ)
+        }
         // Update the the state and visualizations.
 //        let nextState = getDistanceDirectionState(from: nearbyObjectUpdate)
 //        updateVisualization(from: currentDistanceDirectionState, to: nextState, with: nearbyObjectUpdate)

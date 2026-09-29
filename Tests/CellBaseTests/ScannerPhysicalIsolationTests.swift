@@ -256,7 +256,7 @@ private final class IsolationObserver: ConnectServiceDelegate {
             }
         }
     }
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?) { if remoteUUID == prefix + "c" { lock.withLock { count += 1 } } }
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws { if context.remoteUUID == prefix + "c" { lock.withLock { count += 1 } } }
     func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {}
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}

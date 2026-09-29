@@ -126,6 +126,6 @@ private final class MultipeerProcessObserver: ConnectServiceDelegate {
     }
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?) {}
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws {}
 }
 #endif

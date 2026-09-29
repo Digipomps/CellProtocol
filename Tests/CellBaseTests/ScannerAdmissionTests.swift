@@ -192,5 +192,5 @@ private final class AdmissionObserver: ConnectServiceDelegate {
     func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) { invitations += 1 }
     func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
-    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, remoteUUID: String?) {}
+    func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws {}
 }
