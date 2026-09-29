@@ -1,10 +1,10 @@
 # Authenticated bridge channels and identity-origin proofs
 
-Updated: 2026-09-27 for PR #53 R1/R2/R4. Exact-head build, test and CI evidence is in the PDD `CP53-RETTINGER.md` handoff.
+Updated: 2026-09-29 for PR #53 through N26 and peer v3. Build, test and CI evidence is in the PDD `CP53-SAMLET.md` handoff, including its remaining iOS/NI limits.
 
 ## Admission precedes every Cell operation
 
-`BridgeChannelTransport` implements `org.haven.bridge-channel.v1` around a physical
+For WS, `BridgeChannelTransport` implements `org.haven.bridge-channel.v1` around a physical
 transport. `BridgeBase` and `BridgeMultiplexServerSession` fail closed without a
 verified `BridgeChannelSession`. A wire `ready` cannot authenticate either side.
 The state machine is unauthenticated → challengeIssued → verifying → authenticated
@@ -25,6 +25,12 @@ Responses may omit identity because they are correlated with pending commands;
 a present identity must match. Client-side inbound traffic is limited to responses,
 scoped origin-proof requests and multiplex control replies. No Cell grant is
 created by successful transport admission.
+
+Local `EphemeralIdentityVault` binds its vault reference during explicit identity
+creation/insertion. Looking up an already published identity does not rewrite its
+shared metadata while bridge/resolver callers read it. The actor protects its
+maps; it does not make arbitrary external mutation of the returned Identity safe.
+UUID-only lookalikes still fail public-key matching before local signing.
 
 ## Handshake and canonical transcript
 
