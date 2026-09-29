@@ -353,7 +353,7 @@ class ScannerService :  NSObject, ObservableObject {
     private var eventDrainScheduled = false
     // A test can hold the one drain without creating Tasks for each peer.
     var deferEventDrainForTesting = false
-    private var scheduledSetups: Set<UUID> = []
+    private var scheduledSetups: [UUID: (physical: ScannerPeerTransport, lease: ScannerAdmission.Lease)] = [:]
     private var serviceGeneration = UUID()
     private var stopped = false
     private var maintenance: DispatchSourceTimer?
@@ -683,6 +683,12 @@ class ScannerService :  NSObject, ObservableObject {
     func expireInvitations() {
         withState {
             let now = invitationClock()
+            for setup in scheduledSetups.values where !setup.lease.isLive {
+                // Revoke synchronously at expiry, while keeping the worker and
+                // its reservation until noncooperative code actually returns.
+                setup.physical.gate.session.close()
+                bridgeSetupTasks[setup.physical.remoteUUID]?.task.cancel()
+            }
             for (peer, lease) in discoveries where !lease.isLive {
                 discoveries[peer] = nil
                 if let remote = _reversedFoundPeersDict.removeValue(forKey: peer), _foundPeersDict[remote] == peer {
@@ -787,7 +793,8 @@ class ScannerService :  NSObject, ObservableObject {
     private func checkCurrent(_ transport: ScannerPeerTransport, remoteUUID: String) throws {
         try Task.checkCancellation()
         try withState {
-            guard bridgeTransportsByRemoteUUID[remoteUUID] === transport else { throw CancellationError() }
+            guard bridgeTransportsByRemoteUUID[remoteUUID] === transport,
+                  scheduledSetups[transport.setupID]?.lease.isLive ?? true else { throw CancellationError() }
         }
         try transport.gate.session.check()
     }
@@ -844,12 +851,13 @@ class ScannerService :  NSObject, ObservableObject {
         withState {
             guard !stopped, bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical,
                   registeredBridgeUUIDsByRemoteUUID[physical.remoteUUID] == nil,
-                  !scheduledSetups.contains(physical.setupID),
+                  scheduledSetups[physical.setupID] == nil,
                   let lease = admission.reserve(.task, peer: physical.peerID, bytes: 256) else { return }
-            scheduledSetups.insert(physical.setupID)
+            scheduledSetups[physical.setupID] = (physical, lease)
             Task { [weak self, physical] in
-                defer { self?.withState { _ = self?.scheduledSetups.remove(physical.setupID) }; lease.release() }
-                guard let self, lease.isLive else { return }
+                defer { self?.withState { _ = self?.scheduledSetups.removeValue(forKey: physical.setupID) }; lease.release() }
+                guard let self else { return }
+                guard lease.isLive else { await physical.gate.close(); return }
                 do {
                     try await self.setupBridge(physical)
                     guard lease.isLive else { throw CancellationError() }

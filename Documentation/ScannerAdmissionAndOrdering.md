@@ -56,7 +56,9 @@ remove expired entries (and reject their pending context handlers) even while
 the main actor is busy; the scheduled task does not capture all payloads. Stop
 clears the queue and prevents old-generation publication. Executing setup work
 retains its reservation until it returns, including after expiry/cancellation;
-expiry never frees quota for still-running noncooperative work. Each physical
+expiry revokes the setup session and cancels its operation before late
+registration/publication, but never frees quota for still-running noncooperative
+work. Continuations also check the captured setup deadline. Each physical
 setup gets at most one setup wrapper; each Data callback no longer creates one.
 Expiry resolution/status UI is best effort under the same event limits, while
 invitation handlers are always resolved. Downstream asynchronous EntityScanner

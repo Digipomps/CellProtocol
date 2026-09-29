@@ -284,6 +284,36 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         XCTAssertTrue(observer.statuses.contains { $0 == "bridgeFailed:denied" })
     }
 
+    func testExpiredScheduledSetupRevokesBeforeHeldWorkReturnsAndRetainsAdmission() async throws {
+        let clock = ScannerSetupClock(), admission = ScannerAdmission(now: { clock.now })
+        let pair = try await ScannerPair(admissionA: admission); defer { pair.stop() }
+        let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+        let lobby = await ScannerObservedLobby(owner: pair.a.owner)
+        let scanner = await GeneralCell(owner: pair.a.owner)
+        let hold = ScannerWorkBarrier(), entered = expectation(description: "physical callback setup held")
+        lobby.beforeFlow = { entered.fulfill(); await hold.wait() }
+        try await resolver.registerNamedEmitCell(name: "Lobby", emitCell: lobby, scope: .template, identity: pair.a.owner)
+        try await resolver.registerNamedEmitCell(name: "EntityScanner", emitCell: scanner, scope: .template, identity: pair.a.owner)
+        let pump = pair.pump(); defer { pump.cancel() }
+        let remote = Task { try await pair.pb.gate.startPeer() }
+        // Production physical callback, not a direct unbudgeted test setup.
+        pair.a.session(pair.a.mcSession, peer: pair.bPeer, didChange: .connected)
+        await fulfillment(of: [entered], timeout: 2)
+        try await remote.value
+        XCTAssertEqual(admission.snapshot(.task).count, 1)
+        clock.advance(10); pair.a.expireInvitations()
+        XCTAssertThrowsError(try pair.pa.gate.session.check(), "Expired setup must already be revoked, before held code returns")
+        XCTAssertEqual(admission.snapshot(.task).count, 1)
+        XCTAssertGreaterThan(pair.a.channelLimits.outstandingWorkCount, 0)
+        try pair.pb.gate.session.check()
+        let before = await resolver.cellUUID(for: pair.b.mySessionUUID); XCTAssertNil(before)
+        await hold.resume()
+        for _ in 0..<1000 where admission.snapshot(.task).count != 0 { try await Task.sleep(nanoseconds: 1_000_000) }
+        XCTAssertEqual(admission.snapshot(.task).count, 0)
+        let after = await resolver.cellUUID(for: pair.b.mySessionUUID); XCTAssertNil(after)
+        XCTAssertEqual(pair.a.bridgeDelegateCount, 0)
+    }
+
     func testScannerDisconnectRetainsFeedQuotaUntilNoncooperativeWorkReturns() async throws {
         var configuration = BridgeChannelLimits.Configuration(); configuration.maximumFeeds = 1
         let limits = BridgeChannelLimits(configuration: configuration)
@@ -752,13 +782,13 @@ private final class ScannerPair {
     var c: ScannerService?
     let cPeer = MCPeerID(displayName: "test-c")
     var ac: ScannerPeerTransport?, pc: ScannerPeerTransport?
-    init(limits: BridgeChannelLimits = BridgeChannelLimits(), ownerA: Identity? = nil, reverse: Bool = false) async throws {
+    init(limits: BridgeChannelLimits = BridgeChannelLimits(), ownerA: Identity? = nil, reverse: Bool = false, admissionA: ScannerAdmission = ScannerAdmission()) async throws {
         let resolvedOwnerA: Identity
         if let ownerA { resolvedOwnerA = ownerA }
         else { resolvedOwnerA = await Self.owner() }
         let ownerB = await Self.owner()
         let suffix = UUID().uuidString
-        a = ScannerService(admission: ScannerAdmission(), owner: resolvedOwnerA, sessionUUID: (reverse ? "second-" : "first-") + suffix)
+        a = ScannerService(admission: admissionA, owner: resolvedOwnerA, sessionUUID: (reverse ? "second-" : "first-") + suffix)
         b = ScannerService(admission: ScannerAdmission(), owner: ownerB, sessionUUID: (reverse ? "first-" : "second-") + suffix)
         a.channelLimits = limits; b.channelLimits = limits
         a.foundPeersDict[b.mySessionUUID] = bPeer; a.reversedFoundPeersDict[bPeer] = b.mySessionUUID
@@ -921,4 +951,10 @@ private final class ScannerTitles: @unchecked Sendable {
     private let lock = NSLock(); private var titles: [String] = []
     var values: [String] { lock.withLock { titles } }
     func append(_ title: String) { lock.withLock { titles.append(title) } }
+}
+
+private final class ScannerSetupClock: @unchecked Sendable {
+    private let lock = NSLock(); private var time: TimeInterval = 100
+    var now: TimeInterval { lock.withLock { time } }
+    func advance(_ delta: TimeInterval) { lock.withLock { time += delta } }
 }
