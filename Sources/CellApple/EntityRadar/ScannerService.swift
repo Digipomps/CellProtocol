@@ -421,17 +421,12 @@ class ScannerService :  NSObject, ObservableObject {
         return "Fallback to Multipeer Connectivity; discovery and signed contact exchange still work without UWB"
     }
     
-#if os(iOS)
-    var niSession: NISession?
-    var peerDiscoveryToken: NIDiscoveryToken?
-    var sharedTokenWithPeer = false
-#else
-    // NearbyInteraction unavailable on this platform
-    var niSession: Any? = nil
-    var peerDiscoveryToken: Any? = nil
-    var sharedTokenWithPeer = false
-#endif
-    
+    // NI objects and their callbacks live on the same executor as physical bindings.
+    private lazy var nearby = ScannerNearbyInteraction(queue: stateQueue)
+    func setNearbySessionFactoryForTesting(_ factory: @escaping (DispatchQueue) throws -> ScannerNISession?) {
+        withState { nearby.factory = factory }
+    }
+
 #if canImport(UIKit)
     let impactGenerator = UIImpactFeedbackGenerator(style: .medium)
 #else
@@ -495,6 +490,7 @@ class ScannerService :  NSObject, ObservableObject {
         withState {
             guard let slot = physicalSlots[ObjectIdentifier(session)], !slot.retiring else { return }
             slot.retiring = true
+            nearby.retire(session: session)
             session.disconnect()
             reapPhysicalSessions()
         }
@@ -725,6 +721,7 @@ class ScannerService :  NSObject, ObservableObject {
         // weak delegate is already in deinit.
         disconnect()
         withState {
+            nearby.stop()
             stopped = true; serviceGeneration = UUID()
             let pending = Array(invitations.values)
             invitations.removeAll()
@@ -985,7 +982,6 @@ class ScannerService :  NSObject, ObservableObject {
                     self.enqueueEvent(peer: physical.peerID, bytes: 256) { service in
                         guard service.withState({ service.bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { return }
                         service.radarDelegate?.scannerStatusChanged(manager: service, status: "connected", remoteUUID: physical.remoteUUID)
-                        service.startup()
                     }
                 } catch { self.reportBridgeFailure(error, on: physical); await physical.gate.close() }
             }
@@ -1045,6 +1041,7 @@ class ScannerService :  NSObject, ObservableObject {
                     guard self.bridgeTransportsByRemoteUUID[remoteUUID] === peerTransport else { return }
                     self.registeredBridgeUUIDsByRemoteUUID[remoteUUID] = resolvedRegisteredUUID
                 }
+                try await self.startNearbyInteraction(context: self.consumerContext(on: peerTransport))
                 print("********* Finished setting up bridge for \(remoteUUID)")
             } catch {
                 self.reportBridgeFailure(error, on: peerTransport)
@@ -1068,6 +1065,7 @@ class ScannerService :  NSObject, ObservableObject {
             if let expected, bridgeTransportsByRemoteUUID[remoteUUID] !== expected { return false }
             let operation = bridgeSetupTasks[remoteUUID]
             let transport = bridgeTransportsByRemoteUUID.removeValue(forKey: remoteUUID)
+            if let transport { nearby.retire(physical: transport) }
             let registeredUUID = registeredBridgeUUIDsByRemoteUUID.removeValue(forKey: remoteUUID)
             guard transport != nil || registeredUUID != nil else { operation?.task.cancel(); return false }
             invitations[remoteUUID] = nil
@@ -1094,103 +1092,35 @@ class ScannerService :  NSObject, ObservableObject {
 
 
     
-    /// Shared iOS production path; opaque archived bytes allow macOS tests to
-    /// exercise selection, quotas and lifecycle without fabricating an NI token.
-    @discardableResult
-    func shareDiscoveryTokenData(_ encodedData: Data) async throws -> Int {
-        let content: Object = ["token": .data(encodedData), "userUuid": .string(owner.uuid)]
-        let flow = FlowElement(title: "DiscoveryToken", content: .object(content), properties: .init(type: .event, contentType: .object))
-        let data = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(flow), cid: -1))
-        let transports = withState { Array(bridgeTransportsByRemoteUUID.values) }
-        var sent = 0
-        for transport in transports where transport.gate.canSendPeerData {
-            do { try await transport.gate.sendData(data); sent += 1 }
-            catch { reportBridgeFailure(error, on: transport) }
-        }
-        return sent
+    /// One token for one captured authenticated physical channel; never broadcast.
+    func shareDiscoveryTokenData(_ encodedData: Data, generation: UUID, context: ScannerConsumerContext) async throws {
+        try context.check()
+        let flow = ScannerNearbyInteraction.tokenFlow(encodedData, generation: generation, context: context)
+        try await sendScannerFlowElement(flow, context: context)
     }
 
-#if os(iOS)
-    func shareMyDiscoveryToken(token: NIDiscoveryToken) {
-        guard let data = try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do { self.sharedTokenWithPeer = try await self.shareDiscoveryTokenData(data) > 0 }
-            catch { self.reportBridgeFailure(error, remoteUUID: nil) }
-        }
-    }
-#endif
-    
-#if os(iOS)
-    func peerDidShareDiscoveryToken(tokenData: Data, userUuid: String) {
-        guard let discoveryToken = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NIDiscoveryToken.self, from: tokenData) else {
-            print("Unexpectedly failed to decode discovery token.")
-            return
-        }
-        
-        // evaluate userId here?
-        peerDiscoveryToken = discoveryToken
-
-        let config = NINearbyPeerConfiguration(peerToken: discoveryToken)
-
-        // Run the session.
-        print("")
-        niSession?.run(config)
-        print("Got shared token and running niSession")
-    }
-#endif
-
-//    func peerDidShareDiscoveryToken(peer: MCPeerID, token: NIDiscoveryToken) {
-//        if connectedPeer != peer {
-//            fatalError("Received token from unexpected peer.")
-//        }
-//        // Create a configuration.
-//        peerDiscoveryToken = token
-//
-//        let config = NINearbyPeerConfiguration(peerToken: token)
-//
-//        // Run the session.
-//        niSession?.run(config)
-//    }
-//    
-    func startup() {
-        print("****** Starting up NISession *****")
-#if os(iOS)
-        guard supportsNearbyPrecision else {
-            updateInformationLabel(description: "Nearby precision unavailable. Using Multipeer Connectivity only")
-            enqueueEvent(peer: myPeerId, bytes: 256) { service in
-                service.radarDelegate?.scannerStatusChanged(manager: service, status: "precisionUnavailable", remoteUUID: service.connectedRemoteUUID)
+    func startNearbyInteraction(context: ScannerConsumerContext) async throws {
+        let outgoing = try withState {
+            try nearby.start(context: context) { [weak self] entry, measurement in
+                self?.enqueueNearbyMeasurement(entry, measurement)
             }
-            return
         }
-        niSession = NISession()
-        niSession?.delegate = self
-        sharedTokenWithPeer = false
-        if connectedPeer != nil {
-            if let myToken = niSession?.discoveryToken {
-                updateInformationLabel(description: "Initializing ...")
-                if !sharedTokenWithPeer {
-                    shareMyDiscoveryToken(token: myToken)
-                }
-                guard let peerToken = peerDiscoveryToken else {
-                    print("****** no peer dicovery token *****")
-                    return
-                }
-                let config = NINearbyPeerConfiguration(peerToken: peerToken)
-                print("Just before ni session run in startup() config: \(config)")
-                niSession?.run(config)
-            } else {
-                print("Unable to get self discovery token, is this session invalidated?")
-            }
-        } else {
-            updateInformationLabel(description: "Discovering Peer ...")
+        if let outgoing {
+            do { try await shareDiscoveryTokenData(outgoing.token, generation: outgoing.generation, context: context) }
+            catch { withState { nearby.retire(physical: context.physical) }; throw error }
         }
-#else
-        // NearbyInteraction not available
-        updateInformationLabel(description: "NearbyInteraction not available on this platform")
-#endif
     }
-    
+
+    private func enqueueNearbyMeasurement(_ entry: ScannerNearbyInteraction.Entry, _ measurement: ScannerNIMeasurement) {
+        enqueueEvent(peer: entry.context.physical.peerID, bytes: 256) { service in
+            // Recheck at publication, including events held on the main executor.
+            guard service.nearby.isCurrent(entry), !entry.suspended else { return }
+            service.radarDelegate?.proximityChanged(manager: service, remoteUUID: entry.context.remoteUUID,
+                distanceMeters: measurement.distance, directionX: measurement.x,
+                directionY: measurement.y, directionZ: measurement.z)
+        }
+    }
+
     func startupMPC() {
 //        if mpc == nil {
 //            // Prevent Simulator from finding devices.
@@ -1424,26 +1354,13 @@ extension ScannerService {
             return
         }
 
-        if let uuidValue = contentObject["userUuid"],
-           case let .string(uuid) = uuidValue,
-           let tokenValue = contentObject["token"] {
-            let tokenData: Data?
-            switch tokenValue {
-            case .data(let data):
-                tokenData = data
-            case .string(let tokenB64String):
-                tokenData = Data(base64Encoded: tokenB64String)
-            default:
-                tokenData = nil
-            }
-            if let tokenData {
-#if os(iOS)
-                if supportsNearbyPrecision {
-                    self.peerDidShareDiscoveryToken(tokenData: tokenData, userUuid: uuid)
-                }
-#endif
-                return
-            }
+        if flowElement.title == "DiscoveryToken" {
+            // Decode metadata against the proved principal and immutable invitation,
+            // before allocating/decoding any platform token or starting NI.
+            try withState { try nearby.validate(contentObject, context: context) }
+            try await startNearbyInteraction(context: context)
+            try withState { try nearby.receive(contentObject, context: context) }
+            return
         }
 
         try await radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, context: context)
@@ -1504,148 +1421,3 @@ extension ScannerService {
     
     
 }
-// MARK: - `NISessionDelegate`.
-#if os(iOS)
-extension ScannerService: NISessionDelegate {
-    
-
-    func session(_ session: NISession, didUpdate nearbyObjects: [NINearbyObject]) {
-        
-        guard let peerToken = peerDiscoveryToken else {
-            print("didUpdate called without peer token")
-            return
-        }
-
-        // Find the right peer.
-        let peerObj = nearbyObjects.first { (obj) -> Bool in
-            return obj.discoveryToken == peerToken
-        }
-
-        guard let nearbyObjectUpdate = peerObj else {
-            return
-        }
-        guard let remoteUUID = connectedRemoteUUID else {
-            return
-        }
-        print("nearbyObjects: \(nearbyObjects.count)")
-        let distanceMeters = nearbyObjectUpdate.distance
-        let directionX = nearbyObjectUpdate.direction?.x
-        let directionY = nearbyObjectUpdate.direction?.y
-        let directionZ = nearbyObjectUpdate.direction?.z
-        enqueueEvent(peer: myPeerId, bytes: 256) { service in
-            service.radarDelegate?.proximityChanged(manager: service, remoteUUID: remoteUUID,
-                distanceMeters: distanceMeters, directionX: directionX, directionY: directionY, directionZ: directionZ)
-        }
-        // Update the the state and visualizations.
-//        let nextState = getDistanceDirectionState(from: nearbyObjectUpdate)
-//        updateVisualization(from: currentDistanceDirectionState, to: nextState, with: nearbyObjectUpdate)
-//        currentDistanceDirectionState = nextState
-    }
-
-    func session(_ session: NISession, didRemove nearbyObjects: [NINearbyObject], reason: NINearbyObject.RemovalReason) {
-        guard let peerToken = peerDiscoveryToken else {
-            print("didRemove called without peer token")
-            return
-        }
-        // Find the right peer.
-        let peerObj = nearbyObjects.first { (obj) -> Bool in
-            return obj.discoveryToken == peerToken
-        }
-
-        if peerObj == nil {
-            return
-        }
-
-//        currentDistanceDirectionState = .unknown
-
-        switch reason {
-        case .peerEnded:
-            // The peer token is no longer valid.
-            peerDiscoveryToken = nil
-            
-            // The peer stopped communicating, so invalidate the session because
-            // it's finished.
-            session.invalidate()
-            
-            // Restart the sequence to see if the peer comes back.
-//            startup()
-            
-            // Update the app's display.
-            updateInformationLabel(description: "Peer Ended")
-        case .timeout:
-            
-            // The peer timed out, but the session is valid.
-            // If the configuration is valid, run the session again.
-            if let config = session.configuration {
-                session.run(config)
-            }
-            updateInformationLabel(description: "Peer Timeout")
-        default:
-            print("Unknown and unhandled NINearbyObject.RemovalReason: \(reason)")
-        }
-    }
-
-    func sessionWasSuspended(_ session: NISession) {
-//        currentDistanceDirectionState = .unknown
-        updateInformationLabel(description: "Session suspended")
-    }
-
-    func sessionSuspensionEnded(_ session: NISession) {
-        // Session suspension ended. The session can now be run again.
-        if let config = self.niSession?.configuration {
-            print("seesio run in suspension ended")
-            session.run(config)
-        } else {
-            // Create a valid configuration.
-            startup()
-        }
-
-//        centerInformationLabel.text = peerDisplayName
-//        detailDeviceNameLabel.text = peerDisplayName
-    }
-
-    func session(_ session: NISession, didInvalidateWith error: Error) {
-//        currentDistanceDirectionState = .unknown
-        print("Ni Session did invalidate with error: \(error)")
-        // If the app lacks user approval for Nearby Interaction, present
-        // an option to go to Settings where the user can update the access.
-        if case NIError.userDidNotAllow = error {
-            if #available(iOS 15.0, *) {
-#if canImport(UIKit)
-                // In iOS 15.0, Settings persists Nearby Interaction access.
-                updateInformationLabel(description: "Nearby Interactions access required. You can change access for NIPeekaboo in Settings.")
-                // Create an alert that directs the user to Settings.
-                let accessAlert = UIAlertController(title: "Access Required",
-                                                    message: """
-                                                    NIPeekaboo requires access to Nearby Interactions for this sample app.
-                                                    Use this string to explain to users which functionality will be enabled if they change
-                                                    Nearby Interactions access in Settings.
-                                                    """,
-                                                    preferredStyle: .alert)
-                accessAlert.addAction(UIAlertAction(title: "Cancel", style: .cancel, handler: nil))
-                accessAlert.addAction(UIAlertAction(title: "Go to Settings", style: .default, handler: {_ in
-                    // Send the user to the app's Settings to update Nearby Interactions access.
-                    if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(settingsURL, options: [:], completionHandler: nil)
-                    }
-                }))
-
-                // Display the alert.
-//                present(accessAlert, animated: true, completion: nil)
-#endif
-            } else {
-                // Before iOS 15.0, ask the user to restart the app so the
-                // framework can ask for Nearby Interaction access again.
-                updateInformationLabel(description: "Nearby Interactions access required. Restart NIPeekaboo to allow access.")
-            }
-
-            return
-        }
-
-        // Recreate a valid session.
-        startup()
-    }
-
-    
-}
-#endif

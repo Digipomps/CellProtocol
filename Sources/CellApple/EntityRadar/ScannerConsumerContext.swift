@@ -15,13 +15,15 @@ final class ScannerConsumerContext: @unchecked Sendable {
     let localUUID: String
     let remoteUUID: String
     let generation: String
+    let setupID: String
 
     init(service: ScannerService, physical: ScannerPeerTransport) throws {
         self.service = service; self.physical = physical
         localIdentity = try BridgeChannelAuthentication.PublicIdentity(service.owner)
         session = physical.gate.session
-        guard let identity = session.publicIdentity else { throw CancellationError() }
+        guard let endpoint = session.peerEndpoint, let identity = session.publicIdentity else { throw CancellationError() }
         self.identity = identity
+        setupID = endpoint.setupID
         localUUID = service.mySessionUUID; remoteUUID = physical.remoteUUID
         generation = session.generation
         try check()

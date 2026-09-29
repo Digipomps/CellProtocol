@@ -602,8 +602,9 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         try await pair.finish(pair.start()); try await pair.addThirdPeer(authenticate: false)
         let c = try XCTUnwrap(pair.c), ac = try XCTUnwrap(pair.ac), pc = try XCTUnwrap(pair.pc)
         let before = pair.wire.history.count
-        let sent = try await pair.a.shareDiscoveryTokenData(Data("opaque-ni-archive".utf8))
-        XCTAssertEqual(sent, 1)
+        let context = try pair.a.consumerContext(remoteUUID: pair.b.mySessionUUID)
+        try await pair.a.shareDiscoveryTokenData(Data("opaque-ni-archive".utf8), generation: UUID(), context: context)
+        XCTAssertThrowsError(try pair.a.consumerContext(remoteUUID: c.mySessionUUID))
         let selected = Array(pair.wire.history.dropFirst(before))
         XCTAssertEqual(selected.count, 1); XCTAssertEqual(selected.first?.to, pair.bPeer)
         XCTAssertTrue(selected.first?.sealed == true)
@@ -611,11 +612,11 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         try await pair.deliverNext()
         XCTAssertEqual(ac.gate.session.state, .unauthenticated)
         XCTAssertEqual(pc.gate.session.state, .unauthenticated)
-        try await pair.authenticateTransports(ac, pc) // pending handshake survived the broadcast
+        try await pair.authenticateTransports(ac, pc) // pending handshake survived the targeted NI send
         pair.a.channelLimits.revoke(identity: try A.PublicIdentity(c.owner), domain: "nearby")
         let revokedStart = pair.wire.history.count
-        let afterRevoke = try await pair.a.shareDiscoveryTokenData(Data("second-token".utf8))
-        XCTAssertEqual(afterRevoke, 1)
+        try await pair.a.shareDiscoveryTokenData(Data("second-token".utf8), generation: UUID(), context: context)
+        XCTAssertThrowsError(try pair.a.consumerContext(remoteUUID: c.mySessionUUID))
         XCTAssertEqual(Array(pair.wire.history.dropFirst(revokedStart)).map(\.to), [pair.bPeer])
         try await pair.deliverNext(); try pair.pa.gate.session.check(); try pair.pb.gate.session.check()
     }
@@ -646,8 +647,12 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         let pair = try await ScannerPair(limits: BridgeChannelLimits(configuration: configuration)); defer { pair.stop() }
         try await pair.finish(pair.start())
         let before = pair.wire.history.count
-        let sent = try await pair.a.shareDiscoveryTokenData(Data(repeating: 7, count: 20 * 1024))
-        XCTAssertEqual(sent, 0); XCTAssertEqual(pair.wire.history.count, before)
+        let context = try pair.a.consumerContext(remoteUUID: pair.b.mySessionUUID)
+        do {
+            try await pair.a.shareDiscoveryTokenData(Data(repeating: 7, count: 20 * 1024), generation: UUID(), context: context)
+            XCTFail("NI send escaped existing quota")
+        } catch {}
+        XCTAssertEqual(pair.wire.history.count, before)
         XCTAssertThrowsError(try pair.pa.gate.session.check())
     }
 

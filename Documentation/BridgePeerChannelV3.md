@@ -199,7 +199,9 @@ proof, independent crypto audit or production approval is claimed.
 [Scanner admission and ordering](ScannerAdmissionAndOrdering.md) describes the
 N10/N11/N16 consumer, invitation and pre-authentication budgets.
 [EntityScanner consumer security](ScannerConsumerSecurity.md) specifies N13/N20
-work leases, pending records and contact-proof validation. NI remains N12 work. See the physical flow-control document
+work leases, pending records and contact-proof validation.
+[Scanner NI binding](ScannerNearbyInteraction.md) specifies the N12 per-peer
+sessions, immutable tokens and callback retirement. See the physical flow-control document
 for measured resource bounds and the remaining MC reassembly limitation.
 [Shared bridge lifecycle rules](BridgeLifecycle.md) describe the N23–N26 response,
 mux-send, factory and signing protections. A controlled inner-wire relay is not a three-process MC MITM or a radio/NI device test.
