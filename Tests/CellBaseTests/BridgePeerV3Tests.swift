@@ -167,10 +167,12 @@ actor V3Vault: IdentityVaultProtocol {
 private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     weak var gate: BridgeChannelTransport?
     let wire = V3Wire()
+    var beforeFirstSubmission: (@Sendable () async -> Void)?
     var afterFirstSubmission: (@Sendable () async -> Void)?
     func setDelegate(_ delegate: BridgeDelegateProtocol) { gate = delegate as? BridgeChannelTransport }
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
     func sendData(_ data: Data) async throws {
+        if wire.count == 0 { await beforeFirstSubmission?() }
         try gate!.submitPeerFrame(data) { try wire.append($0) }
         if wire.count == 1 { await afterFirstSubmission?() }
     }
@@ -224,7 +226,7 @@ private final class V3GatePair {
     let limits: BridgeChannelLimits
     let io: Identity, ro: Identity
     init(policy: P.DisclosurePolicy? = nil, responderPolicy: P.DisclosurePolicy? = nil,
-         family: String = "vectors", sameIdentity: Bool = false, limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil,
+         family: String = "vectors", sameIdentity: Bool = false, limits: BridgeChannelLimits = .init(), factoryBarrier: V3Barrier? = nil, factoryRole: P.Role = .initiator,
          recheck: @escaping @Sendable (A.PublicIdentity) async throws -> Void = { _ in }) throws {
         self.limits = limits
         let v = try BridgePeerV3Tests.vectors(family)
@@ -237,12 +239,16 @@ private final class V3GatePair {
             limits: limits, source: UUID().uuidString, disclosurePolicy: policy ?? .anyProvenIdentity(allowUnauthenticatedInitiator: true),
             recheckPolicy: recheck, wallClock: clock.date, monotonic: clock.uptime) { [id] gate, _ in
                 id.created(); gate.setDelegate(id)
-                await factoryBarrier?.wait()
+                if factoryRole == .initiator { await factoryBarrier?.wait() }
                 return id
             }
         r = try BridgeChannelTransport(underlying: rt, peerEndpoint: endpoint, role: .responder, owner: ro,
             limits: limits, source: UUID().uuidString, disclosurePolicy: responderPolicy ?? .anyProvenIdentity(allowUnauthenticatedInitiator: true),
-            wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, _ in rd.created(); gate.setDelegate(rd); return rd }
+            wallClock: clock.date, monotonic: clock.uptime) { [rd] gate, _ in
+                rd.created(); gate.setDelegate(rd)
+                if factoryRole == .responder { await factoryBarrier?.wait() }
+                return rd
+            }
     }
     func start() async throws -> Task<Void, Error> {
         let task = Task { try await i.startPeer() }
@@ -325,21 +331,25 @@ extension BridgePeerV3Tests {
     }
 
     func testSuspendedFactoryIsRetiredOnceAndNeverPublishesReady() async throws {
-        let barrier = V3Barrier(), pair = try V3GatePair(factoryBarrier: barrier)
-        let task = try await pair.start()
-        for step in 1...3 { try await pair.step(step) }
-        let pending = Task { try await pair.step(4) }
-        await barrier.reached()
-        await pair.i.close()
-        XCTAssertFalse(pair.i.canSendPeerData)
-        XCTAssertEqual(pair.id.counts.close, 0, "Provisional delegate is owned by the factory")
-        await barrier.release()
-        do { try await pending.value; XCTFail() } catch {}
-        XCTAssertEqual(pair.id.counts.close, 1)
-        XCTAssertFalse(pair.i.canSendPeerData)
-        await pair.stop(task)
-        XCTAssertEqual(pair.id.counts.close, 1)
-        XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+        for role in [P.Role.initiator, .responder] {
+            let barrier = V3Barrier(), pair = try V3GatePair(factoryBarrier: barrier, factoryRole: role)
+            let stepToHold = role == .initiator ? 4 : 5
+            let gate = role == .initiator ? pair.i : pair.r, delegate = role == .initiator ? pair.id : pair.rd
+            let task = try await pair.start()
+            for step in 1..<stepToHold { try await pair.step(step) }
+            let pending = Task { try await pair.step(stepToHold) }
+            await barrier.reached()
+            await gate.close()
+            XCTAssertFalse(gate.canSendPeerData)
+            XCTAssertEqual(delegate.counts.close, 0, "Provisional delegate is owned by the factory")
+            await barrier.release()
+            do { try await pending.value; XCTFail() } catch {}
+            XCTAssertEqual(delegate.counts.close, 1)
+            XCTAssertFalse(gate.canSendPeerData)
+            await pair.stop(task)
+            XCTAssertEqual(delegate.counts.close, 1)
+            XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+        }
     }
 }
 
@@ -378,6 +388,7 @@ private struct V3VectorExchange {
         XCTAssertEqual(wire.count, before, label, file: file, line: line)
         do { _ = try await receive(step, v["W\(step)"]!); XCTFail("Reopened \(label)", file: file, line: line) } catch {}
         if step == 2 { let count = await iv.signCount; XCTAssertEqual(count, 0, label, file: file, line: line) }
+        if step == 1 { let count = await rv.signCount; XCTAssertEqual(count, 0, label, file: file, line: line) }
     }
 }
 
@@ -429,7 +440,7 @@ extension BridgePeerV3Tests {
                 }
                 try await V3VectorExchange().assertRejected(step, changed, label: "M\(step)/\(field)")
             }
-            for time: Int64 in [-1, Int64.min, 1_799_999_990_125, 1_800_000_005_126] {
+            for time: Int64 in [-1, Int64.min, step == 1 ? 1_799_999_990_250 : 1_799_999_990_125, step == 1 ? 1_800_000_005_251 : 1_800_000_005_126] {
                 let changed = try changedEnvelope(v["W\(step)"]!) { body in
                     if step == 1 { body["issuedAtMilliseconds"] = time }
                     else { var hello = body["hello"] as! [String: Any]; hello["issuedAtMilliseconds"] = time; body["hello"] = hello }
@@ -616,5 +627,54 @@ extension BridgePeerV3Tests {
         try await task.value
         try pair.i.session.check(); try pair.r.session.check()
         await pair.stop(task)
+    }
+}
+
+extension BridgePeerV3Tests {
+    func testCloseAndDirectRevokeWinBeforePhysicalSendAdmission() async throws {
+        for role in [P.Role.initiator,.responder] {
+            for revoke in [true,false] {
+                let pair = try V3GatePair(), barrier = V3Barrier()
+                let physical = role == .initiator ? pair.it : pair.rt
+                physical.beforeFirstSubmission = { await barrier.wait() }
+                let start = Task { try await pair.i.startPeer() }
+                let pending = Task {
+                    if role == .responder {
+                        for _ in 0..<1000 { if pair.it.wire.last != nil { break }; await Task.yield() }
+                        try await pair.step(1)
+                    }
+                }
+                await barrier.reached()
+                if revoke { physical.gate!.session.revoke() } else { await physical.gate!.close() }
+                await barrier.release()
+                _ = try? await pending.value
+                if role == .initiator { do { try await start.value; XCTFail() } catch {} }
+                XCTAssertEqual(physical.wire.count, 0)
+                XCTAssertEqual(pair.id.counts.factory + pair.rd.counts.factory, 0)
+                await pair.stop(start)
+                XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+            }
+        }
+    }
+
+    func testRetiredSignerCannotAffectFreshChannelWithSameIdentity() async throws {
+        let limits = BridgeChannelLimits(), old = try V3GatePair(limits: limits), barrier = V3Barrier()
+        await old.rv.setBarriers(sign: { await barrier.wait() })
+        let task = try await old.start(), pending = Task { try await old.step(1) }
+        await barrier.reached()
+        await old.r.close(); await old.i.close()
+        XCTAssertGreaterThan(limits.outstandingWorkCount, 0)
+        let fresh = try V3GatePair(limits: limits), next = try await fresh.start()
+        for step in 1...5 { try await fresh.step(step) }
+        try await next.value
+        await barrier.release()
+        do { try await pending.value; XCTFail() } catch {}
+        _ = try? await task.value
+        XCTAssertEqual(old.rt.wire.count, 0)
+        try fresh.i.session.check(); try fresh.r.session.check()
+        XCTAssertTrue(fresh.i.canSendPeerData); XCTAssertTrue(fresh.r.canSendPeerData)
+        await fresh.stop(next)
+        XCTAssertEqual(limits.outstandingWorkCount, 0)
+        XCTAssertEqual(limits.retainedConnectionCount, 0)
     }
 }
