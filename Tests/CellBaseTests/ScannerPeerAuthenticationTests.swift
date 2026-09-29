@@ -758,8 +758,8 @@ private final class ScannerPair {
         else { resolvedOwnerA = await Self.owner() }
         let ownerB = await Self.owner()
         let suffix = UUID().uuidString
-        a = ScannerService(owner: resolvedOwnerA, sessionUUID: (reverse ? "second-" : "first-") + suffix)
-        b = ScannerService(owner: ownerB, sessionUUID: (reverse ? "first-" : "second-") + suffix)
+        a = ScannerService(admission: ScannerAdmission(), owner: resolvedOwnerA, sessionUUID: (reverse ? "second-" : "first-") + suffix)
+        b = ScannerService(admission: ScannerAdmission(), owner: ownerB, sessionUUID: (reverse ? "first-" : "second-") + suffix)
         a.channelLimits = limits; b.channelLimits = limits
         a.foundPeersDict[b.mySessionUUID] = bPeer; a.reversedFoundPeersDict[bPeer] = b.mySessionUUID
         b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID
@@ -784,7 +784,7 @@ private final class ScannerPair {
         return identity
     }
     func addThirdPeer(authenticate: Bool = true) async throws {
-        let c = ScannerService(owner: await Self.owner(), sessionUUID: "third-" + UUID().uuidString)
+        let c = ScannerService(admission: ScannerAdmission(), owner: await Self.owner(), sessionUUID: "third-" + UUID().uuidString)
         self.c = c; c.channelLimits = a.channelLimits
         a.foundPeersDict[c.mySessionUUID] = cPeer; a.reversedFoundPeersDict[cPeer] = c.mySessionUUID
         c.foundPeersDict[a.mySessionUUID] = aPeer; c.reversedFoundPeersDict[aPeer] = a.mySessionUUID

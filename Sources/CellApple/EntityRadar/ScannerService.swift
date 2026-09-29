@@ -68,7 +68,7 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     let peerID: MCPeerID
     let mcSession: MCSession
     let role: BridgePeerChannelAuthentication.Role
-    let setupID = UUID()
+    let setupID: UUID
     var isInitiator: Bool { role == .initiator }
     private weak var delegate: BridgeDelegateProtocol?
     private let sendLock = NSLock()
@@ -84,11 +84,12 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     var channelSession: BridgeChannelSession? { gate?.session }
 
     init(service: ScannerService, remoteUUID: String, peerID: MCPeerID,
-         session: MCSession, endpoint: BridgePeerChannelAuthentication.Endpoint) {
+         session: MCSession, endpoint: BridgePeerChannelAuthentication.Endpoint, invitationID: UUID) {
         self.service = service
         self.remoteUUID = remoteUUID
         self.peerID = peerID
         self.mcSession = session
+        self.setupID = invitationID
         self.role = endpoint.initiator == service.mySessionUUID ? .initiator : .responder
     }
 
@@ -208,15 +209,16 @@ class ScannerService :  NSObject, ObservableObject {
         let remoteUUID: String
         let endpoint: BridgePeerChannelAuthentication.Endpoint?
         let deadline: TimeInterval
+        let admission: ScannerAdmission.Lease
         var state: State
         var handler: ((Bool, MCSession?) -> Void)?
 
         init(generation: UUID, peer: MCPeerID, session: MCSession, remoteUUID: String,
              endpoint: BridgePeerChannelAuthentication.Endpoint?, deadline: TimeInterval,
-             state: State, handler: ((Bool, MCSession?) -> Void)? = nil) {
+             state: State, admission: ScannerAdmission.Lease, handler: ((Bool, MCSession?) -> Void)? = nil) {
             self.generation = generation; self.peer = peer; self.session = session
             self.remoteUUID = remoteUUID; self.endpoint = endpoint; self.deadline = deadline
-            self.state = state; self.handler = handler
+            self.state = state; self.admission = admission; self.handler = handler
         }
     }
 
@@ -338,6 +340,20 @@ class ScannerService :  NSObject, ObservableObject {
     private let serviceBrowser : MCNearbyServiceBrowser
 
     private var invitations = [String: Invitation]()
+    let admission: ScannerAdmission
+    private var discoveries: [MCPeerID: ScannerAdmission.Lease] = [:]
+    private struct PendingEvent {
+        let generation: UUID
+        let lease: ScannerAdmission.Lease
+        let action: @MainActor (ScannerService) -> Void
+        let discard: () -> Void
+    }
+    private var events: [UUID: PendingEvent] = [:]
+    private var eventOrder: [UUID] = []
+    private var eventDrainScheduled = false
+    // A test can hold the one drain without creating Tasks for each peer.
+    var deferEventDrainForTesting = false
+    private var scheduledSetups: Set<UUID> = []
     private var serviceGeneration = UUID()
     private var stopped = false
     private var maintenance: DispatchSourceTimer?
@@ -449,6 +465,42 @@ class ScannerService :  NSObject, ObservableObject {
         } catch { reportBridgeFailure(error, remoteUUID: remote) }
     }
 
+    /// One bounded, expiring main-actor queue for discovery UI and context work.
+    /// The scheduled task captures only self weakly; expired entries release
+    /// their payload even when the main actor has not yet drained the queue.
+    @discardableResult
+    private func enqueueEvent(peer: MCPeerID, bytes: Int, kind: ScannerAdmission.Kind = .event,
+                              discard: @escaping () -> Void = {}, reserved: ScannerAdmission.Lease? = nil, action: @escaping @MainActor (ScannerService) -> Void) -> Bool {
+        withState {
+            guard !stopped, let lease = reserved ?? admission.reserve(kind, peer: peer, bytes: bytes) else { return false }
+            let id = UUID(), generation = serviceGeneration
+            events[id] = PendingEvent(generation: generation, lease: lease, action: action, discard: discard)
+            eventOrder.append(id)
+            if !eventDrainScheduled && !deferEventDrainForTesting {
+                eventDrainScheduled = true
+                Task { @MainActor [weak self] in self?.drainEvents(generation: generation) }
+            }
+            return true
+        }
+    }
+
+    @MainActor func drainEventsForTesting() { drainEvents(generation: withState { serviceGeneration }) }
+    @MainActor private func drainEvents(generation: UUID) {
+        while let event = withState({ () -> PendingEvent? in
+            guard generation == serviceGeneration else { return nil }
+            guard !eventOrder.isEmpty else { eventDrainScheduled = false; return nil }
+            return events.removeValue(forKey: eventOrder.removeFirst())
+        }) {
+            withState {
+                // Stop/expiry cannot pass the last guard before publication.
+                if !stopped, event.generation == serviceGeneration, event.lease.isLive { event.action(self) }
+                else { event.discard() }
+            }
+            event.lease.release()
+        }
+    }
+    var queuedEventCount: Int { withState { events.count } }
+
     func makeInvitation(remoteUUID: String) throws -> BridgePeerChannelAuthentication.Endpoint {
         try withState {
             expireInvitations()
@@ -456,8 +508,11 @@ class ScannerService :  NSObject, ObservableObject {
                   bridgeTransportsByRemoteUUID[remoteUUID] == nil else { throw BridgeChannelAuthentication.Failure.unexpectedMessage }
             let endpoint = try BridgePeerChannelAuthentication.Endpoint(initiator: mySessionUUID, responder: remoteUUID,
                 setupID: UUID().uuidString, domain: "nearby")
+            guard let lease = admission.reserve(.invitation, peer: peer, bytes: try BridgeChannelAuthentication.encode(endpoint).count + 256) else {
+                throw BridgeChannelAuthentication.Failure.capacity
+            }
             invitations[remoteUUID] = Invitation(generation: serviceGeneration, peer: peer, session: mcSession,
-                remoteUUID: remoteUUID, endpoint: endpoint, deadline: invitationClock() + invitationTimeout, state: .outgoing)
+                remoteUUID: remoteUUID, endpoint: endpoint, deadline: invitationClock() + invitationTimeout, state: .outgoing, admission: lease)
             return endpoint
         }
     }
@@ -518,6 +573,7 @@ class ScannerService :  NSObject, ObservableObject {
     }
 
     init(
+        admission: ScannerAdmission = .shared,
         owner: Identity,
         serviceDicoveryInfoDict: [String: String] = ["v": NearbyBeacon.currentVersion, "k": "u"],
         invitationTimeout: TimeInterval = 30,
@@ -528,6 +584,7 @@ class ScannerService :  NSObject, ObservableObject {
         myPeerId = MCPeerID(displayName: Self.privatePeerDisplayName(sessionUUID: resolvedSessionUUID))
         
         self.owner = owner
+        self.admission = admission
         self.invitationTimeout = invitationTimeout
         
         var serviceDicoveryInfo = serviceDicoveryInfoDict
@@ -577,6 +634,9 @@ class ScannerService :  NSObject, ObservableObject {
             stopped = true; serviceGeneration = UUID()
             let pending = Array(invitations.values)
             invitations.removeAll()
+            let queued = Array(events.values); events.removeAll(); eventOrder.removeAll(); eventDrainScheduled = false
+            for event in queued { event.discard(); event.lease.release() }
+            discoveries.removeAll()
             for invitation in pending { invitation.handler?(false, nil); invitation.handler = nil }
             storedMCSession = nil
         }
@@ -613,7 +673,9 @@ class ScannerService :  NSObject, ObservableObject {
             if accept { invitation.state = .accepted }
             else { invitations[remoteUUID] = nil }
             handler?(accept, accept ? invitation.session : nil)
-            if !accept { radarDelegate?.scannerStatusChanged(manager: self, status: "invitationRejected", remoteUUID: remoteUUID) }
+            if !accept { enqueueEvent(peer: invitation.peer, bytes: 256) { service in
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "invitationRejected", remoteUUID: remoteUUID)
+            } }
             return true
         }
     }
@@ -621,13 +683,31 @@ class ScannerService :  NSObject, ObservableObject {
     func expireInvitations() {
         withState {
             let now = invitationClock()
-            let expired = invitations.values.filter { $0.deadline <= now }
+            for (peer, lease) in discoveries where !lease.isLive {
+                discoveries[peer] = nil
+                if let remote = _reversedFoundPeersDict.removeValue(forKey: peer), _foundPeersDict[remote] == peer {
+                    _foundPeersDict[remote] = nil; advertisementPeers.remove(remote); advertisementProofPeers.remove(remote)
+                    enqueueEvent(peer: peer, bytes: 256) { service in
+                        service.discoveredDevices = service.withState { service._foundPeersDict.values.map(\.displayName) }
+                        service.radarDelegate?.lostDeviceChanged(manager: service, lostDevice: peer, remoteUUID: remote)
+                    }
+                }
+            }
+            for (id, event) in events where !event.lease.isLive {
+                events[id] = nil; event.discard(); event.lease.release()
+            }
+            eventOrder.removeAll { events[$0] == nil }
+            let expired = invitations.values.filter { $0.deadline <= now || !$0.admission.isLive }
             for invitation in expired {
                 invitations[invitation.remoteUUID] = nil
                 let handler = invitation.handler; invitation.handler = nil
                 handler?(false, nil)
                 if invitation.state != .pending { invitation.session.cancelConnectPeer(invitation.peer) }
-                radarDelegate?.scannerStatusChanged(manager: self, status: "invitationExpired", remoteUUID: invitation.remoteUUID)
+                let remote = invitation.remoteUUID
+                invitation.admission.release()
+                enqueueEvent(peer: invitation.peer, bytes: 256) { service in
+                    service.radarDelegate?.scannerStatusChanged(manager: service, status: "invitationExpired", remoteUUID: remote)
+                }
             }
         }
     }
@@ -653,10 +733,20 @@ class ScannerService :  NSObject, ObservableObject {
                 // invitations never replace a handler or renew its deadline.
                 guard existing.state == .outgoing, endpoint != nil, mySessionUUID > remoteUUID else { handler(false, nil); return }
             }
-            invitations[remoteUUID] = Invitation(generation: serviceGeneration, peer: peerID, session: mcSession,
+            let bytes = (endpoint.flatMap { try? BridgeChannelAuthentication.encode($0).count } ?? 0) + remoteUUID.utf8.count + 256
+            guard let lease = admission.reserve(.invitation, peer: peerID, bytes: bytes, replacing: invitations[remoteUUID]?.admission) else {
+                handler(false, nil); return
+            }
+            let invitation = Invitation(generation: serviceGeneration, peer: peerID, session: mcSession,
                 remoteUUID: remoteUUID, endpoint: endpoint, deadline: invitationClock() + invitationTimeout,
-                state: .pending, handler: handler)
-            radarDelegate?.invitationReceived(manager: self, peerID: peerID, remoteUUID: remoteUUID)
+                state: .pending, admission: lease, handler: handler)
+            // Reserve the notification before retaining a handler the user could
+            // never see. Its delayed action rechecks the exact invitation ID.
+            guard enqueueEvent(peer: peerID, bytes: bytes, action: { [weak invitation] service in
+                guard let invitation, service.withState({ service.invitations[remoteUUID] === invitation && invitation.state == .pending }) else { return }
+                service.radarDelegate?.invitationReceived(manager: service, peerID: peerID, remoteUUID: remoteUUID)
+            }) else { invitations[remoteUUID] = nil; handler(false, nil); return }
+            invitations[remoteUUID] = invitation
         }
     }
 
@@ -673,12 +763,12 @@ class ScannerService :  NSObject, ObservableObject {
                   invitation.state != .pending, let endpoint = invitation.endpoint,
                   !bridgeTransportsByRemoteUUID.values.contains(where: { $0.peerID == peerID }) else { throw BridgeChannelAuthentication.Failure.unavailable }
             let physical = ScannerPeerTransport(service: self, remoteUUID: remoteUUID, peerID: invitation.peer,
-                                                session: invitation.session, endpoint: endpoint)
+                                                session: invitation.session, endpoint: endpoint, invitationID: invitation.id)
             bridgeTransportsByRemoteUUID[remoteUUID] = physical
             do {
                 physical.gate = try BridgeChannelTransport(underlying: physical, peerEndpoint: endpoint,
                     role: physical.role,
-                    owner: owner, limits: channelLimits, source: remoteUUID,
+                    owner: owner, limits: channelLimits, source: invitation.admission.source,
                     disclosurePolicy: .anyProvenIdentity(allowUnauthenticatedInitiator: true)) { [weak self, weak physical] transport, _ in
                         guard let self, let physical else { throw CancellationError() }
                         try self.checkCurrent(physical, remoteUUID: remoteUUID)
@@ -748,6 +838,30 @@ class ScannerService :  NSObject, ObservableObject {
             })
         }
         catch { reportBridgeFailure(error, on: physical); await physical.gate.close(); throw error }
+    }
+
+    private func scheduleBridgeSetup(_ physical: ScannerPeerTransport) {
+        withState {
+            guard !stopped, bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical,
+                  registeredBridgeUUIDsByRemoteUUID[physical.remoteUUID] == nil,
+                  !scheduledSetups.contains(physical.setupID),
+                  let lease = admission.reserve(.task, peer: physical.peerID, bytes: 256) else { return }
+            scheduledSetups.insert(physical.setupID)
+            Task { [weak self, physical] in
+                defer { self?.withState { _ = self?.scheduledSetups.remove(physical.setupID) }; lease.release() }
+                guard let self, lease.isLive else { return }
+                do {
+                    try await self.setupBridge(physical)
+                    guard lease.isLive else { throw CancellationError() }
+                    try self.checkCurrent(physical, remoteUUID: physical.remoteUUID)
+                    self.enqueueEvent(peer: physical.peerID, bytes: 256) { service in
+                        guard service.withState({ service.bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { return }
+                        service.radarDelegate?.scannerStatusChanged(manager: service, status: "connected", remoteUUID: physical.remoteUUID)
+                        service.startup()
+                    }
+                } catch { self.reportBridgeFailure(error, on: physical); await physical.gate.close() }
+            }
+        }
     }
 
     private func performBridgeSetup(_ peerTransport: ScannerPeerTransport) async throws {
@@ -971,20 +1085,22 @@ extension ScannerService : MCNearbyServiceAdvertiserDelegate {
     }
 
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        NSLog("%@", "didReceiveInvitationFromPeer \(peerID)")
+        // Bound context before decoding or creating main-actor work. Unknown
+        // contexts are never downgraded into a bridge invitation.
+        let bytes = (context?.count ?? 0) + 256
+        guard bytes <= admission.configuration.invitation.perSourceBytes,
+              let ingress = admission.reserve(.task, peer: peerID, bytes: bytes) else { invitationHandler(false, nil); return }
         if let context, let endpoint = try? BridgeChannelAuthentication.decode(BridgePeerChannelAuthentication.Endpoint.self, from: context) {
             receiveInvitation(from: peerID, endpoint: endpoint, handler: invitationHandler)
         } else if let context {
-            Task { @MainActor [weak self] in
-                guard let self, let remoteID = self.withState({ self._reversedFoundPeersDict[peerID] }) else {
-                    invitationHandler(false, nil); return
-                }
-                if self.advertisementExchange?.accept(context: context, peer: peerID,
-                    localPeer: self.myPeerId, reply: invitationHandler,
-                    localSessionID: self.mySessionUUID, remoteSessionID: remoteID) == true { return }
-                // Unrecognized contexts never widen the ordinary bridge invitation policy.
-                self.receiveInvitation(from: peerID, handler: invitationHandler)
+            let queued = enqueueEvent(peer: peerID, bytes: bytes, kind: .task, discard: { invitationHandler(false, nil) }, reserved: ingress) { service in
+                guard let remoteID = service.withState({ service._reversedFoundPeersDict[peerID] }) else { invitationHandler(false, nil); return }
+                if service.advertisementExchange?.accept(context: context, peer: peerID,
+                    localPeer: service.myPeerId, reply: invitationHandler,
+                    localSessionID: service.mySessionUUID, remoteSessionID: remoteID) == true { return }
+                invitationHandler(false, nil)
             }
+            if !queued { invitationHandler(false, nil) }
         } else {
             receiveInvitation(from: peerID, handler: invitationHandler)
         }
@@ -999,75 +1115,55 @@ extension ScannerService : MCNearbyServiceBrowserDelegate {
     }
 
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
-        NSLog("%@", "foundPeer discovered")
-//        NSLog("%@", "invitePeer: \(peerID)")
-        guard let remoteUUID = info?["uuid"] else {
-            print("Did not find remote uuid in info!")
-            return
+        guard let info, info.count <= 32, let remoteUUID = info["uuid"], !remoteUUID.isEmpty,
+              remoteUUID != mySessionUUID, remoteUUID.utf8.count <= 512 else { return }
+        // Incremental bounded byte count; never build a full names list or copy
+        // the metadata before admission. Dictionary/string allocation by MC is
+        // outside this application callback and is not claimed to be bounded.
+        var bytes = 256 + peerID.displayName.utf8.count
+        for (key, value) in info {
+            guard key.utf8.count <= 4096 - bytes, value.utf8.count <= 4096 - bytes - key.utf8.count else { return }
+            bytes += key.utf8.count + value.utf8.count
         }
-        guard remoteUUID != mySessionUUID else {
-            return
+        withState {
+            expireInvitations()
+            guard !stopped else { return }
+            if let bound = bridgeTransportsByRemoteUUID[remoteUUID], bound.peerID != peerID { return }
+            if bridgeTransportsByRemoteUUID.values.contains(where: { $0.peerID == peerID && $0.remoteUUID != remoteUUID }) { return }
+            if let invitation = invitations[remoteUUID], invitation.peer != peerID { return }
+            if invitations.values.contains(where: { $0.peer == peerID && $0.remoteUUID != remoteUUID }) { return }
+            guard let lease = admission.reserve(.discovery, peer: peerID, bytes: bytes, replacing: discoveries[peerID]) else { return }
+            if let previous = _reversedFoundPeersDict[peerID], previous != remoteUUID {
+                _foundPeersDict[previous] = nil; advertisementPeers.remove(previous); advertisementProofPeers.remove(previous)
+            }
+            if let previous = _foundPeersDict[remoteUUID], previous != peerID {
+                _reversedFoundPeersDict[previous] = nil; discoveries[previous] = nil
+            }
+            discoveries[peerID] = lease
+            _foundPeersDict[remoteUUID] = peerID; _reversedFoundPeersDict[peerID] = remoteUUID
+            if info["ad"] == "1" { advertisementPeers.insert(remoteUUID) } else { advertisementPeers.remove(remoteUUID) }
+            if info["ad"] == "1", info["adp"] == "2" { advertisementProofPeers.insert(remoteUUID) } else { advertisementProofPeers.remove(remoteUUID) }
+            enqueueEvent(peer: peerID, bytes: bytes) { [weak lease] service in
+                guard let lease, service.withState({ service.discoveries[peerID] === lease && lease.isLive }) else { return }
+                service.discoveredDevices = service.withState { service._foundPeersDict.values.map(\.displayName) }
+                service.radarDelegate?.foundDevicesChanged(manager: service, foundDevice: peerID, remoteUUID: remoteUUID, discoveryInfo: info)
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "peerFound", remoteUUID: remoteUUID)
+            }
         }
-        let discoveredPeerNames = withState { () -> [String]? in
-            if let bound = bridgeTransportsByRemoteUUID[remoteUUID], bound.peerID != peerID { return nil }
-            if bridgeTransportsByRemoteUUID.values.contains(where: { $0.peerID == peerID && $0.remoteUUID != remoteUUID }) { return nil }
-            // Invitation ownership survives lostPeer and is independent of
-            // both mutable discovery indexes, in both collision directions.
-            if let invitation = invitations[remoteUUID], invitation.peer != peerID { return nil }
-            if invitations.values.contains(where: { $0.peer == peerID && $0.remoteUUID != remoteUUID }) { return nil }
-            if let previous = _reversedFoundPeersDict[peerID], previous != remoteUUID { _foundPeersDict[previous] = nil }
-            if let previous = _foundPeersDict[remoteUUID], previous != peerID { _reversedFoundPeersDict[previous] = nil }
-            _foundPeersDict[remoteUUID] = peerID
-            _reversedFoundPeersDict[peerID] = remoteUUID
-            if info?["ad"] == "1" { advertisementPeers.insert(remoteUUID) }
-            else { advertisementPeers.remove(remoteUUID) }
-            if info?["ad"] == "1", info?["adp"] == "2" { advertisementProofPeers.insert(remoteUUID) }
-            else { advertisementProofPeers.remove(remoteUUID) }
-            return _foundPeersDict.values.map(\.displayName)
-        }
-
-        guard let discoveredPeerNames else {
-            radarDelegate?.scannerStatusChanged(manager: self, status: "peerDiscoveryCollision", remoteUUID: remoteUUID)
-            return
-        }
-        self.discoveredDevices = discoveredPeerNames
-        print("Discovered devices: \(String(describing: self.discoveredDevices))")
-        self.radarDelegate?.foundDevicesChanged(
-            manager: self,
-            foundDevice: peerID,
-            remoteUUID: remoteUUID,
-            discoveryInfo: info
-        )
-        self.radarDelegate?.scannerStatusChanged(manager: self, status: "peerFound", remoteUUID: remoteUUID)
-        
-
-        
-
-        
-        
-//        browser.invitePeer(peerID, to: self.session, withContext: nil, timeout: 10)
     }
 
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
-        NSLog("%@", "lostPeer: \(peerID)")
-        // remove from connected too?
-        
-        let remoteUUID = withState { () -> String? in
-            guard let remoteUUID = _reversedFoundPeersDict.removeValue(forKey: peerID) else {
-                return nil
+        withState {
+            guard let remoteUUID = _reversedFoundPeersDict.removeValue(forKey: peerID), _foundPeersDict[remoteUUID] == peerID else { return }
+            _foundPeersDict[remoteUUID] = nil; discoveries[peerID] = nil
+            advertisementPeers.remove(remoteUUID); advertisementProofPeers.remove(remoteUUID)
+            enqueueEvent(peer: peerID, bytes: 256) { service in
+                guard service.withState({ service._foundPeersDict[remoteUUID] == nil }) else { return }
+                service.discoveredDevices = service.withState { service._foundPeersDict.values.map(\.displayName) }
+                service.radarDelegate?.lostDeviceChanged(manager: service, lostDevice: peerID, remoteUUID: remoteUUID)
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "peerLost", remoteUUID: remoteUUID)
             }
-            _foundPeersDict.removeValue(forKey: remoteUUID)
-            advertisementPeers.remove(remoteUUID)
-            advertisementProofPeers.remove(remoteUUID)
-            return remoteUUID
         }
-        if let remoteUUID {
-            // Discovery loss is not a physical disconnect. The bound channel survives.
-            self.radarDelegate?.lostDeviceChanged(manager: self, lostDevice: peerID, remoteUUID: remoteUUID)
-            self.radarDelegate?.scannerStatusChanged(manager: self, status: "peerLost", remoteUUID: remoteUUID)
-        }
-        self.discoveredDevices = withState { _foundPeersDict.values.map(\.displayName) }
-        print("Discovered devices2: \(String(describing: self.discoveredDevices))")
     }
     
     
@@ -1110,37 +1206,26 @@ extension ScannerService : MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         let physical = try? capturePeerTransport(session: session, peerID: peerID, prepare: state == .connected)
         // Retire synchronously; an old queued UI callback cannot retire a reconnect.
-        if state == .notConnected {
-            if let physical { peerDisconnected(physical) }
-            else { withState {
-                for invitation in invitations.values.filter({ $0.peer == peerID && $0.session === session }) {
-                    invitations[invitation.remoteUUID] = nil
-                    invitation.handler?(false, nil); invitation.handler = nil
-                }
-            } }
-        }
-        DispatchQueue.main.async { [weak self, physical] in
-            guard let self else { return }
-            self.connectedDevices = session.connectedPeers.map(\.displayName)
-            self.radarDelegate?.connectedDevicesChanged(manager: self, connectedDevices: session.connectedPeers.map(\.displayName))
-            guard let physical, self.withState({ self.bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { return }
+        if state == .notConnected, let physical { peerDisconnected(physical) }
+        // An unbound MC callback carries no invitation instance ID. It may be
+        // cancellation of an older timed-out attempt on this shared MCSession;
+        // only the captured invitation deadline/explicit response may retire it.
+        guard let physical else { return }
+        enqueueEvent(peer: peerID, bytes: 256) { [weak physical] service in
+            guard let physical else { return }
+            service.connectedDevices = session.connectedPeers.map(\.displayName)
+            service.radarDelegate?.connectedDevicesChanged(manager: service, connectedDevices: session.connectedPeers.map(\.displayName))
+            guard service.withState({ service.bridgeTransportsByRemoteUUID[physical.remoteUUID] === physical }) else { return }
             switch state {
             case .connecting:
-                self.radarDelegate?.scannerStatusChanged(manager: self, status: "connecting", remoteUUID: physical.remoteUUID)
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "connecting", remoteUUID: physical.remoteUUID)
             case .connected:
-                self.connectedPublisher.send(true)
-                self.connectedPeerIdDisplayname = physical.peerID.displayName
-                self.connectedPeer = physical.peerID
-                self.connectedRemoteUUID = physical.remoteUUID
-                self.radarDelegate?.scannerStatusChanged(manager: self, status: "authenticating", remoteUUID: physical.remoteUUID)
-                Task {
-                    do {
-                        try await self.setupBridge(physical)
-                        try self.checkCurrent(physical, remoteUUID: physical.remoteUUID)
-                        self.radarDelegate?.scannerStatusChanged(manager: self, status: "connected", remoteUUID: physical.remoteUUID)
-                        self.startup()
-                    } catch { self.reportBridgeFailure(error, on: physical) }
-                }
+                service.connectedPublisher.send(true)
+                service.connectedPeerIdDisplayname = physical.peerID.displayName
+                service.connectedPeer = physical.peerID
+                service.connectedRemoteUUID = physical.remoteUUID
+                service.radarDelegate?.scannerStatusChanged(manager: service, status: "authenticating", remoteUUID: physical.remoteUUID)
+                service.scheduleBridgeSetup(physical)
             default: break
             }
         }
@@ -1154,7 +1239,7 @@ extension ScannerService : MCSessionDelegate {
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         guard let physical = try? capturePeerTransport(session: session, peerID: peerID, prepare: true) else { return }
-        Task { [weak self, physical] in try? await self?.setupBridge(physical) }
+        scheduleBridgeSetup(physical)
         physical.enqueueReceive(data) // preserve callback order before Task scheduling
     }
 

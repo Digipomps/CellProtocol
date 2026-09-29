@@ -54,9 +54,10 @@ Do not treat a failed run as an authenticated connection.
 
 Each installed ScannerPeerTransport retains its MCPeerID, MCSession instance,
 local setup ID and role. Send, callback capture and retirement use this object
-binding. Discovery cannot replace an installed adapter. Pending/accepted
-invitation ownership before adapter creation remains N11 work; it must not be
-inferred from the installed-adapter guarantee.
+binding. Pending, accepted and outgoing invitations also retain their original
+physical peer/session/endpoint independently of discovery. Acceptance is atomic;
+unfinished setups expire. See [Scanner admission and ordering](../Documentation/ScannerAdmissionAndOrdering.md)
+for the N10/N11/N16 contract, budgets and Sybil limitation.
 
 The active [peer v3 contract](../Documentation/BridgePeerChannelV3.md) protects
 identity fields against a pure inner-handshake relay and encrypts all subsequent
@@ -72,8 +73,8 @@ Auth frames and WS frames omit the inner generation field. Both peer ends must
 run v3; v1/v2/HPC2 and plaintext application frames are rejected. Actual encoded
 wire bytes, padding and cryptographic overhead count toward send limits.
 
-The former N07 application-integrity gap is closed. Consumer ordering (N10),
-physical retirement (N15), general delivery backpressure (N18), contact/NI
+The former N07 application-integrity gap is closed. Consumer ordering now extends through dispatch, with origin-signing RPC
+progress on a separate scheduling lane. Physical retirement (N15), general delivery backpressure (N18), contact/NI
 binding and other review findings remain separate work and verification gates.
 
 NI discovery tokens use shareDiscoveryTokenData, one gated send per eligible

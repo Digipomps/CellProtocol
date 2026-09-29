@@ -28,7 +28,7 @@ final class EntityScannerCellContractTests: XCTestCase {
     func testPeerBridgeFailureReachesScannerStatusFlow() async throws {
         let vault = MockIdentityVault(), owner = await vault.identity(for: "scanner", makeNewIfNotFound: true)!
         CellBase.defaultIdentityVault = vault
-        let cell = await EntityScannerCell(owner: owner), service = ScannerService(owner: owner)
+        let cell = await EntityScannerCell(owner: owner), service = ScannerService(admission: ScannerAdmission(), owner: owner)
         defer { service.stop() }
         let reported = expectation(description: "consumer received peer auth failure")
         let subscription = cell.getFeedPublisher().sink(receiveCompletion: { _ in }, receiveValue: { flow in

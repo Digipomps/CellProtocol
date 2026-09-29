@@ -192,8 +192,9 @@ secrets; dropping Swift references does not attest zeroization of OS copies.
 No general anonymity, DoS, post-compromise recovery, deniability, formal security
 proof, independent crypto audit or production approval is claimed.
 
-Pending invitation binding, consumer ordering, NI/contact binding and physical
-resource bounds remain the separate findings N10–N16/N18/N20.
+[Scanner admission and ordering](ScannerAdmissionAndOrdering.md) describes the
+N10/N11/N16 consumer, invitation and pre-authentication budgets. NI/contact
+binding and physical resource bounds remain separate findings N12–N15/N18/N20.
 [Shared bridge lifecycle rules](BridgeLifecycle.md) describe the N23–N26 response,
 mux-send, factory and signing protections. A controlled inner-wire relay is not a three-process MC MITM or a radio/NI device test.
 
