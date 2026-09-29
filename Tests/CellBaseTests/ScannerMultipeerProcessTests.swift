@@ -43,10 +43,15 @@ final class ScannerMultipeerProcessTests: XCTestCase {
             }
         }
         try await runPhysicalIsolationProcesses()
+        try await runRelayProcesses()
     }
 
     func testMultipeerWorker() async throws {
         let env = ProcessInfo.processInfo.environment
+        if let role = env["CP53_RELAY_ROLE"], let path = env["CP53_PEER_DIRECTORY"] {
+            try await runRelayWorker(role: role, folder: URL(fileURLWithPath: path))
+            return
+        }
         if let role = env["CP53_ISOLATION_ROLE"], let path = env["CP53_PEER_DIRECTORY"] {
             try await runPhysicalIsolationWorker(role: role, folder: URL(fileURLWithPath: path))
             return

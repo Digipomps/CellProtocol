@@ -79,6 +79,12 @@ extension ScannerMultipeerProcessTests {
                 try await isolationWait { observer.connected && isolationExists(folder, "host-ready-" + phase) }
                 let peer = try XCTUnwrap(service.foundPeersDict[prefix + "a"])
                 let session = try service.sessionForPeer(peer), ignored = IsolationIgnoringReceiver()
+                let physical = try service.capturePeerTransport(session: session, peerID: peer)
+                // Both full Scanner setups must drain their application records
+                // before B stops receipts. Otherwise a startup record can occupy
+                // one of the 32 slots and make the host's 32nd load send wait
+                // until the production ten-second deadline correctly closes it.
+                try await isolationWait { physical.gate.peerOutstandingUsage.dataRecords == 0 && isolationExists(folder, "host-drained-" + phase) }
                 session.delegate = ignored // deliberately stops app receipt/close processing
                 try isolationMark(folder, phase + ".ready", "authenticated; ignoring app traffic")
                 let waitStarted = ProcessInfo.processInfo.systemUptime
@@ -144,10 +150,13 @@ extension ScannerMultipeerProcessTests {
                 try isolationMark(folder, "\(phase).checked", "physical=1; siblingFlows=\(observer.flows); rss=\(isolationRSS()); baselineRSS=\(baseline); cancelledResources=\(observer.cancelledResources); closedStreams=\(observer.closedStreams)")
             }
             for phase in ["revoke", "blocked"] {
-                try await isolationWait { isolationExists(folder, phase + ".ready") }
+                try await isolationWait { isolationExists(folder, "host-ready-" + phase) }
                 let before = observer.flows
                 let peer = try XCTUnwrap(service.foundPeersDict[prefix + "b" + phase])
                 let physical = try service.capturePeerTransport(session: service.sessionForPeer(peer), peerID: peer)
+                try await isolationWait { physical.gate.peerOutstandingUsage.dataRecords == 0 }
+                try isolationMark(folder, "host-drained-" + phase, "startup application records receipted")
+                try await isolationWait { isolationExists(folder, phase + ".ready") }
                 if phase == "revoke" {
                     service.channelLimits.revoke(identity: try XCTUnwrap(physical.gate.session.publicIdentity), domain: "nearby")
                 } else {

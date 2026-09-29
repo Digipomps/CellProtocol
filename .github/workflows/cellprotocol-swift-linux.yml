@@ -96,7 +96,7 @@ jobs:
           for suite in AgreementSecurityTests FileCryptoSecurityTests \
             FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
-            BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
+            PublisherAsyncLifetimeTests BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
             BridgeResponseLifetimeTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
             BridgeDiagnosticPrivacyTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \

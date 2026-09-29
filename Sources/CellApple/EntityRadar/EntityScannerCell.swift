@@ -142,19 +142,9 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         emitScannerEvent = await makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
         await registerContracts(requester: owner)
 
-        await addIntercept(requester: owner, intercept: { @MainActor [weak self] flowElement, requester in
-            CellBase.diagnosticLog("EntityScannerCell feed item title=\(flowElement.title) topic=\(flowElement.topic)", domain: .flow)
-
-            if flowElement.properties?.type == .event && flowElement.topic == "radar.service" {
-                do {
-                    try self?.gotSharedDicoveryToken(payload: flowElement.content)
-                } catch {
-                    CellBase.diagnosticLog("Handling shared discovery token failed: \(error)", domain: .flow)
-                }
-            }
-
-            return flowElement
-        })
+        // NI tokens are consumed only by ScannerService's authenticated
+        // ScannerConsumerContext path. A generic Cell feed has no physical
+        // principal/generation and must never install an NI token.
 
         await addInterceptForGet(requester: owner, key: "verificationMethods", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self = self else { return .string("failure") }
@@ -1695,38 +1685,6 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func colorChanged(manager: ScannerService, colorString: String) {
-    }
-
-    func setSharedToken() {
-    }
-
-    func getSharedToken() {
-    }
-
-    func gotSharedDicoveryToken(payload: FlowElementValueType) throws {
-        guard case let .object(paramObject) = payload else {
-            throw SetValueError.paramErr
-        }
-        guard let uuidValue = paramObject["userUuid"] else {
-            throw SetValueError.noParamValue("userUuid")
-        }
-        guard case let .string(userUuid) = uuidValue else {
-            throw SetValueError.paramErr
-        }
-        guard let tokenValue = paramObject["token"] else {
-            throw SetValueError.noParamValue("token")
-        }
-        guard case let .data(tokenData) = tokenValue else {
-            throw SetValueError.paramErr
-        }
-
-        self.gotSharedDicoveryToken(tokenData, userUuid: userUuid)
-    }
-
-    func gotSharedDicoveryToken(_ tokenData: Data, userUuid: String) {
-#if os(iOS)
-        connectService?.peerDidShareDiscoveryToken(tokenData: tokenData, userUuid: userUuid)
-#endif
     }
 
     private func perspectiveSnapshot(requester: Identity, context: ScannerConsumerContext? = nil) async -> ValueType {

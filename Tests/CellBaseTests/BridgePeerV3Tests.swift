@@ -171,6 +171,8 @@ private final class V3Transport: BridgeTransportProtocol, @unchecked Sendable {
     var submitted: (@Sendable (Data) -> Void)?
     var beforeFirstSubmission: (@Sendable () async -> Void)?
     var afterFirstSubmission: (@Sendable () async -> Void)?
+    var beforeClose: (@Sendable () async -> Void)?
+    func close() async { await beforeClose?() }
     func setDelegate(_ delegate: BridgeDelegateProtocol) { gate = delegate as? BridgeChannelTransport }
     func setup(_ endpointURL: URL, identity: Identity) async throws {}
     func sendData(_ data: Data) async throws {
@@ -801,3 +803,420 @@ extension BridgePeerV3Tests {
         await pair.stop(startup)
     }
 }
+
+// A real gate faces a legitimate DH participant with a known *test-owned*
+// ephemeral key. This lets mutations have valid AEAD/MAC and reach context,
+// signature and Finished checks instead of stopping at a bad tag.
+private final class V3AdversarialGate {
+    typealias P = BridgePeerChannelAuthentication
+    typealias A = BridgeChannelAuthentication
+    let pair: V3GatePair, gate: BridgeChannelTransport, physical: V3Transport
+    let operation: P.Operation, privateKey = Curve25519.KeyAgreement.PrivateKey()
+    let vault: V3Vault, owner: Identity, role: P.Role
+    let sent = V3Wire()
+    var history: [Int: Data] = [:]
+    var start: Task<Void, Error>?
+    init(step: Int, limits: BridgeChannelLimits) throws {
+        pair = try V3GatePair(limits: limits)
+        role = step.isMultiple(of: 2) ? .responder : .initiator
+        gate = role == .responder ? pair.i : pair.r
+        physical = role == .responder ? pair.it : pair.rt
+        vault = role == .responder ? pair.rv : pair.iv
+        owner = role == .responder ? pair.ro : pair.io
+        operation = try P.Operation(owner: owner, endpoint: gate.session.peerEndpoint!, role: role,
+            generation: UUID().uuidString, policy: .anyProvenIdentity(allowUnauthenticatedInitiator: true),
+            wallClock: pair.clock.date, monotonic: pair.clock.uptime, ephemeral: privateKey)
+    }
+    func advance(to step: Int) async throws {
+        await (role == .responder ? pair.r : pair.i).close() // unused opposite gate
+        start = Task { try await gate.startPeer() }
+        if role == .initiator { history[1] = try await operation.begin(live: {}) }
+        else {
+            for _ in 0..<1000 { if physical.wire.last != nil { break }; await Task.yield() }
+            history[1] = try XCTUnwrap(physical.wire.last)
+        }
+        for previous in 1..<step {
+            if previous.isMultiple(of: 2) == step.isMultiple(of: 2) {
+                try await physical.receive(history[previous]!); history[previous+1] = try XCTUnwrap(physical.wire.last)
+            } else {
+                _ = try await operation.receive(history[previous]!, live: {}, authenticate: { _,_ in }, recheck: {}, send: { try self.sent.append($0) })
+                history[previous+1] = try XCTUnwrap(sent.last)
+            }
+        }
+    }
+    func mutated(_ step: Int, field: String) async throws -> Data {
+        func object(_ data: Data) throws -> [String: Any] { try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any]) }
+        func encode(_ value: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys,.withoutEscapingSlashes]) }
+        if field.hasPrefix("hello.") {
+            var outer = try object(history[step]!), body = try object(Data((outer["&string"] as! String).utf8))
+            var hello = step == 1 ? body : body["hello"] as! [String: Any]
+            let name = String(field.dropFirst(6))
+            switch name {
+            case "profile": hello[name] = "org.haven.bridge-peer-channel.v2"
+            case "role": hello[name] = role == .initiator ? "responder" : "initiator"
+            case "ephemeralPublicKey", "nonce": hello[name] = Data(repeating: 0, count: 31).base64EncodedString()
+            case "lowOrder": hello["ephemeralPublicKey"] = Data(repeating: 0, count: 32).base64EncodedString()
+            case "negativeTime": hello["issuedAtMilliseconds"] = Int64.min
+            case "expiredTime": hello["issuedAtMilliseconds"] = Int64(pair.clock.date().timeIntervalSince1970 * 1000) - 10_000
+            case "futureTime": hello["issuedAtMilliseconds"] = Int64(pair.clock.date().timeIntervalSince1970 * 1000) + 5_001
+            case "generation": hello[name] = gate.session.generation
+            case "issuedAtMilliseconds": hello[name] = Int64.max
+            case "missing": hello.removeValue(forKey: "nonce")
+            default: hello["identity"] = "forbidden-cleartext"
+            }
+            if step == 1 { body = hello } else { body["hello"] = hello }
+            outer["&string"] = String(decoding: try encode(body), as: UTF8.self)
+            return try encode(outer)
+        }
+        if field.hasPrefix("envelope.") {
+            var outer = try object(history[step]!)
+            switch String(field.dropFirst(9)) {
+            case "ready": outer["cmd"] = "ready"
+            case "legacy": outer["cmd"] = "channelAuthPeerHello"
+            case "ws": outer["cmd"] = "channelAuthHello"
+            case "cid": outer["cid"] = 1
+            case "extra": outer["unknown"] = true
+            case "trailing": return history[step]! + Data([0])
+            default: return Data("HPC2".utf8) + Data(repeating: 0, count: 90)
+            }
+            return try encode(outer)
+        }
+        let ih = try A.decode(P.Hello.self, from: Data(P.decodeEnvelope(history[1]!).body.utf8))
+        let rbody = try A.decode(P.ResponderAuth.self, from: Data(P.decodeEnvelope(history[2]!).body.utf8)), rh = rbody.hello
+        let t0 = P.hash(P.framed("clear-2", P.hash(P.framed("wire-1", history[1]!)), try A.encode(rh)))
+        var transcript = t0, transcripts: [Int: Data] = [1:t0]
+        for n in 2..<step { transcript = P.hash(P.framed("wire-\(n)", transcript, history[n]!)); transcripts[n] = transcript }
+        let prk = try P.extract(privateKey, remote: role == .initiator ? rh.ephemeralPublicKey : ih.ephemeralPublicKey, salt: t0)
+        let key = P.key(prk, "handshake-key", role, t0), nonce = try P.nonce(step < 4 ? 0 : 1)
+        let aad = P.framed("handshake-aead", Data(String(step).utf8), transcript)
+        var outer = try object(history[step]!), body = try object(Data((outer["&string"] as! String).utf8))
+        let sealed = Data(base64Encoded: body["sealed"] as! String)!
+        let plain = try ChaChaPoly.open(.init(nonce: nonce, ciphertext: sealed.dropLast(16), tag: sealed.suffix(16)), using: key, authenticating: aad)
+        let size = step < 4 ? 8192 : 1024, count = plain.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+        var value = try object(Data(plain.dropFirst(4).prefix(count)))
+        let path = field.split(separator: ".").map(String.init)
+        if path[0] == "selfConsistentEndpoint" {
+            var endpoint = value["endpoint"] as! [String: Any]
+            endpoint[path[1]] = UUID().uuidString
+            let changed = try A.decode(P.Endpoint.self, from: encode(endpoint))
+            let challenge = try P.challenge(endpoint: changed, identity: A.PublicIdentity(owner), signer: role,
+                local: operation.hello, remote: role == .initiator ? rh : ih, t0: t0, t2: transcripts[2],
+                responder: role == .initiator ? A.PublicIdentity(pair.ro) : nil)
+            let signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner)
+            value["endpoint"] = endpoint
+            value["proof"] = ["sessionID":changed.setupID,"generation":challenge.generation,"signature":signature.base64EncodedString()]
+        } else if path[0] == "signed" {
+            let signed = await vault.signedBytes
+            var challenge = try object(XCTUnwrap(signed))
+            let name = path[1]
+            if name == "nonce" { challenge[name] = Data(repeating: 9, count: 32).base64EncodedString() }
+            else if name == "issuedAt" || name == "expiresAt" { challenge[name] = (challenge[name] as! Double) + 1 }
+            else { challenge[name] = "wrong-" + String(describing: challenge[name]!) }
+            var proof = value["proof"] as! [String: Any]
+            proof["signature"] = try await vault.signMessageForIdentity(messageData: encode(challenge), identity: owner).base64EncodedString()
+            value["proof"] = proof
+        } else if path[0] == "badMAC" || path[0] == "badFinished" {
+            let isAuth = step < 4, name = isAuth ? "identityMAC" : "verifyData"
+            switch path[1] {
+            case "missing": value.removeValue(forKey: name)
+            case "truncated": value[name] = Data(repeating: 0, count: 31).base64EncodedString()
+            default:
+                let other: P.Role = role == .initiator ? .responder : .initiator
+                let chosenRole = path[1] == "direction" ? other : role
+                let context = isAuth ? t0 : transcripts[3]!
+                let chosenKey = path[1] == "key" ? SymmetricKey(size: .bits256) : P.key(prk, isAuth ? "identity-mac-key" : "finished-key", chosenRole, context)
+                let bound = isAuth ? try encode(["endpoint":value["endpoint"]!,"identity":value["identity"]!,"proof":value["proof"]!]) : try encode(value["ack"] as! [String: Any])
+                let contextBytes = path[1] == "transcript" ? Data(repeating: 9, count: 32) : transcript
+                value[name] = P.mac(chosenKey, P.framed(isAuth ? "identity-mac" : "finished", Data((isAuth ? chosenRole.rawValue : String(step)).utf8), contextBytes, bound)).base64EncodedString()
+            }
+        } else if path.count == 2 {
+            var object = value[path[0]] as! [String: Any]
+            let name = path[1]
+            if name == "publicKey" { object[name] = Data(repeating: 7, count: 32).base64EncodedString() }
+            else if name == "signature" { object[name] = Data(repeating: 7, count: 64).base64EncodedString() }
+            else { object[name] = UUID().uuidString }
+            value[path[0]] = object
+        } else if field == "identityMAC" || field == "verifyData" { value[field] = Data(repeating: 0, count: 32).base64EncodedString() }
+        else if field == "extra" { value["unexpected"] = ["nested": true] }
+        if step < 4 && field != "identityMAC" && !field.hasPrefix("badMAC.") {
+            let core = ["endpoint":value["endpoint"]!,"identity":value["identity"]!,"proof":value["proof"]!]
+            value["identityMAC"] = P.mac(P.key(prk,"identity-mac-key",role,t0), P.framed("identity-mac",Data(role.rawValue.utf8),transcript,try encode(core))).base64EncodedString()
+        }
+        if step >= 4 && field.hasPrefix("ack.") {
+            // Correct Finished HMAC over the wrong ack still must not match the
+            // locally expected session/generation/transcript claim.
+            value["verifyData"] = P.mac(P.key(prk,"finished-key",role,transcripts[3]!), P.framed("finished",Data(String(step).utf8),transcript,try encode(value["ack"] as! [String: Any]))).base64EncodedString()
+        }
+        var encoded = try encode(value)
+        if field == "duplicateJSON" { encoded = Data("{\"extra\":1,\"extra\":1,".utf8) + encoded.dropFirst() }
+        var padded = P.integer(UInt32(encoded.count)) + encoded + Data(repeating: 0, count: size-4-encoded.count)
+        if field == "padding" { padded[padded.count-1] = 1 }
+        if field == "jsonLength" { padded.replaceSubrange(0..<4, with: P.integer(UInt32(size))) }
+        if field == "paddingLength" { padded.removeLast() }
+        let box = try ChaChaPoly.seal(padded, using: key, nonce: field == "nonce" ? P.nonce(7) : nonce, authenticating: aad)
+        var replacement = box.ciphertext + box.tag
+        if field == "sealedLength" { replacement.removeLast() }
+        if field == "ciphertext" { replacement[replacement.startIndex] ^= 1 }
+        if field == "tag" { replacement[replacement.index(before: replacement.endIndex)] ^= 1 }
+        body["sealed"] = replacement.base64EncodedString(); outer["&string"] = String(decoding: try encode(body), as: UTF8.self)
+        return try encode(outer)
+    }
+    func stop() async { await gate.close(); await operation.cancel(); if let start { _ = try? await start.value } }
+}
+
+extension BridgePeerV3Tests {
+    func testValidAEADInnerMutationsCloseRealGateReleaseQuotaAndPreserveHealthySibling() async throws {
+        let quotaClock = V3Clock(), limits = BridgeChannelLimits(monotonic: quotaClock.uptime)
+        let sibling = try V3GatePair(limits: limits), healthy = try await sibling.start()
+        for step in 1...5 { try await sibling.step(step) }; try await healthy.value
+        let baseline = limits.retainedConnectionCount
+        for step in 1...5 {
+            let helloFields = ["profile","role","ephemeralPublicKey","lowOrder","nonce","generation","issuedAtMilliseconds","negativeTime","expiredTime","futureTime","missing","extra"].map { "hello." + $0 }
+            let envelopeFields = ["ready","legacy","ws","cid","extra","trailing","HPC2"].map { "envelope." + $0 }
+            let encryptionFields = ["paddingLength","duplicateJSON","nonce","sealedLength","ciphertext"]
+            let fields = envelopeFields + (step == 1 ? helloFields : encryptionFields + (step == 2 ? helloFields : []) + (step < 4 ? ["endpoint.initiator","endpoint.responder","endpoint.setupID","endpoint.domain",
+                "identity.uuid","identity.algorithm","identity.curve","identity.publicKey","proof.sessionID","proof.generation","proof.signature",
+                "signed.resource","signed.audience","signed.domain","signed.nonce","signed.issuedAt","signed.expiresAt","signed.action",
+                "identityMAC","badMAC.missing","badMAC.truncated","badMAC.direction","badMAC.key","badMAC.transcript","extra","padding","jsonLength","tag",
+                "selfConsistentEndpoint.initiator","selfConsistentEndpoint.responder","selfConsistentEndpoint.setupID","selfConsistentEndpoint.domain"]
+                : ["ack.sessionID","ack.generation","ack.transcriptDigest","verifyData","badFinished.missing","badFinished.truncated","badFinished.direction","badFinished.key","badFinished.transcript","extra","padding","jsonLength","tag"]))
+            for field in fields {
+                quotaClock.advance(mono: 60) // isolate field validation from the separately tested rate window
+                print("V3 gate mutation M\(step)/\(field)")
+                let attacker = try V3AdversarialGate(step: step, limits: limits)
+                try await attacker.advance(to: step)
+                let changed = try await attacker.mutated(step, field: field)
+                do { try await attacker.physical.receive(changed); XCTFail("Accepted M\(step)/\(field)") } catch {}
+                XCTAssertFalse(attacker.gate.canSendPeerData, field)
+                XCTAssertFalse(attacker.gate.hasDelegate, field)
+                XCTAssertEqual(attacker.pair.id.counts.factory + attacker.pair.rd.counts.factory, 0, field)
+                XCTAssertEqual(attacker.pair.id.counts.delivery + attacker.pair.rd.counts.delivery, 0, field)
+                XCTAssertEqual(attacker.gate.session.state, .closed, field)
+                if let start = attacker.start { _ = try? await start.value }
+                // Observe automatic error cleanup before the fixture can close
+                // anything itself; otherwise this assertion could hide a leak.
+                XCTAssertEqual(limits.retainedConnectionCount, baseline, field)
+                await attacker.stop()
+                XCTAssertEqual(limits.outstandingWorkCount, 0, field)
+                let previous = sibling.rd.counts.delivery
+                try await sibling.i.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("healthy"), cid: 1)))
+                try await sibling.rt.receive(XCTUnwrap(sibling.it.wire.last))
+                try await sibling.it.receive(XCTUnwrap(sibling.rt.wire.last)) // bounded receipt
+                XCTAssertEqual(sibling.rd.counts.delivery, previous + 1, field)
+            }
+        }
+        await sibling.stop(healthy)
+        XCTAssertEqual(limits.retainedConnectionCount, 0)
+    }
+}
+
+extension BridgePeerV3Tests {
+    func testWrongHandshakeStateAndMalformedRecordsRetireOnlyOffendingGate() async throws {
+        let clock = V3Clock(), limits = BridgeChannelLimits(monotonic: clock.uptime)
+        let sibling = try V3GatePair(limits: limits), healthy = try await sibling.start()
+        for step in 1...5 { try await sibling.step(step) }; try await healthy.value
+        let baseline = limits.retainedConnectionCount, vectors = try Self.vectors()
+        func checkSibling() async throws {
+            let before = sibling.rd.counts.delivery
+            try await sibling.i.sendData(A.encode(BridgeCommand(cmd: "response", payload: .string("healthy"), cid: 1)))
+            try await sibling.rt.receive(XCTUnwrap(sibling.it.wire.last))
+            try await sibling.it.receive(XCTUnwrap(sibling.rt.wire.last))
+            XCTAssertEqual(sibling.rd.counts.delivery, before + 1)
+        }
+        for step in 1...5 {
+            for wrong in 1...5 where step != wrong {
+                clock.advance(mono: 60)
+                let attacker = try V3AdversarialGate(step: step, limits: limits)
+                try await attacker.advance(to: step)
+                do { try await attacker.physical.receive(vectors["W\(wrong)"]!); XCTFail("M\(wrong) accepted at M\(step)") } catch {}
+                XCTAssertEqual(attacker.gate.session.state, .closed)
+                if let start = attacker.start { _ = try? await start.value }
+                XCTAssertEqual(limits.retainedConnectionCount, baseline)
+                XCTAssertEqual(limits.outstandingWorkCount, 0)
+                XCTAssertEqual(attacker.pair.id.counts.factory + attacker.pair.rd.counts.factory, 0)
+                await attacker.stop(); try await checkSibling()
+            }
+        }
+        for initiator in [true, false] {
+            for field in ["magic", "generation", "direction", "counter", "tag", "ciphertext", "empty", "oversize", "replay", "gap", "reflection", "oldCipherNewHeader", "authAfterActive", "plaintext"] {
+                clock.advance(mono: 60)
+                let pair = try V3GatePair(limits: limits), start = try await pair.start()
+                for step in 1...5 { try await pair.step(step) }; try await start.value
+                let sender = initiator ? pair.i : pair.r, sending = initiator ? pair.it : pair.rt
+                let victim = initiator ? pair.r : pair.i, receiving = initiator ? pair.rt : pair.it
+                let delegate = initiator ? pair.rd : pair.id
+                let body = try A.encode(BridgeCommand(cmd: "response", payload: .string("private"), cid: 1))
+                try await sender.sendData(body)
+                var bad = Data(try XCTUnwrap(sending.wire.last))
+                switch field {
+                case "magic": bad[0] ^= 1
+                case "generation": bad.replaceSubrange(4..<40, with: Data(UUID().uuidString.utf8))
+                case "direction": bad[40] ^= 1
+                case "counter": bad[48] ^= 1
+                case "tag": bad[bad.count-1] ^= 1
+                case "ciphertext": bad[49] ^= 1
+                case "empty": bad = Data()
+                case "oversize": bad = Data(repeating: 0, count: BridgePeerRecordLayer.maximumPlaintext + BridgePeerRecordLayer.overhead + 1)
+                case "replay": try await receiving.receive(bad)
+                case "gap": try await sender.sendData(body); bad = Data(try XCTUnwrap(sending.wire.last))
+                case "reflection": try await victim.sendData(body); bad = Data(try XCTUnwrap(receiving.wire.last))
+                case "oldCipherNewHeader":
+                    let old = try V3GatePair(limits: limits), oldStart = try await old.start()
+                    for step in 1...5 { try await old.step(step) }; try await oldStart.value
+                    try await old.i.sendData(body)
+                    var oldWire = Data(try XCTUnwrap(old.it.wire.last))
+                    oldWire.replaceSubrange(0..<49, with: bad.prefix(49)); bad = oldWire
+                    await old.stop(oldStart)
+                case "authAfterActive": bad = vectors["W1"]!
+                default: bad = body
+                }
+                let before = delegate.counts.delivery
+                do { try await receiving.receive(bad); XCTFail("Accepted \(field), initiator=\(initiator)") } catch {}
+                XCTAssertEqual(victim.session.state, .closed, field)
+                XCTAssertEqual(delegate.counts.delivery, before, field)
+                XCTAssertFalse(victim.hasDelegate, field)
+                XCTAssertEqual(limits.retainedConnectionCount, baseline + 1, field)
+                await pair.stop(start)
+                XCTAssertEqual(limits.retainedConnectionCount, baseline, field)
+                XCTAssertEqual(limits.outstandingWorkCount, 0, field)
+                try await checkSibling()
+            }
+        }
+        await sibling.stop(healthy)
+    }
+
+    func testFinalFinishedReservationSurvivesHeldPhysicalClose() async throws {
+        var config = BridgeChannelLimits.Configuration()
+        config.maximumPendingSendBytes = 40_000
+        let limits = BridgeChannelLimits(configuration: config), pair = try V3GatePair(limits: limits)
+        let start = try await pair.start()
+        for step in 1...5 { try await pair.step(step) }; try await start.value
+        let retained = try XCTUnwrap(pair.it.wire.last).count
+        let barrier = V3Barrier(); pair.it.beforeClose = { await barrier.wait() }
+        let closing = Task { await pair.i.close() }
+        await barrier.reached()
+        XCTAssertFalse(pair.i.canSendPeerData)
+        XCTAssertEqual(limits.retainedConnectionCount, 2)
+        // Borrow all remaining bytes from the healthy responder. The old M5 is
+        // still charged even after authority has ended and close has started.
+        try pair.r.session.acquireSend(bytes: config.maximumPendingSendBytes - retained)
+        XCTAssertThrowsError(try pair.r.session.acquireSend(bytes: 1))
+        await barrier.release(); await closing.value
+        try pair.r.session.acquireSend(bytes: retained)
+        pair.r.session.releaseSend(bytes: config.maximumPendingSendBytes)
+        await pair.stop(start)
+        XCTAssertEqual(limits.retainedConnectionCount, 0)
+    }
+
+    func testSuspendedSignerStormKeepsWorkUntilReturnAndRejectsLimitPlusOne() async throws {
+        var config = BridgeChannelLimits.Configuration(); config.maximumOutstandingWork = 2
+        let limits = BridgeChannelLimits(configuration: config)
+        var blocked: [(V3GatePair, V3Barrier, Task<Void, Error>, Task<Void, Error>)] = []
+        for _ in 0..<2 {
+            let pair = try V3GatePair(limits: limits), barrier = V3Barrier()
+            await pair.rv.setBarriers(sign: { await barrier.wait() })
+            let start = try await pair.start(), pending = Task { try await pair.step(1) }
+            await barrier.reached(); await pair.r.close(); await pair.i.close()
+            blocked.append((pair, barrier, start, pending))
+        }
+        XCTAssertEqual(limits.outstandingWorkCount, 2)
+        let retained = limits.retainedConnectionCount
+        for _ in 0..<32 {
+            let refused = try V3GatePair(limits: limits)
+            do { try await refused.i.startPeer(); XCTFail("Unbounded signer work admitted") } catch {}
+            XCTAssertEqual(refused.it.wire.count, 0)
+            let calls = await refused.iv.signCount; XCTAssertEqual(calls, 0)
+            await refused.i.close(); await refused.r.close()
+            XCTAssertEqual(limits.outstandingWorkCount, 2)
+            XCTAssertEqual(limits.retainedConnectionCount, retained)
+        }
+        for (pair, barrier, start, pending) in blocked {
+            await barrier.release(); _ = try? await pending.value; await pair.stop(start)
+            XCTAssertEqual(pair.rt.wire.count, 0)
+        }
+        XCTAssertEqual(limits.outstandingWorkCount, 0); XCTAssertEqual(limits.retainedConnectionCount, 0)
+        let fresh = try V3GatePair(limits: limits), start = try await fresh.start()
+        for step in 1...5 { try await fresh.step(step) }; try await start.value
+        XCTAssertTrue(fresh.i.canSendPeerData); await fresh.stop(start)
+    }
+
+    func testSuspendedPolicySendAndFactoryExpireForBothRolesWithoutLatePublication() async throws {
+        for role in [P.Role.initiator, .responder] {
+            for stage in ["policy", "send", "factory"] {
+                let barrier = V3Barrier()
+                let pair = try V3GatePair(factoryBarrier: stage == "factory" ? barrier : nil, factoryRole: role,
+                    responderRecheck: { _ in if stage == "policy" && role == .responder { await barrier.wait() } },
+                    recheck: { _ in if stage == "policy" && role == .initiator { await barrier.wait() } })
+                let physical = role == .initiator ? pair.it : pair.rt, gate = role == .initiator ? pair.i : pair.r
+                let heldStep = stage == "factory" ? (role == .initiator ? 4 : 5) : (role == .initiator ? 2 : 3)
+                if stage == "send" {
+                    physical.beforeSubmission = { data in
+                        let command = try? P.decodeEnvelope(data).cmd
+                        if command == (role == .initiator ? .initiatorAuth : .responderFinished) { await barrier.wait() }
+                    }
+                }
+                let start = try await pair.start()
+                for step in 1..<heldStep { try await pair.step(step) }
+                let pending = Task { try await pair.step(heldStep) }
+                await barrier.reached()
+                let before = physical.wire.count
+                pair.clock.advance(wall: stage == "factory" ? 301 : 31, mono: stage == "factory" ? 301 : 11)
+                await barrier.release()
+                do { try await pending.value; XCTFail("Expired \(role)/\(stage) continued") } catch {}
+                XCTAssertFalse(gate.canSendPeerData); XCTAssertFalse(gate.hasDelegate)
+                XCTAssertEqual(physical.wire.count, before)
+                if stage == "factory" { XCTAssertEqual((role == .initiator ? pair.id : pair.rd).counts.close, 1) }
+                await pair.stop(start); XCTAssertEqual(pair.limits.outstandingWorkCount, 0)
+            }
+        }
+    }
+}
+
+#if os(macOS)
+@testable import CellApple
+extension BridgePeerV3Tests {
+    func testScannerStopDisconnectAndOwnerCloseDiscardSuspendedSignerInBothRoles() async throws {
+        for initiator in [true, false] {
+            for existence in [true, false] {
+                for reason in ["stop", "disconnect", "ownerClose"] {
+                    let v = try Self.vectors(), barrier = V3Barrier(), suffix = UUID().uuidString
+                    let identity = try A.decode(A.PublicIdentity.self, from: v[initiator ? "identity0" : "identity1"]!)
+                    let vault = try V3Vault(identity: identity, seed: v[initiator ? "seed0" : "seed1"]!)
+                    let owner = identity.makeIdentity(); owner.identityVault = vault
+                    let pair = try await ScannerPair(ownerA: initiator ? owner : nil, ownerB: initiator ? nil : owner, sessionSuffix: suffix)
+                    if existence { await vault.setBarriers(exist: { await barrier.wait() }) }
+                    else { await vault.setBarriers(sign: { await barrier.wait() }) }
+                    let tasks = pair.start()
+                    if initiator { try await pair.deliverNext() }
+                    let pending = Task { try await pair.deliverNext() }
+                    await barrier.reached()
+                    let service = initiator ? pair.a : pair.b, physical = initiator ? pair.pa : pair.pb
+                    let sent = pair.wire.history.count
+                    switch reason {
+                    case "stop": service.stop()
+                    case "disconnect": service.session(physical.mcSession, peer: physical.peerID, didChange: .notConnected)
+                    default: await physical.gate.close() // explicit local-owner revocation contract
+                    }
+                    await physical.gate.close()
+                    XCTAssertGreaterThan(service.channelLimits.outstandingWorkCount, 0)
+                    let fresh = try await ScannerPair(ownerA: pair.a.owner, ownerB: pair.b.owner, sessionSuffix: suffix)
+                    // Reusing the same local vault would deliberately suspend
+                    // the new signer too. Clear only future barriers; the old
+                    // invocation has already captured its non-cancellable wait.
+                    await vault.setBarriers()
+                    try await fresh.finish(fresh.start())
+                    await barrier.release()
+                    do { try await pending.value; XCTFail("Retired Scanner signer continued") } catch {}
+                    XCTAssertEqual(pair.wire.history.count, sent)
+                    let count = await vault.signCount
+                    XCTAssertEqual(count, existence ? 1 : 2, "Only the fresh channel may sign after retirement")
+                    XCTAssertTrue(fresh.pa.gate.canSendPeerData); XCTAssertTrue(fresh.pb.gate.canSendPeerData)
+                    pair.stop(); fresh.stop()
+                    await pair.pa.gate.close(); await pair.pb.gate.close()
+                    _ = try? await tasks.0.value; _ = try? await tasks.1.value
+                }
+            }
+        }
+    }
+}
+#endif

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 import Foundation
+import Combine
 import MultipeerConnectivity
 import XCTest
 @testable import CellApple
@@ -10,6 +11,33 @@ import NearbyInteraction
 #endif
 
 final class ScannerNearbyInteractionTests: XCTestCase {
+    @MainActor func testGenericCellFeedCannotInstallOrReplaceNearbyToken() async throws {
+        let f = try await NIFixture(); defer { f.pair.stop() }
+        let owner = f.pair.a.owner
+        let cell = await EntityScannerCell(owner: owner)
+        cell.connectService = f.pair.a
+        defer { cell.connectService = nil; cell.detach(label: "generic-token-feed", requester: owner) }
+        let source = FlowElementPusherCell(owner: owner)
+        _ = try await cell.attach(emitter: source, label: "generic-token-feed", requester: owner)
+        try await cell.absorbFlow(label: "generic-token-feed", requester: owner)
+        for connected in [false, true] {
+            if connected { try await f.connect(f.pair.b) }
+            let delivered = expectation(description: "Generic event passed through Cell intercepts")
+            let subscription = try await cell.flow(requester: owner).sink(receiveCompletion: { _ in }, receiveValue: {
+                if $0.title == "unbound-token" { delivered.fulfill() }
+            })
+            var flow = FlowElement(title: "unbound-token", content: .object([
+                "userUuid": .string(f.pair.b.mySessionUUID), "token": .data(Data("unbound-token".utf8))
+            ]), properties: .init(type: .event, contentType: .object))
+            flow.topic = "radar.service"
+            source.pushFlowElement(flow, requester: owner)
+            await fulfillment(of: [delivered], timeout: 5)
+            subscription.cancel()
+            XCTAssertEqual(f.aDrivers.count, connected ? 1 : 0)
+            if connected { XCTAssertEqual(f.aDrivers[0].runs, [f.bDrivers[0].token]) }
+        }
+    }
+
     @MainActor func testConcurrentPeersKeepTokensSessionsAndResultsOnTheirAuthenticatedPeer() async throws {
         let f = try await NIFixture(third: true); defer { f.pair.stop() }
         try await f.connect(f.pair.b)
