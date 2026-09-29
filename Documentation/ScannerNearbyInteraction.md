@@ -23,6 +23,8 @@ exactly `niVersion` (integer 1), `userUuid` (channel signer's UUID), `targetSess
 (receiver's session UUID), `setupID` (accepted shared endpoint), `niGeneration`
 (canonical uppercase UUID), and `token` (secure archive, 1...16384 bytes). JSON
 carries token bytes as base64. Legacy unbound token payloads are rejected.
+Generic EntityScanner Cell feeds (including `radar.service` events) have no
+authenticated physical context and cannot install or replace NI tokens.
 The complete physical context and full principal descriptor come from the gate,
 not from these wire labels. Ordinary frame/work/send budgets remain in force.
 
@@ -60,7 +62,8 @@ accepted peer cannot forward a token obtained outside this channel.
 
 ## Verification boundaries
 
-`ScannerNearbyInteractionTests` tests concurrent B/C associations, wrong principal/
+`ScannerNearbyInteractionTests` tests generic Cell-feed token rejection,
+concurrent B/C associations, wrong principal/
 setup/target/version, immutable tokens, queued and late callbacks, reconnect,
 close/revoke/disconnect/stop, suspension and terminal invalidation with fake drivers.
 It exercises the real peer-v3 gate and send path; radio and native token creation

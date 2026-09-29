@@ -19,10 +19,11 @@ invitations choose one setup without renewing pending deadlines. Discovery loss
 cannot retarget the binding; the same physical peer cannot change its name in a
 pending setup. Gate creation transfers the binding and retires invitation state.
 One service timer expires all invitations, including accepted/outgoing setups
-that never create a gate. Stop retires the service generation and MCSession.
+that never create a gate. Stop retires the service generation and every owned MCSession.
 
-Timeout calls cancelConnectPeer for unfinished attempts. This is not an assertion
-that an already connected Multipeer peer has been physically evicted (N15).
+Timeout retires the invitation's dedicated MCSession with disconnect, including
+an unfinished attempt. Physical admission stays charged until its local
+connectedPeers is empty; see [physical lifetime](PeerPhysicalFlowControl.md).
 A late MC callback has no invitation authority; channel authentication still
 requires the exact fresh endpoint/setup, proof and Finished. MC callbacks carry
 no application setup ID; fresh proof, rather than callback arrival, is decisive.
@@ -41,9 +42,10 @@ heap or Multipeer OS allocation. Count limits also bound object overhead.
 | Invitations (pending + accepted + outgoing) | 32 / 64 KiB | 1 / 4096 | min(local invitation timeout, 30 s) |
 | Context/setup work | 16 / 64 KiB | 2 / 8192 | 10 s |
 | Queued UI notification batches | 64 / 64 KiB | 8 / 8192 | 5 s |
+| Physical MCSession slots | 32 / 8192 | 2 / 512 | Held until physical retirement |
 
 One fixed ten-second rate window permits 256 reservations globally and 24 per
-MCPeerID, across all four resources. Capacity-rejected attempts consume rate;
+MCPeerID, across all five resources. Capacity-rejected attempts consume rate;
 oversized inputs are rejected before source bookkeeping. The source table has
 at most 256 entries and expires idle entries after 60 seconds on its next use.
 Active reservations keep their bucket alive. Discovery permits at most 32

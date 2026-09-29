@@ -327,8 +327,8 @@ drain, production TLS/proxy and real consumer deployment remain AP5–AP9b evide
 
 `org.haven.bridge-peer-channel.v3` is separate from the WS profile. The accepted
 invitation supplies E (both endpoint names, setup UUID and domain). The physical
-adapter retains its peer/session instance; pending invitation ownership still has
-the separate N11 limitation. Discovery names and MCSession possession grant no
+adapter and pending/accepted invitation retain their exact peer/session/endpoint
+instance; acceptance is atomic and independent of the discovery index. Discovery names and MCSession possession grant no
 identity or Cell authority. MCSession encryption remains required.
 
 The identity-free M1 and M2 hello fields bind fresh X25519 keys, nonces, roles,
@@ -350,11 +350,12 @@ HPC2, ready, plaintext fallback and cross-profile messages are rejected.
 
 The authoritative [v3 wire and security contract](../Documentation/BridgePeerChannelV3.md)
 defines the five messages, exact encodings, key schedule, disclosure policies,
-padding, limits and remaining application/resource findings. Local vault signing
+padding and limits, with linked consumer, NI and physical-resource contracts. Local vault signing
 and Cell authorization remain separate; no remote signer or dependency is added.
 
-`BridgeChannelSession.reserveOpen` consumes the same pending state before public
-verification for both profiles. Its deadline, absolute expiry, principal binding,
+WS `reserveOpen` consumes its pending challenge before public verification.
+Peer v3 registers its principal only after validating encrypted Auth, identity MAC
+and signature; both profiles retain the same session authority and quota owner. Its deadline, absolute expiry, principal binding,
 revocation, activation and retained resource accounting are shared. The transport
 uses the existing tracked-work, send-byte, cancellation and close machinery.
 Scanner services share one default limits owner; a host may inject its existing

@@ -204,7 +204,14 @@ work leases, pending records and contact-proof validation.
 sessions, immutable tokens and callback retirement. See the physical flow-control document
 for measured resource bounds and the remaining MC reassembly limitation.
 [Shared bridge lifecycle rules](BridgeLifecycle.md) describe the N23–N26 response,
-mux-send, factory and signing protections. A controlled inner-wire relay is not a three-process MC MITM or a radio/NI device test.
+mux-send, factory and signing protections. The opt-in ScannerMultipeerProcessTests parent also runs a three-process relay
+with M as two real MC endpoints, using a test MC adapter around this production
+gate. Scanner adapter integration has separate direct and physical-isolation
+scenarios. None of these one-Mac process tests is a radio/NI device test.
+BridgePeerV3Tests additionally exercises valid-AEAD field mutations against real
+gates with retained-quota cleanup and healthy sibling delivery, suspended signer
+storms, delayed physical M5 retirement, and stop/disconnect/expiry continuations.
+The macOS TSAN workflow covers peer, record, Scanner, EntityScanner and mux suites.
 
 References: [SIGMA](https://iacr.org/cryptodb/archive/2003/CRYPTO/1495/1495.pdf),
 [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748),
