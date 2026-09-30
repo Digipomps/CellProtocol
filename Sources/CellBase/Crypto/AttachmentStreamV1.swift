@@ -261,3 +261,67 @@ public final class AttachmentStreamSealer {
         return AttachmentStreamChunk(index: nextIndex, isFinal: isFinal, combinedCiphertext: box.combined)
     }
 }
+
+/// Incremental decoder for the existing v1 wire format. Returned chunks are
+/// tentative: callers MUST quarantine them until finish() verifies EOF.
+public final class AttachmentStreamOpener {
+    public let header: AttachmentStreamHeader
+    private let key: SymmetricKey
+    private let prefix: Data
+    private var next: UInt64 = 0
+    private var final = false
+    private var short = false
+    private var failed = false
+
+    public init(header: AttachmentStreamHeader, contentKey: SymmetricKey) throws {
+        guard header.suiteID == ContentCryptoSuite.attachmentStreamV1.id,
+              header.version == ContentCryptoSuite.attachmentStreamV1.version else {
+            throw AttachmentStreamError.unsupportedSuite
+        }
+        try AttachmentStreamV1.validateChunkSize(header.chunkSize)
+        guard contentKey.bitCount == 256 else { throw AttachmentStreamError.invalidKeySize }
+        self.header = header
+        key = contentKey
+        prefix = AttachmentStreamV1.noncePrefix(using: contentKey)
+    }
+
+    public func append(_ chunk: AttachmentStreamChunk) throws -> Data {
+        guard !failed else { throw AttachmentStreamError.authenticationFailed }
+        do {
+            guard !final else { throw AttachmentStreamError.chunkAfterFinal }
+            guard chunk.index == next else {
+                throw AttachmentStreamError.unexpectedChunkIndex(expected: next, actual: chunk.index)
+            }
+            let length = chunk.combinedCiphertext.count - 28
+            guard length >= 0 else { throw AttachmentStreamError.invalidChunkLength }
+            if chunk.isFinal {
+                guard length == 0 else { throw AttachmentStreamError.invalidChunkLength }
+            } else {
+                guard !short else { throw AttachmentStreamError.chunkAfterShortChunk }
+                guard length > 0, length <= header.chunkSize else {
+                    throw AttachmentStreamError.invalidChunkLength
+                }
+                guard next < UInt64.max else { throw AttachmentStreamError.tooManyChunks }
+            }
+            let plaintext: Data
+            do {
+                let box = try ChaChaPoly.SealedBox(combined: chunk.combinedCiphertext)
+                guard Data(box.nonce) == AttachmentStreamV1.nonceData(prefix: prefix, index: next) else {
+                    throw AttachmentStreamError.authenticationFailed
+                }
+                plaintext = try ChaChaPoly.open(box, using: key,
+                    authenticating: AttachmentStreamV1.authenticatedData(
+                        header: header, index: next, isFinal: chunk.isFinal))
+            } catch { throw AttachmentStreamError.authenticationFailed }
+            if chunk.isFinal { final = true }
+            else { next += 1; short = length < header.chunkSize }
+            return plaintext
+        } catch { failed = true; throw error }
+    }
+
+    /// Invoke only after the transport confirms no more chunks follow.
+    public func finish() throws {
+        guard !failed else { throw AttachmentStreamError.authenticationFailed }
+        guard final else { failed = true; throw AttachmentStreamError.missingFinalChunk }
+    }
+}
