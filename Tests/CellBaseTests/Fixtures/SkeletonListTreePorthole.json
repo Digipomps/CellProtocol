@@ -1,0 +1,130 @@
+{
+  "source": "CellScaffold/playwright/skeleton-list-tree.spec.js",
+  "revision": "adf48d4615d1ed143d5bdc190fcf63e266214c8f",
+  "scope": [
+    {
+      "id": "staging",
+      "label": "staging",
+      "children": [
+        {
+          "id": "cellscaffold",
+          "label": "CellScaffold",
+          "children": [
+            {
+              "id": "run-r6",
+              "label": "Binding-paritet r6",
+              "state": "running"
+            },
+            {
+              "id": "pr-221",
+              "label": "PR #221",
+              "state": "produced"
+            }
+          ]
+        },
+        {
+          "id": "binding",
+          "label": "Binding",
+          "children": [
+            {
+              "id": "run-b1",
+              "label": "Bygg",
+              "state": "ready"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "prod",
+      "label": "prod",
+      "children": [
+        {
+          "id": "deploy-217",
+          "label": "Deploy #217",
+          "state": "accepted"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "no expandedStateKeypath",
+      "labels": [
+        "staging",
+        "CellScaffold",
+        "Binding-paritet r6",
+        "PR #221",
+        "Binding",
+        "Bygg",
+        "prod",
+        "Deploy #217"
+      ],
+      "depths": [
+        0,
+        1,
+        2,
+        2,
+        1,
+        2,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "seed staging",
+      "expanded": [
+        "staging"
+      ],
+      "labels": [
+        "staging",
+        "CellScaffold",
+        "Binding",
+        "prod"
+      ],
+      "depths": [
+        0,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "expand CellScaffold",
+      "expanded": [
+        "staging",
+        "cellscaffold"
+      ],
+      "labels": [
+        "staging",
+        "CellScaffold",
+        "Binding-paritet r6",
+        "PR #221",
+        "Binding",
+        "prod"
+      ],
+      "depths": [
+        0,
+        1,
+        2,
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "collapse staging",
+      "expanded": [
+        "cellscaffold"
+      ],
+      "labels": [
+        "staging",
+        "prod"
+      ],
+      "depths": [
+        0,
+        0
+      ]
+    }
+  ]
+}
