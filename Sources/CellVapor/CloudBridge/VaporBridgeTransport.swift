@@ -82,6 +82,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     private var receivesStopped = false
     private var receiveTail: Task<Void, Never>?
     private var dispatchTail: Task<Void, Never>?
+    private var multiplexDispatchTails: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] = [:]
     private var receiveCloseTask: Task<Void, Never>?
     // Deterministic test seams, installed before traffic; no production bypass.
     var beforeReceivePreparation: (@Sendable () async -> Void)?
@@ -270,8 +271,9 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     /// Count/bytes are reserved before copying payloads or creating Tasks.
-    /// Preparation is ordered, including handshake completion. Ordinary dispatch
-    /// is ordered separately so a held Cell can still complete origin signing.
+    /// Preparation is ordered, including handshake completion. Live mux channels
+    /// have separate ordered dispatch lanes; logical close and origin signing
+    /// can progress while a consumer is held. Every lane retains receive quota.
     private func enqueueReceive(bytes: Int, copy: () -> Data) {
         receiveLock.withLock {
             guard !receivesStopped else { return }
@@ -297,18 +299,34 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
                         return
                     }
                     let gate = currentDelegate() as? BridgeChannelTransport
+                    let prepared = gate?.prepareMultiplexDispatch(command)
                     let control = command.command == .sign || gate?.isOriginSigningResponse(command) == true
+                        || prepared?.bypassesOrdering == true
                     receiveLock.withLock {
-                        let prior = control ? nil : dispatchTail
+                        let lane = prepared?.laneID, id = UUID()
+                        let prior: Task<Void, Never>?
+                        if control { prior = nil }
+                        else if let lane { prior = multiplexDispatchTails[lane]?.task }
+                        else { prior = dispatchTail }
                         let dispatch = Task { [self] in
-                            defer { releaseReceive(bytes: bytes) }
+                            defer {
+                                if let lane, !control {
+                                    receiveLock.withLock {
+                                        if multiplexDispatchTails[lane]?.id == id { multiplexDispatchTails[lane] = nil }
+                                    }
+                                }
+                                releaseReceive(bytes: bytes)
+                            }
                             await prior?.value
                             do {
                                 try checkReceiving()
-                                try await dispatchCommand(command)
+                                try await dispatchCommand(command, prepared: prepared)
                             } catch { rejectReceive() }
                         }
-                        if !control { dispatchTail = dispatch }
+                        if !control {
+                            if let lane { multiplexDispatchTails[lane] = (id, dispatch) }
+                            else { dispatchTail = dispatch }
+                        }
                     }
                 } catch {
                     rejectReceive()
@@ -404,10 +422,11 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         return try JSONDecoder().decode(BridgeCommand.self, from: incomingData)
     }
 
-    private func dispatchCommand(_ command: BridgeCommand) async throws {
+    private func dispatchCommand(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
         guard let delegate = currentDelegate() else { throw TransportError.TransportNotFound }
         command.identity?.identityVault = await identityVault(for: command.identity)
-        if command.command == .response { try await delegate.consumeResponse(command: command) }
+        if let prepared { try await prepared.consume() }
+        else if command.command == .response { try await delegate.consumeResponse(command: command) }
         else { try await delegate.consumeCommand(command: command) }
     }
 

@@ -559,6 +559,18 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         try await delegate.consumeCommand(command: command)
     }
 
+    func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
+        guard command.protocolVersion == protocolVersion,
+              command.command == .response || command.command == .sign,
+              let channelID = command.channelID, let target = delegate(for: channelID) else { return nil }
+        return BridgeInboundDispatch(laneID: ObjectIdentifier(target)) { [self, target] in
+            guard delegate(for: channelID) === target else { return }
+            if command.command == .response {
+                try await deliverResponse(command, channelID: channelID, delegate: target)
+            } else { try await target.consumeCommand(command: command) }
+        }
+    }
+
     func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
         guard command.protocolVersion == protocolVersion, let id = command.channelID,
               let bridge = delegate(for: id) as? BridgeBase else { return false }
@@ -573,6 +585,11 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
               let delegate = delegate(for: channelID) else {
             throw BridgeMultiplexError.channelNotFound
         }
+        try await deliverResponse(command, channelID: channelID, delegate: delegate)
+    }
+
+    private func deliverResponse(_ command: BridgeCommand, channelID: String,
+                                 delegate: BridgeDelegateProtocol) async throws {
         if case .flowElement? = command.payload {
             let trackedStreamID = command.streamID.map { "\(channelID)|\($0)" }
             switch continuityTracker.observe(streamID: trackedStreamID, sequence: command.sequence) {
@@ -809,8 +826,8 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         }
         func dispatch(_ command: BridgeCommand, response: Bool = false) async throws {
             let id = UUID()
-            let task = try lock.withLock { () throws -> Task<Void, Error> in
-                guard !retired else { throw BridgeMultiplexError.channelNotFound }
+            let task = try lock.withLock { () throws -> Task<Void, Error>? in
+                guard !retired else { return nil }
                 guard tasks.count < 64 else { throw BridgeMultiplexError.resourceLimitExceeded }
                 let task = Task { [delegate] in
                     try Task.checkCancellation()
@@ -820,15 +837,25 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 tasks[id] = task
                 return task
             }
+            guard let task else { return }
             defer { _ = lock.withLock { tasks.removeValue(forKey: id) } }
-            try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+            do {
+                try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+            } catch {
+                // Retirement already revoked this logical destination. A late
+                // cancellation/send error cannot retire the physical siblings.
+                if !lock.withLock({ retired }) { throw error }
+            }
         }
         func retire() async {
-            let ownsCleanup = lock.withLock { () -> Bool in
-                guard !retired else { return false }
-                retired = true; tasks.values.forEach { $0.cancel() }; return true
+            let pending = lock.withLock { () -> [Task<Void, Error>]? in
+                guard !retired else { return nil }
+                retired = true
+                return Array(tasks.values)
             }
-            guard ownsCleanup else { return }
+            guard let pending else { return }
+            // Cancellation handlers may re-enter lifecycle code.
+            pending.forEach { $0.cancel() }
             if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
             else { await delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
         }
@@ -948,19 +975,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                   BridgeMultiplexSession.isValidChannelID(channelID) else {
                 throw BridgeMultiplexError.invalidChannel
             }
-            let removed = stateLock.withLock { () -> ChannelRecord? in
-                let removed = channels.removeValue(forKey: channelID)
-                if pendingChannelIDs.contains(channelID) {
-                    cancelledPendingChannelIDs.insert(channelID)
-                }
-                outboundStreamSequences = outboundStreamSequences.filter {
-                    !$0.key.hasPrefix("\(channelID)|")
-                }
-                compactOutboundStreamInsertionOrderIfNeeded()
-                return removed
-            }
-            defer { withExtendedLifetime(removed) {} }
-            await removed?.retire()
+            await closeChannel(channelID)
         default:
             guard command.protocolVersion == protocolVersion,
                   let channelID = command.channelID,
@@ -969,6 +984,36 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             }
             defer { withExtendedLifetime(record) {} }
             try await record.dispatch(command)
+        }
+    }
+
+    private func closeChannel(_ channelID: String, expected: ChannelRecord? = nil) async {
+        let removed = stateLock.withLock { () -> ChannelRecord? in
+            if let expected, channels[channelID] !== expected { return nil }
+            let removed = channels.removeValue(forKey: channelID)
+            if pendingChannelIDs.contains(channelID) { cancelledPendingChannelIDs.insert(channelID) }
+            outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
+            compactOutboundStreamInsertionOrderIfNeeded()
+            return removed
+        }
+        defer { withExtendedLifetime(removed) {} }
+        await removed?.retire()
+    }
+
+    func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
+        guard command.protocolVersion == protocolVersion, command.command != .openChannel,
+              command.command != .ready, let channelID = command.channelID,
+              BridgeMultiplexSession.isValidChannelID(channelID),
+              let record = stateLock.withLock({ closed ? nil : channels[channelID] }) else { return nil }
+        return BridgeInboundDispatch(laneID: ObjectIdentifier(record),
+                                     bypassesOrdering: command.command == .closeChannel) { [self, record] in
+            guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
+            try channelSession.check(identity: command.identity, requiresIdentity: command.command != .response)
+            if command.command == .closeChannel {
+                await closeChannel(channelID, expected: record)
+            } else {
+                try await record.dispatch(command, response: command.command == .response)
+            }
         }
     }
 

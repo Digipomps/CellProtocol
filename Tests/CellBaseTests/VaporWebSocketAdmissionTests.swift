@@ -19,6 +19,65 @@ final class VaporWebSocketAdmissionTests: XCTestCase {
         return socket
     }
 
+    func testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket() async throws {
+        let a = N30Consumer(), replacement = N30Consumer(), b = N30Consumer(), hold = N30Barrier()
+        a.holdFirst = hold
+        a.replyAfterCommand = true
+        let fixture = try await N30Socket.make(muxConsumers: ["A": [a, replacement], "B": [b]])
+        addTeardownBlock { await hold.release(); await fixture.close() }
+        try await fixture.authenticate()
+        try await fixture.openMuxChannel("A")
+        try await fixture.openMuxChannel("B")
+        _ = try await fixture.inject([fixture.muxCommand("get", channel: "A", value: 0)])
+        try await n30Eventually { a.values == [0] }
+        _ = try await fixture.inject([
+            fixture.muxCommand("get", channel: "A", value: 1),
+            fixture.muxCommand("get", channel: "B", value: 2),
+            fixture.muxCommand("closeChannel", channel: "A")
+        ])
+        // Both assertions must succeed BEFORE releasing the non-cooperative A.
+        try await n30Eventually { b.values == [2] && a.closes.value == 1 }
+        XCTAssertEqual(a.values, [0], "Queued A work must not run after retirement")
+        XCTAssertGreaterThanOrEqual(fixture.transport.receiveSnapshot.count, 1)
+        XCTAssertGreaterThanOrEqual(fixture.limits.outstandingWorkCount, 1,
+                                    "Closing a channel must retain its executing work quota")
+        XCTAssertEqual(fixture.gate.session.state, .authenticated)
+        try await fixture.openMuxChannel("A")
+        _ = try await fixture.inject([fixture.muxCommand("get", channel: "A", value: 5)])
+        try await n30Eventually { replacement.values == [5] }
+        await hold.release()
+        try await n30Eventually { fixture.transport.receiveSnapshot.count == 0 }
+        XCTAssertEqual(replacement.values, [5], "Queued old A must not reach the reused wire ID")
+        XCTAssertEqual(a.lateSendFailures.value, 1, "Retired A cannot publish its late result")
+        XCTAssertEqual(a.values, [0])
+        _ = try await fixture.inject([fixture.muxCommand("get", channel: "B", value: 3)])
+        try await n30Eventually { b.values == [2, 3] }
+        XCTAssertEqual(fixture.gate.session.state, .authenticated,
+                       "A's cancelled consumer must not close B's physical session")
+    }
+
+    func testMuxFlowOrderIsLocalToItsChannelOnSameSocket() async throws {
+        let a = N30Consumer(), b = N30Consumer(), hold = N30Barrier()
+        a.holdFirst = hold
+        let fixture = try await N30Socket.make(muxConsumers: ["A": [a], "B": [b]])
+        addTeardownBlock { await hold.release(); await fixture.close() }
+        try await fixture.authenticate()
+        try await fixture.openMuxChannel("A")
+        try await fixture.openMuxChannel("B")
+        _ = try await fixture.inject([fixture.muxFlow(0, channel: "A")])
+        try await n30Eventually { a.values == [0] }
+        _ = try await fixture.inject([
+            fixture.muxFlow(1, channel: "A"), fixture.muxFlow(2, channel: "A"),
+            fixture.muxFlow(10, channel: "B"), fixture.muxFlow(11, channel: "B")
+        ])
+        try await n30Eventually { b.values == [10, 11] }
+        XCTAssertEqual(a.values, [0])
+        XCTAssertGreaterThanOrEqual(fixture.transport.receiveSnapshot.count, 3)
+        await hold.release()
+        try await n30Eventually { a.values == [0, 1, 2] && fixture.transport.receiveSnapshot.count == 0 }
+        XCTAssertEqual(fixture.gate.session.state, .authenticated)
+    }
+
     func testPreProofBurstIsAdmittedBeforeTasksAndQuotaPlusOneClosesOnlyOffender() async throws {
         let budget = VaporBridgeReceiveBudget()
         let fixture = try await make(budget: budget)
@@ -281,20 +340,50 @@ private actor N30Barrier {
 private final class N30Consumer: BridgeDelegateProtocol, @unchecked Sendable {
     let uuid = UUID().uuidString
     let signs = N30Counter(), otherResponses = N30Counter()
+    let closes = N30Counter(), lateSendFailures = N30Counter()
+    var replyAfterCommand = false
+    var channelTransport: BridgeTransportProtocol?
     private let lock = NSLock()
     private var received: [Int] = []
     var holdFirst: N30Barrier?
     var values: [Int] { lock.withLock { received } }
-    func consumeCommand(command: BridgeCommand) async throws { if command.command == .sign { signs.increment() } }
+    func consumeCommand(command: BridgeCommand) async throws {
+        if command.command == .sign { signs.increment(); return }
+        guard command.command == .get, case let .string(key)? = command.payload, let value = Int(key) else { return }
+        await record(value)
+        if replyAfterCommand, let channelTransport {
+            do {
+                try await channelTransport.sendData(JSONEncoder().encode(BridgeCommand(
+                    cmd: "response", payload: .integer(value), cid: command.cid)))
+            } catch { lateSendFailures.increment(); throw error }
+        }
+    }
     func consumeResponse(command: BridgeCommand) async throws {
         guard case .flowElement(let flow) = command.payload, let value = Int(flow.title ?? "") else { otherResponses.increment(); return }
+        await record(value)
+    }
+    private func record(_ value: Int) async {
         let first = lock.withLock { received.append(value); return received.count == 1 }
         if first { await holdFirst?.wait() }
     }
     func sendCommand(command: Command, identity: Identity, payload: ValueType?) async {}
     func sendSetValueState(for requestedKey: String, setValueState: SetValueState) async {}
-    func pushError(errorMessage: String?, error: Error?) async {}
+    func pushError(errorMessage: String?, error: Error?) async { closes.increment() }
     func ready() async throws {}
+}
+
+private final class N35MuxTargets: @unchecked Sendable {
+    private let lock = NSLock()
+    private var consumers: [String: [N30Consumer]]
+    init(_ consumers: [String: [N30Consumer]]) { self.consumers = consumers }
+    func take(_ target: String) -> N30Consumer? {
+        lock.withLock {
+            guard var pending = consumers[target], !pending.isEmpty else { return nil }
+            let result = pending.removeFirst()
+            consumers[target] = pending
+            return result
+        }
+    }
 }
 
 private final class N30Socket: @unchecked Sendable {
@@ -320,10 +409,12 @@ private final class N30Socket: @unchecked Sendable {
         self.physicalCloses = physicalCloses; self.limits = limits; self.endpoint = endpoint
     }
 
-    static func make(budget: VaporBridgeReceiveBudget? = nil, holdPhysicalClose: N30Barrier? = nil) async throws -> N30Socket {
+    static func make(budget: VaporBridgeReceiveBudget? = nil, holdPhysicalClose: N30Barrier? = nil,
+                     muxConsumers: [String: [N30Consumer]]? = nil) async throws -> N30Socket {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let result = group.next().makePromise(of: (any Channel, VaporBridgeTransport, BridgeChannelTransport).self)
         let consumer = N30Consumer(), closes = N30Counter(), limits = BridgeChannelLimits()
+        let muxTargets = muxConsumers.map(N35MuxTargets.init)
         let owner = await MockIdentityVault().identity(for: UUID().uuidString, makeNewIfNotFound: true)!
         let endpoint = try BridgeChannelAuthentication.Endpoint(url: URL(string: "wss://n30.example/bridge")!, domain: "bridge")
         let listener = try await ServerBootstrap(group: group).childChannelInitializer { channel in
@@ -341,7 +432,14 @@ private final class N30Socket: @unchecked Sendable {
                         transport = VaporBridgeTransport(webSocket: socket, closeUnderlyingChannel: close)
                     }
                     do {
-                        let gate = try BridgeChannelTransport(underlying: transport, endpoint: endpoint, limits: limits, source: "loopback") { _, _ in consumer }
+                        let gate = try BridgeChannelTransport(underlying: transport, endpoint: endpoint, limits: limits, source: "loopback") { transport, _ in
+                            guard let muxTargets else { return consumer }
+                            return BridgeMultiplexServerSession(physicalTransport: transport) { target, _, channel in
+                                guard let consumer = muxTargets.take(target) else { throw BridgeMultiplexError.invalidChannel }
+                                consumer.channelTransport = channel
+                                return consumer
+                            }
+                        }
                         result.succeed((channel, transport, gate))
                     } catch { result.fail(error) }
                 }
@@ -361,6 +459,27 @@ private final class N30Socket: @unchecked Sendable {
             payload: .string(String(decoding: BridgeChannelAuthentication.encode(proof), as: UTF8.self)), cid: 0))
         _ = try await inject([data])
         try await n30Eventually { self.gate.session.state == .authenticated && self.transport.receiveSnapshot.count == 0 }
+    }
+
+    func openMuxChannel(_ id: String) async throws {
+        let retained = transport.receiveSnapshot.count
+        _ = try await inject([JSONEncoder().encode(BridgeCommand(cmd: "openChannel",
+            identity: owner.publicIdentitySnapshot(), payload: nil, cid: 1,
+            protocolVersion: 2, channelID: id, targetEndpoint: id))])
+        try await n30Eventually { self.transport.receiveSnapshot.count <= retained }
+        XCTAssertEqual(gate.session.state, .authenticated)
+    }
+
+    func muxCommand(_ command: String, channel: String, value: Int = 0) throws -> Data {
+        try JSONEncoder().encode(BridgeCommand(cmd: command, identity: owner.publicIdentitySnapshot(),
+            payload: command == "get" ? .string(String(value)) : nil, cid: 10 + value,
+            protocolVersion: 2, channelID: channel))
+    }
+
+    func muxFlow(_ value: Int, channel: String) throws -> Data {
+        var command = try JSONDecoder().decode(BridgeCommand.self, from: Self.flow(value))
+        command.protocolVersion = 2; command.channelID = channel
+        return try JSONEncoder().encode(command)
     }
 
     @discardableResult

@@ -3,6 +3,20 @@
 
 import Foundation
 
+/// A locally captured mux destination. Scheduling grants no authority: the
+/// originating gate revalidates every command when this work executes.
+public struct BridgeInboundDispatch: @unchecked Sendable {
+    public let laneID: ObjectIdentifier
+    public let bypassesOrdering: Bool
+    private let body: @Sendable () async throws -> Void
+
+    init(laneID: ObjectIdentifier, bypassesOrdering: Bool = false,
+         body: @escaping @Sendable () async throws -> Void) {
+        self.laneID = laneID; self.bypassesOrdering = bypassesOrdering; self.body = body
+    }
+    public func consume() async throws { try await body() }
+}
+
 /// Auth gate around one physical transport. Server factory is not called until
 /// proof consumption, policy recheck and activation succeed. All logical channels
 /// on a multiplex connection share its proven principal and generation.
@@ -467,7 +481,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         do { try await trackedWork(admission: command.cmd.hasPrefix("channelAuth")) { try await self.processCommand(command) } }
         catch { await close(); throw error }
     }
-    private func processCommand(_ command: BridgeCommand) async throws {
+    private func processCommand(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
         do {
             if command.cmd.hasPrefix("channelAuth") {
                 try await consumeAuthentication(command)
@@ -482,9 +496,30 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             }
             guard let delegate = lock.withLock({ self.delegate }), !lock.withLock({ stopped }) else { throw Auth.Failure.unavailable }
             try session.check()
-            try await delegate.consumeCommand(command: command)
+            if let prepared { try await prepared.consume() }
+            else { try await delegate.consumeCommand(command: command) }
         } catch { await close(); throw error }
     }
+
+    /// Capture a live logical destination before a transport queues the frame.
+    /// A retired destination never gets looked up again by a reusable wire ID.
+    public func prepareMultiplexDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
+        let target = lock.withLock { stopped ? nil : delegate }
+        let captured: BridgeInboundDispatch?
+        if let mux = target as? BridgeMultiplexServerSession { captured = mux.prepareInboundDispatch(command) }
+        else if let mux = target as? BridgeMultiplexSession { captured = mux.prepareInboundDispatch(command) }
+        else { return nil }
+        guard let captured else { return nil }
+        return BridgeInboundDispatch(laneID: captured.laneID, bypassesOrdering: captured.bypassesOrdering) { [self] in
+            do {
+                try await trackedWork {
+                    if command.command == .response { try await self.processResponse(command, prepared: captured) }
+                    else { try await self.processCommand(command, prepared: captured) }
+                }
+            } catch { await close(); throw error }
+        }
+    }
+
     /// Scheduling only; all response validation still runs through this gate.
     public func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
         let target = lock.withLock { stopped ? nil : delegate }
@@ -498,13 +533,14 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         do { try await trackedWork { try await self.processResponse(command) } }
         catch { await close(); throw error }
     }
-    private func processResponse(_ command: BridgeCommand) async throws {
+    private func processResponse(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
         do {
             guard lock.withLock({ peerOperation == nil || peerReady }) else { throw Auth.Failure.unexpectedMessage }
             try checkPeerGeneration(command)
             try session.checkInbound(command)
             guard command.command == .response, let delegate = lock.withLock({ self.delegate }) else { throw Auth.Failure.unexpectedMessage }
-            try await delegate.consumeResponse(command: command)
+            if let prepared { try await prepared.consume() }
+            else { try await delegate.consumeResponse(command: command) }
         } catch { await close(); throw error }
     }
 

@@ -49,13 +49,26 @@ final class BridgeChannelWebSocketTests: XCTestCase {
         try await protectedRead(multiplexed: true)
     }
 
-    private func protectedRead(multiplexed: Bool) async throws {
+    func testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket() async throws {
+        try await protectedRead(multiplexed: true, independentChannels: true)
+    }
+
+    private func protectedRead(multiplexed: Bool, independentChannels: Bool = false) async throws {
         let oldResolver = CellBase.defaultCellResolver, oldVault = CellBase.defaultIdentityVault
         defer { CellBase.defaultCellResolver = oldResolver; CellBase.defaultIdentityVault = oldVault }
         let vault = MockIdentityVault()
         let owner = await vault.identity(for: "loopback-client", makeNewIfNotFound: true)!
         let trap = SigningTrapVault(); CellBase.defaultIdentityVault = trap
         let cell = await GeneralCell(owner: owner.publicIdentitySnapshot())
+        let releaseHeldRead = SocketUpgradeBarrier()
+        let heldEntered = independentChannels ? expectation(description: "A entered actual Cell GET") : nil
+        if let heldEntered {
+            await cell.addInterceptForGet(requester: owner, key: "held") { _, _ in
+                heldEntered.fulfill()
+                await releaseHeldRead.wait()
+                return .string("late-value")
+            }
+        }
         await cell.addInterceptForGet(requester: owner, key: "secret") { _, _ in .string("socket-value") }
         let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
         try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
@@ -103,7 +116,34 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             try await transport.setup(url, identity: owner)
             let value = try await bridge.get(keypath: "secret", requester: owner)
             XCTAssertEqual(value, .string("socket-value"))
-            XCTAssertEqual(state.count, 1)
+            if let heldEntered, let mux {
+                let pending = Task { _ = try? await bridge.get(keypath: "held", requester: owner) }
+                await fulfillment(of: [heldEntered], timeout: 3)
+                let siblingFinished = expectation(description: "B completed protected GET while A awaits")
+                let sibling = Task {
+                    do {
+                        let otherTransport = try mux.channelTransport(targetEndpoint: "Protected")
+                        let other = try await BridgeBase(.init(owner: owner, transport: otherTransport,
+                            connection: .outbound, identityProofScopes: [
+                                .init(domain: cell.identityDomain, resource: cell.uuid)
+                            ]))
+                        try await other.setTransport(otherTransport, connection: .outbound)
+                        try await otherTransport.setup(url, identity: owner)
+                        let result = try await other.get(keypath: "secret", requester: owner)
+                        XCTAssertEqual(result, .string("socket-value"))
+                        siblingFinished.fulfill()
+                        await otherTransport.close()
+                    } catch { XCTFail("Independent protected read failed: \(error)") }
+                }
+                // The regression fails on the old physical dispatchTail. Always
+                // release the held Cell afterward so red runs cannot hang teardown.
+                await fulfillment(of: [siblingFinished], timeout: 3)
+                await transport.close()
+                await releaseHeldRead.resume()
+                await pending.value
+                await sibling.value
+            }
+            XCTAssertEqual(state.count, 1, "Both logical channels must share one admitted physical socket")
             let signerCalls = await trap.calls; XCTAssertEqual(signerCalls, 0)
             await transport.close()
             await gate.close()
@@ -113,6 +153,7 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             await app.server.shutdown()
             try await app.asyncShutdown()
         } catch {
+            await releaseHeldRead.resume()
             for connection in state.gates { await connection.close() }
             await app.server.shutdown()
             try await app.asyncShutdown()

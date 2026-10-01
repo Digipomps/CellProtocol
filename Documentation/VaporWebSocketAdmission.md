@@ -25,14 +25,29 @@ security-event sink retains the accepted frame's reservation. Closing does not r
 held queued work early. Existing gate/work/operation/send quotas also still apply.
 
 Preparation follows callback arrival order, including completion of each
-authentication message. Ordinary application dispatch has its own ordered tail,
-so the first held response prevents later feed values from entering the gate.
-Only a `sign` command or a response matched to a locally registered signing RPC
-may pass this tail. The latter lookup follows the gate and, for mux, the exact
-logical channel to its BridgeBase auditor. A signature-shaped payload is not a
-scheduling credential. The unchanged gate, principal, operation-permit and
-response validation still execute for every control message. The control lane
-uses the same receive budgets; a saturated connection is closed, not exempted.
+authentication message. Ordinary dispatch for an established mux channel has a
+separate tail bound to the locally captured channel instance. A waiting consumer
+on A therefore does not prevent B from progressing. Values on the same channel
+still enter the consumer in order. The fallback tail handles non-mux traffic and
+channel setup; pending channel factories are outside this change's independence
+guarantee.
+
+A close for an established logical channel bypasses that channel's consumer
+tail, but still passes the normal gate and identity checks. It retires only the
+captured channel instance. Queued work retains that instance rather than looking
+up a reusable wire ID when it eventually runs. Retirement suppresses cancellation
+and late-send failures from that old consumer so they cannot close siblings.
+Count/byte/work/channel reservations remain retained until their actual work
+returns. Captured destinations and scheduling tails are bounded by the same
+receive admission; completed per-channel tails are removed.
+
+A `sign` command or a response matched to a locally registered signing RPC can
+also progress independently. The lookup follows the gate and exact logical
+channel to its BridgeBase auditor. A signature-shaped payload is not a scheduling
+credential. Every prepared dispatch still runs the gate's normal principal,
+generation, expiry, operation-permit and response validation. All lanes use the
+same receive budgets; saturation closes the connection rather than bypassing
+limits.
 
 Overflow or malformed input stops further admission and closes the existing
 session synchronously. At most one adapter cleanup Task is scheduled; the
@@ -73,3 +88,26 @@ framing to prove a protected read with origin signing for both ordinary and
 mux WebSockets, with no server signing vault. The full macOS regression and its
 existing three-pass TSAN job include both suites. No production host deployment,
 TLS proxy verification, or universal DoS guarantee follows from these tests.
+
+## N35 regression candidate
+
+Three added regressions cover two logical channels on one physical socket:
+
+- `VaporWebSocketAdmissionTests.testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket`:
+  holds A without cooperative cancellation, requires B and selective A-close to
+  progress, reuses A's wire ID before old work completes, retains work accounting,
+  rejects the old late send and prevents queued old work reaching replacement A.
+- `VaporWebSocketAdmissionTests.testMuxFlowOrderIsLocalToItsChannelOnSameSocket`:
+  holds A's first Flow delivery, requires ordered B delivery, then verifies A's
+  own order and eventual receive-accounting release.
+- `BridgeChannelWebSocketTests.testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket`:
+  performs real HTTP upgrade and authentication, holds an actual GeneralCell GET,
+  and requires another protected GET with origin signing on the same socket.
+
+At creation on 2026-10-01 these tests and the correction are **uncompiled and
+unexecuted**: the host capacity gate reported 47.3 GiB free, 37.3 GiB / 4 percent
+projected after reserve, below the task's 40 GiB and 10 percent requirements.
+No CI or deployment success is implied. Required verification: run these three
+new tests against original production sources at `3824cf84` and require runtime
+assertion failures; restore the candidate and run focused/broad regression plus
+transport/mux concurrency coverage. Compilation failure is not a red regression.
