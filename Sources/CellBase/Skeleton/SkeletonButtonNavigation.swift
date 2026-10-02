@@ -15,7 +15,8 @@ extension SkeletonNavigationBarItem {
             payload: payload,
             keypathKeypath: keypathKeypath,
             labelKeypath: labelKeypath,
-            payloadKeypath: payloadKeypath
+            payloadKeypath: payloadKeypath,
+            icon: icon
         )
     }
 }

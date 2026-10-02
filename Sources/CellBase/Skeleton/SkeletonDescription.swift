@@ -3515,6 +3515,12 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
     public var payloadKeypath: String?
     public var activeValue: String?
     public var activeConfigurationName: String?
+    /// SF Symbol name (e.g. "person.circle", "calendar", "message"), matching the
+    /// convention `SkeletonButton.icon`/`SkeletonImage.name` already use. Web
+    /// renderers translate this into their own icon set (see the SF-Symbol-to-Lucide
+    /// mapping table in skeleton-runtime.js) rather than the protocol carrying
+    /// platform-specific icon identifiers.
+    public var icon: String?
     public var modifiers: SkeletonModifiers?
 
     public init(
@@ -3527,6 +3533,7 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         payloadKeypath: String? = nil,
         activeValue: String? = nil,
         activeConfigurationName: String? = nil,
+        icon: String? = nil,
         modifiers: SkeletonModifiers? = nil
     ) {
         self.keypath = keypath
@@ -3538,6 +3545,7 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         self.payloadKeypath = payloadKeypath
         self.activeValue = activeValue
         self.activeConfigurationName = activeConfigurationName
+        self.icon = icon
         self.modifiers = modifiers
     }
 
@@ -3552,6 +3560,7 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         case payloadKeypath
         case activeValue
         case activeConfigurationName
+        case icon
         case modifiers
     }
 
@@ -3569,6 +3578,7 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
         self.activeValue = try container.decodeIfPresent(String.self, forKey: .activeValue)
         self.activeConfigurationName = try container.decodeIfPresent(String.self, forKey: .activeConfigurationName)
+        self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
     }
 
@@ -3584,6 +3594,7 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         try container.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
         try container.encodeIfPresent(self.activeValue, forKey: .activeValue)
         try container.encodeIfPresent(self.activeConfigurationName, forKey: .activeConfigurationName)
+        try container.encodeIfPresent(self.icon, forKey: .icon)
         try container.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
 }
