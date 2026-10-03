@@ -1,42 +1,49 @@
-name: Bridge N35 bounded macOS regression
+name: CellProtocol macOS regression
 
-# This isolated candidate permits exactly one explicitly dispatched job.
-# Restore the normal regression workflow when integrating the runtime change.
 on:
+  pull_request:
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', 'Scripts/verify-transport-security-floor.sh', '.github/workflows/security-regression-macos.yml']
+  push:
+    branches: [main]
+    paths: ['Sources/**', 'Tests/**', 'commons/**', 'Package.swift', 'Package.resolved', 'Scripts/verify-transport-security-floor.sh', '.github/workflows/security-regression-macos.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: bridge-n35-${{ github.ref }}
-  cancel-in-progress: false
+  group: macos-regression-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   regression:
+    # Existing CellApple sources import FoundationModels and need the 26 SDK.
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          fetch-depth: 0
-      - name: Check orchestration and record toolchain
+      - name: Test exact sources and pinned dependencies
         shell: bash
         run: |
           set -euo pipefail
-          python3 Scripts/test_bridge_mux_n35_ci.py
           xcodebuild -version
           swift --version
-      - name: Reproduce original failure, then test candidate once
+          swift test --disable-automatic-resolution --jobs 4
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
+      - name: Verify peer, Scanner, EntityScanner, record and mux lifetimes with Thread Sanitizer
         shell: bash
         env:
           TSAN_OPTIONS: halt_on_error=1
-        run: python3 Scripts/run-bridge-mux-n35-ci.py
-      - name: Preserve test and timeout evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: bridge-mux-n35-${{ github.sha }}
-          path: ${{ runner.temp }}/bridge-mux-n35-evidence
-          if-no-files-found: warn
-          retention-days: 14
+        run: |
+          set -euo pipefail
+          # Each invocation starts a fresh test process. The first rebuilds the
+          # pinned package with instrumentation; later invocations reuse it.
+          for attempt in 1 2 3; do
+            echo "Peer, Scanner, consumer, record and mux Thread Sanitizer pass ${attempt}/3"
+            swift test --disable-automatic-resolution --jobs 2 \
+              --sanitize thread --filter 'EphemeralIdentityVaultConcurrencyTests|PublisherAsyncLifetimeTests|BridgeDescriptionConcurrencyTests|EntityScannerConsumerSecurityTests|ScannerNearbyInteractionTests|ScannerPeerAuthenticationTests|ScannerServiceInvitationTests|ScannerAdmissionTests|ScannerRetainedStateTests|BridgePeerV3Tests|BridgePeerRecordLayerTests|BridgePeerFlowControlTests|BridgeMultiplexingTests|BridgeMuxSendLifetimeTests|BridgeResponseLifetimeTests|BridgeFeedAndRPCOrderingTests|BridgeFactoryLifetimeTests|BridgeSigningLifetimeTests|VaporWebSocketAdmissionTests|BridgeChannelWebSocketTests'
+          done
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests commons
+      - name: Reject a vulnerable downstream transport pin
+        shell: bash
+        run: bash Scripts/verify-transport-security-floor.sh

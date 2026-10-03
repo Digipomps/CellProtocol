@@ -104,10 +104,28 @@ Three added regressions cover two logical channels on one physical socket:
   performs real HTTP upgrade and authentication, holds an actual GeneralCell GET,
   and requires another protected GET with origin signing on the same socket.
 
-At creation on 2026-10-01 these tests and the correction are **uncompiled and
-unexecuted**: the host capacity gate reported 47.3 GiB free, 37.3 GiB / 4 percent
-projected after reserve, below the task's 40 GiB and 10 percent requirements.
-No CI or deployment success is implied. Required verification: run these three
-new tests against original production sources at `3824cf84` and require runtime
-assertion failures; restore the candidate and run focused/broad regression plus
-transport/mux concurrency coverage. Compilation failure is not a red regression.
+Verified in [macOS CI run 37049974688](https://github.com/Digipomps/CellProtocol/actions/runs/37049974688),
+completed 2026-10-02 and inspected 2026-10-03. Tested head:
+`7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1`; runtime change: `091c85b`.
+
+- The three tests compiled and all failed with the three original runtime files
+  from `3824cf84` restored. Failures were sibling-progress/close timeouts, not
+  compiler errors. XCTest reports six failures, two from thrown timeout errors.
+- With the candidate restored, all three tests passed.
+- Full macOS suite: 1539 tests, five skipped, zero failures.
+- One focused Thread Sanitizer pass: 55 tests, zero failures.
+
+One macOS-26 job took 18m40s, using Xcode 26.6 and Swift 6.3.3. Dependency pins
+stayed unchanged; the downloaded source hashes match the runtime candidate.
+Artifact `bridge-mux-n35-7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1`
+contains all four raw logs and `result.json` with commands and source hashes.
+`Scripts/run-bridge-mux-n35-ci.py` is the bounded reproducer; its nine
+orchestration tests passed locally and in CI without simulating runtime results
+as Swift evidence. The temporary dispatch-only workflow was restored after the
+run; normal PR/main regression policy is preserved.
+
+Host Swift compilation remained blocked by the task's 40 GiB and 10 percent
+capacity gate; only syntax/static and Python checks ran locally. The full-suite
+skips include optional fixture/worker tests and native Multipeer coverage.
+This evidence addresses established-channel N35 behavior, not other PR53
+findings, iOS Nearby Interaction, a production TLS route or deployment.
