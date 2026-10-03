@@ -6,6 +6,7 @@ normal signed resolver path. Inventory is observation, never creator attribution
 """
 import argparse
 import fnmatch
+import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import sys
+import tempfile
 import time
 import uuid
 
@@ -81,6 +83,13 @@ class Collector:
             raise Rejected("spool must be a canonical absolute path")
         # An enrolled, private directory is required; never chmod an existing tree.
         private_file(spool, directory=True)
+        self.spool = spool
+        self.delivery_enabled = config.get("deliveryEnabled", False)
+        self.delivery_max_bytes = config.get("deliveryMaxBytes", DEFAULT_SNAPSHOT_BYTES)
+        if type(self.delivery_enabled) is not bool:
+            raise Rejected("invalid delivery setting")
+        if type(self.delivery_max_bytes) is not int or not 1024 <= self.delivery_max_bytes <= MAX_SNAPSHOT_BYTES:
+            raise Rejected("invalid delivery bound")
         self.db_path = spool / "events.sqlite3"
         for suffix in ("", "-journal", "-wal", "-shm"):
             candidate = Path(str(self.db_path) + suffix)
@@ -219,6 +228,10 @@ class Collector:
                 run = dict(runs[attempt])
                 if run["status"] != "running":
                     if kind == "finish" and run["status"] == result:
+                        # Publish after the transaction exits, including a retry
+                        # of a committed event whose prior export failed.
+                        self.db.commit()
+                        self.publish_if_enabled()
                         return attempt  # Retrying the same terminal receipt is harmless.
                     raise Rejected("attempt already terminal")
                 if kind in ("finish", "recover"):
@@ -266,7 +279,56 @@ class Collector:
                         updates.append(missing)  # Absence is not deletion proof.
             event = {"schema": SCHEMA, "run": run, "artifacts": updates}
             self.db.execute("INSERT INTO events (id, body) VALUES (?, ?)", (str(uuid.uuid4()), canonical(event)))
+        self.publish_if_enabled()
         return attempt
+
+    def publish_if_enabled(self):
+        if not self.delivery_enabled:
+            return
+        try:
+            self.publish_snapshot()
+        except (Rejected, OSError, sqlite3.Error, ValueError, KeyError, TypeError):
+            # The journal event already committed. Preserve its attempt receipt
+            # even when the export cannot be refreshed (e.g. disk full).
+            print("artifact_provenance_pending: export_unavailable; local journal retained", file=sys.stderr)
+
+    def publish_snapshot(self):
+        """Atomically export one bounded frame; never sends data or grants access.
+
+        A private lock serializes producers before reading their latest journal
+        snapshot. The sender must retain its own pending frame across uncertain
+        writes; replacing this export does not acknowledge an earlier delivery.
+        """
+        if not self.delivery_enabled:
+            raise Rejected("delivery export disabled")
+        lock_path = self.spool / "delivery-export.lock"
+        if lock_path.exists() or lock_path.is_symlink():
+            private_file(lock_path)
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        temporary = None
+        try:
+            # Do not hold a job completion forever behind another exporter.
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            encoded = self.encoded_snapshot(self.delivery_max_bytes)
+            destination = self.spool / "delivery-snapshot.json"
+            if destination.exists() or destination.is_symlink():
+                private_file(destination)
+            with tempfile.NamedTemporaryFile(prefix=".delivery-", dir=self.spool, delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+            temporary = None
+            directory_fd = os.open(self.spool, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            os.close(lock_fd)
 
     def snapshot(self):
         # One read transaction binds the sequence to the exported state.
@@ -301,7 +363,7 @@ class Collector:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
-    parser.add_argument("command", choices=("start", "finish", "created", "recover", "snapshot"))
+    parser.add_argument("command", choices=("start", "finish", "created", "recover", "snapshot", "publish"))
     parser.add_argument("--attempt")
     parser.add_argument("--job")
     parser.add_argument("--project")
@@ -317,6 +379,8 @@ def main():
             # Validate the full frame before emitting any bytes. An oversized
             # snapshot must not look like a successful partial import.
             sys.stdout.buffer.write(collector.encoded_snapshot(args.max_bytes))
+        elif args.command == "publish":
+            collector.publish_snapshot()
         else:
             print(collector.record(args.command, args.attempt, args.job, args.project, args.path, args.result))
         return 0

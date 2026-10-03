@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("haven_artifacts", Path(__file__).with_name("haven_artifacts.py"))
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -120,6 +121,93 @@ class ArtifactTests(unittest.TestCase):
         for maximum in (0, -1, 1023, MODULE.MAX_SNAPSHOT_BYTES + 1, True, "1024"):
             with self.assertRaises(MODULE.Rejected):
                 collector.encoded_snapshot(maximum)
+
+    def test_delivery_export_is_disabled_by_default(self):
+        collector = self.collector()
+        self.start(collector)
+        self.assertFalse((self.spool / "delivery-snapshot.json").exists())
+        with self.assertRaises(MODULE.Rejected):
+            collector.publish_snapshot()
+
+    def test_enabled_export_refreshes_after_commit_with_exact_integer_metadata(self):
+        self.settings["deliveryEnabled"] = True
+        self.save_config()
+        path = self.root / "file"
+        path.touch()
+        timestamp = 1780000000123456789
+        os.utime(path, ns=(timestamp, timestamp))
+        collector = self.collector()
+        attempt = self.start(collector)
+        exported = self.spool / "delivery-snapshot.json"
+        first = json.loads(exported.read_bytes())
+        artifact = next(item for item in first["artifacts"] if item["path"] == str(path))
+        self.assertEqual(artifact["modifiedNs"], path.stat().st_mtime_ns)
+        collector.record("finish", attempt=attempt, result="succeeded")
+        latest = json.loads(exported.read_bytes())
+        self.assertEqual(latest, collector.snapshot())
+        self.assertGreater(latest["sequence"], first["sequence"])
+        self.assertEqual(exported.stat().st_mode & 0o777, 0o600)
+
+    def test_failed_export_keeps_previous_frame_and_committed_attempt_receipt(self):
+        self.settings["deliveryEnabled"] = True
+        self.save_config()
+        collector = self.collector()
+        attempt = self.start(collector)
+        exported = self.spool / "delivery-snapshot.json"
+        previous = exported.read_bytes()
+        with patch.object(MODULE.os, "replace", side_effect=OSError("private-path")):
+            result = collector.record("finish", attempt=attempt, result="succeeded")
+        self.assertEqual(result, attempt)
+        self.assertEqual(exported.read_bytes(), previous)
+        self.assertEqual(collector.snapshot()["runs"][0]["status"], "succeeded")
+        self.assertEqual(list(self.spool.glob(".delivery-*")), [])
+        # An identical terminal retry repairs the export without a new event.
+        before = collector.snapshot()
+        collector.record("finish", attempt=attempt, result="succeeded")
+        self.assertEqual(json.loads(exported.read_bytes()), before)
+
+    def test_oversized_export_retains_previous_complete_frame_and_all_events(self):
+        self.settings["deliveryEnabled"] = True
+        self.save_config()
+        collector = self.collector()
+        attempt = self.start(collector)
+        exported = self.spool / "delivery-snapshot.json"
+        previous = exported.read_bytes()
+        collector.delivery_max_bytes = 1024
+        collector.record("finish", attempt=attempt, result="succeeded")
+        self.assertEqual(exported.read_bytes(), previous)
+        with self.assertRaises(MODULE.SnapshotTooLarge):
+            collector.publish_snapshot()
+        collector.delivery_max_bytes = MODULE.MAX_SNAPSHOT_BYTES
+        collector.publish_snapshot()
+        self.assertEqual(json.loads(exported.read_bytes()), collector.snapshot())
+
+    def test_export_lock_is_nonblocking_and_recovery_reads_latest_journal(self):
+        self.settings["deliveryEnabled"] = True
+        self.save_config()
+        collector = self.collector()
+        attempt = self.start(collector)
+        lock = os.open(self.spool / "delivery-export.lock", os.O_RDWR)
+        try:
+            MODULE.fcntl.flock(lock, MODULE.fcntl.LOCK_EX | MODULE.fcntl.LOCK_NB)
+            collector.record("finish", attempt=attempt, result="succeeded")
+        finally:
+            os.close(lock)
+        fresh = self.collector()
+        fresh.publish_snapshot()
+        self.assertEqual(json.loads((self.spool / "delivery-snapshot.json").read_bytes()), fresh.snapshot())
+
+    def test_export_rejects_symlink_destination_without_touching_target(self):
+        self.settings["deliveryEnabled"] = True
+        self.save_config()
+        collector = self.collector()
+        external = self.base / "untouched"
+        external.write_text("preserve")
+        (self.spool / "delivery-snapshot.json").symlink_to(external)
+        self.start(collector)
+        with self.assertRaises(MODULE.Rejected):
+            collector.publish_snapshot()
+        self.assertEqual(external.read_text(), "preserve")
 
     def test_terminal_retry_is_idempotent_but_conflict_is_rejected(self):
         collector = self.collector()

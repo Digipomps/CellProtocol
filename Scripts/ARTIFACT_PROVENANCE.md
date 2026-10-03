@@ -55,6 +55,24 @@ overhead and retain pending status until a matching durable receipt arrives.
 This collector does not make network requests. A bounded snapshot is not proof
 of enrollment, a remote grant, or an implemented background sender.
 
+### Optional automatic export
+
+With the explicit private configuration `"deliveryEnabled": true`, every
+committed event refreshes `delivery-snapshot.json` inside the enrolled spool.
+`deliveryMaxBytes` defaults to 262144 and is bounded to 1024...4194304 bytes.
+The export is mode 0600, atomically replaced and fsynced under a nonblocking
+producer lock. An oversized frame or failed export keeps the previous complete
+file and every journal event. The command still returns the committed attempt
+receipt, with a fixed degraded-delivery warning on stderr. An identical terminal
+retry repairs a failed export without creating another event.
+
+`publish` explicitly refreshes this file from the latest journal, for recovery
+after a failed export. It requires `deliveryEnabled` and makes no network calls.
+The receiver-facing AgentD sender must freeze a separate pending frame before
+sending; replacing the export does not acknowledge or discard earlier delivery.
+The sender also requires owner/host/writer/requester/target enrollment and a
+remote grant. Enabling the export alone does not enable remote delivery.
+
 `created` is a declaration by the registered writer immediately after it creates
 the exact path; recursively inventoried children remain observations. The writer
 must not call it for existing files. `recover --result interrupted` closes only
@@ -86,7 +104,7 @@ lease, capacity and cache-deletion policies remain the runner's responsibility.
 - TTL, dependencies, open processes, live leases, mounts and Git/recovery state
   are not certified by inventory. Terminal files stay **unknown**; there is no
   delete command or eligible-for-cleanup state in this collector.
-- Local replay is implemented. Automatic signed upload/reconnect, journal
+- Local replay and optional bounded file export are implemented. Automatic signed upload/reconnect, journal
   compaction, Linux end-to-end and full Workbench verification remain release
   gates in HD-0154. Do not claim that source changes are deployed.
 
@@ -94,6 +112,13 @@ lease, capacity and cache-deletion policies remain the runner's responsibility.
 
 `python3 -B Scripts/test_haven_artifacts.py -v` exercises capture, scope,
 owner/host binding, replay, rollback, symlinks, partial coverage and fake build
-failures. `bash Tests/Scripts/HavenSwiftPMRunnerTests.sh` exercises existing lease
+failures, plus atomic export, contention and recovery (24 tests on 2026-10-03).
+`bash Tests/Scripts/HavenSwiftPMRunnerTests.sh` exercises existing lease
 and GC semantics using generated test fixtures and a fake Swift executable.
 Neither test invokes a real Swift build or touches production caches.
+
+On 2026-10-04 both sets also passed on Linux: 24 collector tests and 12 runner
+fixtures. Copy the complete fixture set, including `Tests/Scripts/Fixtures/lsof`;
+omitting that fake makes the orphan-open-file test use the real tool and gives
+a misleading failure. The first incomplete Linux transfer is retained as failed
+test-setup evidence. This does not verify live host enrollment or remote delivery.
