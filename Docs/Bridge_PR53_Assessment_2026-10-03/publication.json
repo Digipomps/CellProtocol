@@ -1,0 +1,60 @@
+{
+  "headRefName": "pdd/bro-kanal-auth",
+  "headRefOid": "55c81a2ce9e715fd48cf0642cee3a1511d0f7222",
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/Digipomps/CellProtocol/actions/runs/37120224243/job/111194733429",
+      "name": "Persisted Cell file bounds",
+      "startedAt": "2026-10-03T11:37:06Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "CellProtocol Swift Linux"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/Digipomps/CellProtocol/actions/runs/37120224152/job/111194733197",
+      "name": "regression",
+      "startedAt": "2026-10-03T11:37:11Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "CellProtocol macOS regression"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/Digipomps/CellProtocol/actions/runs/37120224124/job/111194732952",
+      "name": "bounded synthetic runtime matrix",
+      "startedAt": "2026-10-03T11:37:11Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Runtime capacity benchmark (macOS)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/Digipomps/CellProtocol/actions/runs/37120224154/job/111194733224",
+      "name": "Vapor identity vault strict storage",
+      "startedAt": "2026-10-03T11:37:06Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "Vapor identity vault Swift Linux"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-03T11:37:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Digipomps/CellProtocol/actions/runs/37120223239/job/111194731249",
+      "name": "Dispatch PyCellProtocol upstream sync",
+      "startedAt": "2026-10-03T11:37:05Z",
+      "status": "COMPLETED",
+      "workflowName": "Notify PyCellProtocol"
+    }
+  ],
+  "url": "https://github.com/Digipomps/CellProtocol/pull/53",
+  "verified_at": "2026-10-03T11:37:51.300872+00:00",
+  "cleanup_executed": false
+}

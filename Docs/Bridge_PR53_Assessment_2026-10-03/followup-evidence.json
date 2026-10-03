@@ -1,0 +1,29 @@
+{
+  "time": "2026-10-03T11:03:57.766876+00:00",
+  "local_pr_head": "990fffe09e8bdd8058b1d56e1cc17fca6ad71dce",
+  "branch": "pdd/bro-kanal-auth",
+  "status": "",
+  "objects_identical_to_tested_7ef06e7": {
+    "Package.swift": "7c6d33b2c7aca7ad5059b420952626810f1db1e3",
+    "Package.resolved": "e00c254d6bd6d89635a9d76adc9e65d6a37b6d13",
+    "Sources": "1fc03c8b9420b57c8f262cd8715a9daff5f7ceba",
+    "Tests": "b7d607b296b7fc84307050a5c26570b67b0e1185"
+  },
+  "orchestration_tests": {
+    "command": "python3 Scripts/test_bridge_mux_n35_ci.py",
+    "tests": 9,
+    "failures": 0,
+    "exit": 0
+  },
+  "new_swift_tests": false,
+  "cleanup": {
+    "executed": false,
+    "plan_exit": 2,
+    "reason": "candidates cannot meet the minimum projected buffer",
+    "authorization_token": null
+  },
+  "build_gate_exit": 75,
+  "push_merge_deploy": false,
+  "hd_task": "HD-0161",
+  "physical_ni": "deferred by user; untested"
+}

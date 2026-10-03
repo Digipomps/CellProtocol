@@ -1,0 +1,104 @@
+[
+  {
+    "path": "/private/tmp/cs-g3-20260929/.build/out",
+    "gib": 5.25,
+    "git_root": "/private/tmp/cs-g3-20260929",
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/hd-oncomplete-20260929/.build/out",
+    "gib": 3.28,
+    "git_root": "/private/tmp/hd-oncomplete-20260929",
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/hd-ikon-20260929/.build/out",
+    "gib": 3.27,
+    "git_root": "/private/tmp/hd-ikon-20260929",
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20260929T132924Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20260929T041428Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20260929T030111Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20260930T193301Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20261003T101614Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/cp-baseline-20260929T083343Z/.build/out",
+    "gib": 2.13,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-base-20260929T025743Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-base-20260929T041843Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-base-20260929T084050Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-base-20261002T202447Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-ref-20260929T042118Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/palazzo-base-20261003T101614Z/.build/out",
+    "gib": 1.72,
+    "git_root": null,
+    "markers": true
+  },
+  {
+    "path": "/private/tmp/hd-testflyt-v2/.build/out",
+    "gib": 0.0,
+    "git_root": null,
+    "markers": false
+  },
+  {
+    "path": "/private/tmp/hd-main-20260925/.build/out",
+    "gib": 0.0,
+    "git_root": null,
+    "markers": false
+  }
+]

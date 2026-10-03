@@ -1,0 +1,174 @@
+{
+  "filesystems": [
+    {
+      "available_bytes": 56115200000,
+      "available_percent": 5.642,
+      "capacity_percent_text": "94%",
+      "filesystem": "/dev/disk3s5",
+      "mountpoint": "/System/Volumes/Data",
+      "status": "critical",
+      "total_bytes": 994610155520,
+      "used_bytes": 876544000000
+    }
+  ],
+  "mode": "read-only-metadata",
+  "roots": [
+    {
+      "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData",
+      "top_entries": [
+        {
+          "allocated_bytes": 1326977263,
+          "complete": true,
+          "entries": 38974,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/CellScaffold-fzwhnitetukqhyafvgqafbocncmr"
+        },
+        {
+          "allocated_bytes": 474544499,
+          "complete": true,
+          "entries": 11341,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/_wt-bro-kanal-auth-20260927-cbpvndituuuuizbrbrgwuvcbablx"
+        },
+        {
+          "allocated_bytes": 235375456,
+          "complete": true,
+          "entries": 466,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/ModuleCache.noindex"
+        },
+        {
+          "allocated_bytes": 21922912,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-ftrmpltuglktlveyobpxoyywokjh"
+        },
+        {
+          "allocated_bytes": 21906528,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-eljrekoaqyiksqglxwvuhajnxitr"
+        },
+        {
+          "allocated_bytes": 21832800,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-bfdyendaeiaiwudymmlgkssjzwjb"
+        },
+        {
+          "allocated_bytes": 21804128,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-dwxumertlfbwyfdmfuvpzbwiewmp"
+        },
+        {
+          "allocated_bytes": 21804128,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-fhaqszibpgxixggvwiekhazurmko"
+        },
+        {
+          "allocated_bytes": 21779552,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-eoxvjuoimssbalfxjhimjvjxqiqu"
+        },
+        {
+          "allocated_bytes": 21509216,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-erjqezxlegozmocpftjxoqzkehoy"
+        },
+        {
+          "allocated_bytes": 21509216,
+          "complete": true,
+          "entries": 14,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/Binding-frqybcycjvfqdhetzojcecpmejyy"
+        },
+        {
+          "allocated_bytes": 3195360,
+          "complete": true,
+          "entries": 10,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/CompilationCache.noindex"
+        },
+        {
+          "allocated_bytes": 25344,
+          "complete": true,
+          "entries": 11,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/Users/kjetil/Library/Developer/Xcode/DerivedData/CellProtocol-cbpvndituuuuizbrbrgwuvcbablx"
+        }
+      ],
+      "totals": {
+        "allocated_bytes": 2214186882,
+        "complete": true,
+        "directories": 8969,
+        "entries": 50915,
+        "errors": 0,
+        "files": 41934,
+        "special_files": 0,
+        "symlinks": 12
+      }
+    },
+    {
+      "path": "/private/tmp/haven-swiftpm-bounded",
+      "top_entries": [
+        {
+          "allocated_bytes": 15319840189,
+          "complete": true,
+          "entries": 187760,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/private/tmp/haven-swiftpm-bounded/caches"
+        },
+        {
+          "allocated_bytes": 64,
+          "complete": true,
+          "entries": 1,
+          "errors": 0,
+          "kind": "directory",
+          "path": "/private/tmp/haven-swiftpm-bounded/leases"
+        }
+      ],
+      "totals": {
+        "allocated_bytes": 15319840381,
+        "complete": true,
+        "directories": 18395,
+        "entries": 187762,
+        "errors": 0,
+        "files": 169348,
+        "special_files": 0,
+        "symlinks": 19
+      }
+    }
+  ],
+  "schema_version": 1,
+  "thresholds": {
+    "minimum_free_bytes": 42949672960,
+    "minimum_free_percent": 10.0,
+    "trigger_free_bytes": 85899345920,
+    "trigger_free_percent": 15.0
+  }
+}

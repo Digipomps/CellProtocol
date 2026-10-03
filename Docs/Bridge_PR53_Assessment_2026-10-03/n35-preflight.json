@@ -1,0 +1,2959 @@
+{
+ "schema": "haven.preflight.result.v1",
+ "ts": "2026-10-03T11:00:02+00:00",
+ "root": "/Users/kjetil/Build/Digipomps/HAVEN/CellProtocol/_wt-bro-kanal-auth-20260927",
+ "tiers": [
+  "T0",
+  "T1"
+ ],
+ "release": false,
+ "rules_dir": "/Users/kjetil/Build/Digipomps/HAVEN/HAVEN-Deploy/rules",
+ "siblings": [],
+ "config_issues": [],
+ "rules": [
+  {
+   "id": "ENV-001",
+   "title": "For lite ledig disk",
+   "lesson": "L-2026-08-28-disk-full-build-host",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Ledig disk under 40 GiB eller 10 % – swift build/docker fyller disken og feiler midtveis.",
+   "fix_hint": "Rydd .build/DerivedData/docker system prune, eller flytt worktree.",
+   "status": "fail",
+   "note": "",
+   "evidence": [
+    {
+     "file": "",
+     "line": 0,
+     "text": "free 51.1 GiB (5.5%) < required 40 GiB / 10%",
+     "extra": {
+      "free_gib": 51.1,
+      "pct": 5.5
+     },
+     "fingerprint": "9a5cc6611b152833"
+    }
+   ],
+   "files_scanned": 938,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 0
+  },
+  {
+   "id": "DARWIN-004",
+   "title": "Mac-sti eller -vert lekker",
+   "lesson": "L-2026-08-19-private-tmp-path-leak",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "Hardkodet Mac-sti/arkitektur (/private/tmp, /Users/, arch -arm64, /opt/homebrew, NSHomeDirectory(), /Library/).",
+   "fix_hint": "Bruk FileManager.temporaryDirectory / miljøvariabler / relative stier.",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Scripts/record-runtime-swift-tasks-trace.sh",
+     "line": 20,
+     "text": "scratch_root=\"${BENCHMARK_SCRATCH_DIR:-/private/tmp/CellProtocol-runtime-capacity-build}\"",
+     "extra": {},
+     "fingerprint": "54f7c3026b962750"
+    },
+    {
+     "file": "Scripts/run-runtime-capacity-benchmark.sh",
+     "line": 6,
+     "text": "# This script deliberately builds into /private/tmp instead of the repository's",
+     "extra": {},
+     "fingerprint": "e2f317f2b8510150"
+    },
+    {
+     "file": "Scripts/run-runtime-capacity-benchmark.sh",
+     "line": 14,
+     "text": "output_root=\"${BENCHMARK_OUTPUT_DIR:-/private/tmp/CellProtocol-runtime-capacity-${run_stamp}}\"",
+     "extra": {},
+     "fingerprint": "d1882de5c25a0c08"
+    },
+    {
+     "file": "Scripts/run-runtime-capacity-benchmark.sh",
+     "line": 15,
+     "text": "scratch_root=\"${BENCHMARK_SCRATCH_DIR:-/private/tmp/CellProtocol-runtime-capacity-build}\"",
+     "extra": {},
+     "fingerprint": "c25183bbe47d710a"
+    },
+    {
+     "file": "Scripts/test-runtime-capacity-benchmark-gate.sh",
+     "line": 12,
+     "text": "temporary_root=\"$(mktemp -d \"${TMPDIR:-/private/tmp}/cellprotocol-runtime-capacity-gate.XXXXXX\")\"",
+     "extra": {},
+     "fingerprint": "9762db8b7f9c4741"
+    },
+    {
+     "file": "Sources/CellApple/Cells/Porthole/Utility Views/Skeleton/AppInitializer.swift",
+     "line": 145,
+     "text": "// if let defaultUrl = URL(string: \"file:///Users/Shared/CellsContainer/CellConfigurations/\") {",
+     "extra": {},
+     "fingerprint": "1333684f51db746a"
+    },
+    {
+     "file": "Sources/CellBase/PersistingCells/CellStoragePathPolicy.swift",
+     "line": 85,
+     "text": "// Foundation's standardization may rewrite /private/tmp to /tmp only",
+     "extra": {},
+     "fingerprint": "53eca87f83386180"
+    },
+    {
+     "file": "Tests/Scripts/HavenSwiftPMRunnerTests.sh",
+     "line": 181,
+     "text": "\"$RUNNER\" --cache-root \"$root\" --cache-key package-path --max-age-seconds 0 --max-cache-kib 0 -- test --package-path /private/tmp/other-package",
+     "extra": {},
+     "fingerprint": "8ba772ca34d78679"
+    }
+   ],
+   "files_scanned": 641,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 119
+  },
+  {
+   "id": "DARWIN-005",
+   "title": "ObjC-runtime i Sources",
+   "lesson": "L-2026-08-20-objc-dynamic-linux",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "`@objc`, `dynamic func` eller `: NSObject` i Sources – ObjC-runtime finnes ikke på Linux.",
+   "fix_hint": "Bruk rene Swift-protokoller/klasser, eller guard med #if canImport(ObjectiveC).",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "0b964cd2213ab650"
+    },
+    {
+     "file": "Sources/CellBase/Cells/Bridging/LightweightBridgeTransport.swift",
+     "line": 297,
+     "text": "private final class URLSessionLightweightWebSocketClient: NSObject, LightweightWebSocketClient, URLSessionWebSocketDelegate, @unchecked Sendable {",
+     "extra": {},
+     "fingerprint": "ea7cf09d5c4c16b0"
+    },
+    {
+     "file": "Sources/CellBase/Crypto/HTTPSSecretCredentialTransport.swift",
+     "line": 21,
+     "text": "private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {",
+     "extra": {},
+     "fingerprint": "85daac53263e8260"
+    }
+   ],
+   "files_scanned": 320,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 67
+  },
+  {
+   "id": "FND-002",
+   "title": "String(format:) med %@",
+   "lesson": "L-2026-08-16-string-format-percent-at",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "`String(format:)` med `%@`: Swift String som %@ er utrygt i corelibs-foundation på Linux (tomt/krasj for ikke-NSObject-verdier).",
+   "fix_hint": "Bruk \\(interpolasjon) for Swift-verdier; %@ bare for NSObject-broede verdier bak guard.",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "764cd343cdaf443d"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "c71e4899de99a133"
+    },
+    {
+     "file": "Sources/ReferenceLoadBenchmark/main.swift",
+     "line": 111,
+     "text": "print(String(format: \"[%9.1f ms] %@: %@\", ms, domain.rawValue, String(message.prefix(220))))",
+     "extra": {},
+     "fingerprint": "e72bba2612de11f9"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 13
+  },
+  {
+   "id": "FND-003",
+   "title": "NSString-bro",
+   "lesson": "L-2026-08-17-nsstring-bridge",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "`as NSString` / `NSString(` – bro-semantikk avviker på Linux.",
+   "fix_hint": "Bruk String-API (hasPrefix, components(separatedBy:), NSString kun bak guard).",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "e3a26b3af92c0f7f"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "867f41aab46e2e7b"
+    },
+    {
+     "file": "Sources/CellBase/Cells/Vault/GraphIndexCell.swift",
+     "line": 331,
+     "text": "let range = NSRange(location: 0, length: (markdown as NSString).length)",
+     "extra": {},
+     "fingerprint": "f5e2c3e2a8e8a5f3"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 41
+  },
+  {
+   "id": "FND-008",
+   "title": "DateFormatter uten timeZone/locale",
+   "lesson": "L-2026-08-19-dateformatter-tz-locale",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "DateFormatter uten eksplisitt timeZone og locale gir ulik output på server (UTC/C-locale).",
+   "fix_hint": "Sett `f.timeZone = TimeZone(identifier: \"UTC\")` og `f.locale = Locale(identifier: \"en_US_POSIX\")`.",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple/Cells/Porthole/Utility Views/Skeleton/Suggestion/SkeletonView.swift",
+     "line": 2124,
+     "text": "let formatter = DateFormatter()",
+     "extra": {
+      "missing": [
+       "locale"
+      ]
+     },
+     "fingerprint": "a5d6610f149eb5a6"
+    },
+    {
+     "file": "Sources/CellApple/Cells/Porthole/Utility Views/Skeleton/Suggestion/SkeletonView.swift",
+     "line": 2133,
+     "text": "let formatter = DateFormatter()",
+     "extra": {
+      "missing": [
+       "locale"
+      ]
+     },
+     "fingerprint": "a5d6610f149eb5a6"
+    },
+    {
+     "file": "Sources/CellBase/Invitation/HavenInvitePublication.swift",
+     "line": 129,
+     "text": "let formatter = DateFormatter()",
+     "extra": {
+      "missing": [
+       "timeZone"
+      ]
+     },
+     "fingerprint": "dc79954dc9b0aff4"
+    }
+   ],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 74
+  },
+  {
+   "id": "SWIFT-002",
+   "title": "Task-rekkefølge antatt i test",
+   "lesson": "L-2026-08-22-task-ordering-linux-executor",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Fire-and-forget `Task {}` etterfulgt av assert uten await/.value – rekkefølge er ikke garantert på Linux.",
+   "fix_hint": "`await task.value` / `await fulfillment(of:)` før assert.",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Tests/CellBaseTests/GeneralCellInterfaceTests.swift",
+     "line": 944,
+     "text": "Task {",
+     "extra": {
+      "assertion_line": 954
+     },
+     "fingerprint": "6b4333b82da45cb2"
+    },
+    {
+     "file": "Tests/CellBaseTests/IntegrationTests.swift",
+     "line": 754,
+     "text": "Task.detached {",
+     "extra": {
+      "assertion_line": 768
+     },
+     "fingerprint": "3e023bae18869455"
+    },
+    {
+     "file": "Tests/CellBaseTests/VaporIdentityVaultStrictTests.swift",
+     "line": 632,
+     "text": "Task { await VaporIdentityVault.shared.setStrictWriteFailureForTesting(false) }",
+     "extra": {
+      "assertion_line": 639
+     },
+     "fingerprint": "2cec93ce5e393444"
+    },
+    {
+     "file": "Tests/PushFeedItemTests/PushFeedItemTests.swift",
+     "line": 30,
+     "text": "Task {",
+     "extra": {
+      "assertion_line": 32
+     },
+     "fingerprint": "67b017b33b6d49e4"
+    }
+   ],
+   "files_scanned": 214,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 10
+  },
+  {
+   "id": "TEST-001",
+   "title": "Testklasse utenfor CI-filter",
+   "lesson": "L-2026-08-22-test-class-not-in-ci-filter",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T1",
+   "engine": "python",
+   "message": "XCTestCase/@Suite-type i Tests/** som ikke matches av `--filter` i .github/workflows – testen kjører aldri i CI. Endrede/nye testfiler (git status) eskaleres til block.",
+   "fix_hint": "Utvid `--filter 'A|B'` i workflow (også over `\\\\`-linjeskift), eller fjern filteret. Evidens inneholder antall og klasseliste.",
+   "status": "warn",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Tests/CellBaseTests/ActiveFeedAuthorizationTests.swift",
+     "line": 12,
+     "text": "final class ActiveFeedAuthorizationTests: XCTestCase {",
+     "extra": {
+      "type": "ActiveFeedAuthorizationTests",
+      "changed": false
+     },
+     "fingerprint": "9cbd4c0df80d9386"
+    },
+    {
+     "file": "Tests/CellBaseTests/AdmissionAndCatalogContractModelsTests.swift",
+     "line": 13,
+     "text": "final class AdmissionAndCatalogContractModelsTests: XCTestCase {",
+     "extra": {
+      "type": "AdmissionAndCatalogContractModelsTests",
+      "changed": false
+     },
+     "fingerprint": "b0b6ecd64de5be83"
+    },
+    {
+     "file": "Tests/CellBaseTests/AgentTrustPackageTests.swift",
+     "line": 9,
+     "text": "final class AgentTrustPackageTests: XCTestCase {",
+     "extra": {
+      "type": "AgentTrustPackageTests",
+      "changed": false
+     },
+     "fingerprint": "16962e11e45ae0d9"
+    },
+    {
+     "file": "Tests/CellBaseTests/AgreementCodingTests.swift",
+     "line": 7,
+     "text": "final class AgreementCodingTests: XCTestCase {",
+     "extra": {
+      "type": "AgreementCodingTests",
+      "changed": false
+     },
+     "fingerprint": "0ddcc1961896f2e1"
+    },
+    {
+     "file": "Tests/CellBaseTests/AgreementSecurityTests.swift",
+     "line": 7,
+     "text": "final class AgreementSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "AgreementSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "fc8c5d8e63942f83"
+    },
+    {
+     "file": "Tests/CellBaseTests/AppleBridgeTransportTests.swift",
+     "line": 83,
+     "text": "final class AppleBridgeTransportTests: XCTestCase {",
+     "extra": {
+      "type": "AppleBridgeTransportTests",
+      "changed": false
+     },
+     "fingerprint": "29af0221ea5f1791"
+    },
+    {
+     "file": "Tests/CellBaseTests/AppleIdentityVaultKeyStorageTests.swift",
+     "line": 9,
+     "text": "final class AppleIdentityVaultKeyStorageTests: XCTestCase {",
+     "extra": {
+      "type": "AppleIdentityVaultKeyStorageTests",
+      "changed": false
+     },
+     "fingerprint": "c66e0d3fb9798e79"
+    },
+    {
+     "file": "Tests/CellBaseTests/AppleIntelligenceCellContractTests.swift",
+     "line": 8,
+     "text": "final class AppleIntelligenceCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "AppleIntelligenceCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "27b15998d3efe728"
+    },
+    {
+     "file": "Tests/CellBaseTests/AppleRuntimeStorageTests.swift",
+     "line": 8,
+     "text": "final class AppleRuntimeStorageTests: XCTestCase {",
+     "extra": {
+      "type": "AppleRuntimeStorageTests",
+      "changed": false
+     },
+     "fingerprint": "1ac7e795e056af77"
+    },
+    {
+     "file": "Tests/CellBaseTests/AttachmentStreamV1Tests.swift",
+     "line": 13,
+     "text": "final class AttachmentStreamV1Tests: XCTestCase {",
+     "extra": {
+      "type": "AttachmentStreamV1Tests",
+      "changed": false
+     },
+     "fingerprint": "37b8318a0cbbef5b"
+    },
+    {
+     "file": "Tests/CellBaseTests/AudioAnalysisRecordTests.swift",
+     "line": 7,
+     "text": "final class AudioAnalysisRecordTests: XCTestCase {",
+     "extra": {
+      "type": "AudioAnalysisRecordTests",
+      "changed": false
+     },
+     "fingerprint": "01fd3860ea6fe84a"
+    },
+    {
+     "file": "Tests/CellBaseTests/AudioSignalAnalysisTests.swift",
+     "line": 8,
+     "text": "final class AudioSignalAnalysisTests: XCTestCase {",
+     "extra": {
+      "type": "AudioSignalAnalysisTests",
+      "changed": false
+     },
+     "fingerprint": "0662f3f4d1af5fd6"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeCanonicalKeyQuotaTests.swift",
+     "line": 7,
+     "text": "final class BridgeCanonicalKeyQuotaTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeCanonicalKeyQuotaTests",
+      "changed": false
+     },
+     "fingerprint": "db1f34f954da7a88"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeChannelAuthenticationTests.swift",
+     "line": 7,
+     "text": "final class BridgeChannelAuthenticationTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeChannelAuthenticationTests",
+      "changed": false
+     },
+     "fingerprint": "4078801f25b47085"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeChannelLifetimeQuotaTests.swift",
+     "line": 12,
+     "text": "final class BridgeChannelLifetimeQuotaTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeChannelLifetimeQuotaTests",
+      "changed": false
+     },
+     "fingerprint": "9e20a380a683154f"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeChannelProcessTests.swift",
+     "line": 12,
+     "text": "final class BridgeChannelProcessTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeChannelProcessTests",
+      "changed": false
+     },
+     "fingerprint": "10a51c24ec3df258"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeChannelSequenceTests.swift",
+     "line": 7,
+     "text": "final class BridgeChannelSequenceTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeChannelSequenceTests",
+      "changed": false
+     },
+     "fingerprint": "424941606dfa3409"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeChannelTransportTests.swift",
+     "line": 13,
+     "text": "final class BridgeChannelTransportTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeChannelTransportTests",
+      "changed": false
+     },
+     "fingerprint": "086e0991a5e59dbb"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeDiagnosticPrivacyTests.swift",
+     "line": 6,
+     "text": "final class BridgeDiagnosticPrivacyTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeDiagnosticPrivacyTests",
+      "changed": false
+     },
+     "fingerprint": "3249953526d31c97"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeIdentityBoundaryTests.swift",
+     "line": 13,
+     "text": "final class BridgeIdentityBoundaryTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeIdentityBoundaryTests",
+      "changed": false
+     },
+     "fingerprint": "bddf530e509ee3fa"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeIdentityProofAuthorizationTests.swift",
+     "line": 7,
+     "text": "final class BridgeIdentityProofAuthorizationTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeIdentityProofAuthorizationTests",
+      "changed": false
+     },
+     "fingerprint": "2b8597d63041b897"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeInboundPayloadValidatorTests.swift",
+     "line": 7,
+     "text": "final class BridgeInboundPayloadValidatorTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeInboundPayloadValidatorTests",
+      "changed": false
+     },
+     "fingerprint": "5fc2264de0da8e36"
+    },
+    {
+     "file": "Tests/CellBaseTests/BridgeTests.swift",
+     "line": 12,
+     "text": "final class BridgeTests: XCTestCase {",
+     "extra": {
+      "type": "BridgeTests",
+      "changed": false
+     },
+     "fingerprint": "33749f064899e2cb"
+    },
+    {
+     "file": "Tests/CellBaseTests/CalendarContractTests.swift",
+     "line": 7,
+     "text": "final class CalendarContractTests: XCTestCase {",
+     "extra": {
+      "type": "CalendarContractTests",
+      "changed": false
+     },
+     "fingerprint": "0d59740f874a9dd6"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellAccessGraphContractsTests.swift",
+     "line": 7,
+     "text": "final class CellAccessGraphContractsTests: XCTestCase {",
+     "extra": {
+      "type": "CellAccessGraphContractsTests",
+      "changed": false
+     },
+     "fingerprint": "ec35dee58c67934a"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellBaseTests.swift",
+     "line": 10,
+     "text": "final class CellBaseTests: XCTestCase {",
+     "extra": {
+      "type": "CellBaseTests",
+      "changed": false
+     },
+     "fingerprint": "735a741ee08c9e34"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellLifecycleTests.swift",
+     "line": 117,
+     "text": "final class CellLifecycleTests: XCTestCase {",
+     "extra": {
+      "type": "CellLifecycleTests",
+      "changed": false
+     },
+     "fingerprint": "6f35f056d8d5eab4"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellResolverProtocolLightweightBridgeTransportTests.swift",
+     "line": 7,
+     "text": "final class CellResolverProtocolLightweightBridgeTransportTests: XCTestCase {",
+     "extra": {
+      "type": "CellResolverProtocolLightweightBridgeTransportTests",
+      "changed": false
+     },
+     "fingerprint": "0d025d950749f60c"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellRuntimeEnvironmentTests.swift",
+     "line": 7,
+     "text": "final class CellRuntimeEnvironmentTests: XCTestCase {",
+     "extra": {
+      "type": "CellRuntimeEnvironmentTests",
+      "changed": false
+     },
+     "fingerprint": "35358fa4822bc7e6"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellRuntimeReadinessContractTests.swift",
+     "line": 8,
+     "text": "final class CellRuntimeReadinessContractTests: XCTestCase {",
+     "extra": {
+      "type": "CellRuntimeReadinessContractTests",
+      "changed": false
+     },
+     "fingerprint": "3644d6f142ec8841"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellSecurityKitTests.swift",
+     "line": 7,
+     "text": "final class CellSecurityKitTests: XCTestCase {",
+     "extra": {
+      "type": "CellSecurityKitTests",
+      "changed": false
+     },
+     "fingerprint": "b9a0981546522681"
+    },
+    {
+     "file": "Tests/CellBaseTests/CellStoragePathPolicyTests.swift",
+     "line": 5,
+     "text": "final class CellStoragePathPolicyTests: XCTestCase {",
+     "extra": {
+      "type": "CellStoragePathPolicyTests",
+      "changed": false
+     },
+     "fingerprint": "7fe3c8cf1f1a004b"
+    },
+    {
+     "file": "Tests/CellBaseTests/ChatCellTests.swift",
+     "line": 18,
+     "text": "final class ChatCellTests: XCTestCase {",
+     "extra": {
+      "type": "ChatCellTests",
+      "changed": false
+     },
+     "fingerprint": "465b9897e7ffb7a0"
+    },
+    {
+     "file": "Tests/CellBaseTests/ClaimCompositionTests.swift",
+     "line": 8,
+     "text": "final class ClaimCompositionTests: XCTestCase {",
+     "extra": {
+      "type": "ClaimCompositionTests",
+      "changed": false
+     },
+     "fingerprint": "e35d5a12cc5be592"
+    },
+    {
+     "file": "Tests/CellBaseTests/ClaimDefinitionTests.swift",
+     "line": 8,
+     "text": "final class ClaimDefinitionTests: XCTestCase {",
+     "extra": {
+      "type": "ClaimDefinitionTests",
+      "changed": false
+     },
+     "fingerprint": "6de042e81e3c18a1"
+    },
+    {
+     "file": "Tests/CellBaseTests/ClaimSchemeTests.swift",
+     "line": 8,
+     "text": "final class ClaimSchemeTests: XCTestCase {",
+     "extra": {
+      "type": "ClaimSchemeTests",
+      "changed": false
+     },
+     "fingerprint": "c80402b905b38919"
+    },
+    {
+     "file": "Tests/CellBaseTests/CommonsCellsTests.swift",
+     "line": 7,
+     "text": "final class CommonsCellsTests: XCTestCase {",
+     "extra": {
+      "type": "CommonsCellsTests",
+      "changed": false
+     },
+     "fingerprint": "98d268882f07c14a"
+    },
+    {
+     "file": "Tests/CellBaseTests/ConferenceOrganizerAccessModelsTests.swift",
+     "line": 85,
+     "text": "final class ConferenceOrganizerAccessModelsTests: XCTestCase {",
+     "extra": {
+      "type": "ConferenceOrganizerAccessModelsTests",
+      "changed": false
+     },
+     "fingerprint": "fe05c6764e907a1d"
+    },
+    {
+     "file": "Tests/CellBaseTests/ConferenceSwarmSignalMatchingTests.swift",
+     "line": 7,
+     "text": "final class ConferenceSwarmSignalMatchingTests: XCTestCase {",
+     "extra": {
+      "type": "ConferenceSwarmSignalMatchingTests",
+      "changed": false
+     },
+     "fingerprint": "52608230bf996e65"
+    },
+    {
+     "file": "Tests/CellBaseTests/ContractProbeCellTests.swift",
+     "line": 12,
+     "text": "final class ContractProbeCellTests: XCTestCase {",
+     "extra": {
+      "type": "ContractProbeCellTests",
+      "changed": false
+     },
+     "fingerprint": "e50c8619d5742b7a"
+    },
+    {
+     "file": "Tests/CellBaseTests/CorrespondenceCellTests.swift",
+     "line": 17,
+     "text": "final class CorrespondenceCellTests: XCTestCase {",
+     "extra": {
+      "type": "CorrespondenceCellTests",
+      "changed": false
+     },
+     "fingerprint": "b87857db954f2f5e"
+    },
+    {
+     "file": "Tests/CellBaseTests/CrossRuntimeWireFixtureTests.swift",
+     "line": 8,
+     "text": "final class CrossRuntimeWireFixtureTests: XCTestCase {",
+     "extra": {
+      "type": "CrossRuntimeWireFixtureTests",
+      "changed": false
+     },
+     "fingerprint": "2c4f3af37abd67c6"
+    },
+    {
+     "file": "Tests/CellBaseTests/DIDDocumentValidatorTests.swift",
+     "line": 7,
+     "text": "final class DIDDocumentValidatorTests: XCTestCase {",
+     "extra": {
+      "type": "DIDDocumentValidatorTests",
+      "changed": false
+     },
+     "fingerprint": "d693f97e3bb4a84d"
+    },
+    {
+     "file": "Tests/CellBaseTests/DIDInteroperabilityTests.swift",
+     "line": 7,
+     "text": "final class DIDInteroperabilityTests: XCTestCase {",
+     "extra": {
+      "type": "DIDInteroperabilityTests",
+      "changed": false
+     },
+     "fingerprint": "bbb715227a76305e"
+    },
+    {
+     "file": "Tests/CellBaseTests/DatabaseSecretContractTests.swift",
+     "line": 9,
+     "text": "final class DatabaseSecretContractTests: XCTestCase {",
+     "extra": {
+      "type": "DatabaseSecretContractTests",
+      "changed": false
+     },
+     "fingerprint": "bf58f71de0ca405a"
+    },
+    {
+     "file": "Tests/CellBaseTests/DeviceIngressContractTests.swift",
+     "line": 8,
+     "text": "final class DeviceIngressContractTests: XCTestCase {",
+     "extra": {
+      "type": "DeviceIngressContractTests",
+      "changed": false
+     },
+     "fingerprint": "cf194a66777ab831"
+    },
+    {
+     "file": "Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift",
+     "line": 8,
+     "text": "final class DeviceIngressWireFixtureTests: XCTestCase {",
+     "extra": {
+      "type": "DeviceIngressWireFixtureTests",
+      "changed": false
+     },
+     "fingerprint": "ce02ca5b25d26f13"
+    },
+    {
+     "file": "Tests/CellBaseTests/DiagnosticLoggingTests.swift",
+     "line": 7,
+     "text": "final class DiagnosticLoggingTests: XCTestCase {",
+     "extra": {
+      "type": "DiagnosticLoggingTests",
+      "changed": false
+     },
+     "fingerprint": "619de1f9bcb618c5"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAnchorAccessBoundaryTests.swift",
+     "line": 26,
+     "text": "final class EntityAnchorAccessBoundaryTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAnchorAccessBoundaryTests",
+      "changed": false
+     },
+     "fingerprint": "1ec4ef118f894caa"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAnchorEncryptionTests.swift",
+     "line": 13,
+     "text": "final class EntityAnchorEncryptionTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAnchorEncryptionTests",
+      "changed": false
+     },
+     "fingerprint": "64c229bfaea82eae"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAnchorEnrollmentContractTests.swift",
+     "line": 13,
+     "text": "final class EntityAnchorEnrollmentContractTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAnchorEnrollmentContractTests",
+      "changed": false
+     },
+     "fingerprint": "1c2e21d2bee4249b"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAnchorGenesisTests.swift",
+     "line": 20,
+     "text": "final class EntityAnchorGenesisTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAnchorGenesisTests",
+      "changed": false
+     },
+     "fingerprint": "f27b8dd22e94d78a"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAtlasInspectorCellTests.swift",
+     "line": 7,
+     "text": "final class EntityAtlasInspectorCellTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAtlasInspectorCellTests",
+      "changed": false
+     },
+     "fingerprint": "87918c49954bb533"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAtlasProjectionTests.swift",
+     "line": 57,
+     "text": "final class EntityAtlasProjectionTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAtlasProjectionTests",
+      "changed": false
+     },
+     "fingerprint": "09c8be38ed20f9f2"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAuthorityCommitTests.swift",
+     "line": 7,
+     "text": "final class EntityAuthorityCommitTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAuthorityCommitTests",
+      "changed": false
+     },
+     "fingerprint": "7a9b1d32434f7119"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityAuthorityReplicaStoreTests.swift",
+     "line": 8,
+     "text": "final class EntityAuthorityReplicaStoreTests: XCTestCase {",
+     "extra": {
+      "type": "EntityAuthorityReplicaStoreTests",
+      "changed": false
+     },
+     "fingerprint": "7d16ef7023069fb3"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityGenesisTests.swift",
+     "line": 10,
+     "text": "final class EntityGenesisTests: XCTestCase {",
+     "extra": {
+      "type": "EntityGenesisTests",
+      "changed": false
+     },
+     "fingerprint": "327550c8155c24c1"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityRelationAdmissionSecurityTests.swift",
+     "line": 4,
+     "text": "final class EntityRelationAdmissionSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "EntityRelationAdmissionSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "def3e5bf945f6948"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityRelationHostParityTests.swift",
+     "line": 13,
+     "text": "final class EntityRelationHostParityTests: XCTestCase {",
+     "extra": {
+      "type": "EntityRelationHostParityTests",
+      "changed": false
+     },
+     "fingerprint": "ff45e246fbe94c41"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityRelationPerspectiveTests.swift",
+     "line": 8,
+     "text": "final class EntityRelationPerspectiveTests: XCTestCase {",
+     "extra": {
+      "type": "EntityRelationPerspectiveTests",
+      "changed": false
+     },
+     "fingerprint": "5795fac59a3e2cf7"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityRelationRecordV1Tests.swift",
+     "line": 12,
+     "text": "final class EntityRelationRecordV1Tests: XCTestCase {",
+     "extra": {
+      "type": "EntityRelationRecordV1Tests",
+      "changed": false
+     },
+     "fingerprint": "4d4e2f921b4cf622"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityRepresentationAgreementTests.swift",
+     "line": 7,
+     "text": "final class EntityRepresentationAgreementTests: XCTestCase {",
+     "extra": {
+      "type": "EntityRepresentationAgreementTests",
+      "changed": false
+     },
+     "fingerprint": "017511884b2913ec"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityScannerAgreementSurfaceTests.swift",
+     "line": 17,
+     "text": "final class EntityScannerAgreementSurfaceTests: XCTestCase {",
+     "extra": {
+      "type": "EntityScannerAgreementSurfaceTests",
+      "changed": false
+     },
+     "fingerprint": "d8e69be4b2598527"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityScannerCellContractTests.swift",
+     "line": 9,
+     "text": "final class EntityScannerCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "EntityScannerCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "0bfe4fbfd8ccbb24"
+    },
+    {
+     "file": "Tests/CellBaseTests/EntityValidatedContactRecordV1Tests.swift",
+     "line": 7,
+     "text": "final class EntityValidatedContactRecordV1Tests: XCTestCase {",
+     "extra": {
+      "type": "EntityValidatedContactRecordV1Tests",
+      "changed": false
+     },
+     "fingerprint": "a083ab607b2e7fc0"
+    },
+    {
+     "file": "Tests/CellBaseTests/ExploreContractValidatorTests.swift",
+     "line": 7,
+     "text": "final class ExploreContractValidatorTests: XCTestCase {",
+     "extra": {
+      "type": "ExploreContractValidatorTests",
+      "changed": false
+     },
+     "fingerprint": "cd47d3e367027d75"
+    },
+    {
+     "file": "Tests/CellBaseTests/FeedAuthorizationRegistryTests.swift",
+     "line": 12,
+     "text": "final class FeedAuthorizationRegistryTests: XCTestCase {",
+     "extra": {
+      "type": "FeedAuthorizationRegistryTests",
+      "changed": false
+     },
+     "fingerprint": "6a4ed8fe89fa7c88"
+    },
+    {
+     "file": "Tests/CellBaseTests/FileCryptoCellTests.swift",
+     "line": 7,
+     "text": "final class FileCryptoCellTests: XCTestCase {",
+     "extra": {
+      "type": "FileCryptoCellTests",
+      "changed": false
+     },
+     "fingerprint": "d547c559f662b72b"
+    },
+    {
+     "file": "Tests/CellBaseTests/FileCryptoSecurityTests.swift",
+     "line": 8,
+     "text": "final class FileCryptoSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "FileCryptoSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "7b866f817d975aa9"
+    },
+    {
+     "file": "Tests/CellBaseTests/FlowCacheCellTests.swift",
+     "line": 12,
+     "text": "final class FlowCacheCellTests: XCTestCase {",
+     "extra": {
+      "type": "FlowCacheCellTests",
+      "changed": false
+     },
+     "fingerprint": "3f7cb3afdc5eccbe"
+    },
+    {
+     "file": "Tests/CellBaseTests/FlowElementPusherSecurityTests.swift",
+     "line": 12,
+     "text": "final class FlowElementPusherSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "FlowElementPusherSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "4b2220fdf1f03783"
+    },
+    {
+     "file": "Tests/CellBaseTests/FlowEnvelopeCryptoTests.swift",
+     "line": 7,
+     "text": "final class FlowEnvelopeCryptoTests: XCTestCase {",
+     "extra": {
+      "type": "FlowEnvelopeCryptoTests",
+      "changed": false
+     },
+     "fingerprint": "41d3cea803b9c2fa"
+    },
+    {
+     "file": "Tests/CellBaseTests/FlowEnvelopeSerializationTests.swift",
+     "line": 7,
+     "text": "final class FlowEnvelopeSerializationTests: XCTestCase {",
+     "extra": {
+      "type": "FlowEnvelopeSerializationTests",
+      "changed": false
+     },
+     "fingerprint": "438e961fe5fbc8ff"
+    },
+    {
+     "file": "Tests/CellBaseTests/FlowInspectionCellsTests.swift",
+     "line": 12,
+     "text": "final class FlowInspectionCellsTests: XCTestCase {",
+     "extra": {
+      "type": "FlowInspectionCellsTests",
+      "changed": false
+     },
+     "fingerprint": "72d70265d0b8996f"
+    },
+    {
+     "file": "Tests/CellBaseTests/GeneralCellInterfaceTests.swift",
+     "line": 7,
+     "text": "final class GeneralCellInterfaceTests: XCTestCase {",
+     "extra": {
+      "type": "GeneralCellInterfaceTests",
+      "changed": false
+     },
+     "fingerprint": "6d2a4cb87975aedd"
+    },
+    {
+     "file": "Tests/CellBaseTests/GoalDefinitionTests.swift",
+     "line": 7,
+     "text": "final class GoalDefinitionTests: XCTestCase {",
+     "extra": {
+      "type": "GoalDefinitionTests",
+      "changed": false
+     },
+     "fingerprint": "718246fcc6601bf2"
+    },
+    {
+     "file": "Tests/CellBaseTests/GoalEvaluationCellTests.swift",
+     "line": 12,
+     "text": "final class GoalEvaluationCellTests: XCTestCase {",
+     "extra": {
+      "type": "GoalEvaluationCellTests",
+      "changed": false
+     },
+     "fingerprint": "559e2a39d53ad5cf"
+    },
+    {
+     "file": "Tests/CellBaseTests/GoalEvaluationEngineTests.swift",
+     "line": 7,
+     "text": "final class GoalEvaluationEngineTests: XCTestCase {",
+     "extra": {
+      "type": "GoalEvaluationEngineTests",
+      "changed": false
+     },
+     "fingerprint": "c0896c60348441df"
+    },
+    {
+     "file": "Tests/CellBaseTests/GraphIndexCellTests.swift",
+     "line": 7,
+     "text": "final class GraphIndexCellTests: XCTestCase {",
+     "extra": {
+      "type": "GraphIndexCellTests",
+      "changed": false
+     },
+     "fingerprint": "981852920d93b7b8"
+    },
+    {
+     "file": "Tests/CellBaseTests/HavenInviteRoundATests.swift",
+     "line": 17,
+     "text": "final class HavenInviteRoundATests: XCTestCase {",
+     "extra": {
+      "type": "HavenInviteRoundATests",
+      "changed": false
+     },
+     "fingerprint": "bcc06ba76e8c07d6"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentitiesCellContractTests.swift",
+     "line": 7,
+     "text": "final class IdentitiesCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "IdentitiesCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "062a5b336cd096b9"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityAgreementTests.swift",
+     "line": 7,
+     "text": "final class IdentityAgreementTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityAgreementTests",
+      "changed": false
+     },
+     "fingerprint": "211676a28500a46f"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityDomainBindingTests.swift",
+     "line": 7,
+     "text": "final class IdentityDomainBindingTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityDomainBindingTests",
+      "changed": false
+     },
+     "fingerprint": "06dc5d7ac009159d"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityLinkGenesisClassificationTests.swift",
+     "line": 7,
+     "text": "final class IdentityLinkGenesisClassificationTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityLinkGenesisClassificationTests",
+      "changed": false
+     },
+     "fingerprint": "cefc6f22f99d1ec1"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityLinkRegistryBindingTests.swift",
+     "line": 11,
+     "text": "final class IdentityLinkRegistryBindingTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityLinkRegistryBindingTests",
+      "changed": false
+     },
+     "fingerprint": "69087d6f26ac64a3"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityLinkRegistryTests.swift",
+     "line": 10,
+     "text": "final class IdentityLinkRegistryTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityLinkRegistryTests",
+      "changed": false
+     },
+     "fingerprint": "5c62a1a6bbcd096b"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityLinkRuntimePolicyTests.swift",
+     "line": 9,
+     "text": "final class IdentityLinkRuntimePolicyTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityLinkRuntimePolicyTests",
+      "changed": false
+     },
+     "fingerprint": "c7f24620e4813aa4"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityLinkingModelsTests.swift",
+     "line": 7,
+     "text": "final class IdentityLinkingModelsTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityLinkingModelsTests",
+      "changed": false
+     },
+     "fingerprint": "10d066e1525b013c"
+    },
+    {
+     "file": "Tests/CellBaseTests/IdentityPublicKeySignatureVerifierTests.swift",
+     "line": 12,
+     "text": "final class IdentityPublicKeySignatureVerifierTests: XCTestCase {",
+     "extra": {
+      "type": "IdentityPublicKeySignatureVerifierTests",
+      "changed": false
+     },
+     "fingerprint": "b518654e2c766294"
+    },
+    {
+     "file": "Tests/CellBaseTests/IntegrationTests.swift",
+     "line": 13,
+     "text": "final class IntegrationTests: XCTestCase {",
+     "extra": {
+      "type": "IntegrationTests",
+      "changed": false
+     },
+     "fingerprint": "820ca1e406d9c122"
+    },
+    {
+     "file": "Tests/CellBaseTests/InterestPurposeWeightedSumTests.swift",
+     "line": 14,
+     "text": "final class InterestPurposeWeightedSumTests: XCTestCase {",
+     "extra": {
+      "type": "InterestPurposeWeightedSumTests",
+      "changed": false
+     },
+     "fingerprint": "3eaefea1e0644df4"
+    },
+    {
+     "file": "Tests/CellBaseTests/JOSEAESKeyWrapTests.swift",
+     "line": 7,
+     "text": "final class JOSEAESKeyWrapTests: XCTestCase {",
+     "extra": {
+      "type": "JOSEAESKeyWrapTests",
+      "changed": false
+     },
+     "fingerprint": "7a1e3ffaea63ba57"
+    },
+    {
+     "file": "Tests/CellBaseTests/JOSEJWSVerifierSecurityTests.swift",
+     "line": 12,
+     "text": "final class JOSEJWSVerifierSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "JOSEJWSVerifierSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "18fa4ebc14e320ba"
+    },
+    {
+     "file": "Tests/CellBaseTests/LightweightBridgeTransportTests.swift",
+     "line": 111,
+     "text": "final class LightweightBridgeTransportTests: XCTestCase {",
+     "extra": {
+      "type": "LightweightBridgeTransportTests",
+      "changed": false
+     },
+     "fingerprint": "bb4caa51e9902a57"
+    },
+    {
+     "file": "Tests/CellBaseTests/LobbyCellContractTests.swift",
+     "line": 8,
+     "text": "final class LobbyCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "LobbyCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "5184de14d4f726a3"
+    },
+    {
+     "file": "Tests/CellBaseTests/MatchStrategyPlannerTests.swift",
+     "line": 7,
+     "text": "final class MatchStrategyPlannerTests: XCTestCase {",
+     "extra": {
+      "type": "MatchStrategyPlannerTests",
+      "changed": false
+     },
+     "fingerprint": "b749d94cdead4e89"
+    },
+    {
+     "file": "Tests/CellBaseTests/MatcherBaselineDumpTests.swift",
+     "line": 16,
+     "text": "final class MatcherBaselineDumpTests: XCTestCase {",
+     "extra": {
+      "type": "MatcherBaselineDumpTests",
+      "changed": false
+     },
+     "fingerprint": "b348fd5061e61eb8"
+    },
+    {
+     "file": "Tests/CellBaseTests/NearbyBeaconTests.swift",
+     "line": 5,
+     "text": "final class NearbyBeaconTests: XCTestCase {",
+     "extra": {
+      "type": "NearbyBeaconTests",
+      "changed": false
+     },
+     "fingerprint": "ebddcdbab17e7f06"
+    },
+    {
+     "file": "Tests/CellBaseTests/NearbyDisclosurePolicyTests.swift",
+     "line": 4,
+     "text": "final class NearbyDisclosurePolicyTests: XCTestCase {",
+     "extra": {
+      "type": "NearbyDisclosurePolicyTests",
+      "changed": false
+     },
+     "fingerprint": "ff76dd5443d9607c"
+    },
+    {
+     "file": "Tests/CellBaseTests/NearbyPeerStateMachineTests.swift",
+     "line": 4,
+     "text": "final class NearbyPeerStateMachineTests: XCTestCase {",
+     "extra": {
+      "type": "NearbyPeerStateMachineTests",
+      "changed": false
+     },
+     "fingerprint": "7f6c8f44f297c55c"
+    },
+    {
+     "file": "Tests/CellBaseTests/NearbyProbeTests.swift",
+     "line": 4,
+     "text": "final class NearbyProbeTests: XCTestCase {",
+     "extra": {
+      "type": "NearbyProbeTests",
+      "changed": false
+     },
+     "fingerprint": "d89b4e91914845cb"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VCICredentialOfferTests.swift",
+     "line": 7,
+     "text": "final class OID4VCICredentialOfferTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VCICredentialOfferTests",
+      "changed": false
+     },
+     "fingerprint": "d629f13b345cefaf"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VCIIssuerMetadataTests.swift",
+     "line": 7,
+     "text": "final class OID4VCIIssuerMetadataTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VCIIssuerMetadataTests",
+      "changed": false
+     },
+     "fingerprint": "1374834d2d1db681"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VCIMetadataClientTests.swift",
+     "line": 7,
+     "text": "final class OID4VCIMetadataClientTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VCIMetadataClientTests",
+      "changed": false
+     },
+     "fingerprint": "8a8cd9c0b46a3da0"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPDCQLTests.swift",
+     "line": 7,
+     "text": "final class OID4VPDCQLTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPDCQLTests",
+      "changed": false
+     },
+     "fingerprint": "188aa78258c02237"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPDirectPostJWTEncryptionTests.swift",
+     "line": 14,
+     "text": "final class OID4VPDirectPostJWTEncryptionTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPDirectPostJWTEncryptionTests",
+      "changed": false
+     },
+     "fingerprint": "3372a24c8b6527ab"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPDirectPostJWTSubmissionAdapterTests.swift",
+     "line": 14,
+     "text": "final class OID4VPDirectPostJWTSubmissionAdapterTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPDirectPostJWTSubmissionAdapterTests",
+      "changed": false
+     },
+     "fingerprint": "4414c668bfab616c"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPDirectPostTests.swift",
+     "line": 7,
+     "text": "final class OID4VPDirectPostTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPDirectPostTests",
+      "changed": false
+     },
+     "fingerprint": "472c5da5e2a1fe42"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPRequestMatcherTests.swift",
+     "line": 7,
+     "text": "final class OID4VPRequestMatcherTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPRequestMatcherTests",
+      "changed": false
+     },
+     "fingerprint": "55f40665f8ce12cd"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPRequestObjectTests.swift",
+     "line": 7,
+     "text": "final class OID4VPRequestObjectTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPRequestObjectTests",
+      "changed": false
+     },
+     "fingerprint": "04418e6043e2b98b"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPResponseTests.swift",
+     "line": 7,
+     "text": "final class OID4VPResponseTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPResponseTests",
+      "changed": false
+     },
+     "fingerprint": "34514efa8264931a"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPSignedRequestObjectTests.swift",
+     "line": 7,
+     "text": "final class OID4VPSignedRequestObjectTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPSignedRequestObjectTests",
+      "changed": false
+     },
+     "fingerprint": "b2130629e606939a"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPSignedRequestTrustVerifierTests.swift",
+     "line": 14,
+     "text": "final class OID4VPSignedRequestTrustVerifierTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPSignedRequestTrustVerifierTests",
+      "changed": false
+     },
+     "fingerprint": "fceaef74bbf76480"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPStaticVerifierMetadataProviderTests.swift",
+     "line": 7,
+     "text": "final class OID4VPStaticVerifierMetadataProviderTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPStaticVerifierMetadataProviderTests",
+      "changed": false
+     },
+     "fingerprint": "ad41695d303fb4a5"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPVerifierMetadataResolverTests.swift",
+     "line": 7,
+     "text": "final class OID4VPVerifierMetadataResolverTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPVerifierMetadataResolverTests",
+      "changed": false
+     },
+     "fingerprint": "db7c25596c02ac00"
+    },
+    {
+     "file": "Tests/CellBaseTests/OID4VPVerifierMetadataTests.swift",
+     "line": 7,
+     "text": "final class OID4VPVerifierMetadataTests: XCTestCase {",
+     "extra": {
+      "type": "OID4VPVerifierMetadataTests",
+      "changed": false
+     },
+     "fingerprint": "f94a732c7919ca1c"
+    },
+    {
+     "file": "Tests/CellBaseTests/PersistenceTests.swift",
+     "line": 10,
+     "text": "final class PersistenceTests: XCTestCase {",
+     "extra": {
+      "type": "PersistenceTests",
+      "changed": false
+     },
+     "fingerprint": "97c37c874afb096a"
+    },
+    {
+     "file": "Tests/CellBaseTests/PersistenceTests.swift",
+     "line": 258,
+     "text": "final class PersistedCellFileIOTests: XCTestCase {",
+     "extra": {
+      "type": "PersistedCellFileIOTests",
+      "changed": false
+     },
+     "fingerprint": "3c67950a0ac92d51"
+    },
+    {
+     "file": "Tests/CellBaseTests/PerspectiveCellContractTests.swift",
+     "line": 8,
+     "text": "final class PerspectiveCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "PerspectiveCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "467cb31caa050d2d"
+    },
+    {
+     "file": "Tests/CellBaseTests/PerspectiveCellMatchPayloadTests.swift",
+     "line": 5,
+     "text": "final class PerspectiveCellMatchPayloadTests: XCTestCase {",
+     "extra": {
+      "type": "PerspectiveCellMatchPayloadTests",
+      "changed": false
+     },
+     "fingerprint": "2d4cb2e4ba4086a7"
+    },
+    {
+     "file": "Tests/CellBaseTests/PerspectiveEntityProjectionTests.swift",
+     "line": 16,
+     "text": "final class PerspectiveEntityProjectionTests: XCTestCase {",
+     "extra": {
+      "type": "PerspectiveEntityProjectionTests",
+      "changed": false
+     },
+     "fingerprint": "e79edd30baf27c5d"
+    },
+    {
+     "file": "Tests/CellBaseTests/PortholeViewModelAvailabilityTests.swift",
+     "line": 8,
+     "text": "final class PortholeViewModelAvailabilityTests: XCTestCase {",
+     "extra": {
+      "type": "PortholeViewModelAvailabilityTests",
+      "changed": false
+     },
+     "fingerprint": "383e65db397a1a9f"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeAndInterestMatchingTests.swift",
+     "line": 8,
+     "text": "final class PurposeAndInterestMatchingTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeAndInterestMatchingTests",
+      "changed": false
+     },
+     "fingerprint": "2a2b2702d7caf358"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeBoundExternalActionTests.swift",
+     "line": 7,
+     "text": "final class PurposeBoundExternalActionTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeBoundExternalActionTests",
+      "changed": false
+     },
+     "fingerprint": "71753a4485baa07a"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeCompositionTests.swift",
+     "line": 8,
+     "text": "final class PurposeCompositionTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeCompositionTests",
+      "changed": false
+     },
+     "fingerprint": "fbaf9a9adedd41ac"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeGoalLintTests.swift",
+     "line": 7,
+     "text": "final class PurposeGoalLintTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeGoalLintTests",
+      "changed": false
+     },
+     "fingerprint": "364ccfe265d56925"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestAdjacencyIndexTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestAdjacencyIndexTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestAdjacencyIndexTests",
+      "changed": false
+     },
+     "fingerprint": "930860807c48b699"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestBenchmarkArtifactTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestBenchmarkArtifactTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestBenchmarkArtifactTests",
+      "changed": false
+     },
+     "fingerprint": "6a12ad55215790b3"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestBenchmarkReportTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestBenchmarkReportTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestBenchmarkReportTests",
+      "changed": false
+     },
+     "fingerprint": "525f3bdd914986fe"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestChallengeExperimentTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestChallengeExperimentTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestChallengeExperimentTests",
+      "changed": false
+     },
+     "fingerprint": "06c08ad24648ca16"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestRuntimeComparisonTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestRuntimeComparisonTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestRuntimeComparisonTests",
+      "changed": false
+     },
+     "fingerprint": "ae3c31452b394532"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestScenarioExperimentTests.swift",
+     "line": 7,
+     "text": "final class PurposeInterestScenarioExperimentTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestScenarioExperimentTests",
+      "changed": false
+     },
+     "fingerprint": "2795176e4557c814"
+    },
+    {
+     "file": "Tests/CellBaseTests/PurposeInterestScenarioRankingTests.swift",
+     "line": 9,
+     "text": "final class PurposeInterestScenarioRankingTests: XCTestCase {",
+     "extra": {
+      "type": "PurposeInterestScenarioRankingTests",
+      "changed": false
+     },
+     "fingerprint": "a446a382042da6c8"
+    },
+    {
+     "file": "Tests/CellBaseTests/RadarEntityLedgerTests.swift",
+     "line": 12,
+     "text": "final class RadarEntityLedgerTests: XCTestCase {",
+     "extra": {
+      "type": "RadarEntityLedgerTests",
+      "changed": false
+     },
+     "fingerprint": "9fe057d27c734e45"
+    },
+    {
+     "file": "Tests/CellBaseTests/RealCellContractTests.swift",
+     "line": 7,
+     "text": "final class RealCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "RealCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "0e4de52364001272"
+    },
+    {
+     "file": "Tests/CellBaseTests/ReceiptSignatureTests.swift",
+     "line": 13,
+     "text": "final class ReceiptSignatureTests: XCTestCase {",
+     "extra": {
+      "type": "ReceiptSignatureTests",
+      "changed": false
+     },
+     "fingerprint": "711ef08db3694aa5"
+    },
+    {
+     "file": "Tests/CellBaseTests/RegisteredKeypathAuditTests.swift",
+     "line": 14,
+     "text": "final class RegisteredKeypathAuditTests: XCTestCase {",
+     "extra": {
+      "type": "RegisteredKeypathAuditTests",
+      "changed": false
+     },
+     "fingerprint": "5213df2a8a86bd69"
+    },
+    {
+     "file": "Tests/CellBaseTests/RelationalLearningCellContractTests.swift",
+     "line": 13,
+     "text": "final class RelationalLearningCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "RelationalLearningCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "c4dc83a08bbe0e5f"
+    },
+    {
+     "file": "Tests/CellBaseTests/RelationalLearningEngineTests.swift",
+     "line": 8,
+     "text": "final class RelationalLearningEngineTests: XCTestCase {",
+     "extra": {
+      "type": "RelationalLearningEngineTests",
+      "changed": false
+     },
+     "fingerprint": "19562435935c2254"
+    },
+    {
+     "file": "Tests/CellBaseTests/ResolverTests.swift",
+     "line": 18,
+     "text": "final class ResolverTests: XCTestCase {",
+     "extra": {
+      "type": "ResolverTests",
+      "changed": false
+     },
+     "fingerprint": "9ab2af4d8ebf14c3"
+    },
+    {
+     "file": "Tests/CellBaseTests/RestaurantPurposeRecommendationTests.swift",
+     "line": 7,
+     "text": "final class RestaurantPurposeRecommendationTests: XCTestCase {",
+     "extra": {
+      "type": "RestaurantPurposeRecommendationTests",
+      "changed": false
+     },
+     "fingerprint": "5de0eaef91bdcc7d"
+    },
+    {
+     "file": "Tests/CellBaseTests/RuntimeLifecyclePropertyTests.swift",
+     "line": 21,
+     "text": "final class RuntimeLifecyclePropertyTests: XCTestCase {",
+     "extra": {
+      "type": "RuntimeLifecyclePropertyTests",
+      "changed": false
+     },
+     "fingerprint": "e8a1a67767c2f8c0"
+    },
+    {
+     "file": "Tests/CellBaseTests/SDGPilotPurposeCatalogTests.swift",
+     "line": 7,
+     "text": "final class SDGPilotPurposeCatalogTests: XCTestCase {",
+     "extra": {
+      "type": "SDGPilotPurposeCatalogTests",
+      "changed": false
+     },
+     "fingerprint": "f29f127c6dce1e38"
+    },
+    {
+     "file": "Tests/CellBaseTests/ScannerMultipeerProcessTests.swift",
+     "line": 10,
+     "text": "final class ScannerMultipeerProcessTests: XCTestCase {",
+     "extra": {
+      "type": "ScannerMultipeerProcessTests",
+      "changed": false
+     },
+     "fingerprint": "39b82e58fb1596d1"
+    },
+    {
+     "file": "Tests/CellBaseTests/SerializationTests.swift",
+     "line": 7,
+     "text": "final class SerializationTests: XCTestCase {",
+     "extra": {
+      "type": "SerializationTests",
+      "changed": false
+     },
+     "fingerprint": "d2ae10fbec89f6f0"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonActionButtonExecutionTests.swift",
+     "line": 8,
+     "text": "final class SkeletonActionButtonExecutionTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonActionButtonExecutionTests",
+      "changed": false
+     },
+     "fingerprint": "2c48933bfc3e8056"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonButtonResolutionTests.swift",
+     "line": 8,
+     "text": "final class SkeletonButtonResolutionTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonButtonResolutionTests",
+      "changed": false
+     },
+     "fingerprint": "2d808b8373ac22e4"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonFormatRoundBTests.swift",
+     "line": 10,
+     "text": "final class SkeletonFormatRoundBTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonFormatRoundBTests",
+      "changed": false
+     },
+     "fingerprint": "4877f5182ee48bc2"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonLocalizationTests.swift",
+     "line": 12,
+     "text": "final class SkeletonLocalizationTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonLocalizationTests",
+      "changed": false
+     },
+     "fingerprint": "7c0931e52be6a1be"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonModifiersStorageTests.swift",
+     "line": 12,
+     "text": "final class SkeletonModifiersStorageTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonModifiersStorageTests",
+      "changed": false
+     },
+     "fingerprint": "7969b7e9bb13f9d9"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonNativeLayoutRoundBTests.swift",
+     "line": 14,
+     "text": "final class SkeletonNativeLayoutRoundBTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonNativeLayoutRoundBTests",
+      "changed": false
+     },
+     "fingerprint": "76c47b591c3e5438"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonNativeRendererTests.swift",
+     "line": 12,
+     "text": "final class SkeletonNativeRendererTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonNativeRendererTests",
+      "changed": false
+     },
+     "fingerprint": "fbe2d892cb379606"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonReachabilityAuditTests.swift",
+     "line": 12,
+     "text": "final class SkeletonReachabilityAuditTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonReachabilityAuditTests",
+      "changed": false
+     },
+     "fingerprint": "25c16ca319e39c82"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonStyleParityTests.swift",
+     "line": 7,
+     "text": "final class SkeletonStyleParityTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonStyleParityTests",
+      "changed": false
+     },
+     "fingerprint": "73191a457470fb57"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonTests.swift",
+     "line": 7,
+     "text": "final class SkeletonTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonTests",
+      "changed": false
+     },
+     "fingerprint": "c0746b588471245e"
+    },
+    {
+     "file": "Tests/CellBaseTests/SkeletonTextInputPresentationTests.swift",
+     "line": 11,
+     "text": "final class SkeletonTextInputPresentationTests: XCTestCase {",
+     "extra": {
+      "type": "SkeletonTextInputPresentationTests",
+      "changed": false
+     },
+     "fingerprint": "42ba91c4881d0e20"
+    },
+    {
+     "file": "Tests/CellBaseTests/TrustPacketCellTests.swift",
+     "line": 7,
+     "text": "final class TrustPacketCellTests: XCTestCase {",
+     "extra": {
+      "type": "TrustPacketCellTests",
+      "changed": false
+     },
+     "fingerprint": "da0180f876b0bb82"
+    },
+    {
+     "file": "Tests/CellBaseTests/TrustedIssuerCellContractTests.swift",
+     "line": 7,
+     "text": "final class TrustedIssuerCellContractTests: XCTestCase {",
+     "extra": {
+      "type": "TrustedIssuerCellContractTests",
+      "changed": false
+     },
+     "fingerprint": "ebea3e2ffde6d1ab"
+    },
+    {
+     "file": "Tests/CellBaseTests/TrustedIssuerCellTests.swift",
+     "line": 108,
+     "text": "final class TrustedIssuerCellTests: XCTestCase {",
+     "extra": {
+      "type": "TrustedIssuerCellTests",
+      "changed": false
+     },
+     "fingerprint": "e8eb94b2bab3b87e"
+    },
+    {
+     "file": "Tests/CellBaseTests/TrustedIssuerEvaluationReceiptTests.swift",
+     "line": 7,
+     "text": "final class TrustedIssuerEvaluationReceiptTests: XCTestCase {",
+     "extra": {
+      "type": "TrustedIssuerEvaluationReceiptTests",
+      "changed": false
+     },
+     "fingerprint": "e05802d86a4c7fc2"
+    },
+    {
+     "file": "Tests/CellBaseTests/TrustedIssuerSignedEvaluationTests.swift",
+     "line": 7,
+     "text": "final class TrustedIssuerSignedEvaluationTests: XCTestCase {",
+     "extra": {
+      "type": "TrustedIssuerSignedEvaluationTests",
+      "changed": false
+     },
+     "fingerprint": "ca77018f932bf4da"
+    },
+    {
+     "file": "Tests/CellBaseTests/UserDataResilienceTests.swift",
+     "line": 13,
+     "text": "final class UserDataResilienceTests: XCTestCase {",
+     "extra": {
+      "type": "UserDataResilienceTests",
+      "changed": false
+     },
+     "fingerprint": "fdb2b96f2ad37807"
+    },
+    {
+     "file": "Tests/CellBaseTests/VCIssuerServiceSecurityTests.swift",
+     "line": 7,
+     "text": "final class VCIssuerServiceSecurityTests: XCTestCase {",
+     "extra": {
+      "type": "VCIssuerServiceSecurityTests",
+      "changed": false
+     },
+     "fingerprint": "c7ab3bdbe1d923e3"
+    },
+    {
+     "file": "Tests/CellBaseTests/VaporBridgeTransportTests.swift",
+     "line": 14,
+     "text": "final class VaporBridgeTransportTests: XCTestCase {",
+     "extra": {
+      "type": "VaporBridgeTransportTests",
+      "changed": false
+     },
+     "fingerprint": "e15779d08aeb6a80"
+    },
+    {
+     "file": "Tests/CellBaseTests/VaporCellRuntimeReadinessContractTests.swift",
+     "line": 8,
+     "text": "final class VaporCellRuntimeReadinessContractTests: XCTestCase {",
+     "extra": {
+      "type": "VaporCellRuntimeReadinessContractTests",
+      "changed": false
+     },
+     "fingerprint": "ef8924a8b8549351"
+    },
+    {
+     "file": "Tests/CellBaseTests/VaultCellTests.swift",
+     "line": 12,
+     "text": "final class VaultCellTests: XCTestCase {",
+     "extra": {
+      "type": "VaultCellTests",
+      "changed": false
+     },
+     "fingerprint": "39cb4a4da63e4f5d"
+    },
+    {
+     "file": "Tests/CellBaseTests/VaultContractsTests.swift",
+     "line": 7,
+     "text": "final class VaultContractsTests: XCTestCase {",
+     "extra": {
+      "type": "VaultContractsTests",
+      "changed": false
+     },
+     "fingerprint": "6cdca0db48293f09"
+    },
+    {
+     "file": "Tests/CellBaseTests/WebSocketSendCompletionTests.swift",
+     "line": 5,
+     "text": "final class WebSocketSendCompletionTests: XCTestCase {",
+     "extra": {
+      "type": "WebSocketSendCompletionTests",
+      "changed": false
+     },
+     "fingerprint": "e86bd56feeef4446"
+    },
+    {
+     "file": "Tests/CellBaseTests/PersistingCells/CellJSONCoderTests.swift",
+     "line": 7,
+     "text": "final class CellJSONCoderTests: XCTestCase {",
+     "extra": {
+      "type": "CellJSONCoderTests",
+      "changed": false
+     },
+     "fingerprint": "292fcf3919fcd6df"
+    },
+    {
+     "file": "Tests/HavenCommonsTests/KeyPathResolverTests.swift",
+     "line": 8,
+     "text": "final class KeyPathResolverTests: XCTestCase {",
+     "extra": {
+      "type": "KeyPathResolverTests",
+      "changed": false
+     },
+     "fingerprint": "764e7e8104c12b0e"
+    },
+    {
+     "file": "Tests/HavenCommonsTests/PerspectiveSchemaTests.swift",
+     "line": 7,
+     "text": "final class PerspectiveSchemaTests: XCTestCase {",
+     "extra": {
+      "type": "PerspectiveSchemaTests",
+      "changed": false
+     },
+     "fingerprint": "72e2db4a1756a80d"
+    },
+    {
+     "file": "Tests/HavenCommonsTests/TaxonomyResolverTests.swift",
+     "line": 8,
+     "text": "final class TaxonomyResolverTests: XCTestCase {",
+     "extra": {
+      "type": "TaxonomyResolverTests",
+      "changed": false
+     },
+     "fingerprint": "b4cc4a62acd81c99"
+    },
+    {
+     "file": "Tests/PushFeedItemTests/PushFeedItemTests.swift",
+     "line": 7,
+     "text": "final class PushFlowElementTests: XCTestCase {",
+     "extra": {
+      "type": "PushFlowElementTests",
+      "changed": false
+     },
+     "fingerprint": "33d7af785ded72fa"
+    },
+    {
+     "file": "",
+     "line": 0,
+     "text": "173 test type(s) outside --filter: ActiveFeedAuthorizationTests, AdmissionAndCatalogContractModelsTests, AgentTrustPackageTests, AgreementCodingTests, AgreementSecurityTests, AppleBridgeTransportTests, AppleIdentityVaultKeyStorageTests, AppleIntelligenceCellContractTests, AppleRuntimeStorageTests, AttachmentStreamV1Tests, AudioAnalysisRecordTests, AudioSignalAnalysisTests, BridgeCanonicalKeyQuotaT",
+     "extra": {
+      "count": 173,
+      "types": [
+       "ActiveFeedAuthorizationTests",
+       "AdmissionAndCatalogContractModelsTests",
+       "AgentTrustPackageTests",
+       "AgreementCodingTests",
+       "AgreementSecurityTests",
+       "AppleBridgeTransportTests",
+       "AppleIdentityVaultKeyStorageTests",
+       "AppleIntelligenceCellContractTests",
+       "AppleRuntimeStorageTests",
+       "AttachmentStreamV1Tests",
+       "AudioAnalysisRecordTests",
+       "AudioSignalAnalysisTests",
+       "BridgeCanonicalKeyQuotaTests",
+       "BridgeChannelAuthenticationTests",
+       "BridgeChannelLifetimeQuotaTests",
+       "BridgeChannelProcessTests",
+       "BridgeChannelSequenceTests",
+       "BridgeChannelTransportTests",
+       "BridgeDiagnosticPrivacyTests",
+       "BridgeIdentityBoundaryTests",
+       "BridgeIdentityProofAuthorizationTests",
+       "BridgeInboundPayloadValidatorTests",
+       "BridgeTests",
+       "CalendarContractTests",
+       "CellAccessGraphContractsTests",
+       "CellBaseTests",
+       "CellJSONCoderTests",
+       "CellLifecycleTests",
+       "CellResolverProtocolLightweightBridgeTransportTests",
+       "CellRuntimeEnvironmentTests",
+       "CellRuntimeReadinessContractTests",
+       "CellSecurityKitTests",
+       "CellStoragePathPolicyTests",
+       "ChatCellTests",
+       "ClaimCompositionTests",
+       "ClaimDefinitionTests",
+       "ClaimSchemeTests",
+       "CommonsCellsTests",
+       "ConferenceOrganizerAccessModelsTests",
+       "ConferenceSwarmSignalMatchingTests",
+       "ContractProbeCellTests",
+       "CorrespondenceCellTests",
+       "CrossRuntimeWireFixtureTests",
+       "DIDDocumentValidatorTests",
+       "DIDInteroperabilityTests",
+       "DatabaseSecretContractTests",
+       "DeviceIngressContractTests",
+       "DeviceIngressWireFixtureTests",
+       "DiagnosticLoggingTests",
+       "EntityAnchorAccessBoundaryTests",
+       "EntityAnchorEncryptionTests",
+       "EntityAnchorEnrollmentContractTests",
+       "EntityAnchorGenesisTests",
+       "EntityAtlasInspectorCellTests",
+       "EntityAtlasProjectionTests",
+       "EntityAuthorityCommitTests",
+       "EntityAuthorityReplicaStoreTests",
+       "EntityGenesisTests",
+       "EntityRelationAdmissionSecurityTests",
+       "EntityRelationHostParityTests",
+       "EntityRelationPerspectiveTests",
+       "EntityRelationRecordV1Tests",
+       "EntityRepresentationAgreementTests",
+       "EntityScannerAgreementSurfaceTests",
+       "EntityScannerCellContractTests",
+       "EntityValidatedContactRecordV1Tests",
+       "ExploreContractValidatorTests",
+       "FeedAuthorizationRegistryTests",
+       "FileCryptoCellTests",
+       "FileCryptoSecurityTests",
+       "FlowCacheCellTests",
+       "FlowElementPusherSecurityTests",
+       "FlowEnvelopeCryptoTests",
+       "FlowEnvelopeSerializationTests",
+       "FlowInspectionCellsTests",
+       "GeneralCellInterfaceTests",
+       "GoalDefinitionTests",
+       "GoalEvaluationCellTests",
+       "GoalEvaluationEngineTests",
+       "GraphIndexCellTests",
+       "HavenInviteRoundATests",
+       "IdentitiesCellContractTests",
+       "IdentityAgreementTests",
+       "IdentityDomainBindingTests",
+       "IdentityLinkGenesisClassificationTests",
+       "IdentityLinkRegistryBindingTests",
+       "IdentityLinkRegistryTests",
+       "IdentityLinkRuntimePolicyTests",
+       "IdentityLinkingModelsTests",
+       "IdentityPublicKeySignatureVerifierTests",
+       "IntegrationTests",
+       "InterestPurposeWeightedSumTests",
+       "JOSEAESKeyWrapTests",
+       "JOSEJWSVerifierSecurityTests",
+       "KeyPathResolverTests",
+       "LightweightBridgeTransportTests",
+       "LobbyCellContractTests",
+       "MatchStrategyPlannerTests",
+       "MatcherBaselineDumpTests",
+       "NearbyBeaconTests",
+       "NearbyDisclosurePolicyTests",
+       "NearbyPeerStateMachineTests",
+       "NearbyProbeTests",
+       "OID4VCICredentialOfferTests",
+       "OID4VCIIssuerMetadataTests",
+       "OID4VCIMetadataClientTests",
+       "OID4VPDCQLTests",
+       "OID4VPDirectPostJWTEncryptionTests",
+       "OID4VPDirectPostJWTSubmissionAdapterTests",
+       "OID4VPDirectPostTests",
+       "OID4VPRequestMatcherTests",
+       "OID4VPRequestObjectTests",
+       "OID4VPResponseTests",
+       "OID4VPSignedRequestObjectTests",
+       "OID4VPSignedRequestTrustVerifierTests",
+       "OID4VPStaticVerifierMetadataProviderTests",
+       "OID4VPVerifierMetadataResolverTests",
+       "OID4VPVerifierMetadataTests",
+       "PersistedCellFileIOTests",
+       "PersistenceTests",
+       "PerspectiveCellContractTests",
+       "PerspectiveCellMatchPayloadTests",
+       "PerspectiveEntityProjectionTests",
+       "PerspectiveSchemaTests",
+       "PortholeViewModelAvailabilityTests",
+       "PurposeAndInterestMatchingTests",
+       "PurposeBoundExternalActionTests",
+       "PurposeCompositionTests",
+       "PurposeGoalLintTests",
+       "PurposeInterestAdjacencyIndexTests",
+       "PurposeInterestBenchmarkArtifactTests",
+       "PurposeInterestBenchmarkReportTests",
+       "PurposeInterestChallengeExperimentTests",
+       "PurposeInterestRuntimeComparisonTests",
+       "PurposeInterestScenarioExperimentTests",
+       "PurposeInterestScenarioRankingTests",
+       "PushFlowElementTests",
+       "RadarEntityLedgerTests",
+       "RealCellContractTests",
+       "ReceiptSignatureTests",
+       "RegisteredKeypathAuditTests",
+       "RelationalLearningCellContractTests",
+       "RelationalLearningEngineTests",
+       "ResolverTests",
+       "RestaurantPurposeRecommendationTests",
+       "RuntimeLifecyclePropertyTests",
+       "SDGPilotPurposeCatalogTests",
+       "ScannerMultipeerProcessTests",
+       "SerializationTests",
+       "SkeletonActionButtonExecutionTests",
+       "SkeletonButtonResolutionTests",
+       "SkeletonFormatRoundBTests",
+       "SkeletonLocalizationTests",
+       "SkeletonModifiersStorageTests",
+       "SkeletonNativeLayoutRoundBTests",
+       "SkeletonNativeRendererTests",
+       "SkeletonReachabilityAuditTests",
+       "SkeletonStyleParityTests",
+       "SkeletonTests",
+       "SkeletonTextInputPresentationTests",
+       "TaxonomyResolverTests",
+       "TrustPacketCellTests",
+       "TrustedIssuerCellContractTests",
+       "TrustedIssuerCellTests",
+       "TrustedIssuerEvaluationReceiptTests",
+       "TrustedIssuerSignedEvaluationTests",
+       "UserDataResilienceTests",
+       "VCIssuerServiceSecurityTests",
+       "VaporBridgeTransportTests",
+       "VaporCellRuntimeReadinessContractTests",
+       "VaultCellTests",
+       "VaultContractsTests",
+       "WebSocketSendCompletionTests"
+      ]
+     },
+     "fingerprint": "ea04c397665484db"
+    }
+   ],
+   "files_scanned": 214,
+   "max_shown": 8,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 62
+  },
+  {
+   "id": "CI-001",
+   "title": "Workflow uten concurrency",
+   "lesson": "L-2026-08-28-ci-concurrency-race",
+   "severity": "info",
+   "effective_severity": "info",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Workflow mangler `concurrency:` med cancel-in-progress – to kjøringer kan deploye samtidig.",
+   "fix_hint": "Legg til `concurrency: { group: deploy-${{ github.ref }}, cancel-in-progress: true }`.",
+   "status": "info",
+   "note": "",
+   "evidence": [
+    {
+     "file": ".github/workflows/notify-pycellprotocol.yml",
+     "line": 1,
+     "text": "no top-level concurrency: block",
+     "extra": {
+      "missing": "concurrency"
+     },
+     "fingerprint": "3ba57948ff273dc3"
+    },
+    {
+     "file": ".github/workflows/runtime-capacity-benchmark-macos.yml",
+     "line": 18,
+     "text": "concurrency without cancel-in-progress: true",
+     "extra": {
+      "missing": "cancel-in-progress"
+     },
+     "fingerprint": "fb072877547cae74"
+    }
+   ],
+   "files_scanned": 5,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 3
+  },
+  {
+   "id": "DARWIN-001",
+   "title": "Darwin-only import utenfor guard",
+   "lesson": "L-2026-08-16-appkit-import-linux",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Import av Darwin-only modul utenfor #if canImport(...)/#if os(...) – bygger ikke på Linux.",
+   "fix_hint": "Pakk inn i `#if canImport(AppKit) import AppKit #endif` (eller `#if os(macOS)`), og guard bruken.",
+   "status": "pass",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "8517836e3dc3674f"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "660af8c1bafc730c"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 111
+  },
+  {
+   "id": "DARWIN-002",
+   "title": "Guardet import, uguardet bruk",
+   "lesson": "L-2026-08-17-nsworkspace-unguarded-use",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Modulen er importert bak guard, men Darwin-symbol brukes utenfor guard.",
+   "fix_hint": "Flytt bruken inn i samme `#if canImport(...)`-blokk, eller lag en Linux-fallback i #else.",
+   "status": "pass",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "c66c20f9fb6caeee"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "e8d48e1f47046d44"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 111
+  },
+  {
+   "id": "DARWIN-003",
+   "title": "Darwin/Glibc uten dual-import",
+   "lesson": "L-2026-08-18-glibc-darwin-dual-import",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "`import Darwin`/`import Glibc` (også `Darwin.Mach`) utenfor guard, guardet uten motpart, eller libc-kall uten libc-import. Guard kan være #if os(macOS)/os(Linux)/canImport(Darwin)/canImport(Glibc)/!os(...).",
+   "fix_hint": "Bruk `#if canImport(Darwin)\\nimport Darwin\\n#elseif canImport(Glibc)\\nimport Glibc\\n#endif`.",
+   "status": "pass",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "b821b6b51a297ec1"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "3f18a4587a750bf3"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 35
+  },
+  {
+   "id": "FND-001",
+   "title": "NSDictionary/NSArray-bro og isEqual",
+   "lesson": "L-2026-08-16-nsdictionary-isequal",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "NSDictionary(dictionary:)/NSArray(array:)/isEqual(to:) oppfører seg ulikt i swift-corelibs-foundation.",
+   "fix_hint": "Bruk Swift-typer ([String: Any] / ==) eller sammenlign via Codable/JSONSerialization.",
+   "status": "pass",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "774d76c3432a05d9"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "26732460b75ff2e1"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 25
+  },
+  {
+   "id": "FND-004",
+   "title": "DispatchQueue.main i tester",
+   "lesson": "L-2026-08-17-main-queue-tests-hang",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "DispatchQueue.main/RunLoop.main i tester henger under `swift test` på Linux (ingen main run loop).",
+   "fix_hint": "Bruk XCTestExpectation + bakgrunnskø, eller async-test med await.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 214,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 16
+  },
+  {
+   "id": "FND-005",
+   "title": "Bundle.module uten resources",
+   "lesson": "L-2026-08-18-bundle-module-missing-resources",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T1",
+   "engine": "python",
+   "message": "Bundle.module brukes i et target uten `resources:` i Package.swift – runtime-krasj på Linux.",
+   "fix_hint": "Legg til `resources: [.copy(\"Fixtures\")]` i target-deklarasjonen.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 17
+  },
+  {
+   "id": "FND-006",
+   "title": "Eksotisk FileAttributeKey/URLResourceKey",
+   "lesson": "L-2026-08-18-fileattributekey-linux",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "FileAttributeKey/URLResourceKey som ikke er implementert i corelibs-foundation.",
+   "fix_hint": "Begrens til .size/.modificationDate/.posixPermissions/.type; bruk stat() bak guard ellers.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 45
+  },
+  {
+   "id": "FND-007",
+   "title": "Data(contentsOf: URL(string:))",
+   "lesson": "L-2026-08-19-data-contentsof-url-string",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "Data(contentsOf: URL(string:)) blokkerer og bruker FoundationNetworking – ulik atferd på Linux.",
+   "fix_hint": "Bruk URL(fileURLWithPath:) for filer, URLSession (import FoundationNetworking) for nett.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 22
+  },
+  {
+   "id": "FND-009",
+   "title": "Regex-syntaks som ICU/Linux tolker ulikt",
+   "lesson": "L-2026-08-20-nsregex-lookbehind",
+   "severity": "info",
+   "effective_severity": "info",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "`\\R`, lookbehind eller `\\p{…}` i regex – støtte varierer mellom ICU-versjoner på Linux.",
+   "fix_hint": "Verifiser mønsteret i Docker-image, eller skriv om uten lookbehind.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 48
+  },
+  {
+   "id": "FND-012",
+   "title": "Combine/CryptoKit uten fallback",
+   "lesson": "L-2026-08-21-combine-cryptokit-fallback",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T1",
+   "engine": "python",
+   "message": "`import Combine` uten OpenCombine-fallback / `import CryptoKit` uten `#if canImport(CryptoKit) … #else import Crypto`. (warn: en canImport-guard uten #else er gyldig hvis all bruk også er guardet)",
+   "fix_hint": "`#if canImport(CryptoKit) import CryptoKit #else import Crypto #endif` (swift-crypto) / OpenCombine.",
+   "status": "pass",
+   "note": "",
+   "evidence": [
+    {
+     "file": "Sources/CellApple",
+     "line": 0,
+     "text": "skipped Apple-only target CellApple (94 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellApple",
+      "files": 94
+     },
+     "fingerprint": "c39c8748367a8404"
+    },
+    {
+     "file": "Tests/CellBaseTests",
+     "line": 0,
+     "text": "skipped Apple-only target CellBaseTests (205 files)",
+     "extra": {
+      "severity": "info",
+      "kind": "skipped-target",
+      "target": "CellBaseTests",
+      "files": 205
+     },
+     "fingerprint": "6b3e421b5ee795d7"
+    }
+   ],
+   "files_scanned": 330,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 35
+  },
+  {
+   "id": "GIT-001",
+   "title": "Skitten arbeidskopi",
+   "lesson": "L-2026-08-27-dirty-tree-deploy",
+   "severity": "info",
+   "effective_severity": "info",
+   "tier": "T1",
+   "engine": "python",
+   "message": "Ucommittede/untracked endringer i worktree – deploy fra skitten tre er ikke reproduserbart (block ved --release).",
+   "fix_hint": "Commit eller stash; deploy kun fra ren commit.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 938,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 36
+  },
+  {
+   "id": "KO-001",
+   "title": "Arbeidsjobb har fast format uten shell eller tilgangsøkning",
+   "lesson": "L-2026-09-07-innliming-i-stedet-for-ko",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Arbeidsjobben bryter køkontrakten.",
+   "fix_hint": "Bruk hd task new med executor, promptfil og deklarert opphav.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 0,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 9
+  },
+  {
+   "id": "PIN-002",
+   "title": "Lokal override / resolved-drift",
+   "lesson": "L-2026-08-26-local-package-override-drift",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T1",
+   "engine": "python",
+   "message": "Package.swift-avhengighet mangler i Package.resolved (evidens navngir identiteten – typisk etter lokal sibling-override), `.package(path:)` i bruk, eller *_LOCAL_PACKAGE_PATH satt.",
+   "fix_hint": "Fjern lokal override, `swift package resolve`, commit Package.resolved.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 938,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 0
+  },
+  {
+   "id": "PIN-004",
+   "title": "Submodul ikke initialisert",
+   "lesson": "L-2026-08-26-submodule-not-initialised",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Submodul i .gitmodules er tom/mangler eller avviker fra registrert commit.",
+   "fix_hint": "`git submodule update --init --recursive`.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 938,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 0
+  },
+  {
+   "id": "PW-001",
+   "title": "Porthole: forceShell-render uten preserveSkeletonDOM",
+   "lesson": "L-2026-09-07-porthole-refresh-replaces-skeleton",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "render({forceShell…}) uten preserveSkeletonDOM bytter skeleton-root og detacher DOM brukeren står i (steg 20-feilen). Bare handlingsstien skal få bytte skjelett.",
+   "fix_hint": "Legg til preserveSkeletonDOM: true, eller gjør preserve til default og la runAction be om replaceSkeleton eksplisitt. docs/Laerdom-rekkefolge-og-kodeanalyse.md A1.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 0,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 0
+  },
+  {
+   "id": "PW-002",
+   "title": "Timer sletter egen ventepost før fetch er ferdig",
+   "lesson": "L-2026-09-07-time-as-order",
+   "severity": "info",
+   "effective_severity": "info",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "Timer som fjerner sin egen post fra et ventekart FØR POST-en er landet gjør flush/await til no-op (setComposer/submit-race).",
+   "fix_hint": "Behold posten med promise til fetch er resolved. Lærdom A5.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 0,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 0
+  },
+  {
+   "id": "SH-001",
+   "title": "grep -c/-q under set -e",
+   "lesson": "L-2026-08-23-grep-count-set-e",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "python",
+   "message": "`VAR=$(… grep -c/-q …)` eller bar pipeline som ender i grep -c/-q under `set -e` uten `|| true`/if/while – grep gir exit 1 ved null treff og dreper skriptet. (Substitusjon som argument, `local`/`export`/`declare` maskerer.)",
+   "fix_hint": "`n=$(grep -c … || true)` eller `if grep -q …; then`.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 7,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 4
+  },
+  {
+   "id": "SH-002",
+   "title": "BSD/GNU-divergens uten uname-case",
+   "lesson": "L-2026-08-24-sed-i-bsd-gnu",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "BSD/GNU-divergerende flagg (stat -c/-f, date -d/-j, sed -i, base64 -w, readlink -f, timeout, mktemp -t) uten uname-gren eller begge former. Warn: skript som bare kjører på Linux-verten kan bruke GNU-flagg, men skript som også kjøres på Mac-en feiler på den andre siden.",
+   "fix_hint": "Legg til `case \"$(uname -s)\" in Darwin) …;; Linux) …;; esac`, bruk begge former med `||`, eller bruk portable former (pwd -P, shasum -a 256, mktemp -d \"${TMPDIR:-/tmp}/x.XXXXXX\").",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 7,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 13
+  },
+  {
+   "id": "SH-003",
+   "title": "mapfile fra docker inspect",
+   "lesson": "L-2026-08-24-mapfile-docker-inspect",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "mapfile/readarray fra `docker inspect` gir ulik array-form (multiline JSON) mellom verter.",
+   "fix_hint": "Bruk `docker inspect --format '{{json .}}'` + jq -r, eller `while read -r`.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 7,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 2
+  },
+  {
+   "id": "SH-004",
+   "title": "Bashism under #!/bin/sh",
+   "lesson": "L-2026-08-25-bashism-under-sh",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Bashism ([[ ]], arrays, <<<, pipefail …) i skript med `#!/bin/sh` – dash på Ubuntu-image.",
+   "fix_hint": "Bytt shebang til `#!/usr/bin/env bash` eller skriv POSIX-sh.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 7,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 1
+  },
+  {
+   "id": "SH-005",
+   "title": "haven-deploy kombinerer --env-only og --preflight",
+   "lesson": "L-2026-09-04-preflight-flag-does-not-prevent-host-mutation",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T0",
+   "engine": "regex",
+   "message": "Denne haven-deploy-versjonen leser MODE bare fra argument 3; når --env-only og --preflight kombineres, blir ett flagg ignorert eller `current` avvist. Kommandoen er ikke en trygg read-only preflight.",
+   "fix_hint": "Ikke kombiner flaggene. Behandle `--env-only` som muterende og krev claim; legg først til eksplisitt parserstøtte og regresjonstest dersom env-only skal kunne stoppe etter preflight.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 159,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 28
+  },
+  {
+   "id": "SWIFT-001",
+   "title": "Lang `+`-kjede av strenger",
+   "lesson": "L-2026-08-21-plus-chain-typecheck-timeout",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Uttrykk med ≥8 `+`-sammenføyninger av strenger – type-checker timeout på Linux-CI.",
+   "fix_hint": "Bruk interpolasjon, `[…].joined()` eller flere setninger.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 119
+  },
+  {
+   "id": "TEST-002",
+   "title": "Fixture med permissiv filmodus (key/vault/manifest)",
+   "lesson": "L-2026-08-17-fixture-mode-0644-vault",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "Fixture for key/vault/manifest/secret/token skrives med 0644/0664/0666-modus eller attributes: nil – vault-loader på Linux avviser permissive nøkkelfiler.",
+   "fix_hint": "Sett `attributes: [.posixPermissions: 0o600]` (kataloger 0o700) når fixturen opprettes.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 629,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 86
+  },
+  {
+   "id": "TOOL-001",
+   "title": "Toolchain-markører spriker",
+   "lesson": "L-2026-08-27-swift-version-marker-drift",
+   "severity": "warn",
+   "effective_severity": "warn",
+   "tier": "T0",
+   "engine": "python",
+   "message": "swift:X.Y i Dockerfile/workflow avviker (major.minor) fra swift-tools-version i Package.swift.",
+   "fix_hint": "Samkjør Dockerfile FROM swift:X.Y, workflow swift-version og swift-tools-version.",
+   "status": "pass",
+   "note": "",
+   "evidence": [],
+   "files_scanned": 5,
+   "max_shown": 10,
+   "suppressed": 0,
+   "expired_suppressions": 0,
+   "duration_ms": 3
+  },
+  {
+   "id": "PIN-001",
+   "title": "CellProtocol-pin inkoherent",
+   "lesson": "L-2026-08-25-cellprotocol-pin-drift",
+   "severity": "block",
+   "effective_severity": "block",
+   "tier": "T1",
+   "engine": "python",
+   "message": "`cellprotocol` pinnes til ulike revisjoner på tvers av rot-Package.swift `revision:`, rot-Package.resolved (når pin finnes) og siblings' Package.resolved/Package.swift. Én evidenslinje per revisjon med kilder.",
+   "fix_hint": "Oppdater alle Package.resolved til samme revision (swift package resolve) og commit.",
+   "status": "skipped",
+   "note": "no Package.resolved/Package.swift pins cellprotocol under root or siblings",
+   "evidence": [],
+   "files_scanned": 938,
+   "max_shown": 10,
+   "duration_ms": 1
+  }
+ ],
+ "summary": {
+  "block": 1,
+  "warn": 7,
+  "info": 1,
+  "pass": 24,
+  "skipped": 1,
+  "error": 0,
+  "external": 0,
+  "suppressed": 0
+ },
+ "exit_code": 2
+}

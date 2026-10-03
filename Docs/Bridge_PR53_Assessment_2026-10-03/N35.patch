@@ -1,0 +1,932 @@
+diff --git a/Documentation/VaporWebSocketAdmission.md b/Documentation/VaporWebSocketAdmission.md
+index a12b6fa..80f853d 100644
+--- a/Documentation/VaporWebSocketAdmission.md
++++ b/Documentation/VaporWebSocketAdmission.md
+@@ -25,14 +25,29 @@ security-event sink retains the accepted frame's reservation. Closing does not r
+ held queued work early. Existing gate/work/operation/send quotas also still apply.
+ 
+ Preparation follows callback arrival order, including completion of each
+-authentication message. Ordinary application dispatch has its own ordered tail,
+-so the first held response prevents later feed values from entering the gate.
+-Only a `sign` command or a response matched to a locally registered signing RPC
+-may pass this tail. The latter lookup follows the gate and, for mux, the exact
+-logical channel to its BridgeBase auditor. A signature-shaped payload is not a
+-scheduling credential. The unchanged gate, principal, operation-permit and
+-response validation still execute for every control message. The control lane
+-uses the same receive budgets; a saturated connection is closed, not exempted.
++authentication message. Ordinary dispatch for an established mux channel has a
++separate tail bound to the locally captured channel instance. A waiting consumer
++on A therefore does not prevent B from progressing. Values on the same channel
++still enter the consumer in order. The fallback tail handles non-mux traffic and
++channel setup; pending channel factories are outside this change's independence
++guarantee.
++
++A close for an established logical channel bypasses that channel's consumer
++tail, but still passes the normal gate and identity checks. It retires only the
++captured channel instance. Queued work retains that instance rather than looking
++up a reusable wire ID when it eventually runs. Retirement suppresses cancellation
++and late-send failures from that old consumer so they cannot close siblings.
++Count/byte/work/channel reservations remain retained until their actual work
++returns. Captured destinations and scheduling tails are bounded by the same
++receive admission; completed per-channel tails are removed.
++
++A `sign` command or a response matched to a locally registered signing RPC can
++also progress independently. The lookup follows the gate and exact logical
++channel to its BridgeBase auditor. A signature-shaped payload is not a scheduling
++credential. Every prepared dispatch still runs the gate's normal principal,
++generation, expiry, operation-permit and response validation. All lanes use the
++same receive budgets; saturation closes the connection rather than bypassing
++limits.
+ 
+ Overflow or malformed input stops further admission and closes the existing
+ session synchronously. At most one adapter cleanup Task is scheduled; the
+@@ -73,3 +88,44 @@ framing to prove a protected read with origin signing for both ordinary and
+ mux WebSockets, with no server signing vault. The full macOS regression and its
+ existing three-pass TSAN job include both suites. No production host deployment,
+ TLS proxy verification, or universal DoS guarantee follows from these tests.
++
++## N35 regression candidate
++
++Three added regressions cover two logical channels on one physical socket:
++
++- `VaporWebSocketAdmissionTests.testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket`:
++  holds A without cooperative cancellation, requires B and selective A-close to
++  progress, reuses A's wire ID before old work completes, retains work accounting,
++  rejects the old late send and prevents queued old work reaching replacement A.
++- `VaporWebSocketAdmissionTests.testMuxFlowOrderIsLocalToItsChannelOnSameSocket`:
++  holds A's first Flow delivery, requires ordered B delivery, then verifies A's
++  own order and eventual receive-accounting release.
++- `BridgeChannelWebSocketTests.testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket`:
++  performs real HTTP upgrade and authentication, holds an actual GeneralCell GET,
++  and requires another protected GET with origin signing on the same socket.
++
++Verified in [macOS CI run 37049974688](https://github.com/Digipomps/CellProtocol/actions/runs/37049974688),
++completed 2026-10-02 and inspected 2026-10-03. Tested head:
++`7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1`; runtime change: `091c85b`.
++
++- The three tests compiled and all failed with the three original runtime files
++  from `3824cf84` restored. Failures were sibling-progress/close timeouts, not
++  compiler errors. XCTest reports six failures, two from thrown timeout errors.
++- With the candidate restored, all three tests passed.
++- Full macOS suite: 1539 tests, five skipped, zero failures.
++- One focused Thread Sanitizer pass: 55 tests, zero failures.
++
++One macOS-26 job took 18m40s, using Xcode 26.6 and Swift 6.3.3. Dependency pins
++stayed unchanged; the downloaded source hashes match the runtime candidate.
++Artifact `bridge-mux-n35-7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1`
++contains all four raw logs and `result.json` with commands and source hashes.
++`Scripts/run-bridge-mux-n35-ci.py` is the bounded reproducer; its nine
++orchestration tests passed locally and in CI without simulating runtime results
++as Swift evidence. The temporary dispatch-only workflow was restored after the
++run; normal PR/main regression policy is preserved.
++
++Host Swift compilation remained blocked by the task's 40 GiB and 10 percent
++capacity gate; only syntax/static and Python checks ran locally. The full-suite
++skips include optional fixture/worker tests and native Multipeer coverage.
++This evidence addresses established-channel N35 behavior, not other PR53
++findings, iOS Nearby Interaction, a production TLS route or deployment.
+diff --git a/Scripts/run-bridge-mux-n35-ci.py b/Scripts/run-bridge-mux-n35-ci.py
+new file mode 100644
+index 0000000..6bb83fb
+--- /dev/null
++++ b/Scripts/run-bridge-mux-n35-ci.py
+@@ -0,0 +1,132 @@
++#!/usr/bin/env python3
++"""One bounded red/green CI run; refuses to compile on the local host."""
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++import signal
++import subprocess
++import sys
++import time
++
++BASE = '3824cf84b58903f900a49b0987ee660085f3d875'
++SOURCES = [
++    'Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift',
++    'Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift',
++    'Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift',
++]
++TESTS = [
++    'testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket',
++    'testMuxFlowOrderIsLocalToItsChannelOnSameSocket',
++    'testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket',
++]
++FILTER = '|'.join(TESTS)
++TSAN = '|'.join(['VaporWebSocketAdmissionTests', 'BridgeChannelWebSocketTests',
++    'BridgeMultiplexingTests', 'BridgeMuxSendLifetimeTests', 'BridgeResponseLifetimeTests',
++    'BridgeFeedAndRPCOrderingTests', 'BridgeChannelSequenceTests'])
++
++
++def main():
++    if os.environ.get('GITHUB_ACTIONS') != 'true' or sys.platform != 'darwin':
++        raise SystemExit('This driver is restricted to the explicitly approved macOS CI job.')
++    root = Path.cwd()
++    evidence = Path(os.environ['RUNNER_TEMP']) / 'bridge-mux-n35-evidence'
++    evidence.mkdir(exist_ok=True)
++    started = time.monotonic()
++    deadline = started + 22 * 60
++    result = {'base': BASE, 'candidate': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
++              'internal_deadline_seconds': 1320, 'steps': [], 'completed': False}
++    saved = {p: (root / p).read_bytes() for p in SOURCES}
++    pins = (root / 'Package.resolved').read_bytes()
++    result['source_hashes'] = {p: hashlib.sha256(data).hexdigest() for p, data in saved.items()}
++
++    def report():
++        (evidence / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
++
++    def run(name, args):
++        remaining = deadline - time.monotonic()
++        if remaining <= 10:
++            raise TimeoutError('Aggregate CI deadline exhausted; no further command started.')
++        print(name, flush=True)
++        begin = time.monotonic()
++        path = evidence / (name + '.log')
++        code = None
++        timed_out = False
++        with path.open('wb') as log:
++            process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
++            try:
++                code = process.wait(timeout=remaining - 10)
++            except subprocess.TimeoutExpired:
++                timed_out = True
++            finally:
++                if process.poll() is None:
++                    os.killpg(process.pid, signal.SIGTERM)
++                    try:
++                        process.wait(timeout=5)
++                    except subprocess.TimeoutExpired:
++                        os.killpg(process.pid, signal.SIGKILL)
++                        process.wait(timeout=5)
++                code = process.returncode
++        result['steps'].append({'name': name, 'command': args, 'exit': code,
++                                'seconds': round(time.monotonic() - begin, 3), 'timed_out': timed_out})
++        report()
++        if timed_out:
++            raise TimeoutError(name)
++        return code, path.read_text(errors='replace')
++
++    swift = ['swift', 'test', '--disable-automatic-resolution', '--jobs', '2']
++    previous_handlers = {}
++
++    def interrupted(signum, _frame):
++        # Allow the child cleanup and source restoration to finish on cancellation.
++        for sig in previous_handlers:
++            signal.signal(sig, signal.SIG_IGN)
++        raise RuntimeError('CI driver interrupted by signal ' + str(signum))
++
++    for sig in (signal.SIGINT, signal.SIGTERM):
++        previous_handlers[sig] = signal.signal(sig, interrupted)
++    report()
++    try:
++        subprocess.run(['git', 'diff', '--exit-code'], check=True, timeout=15)
++        for path in SOURCES:
++            (root / path).write_bytes(subprocess.check_output(['git', 'show', BASE + ':' + path], timeout=15))
++        try:
++            code, output = run('original-regressions', swift + ['--filter', FILTER])
++            # Compiler/setup failure cannot be accepted as a reproduced regression.
++            if code == 0 or not re.search(r'Executed 3 tests, with [1-9]', output):
++                raise RuntimeError('Original code did not produce three executed, failing regression tests.')
++            for name in TESTS:
++                if not re.search(r"Test Case '[^\n]*" + re.escape(name) + r"[^\n]*' failed", output):
++                    raise RuntimeError('Missing original runtime test failure: ' + name)
++            result['original_regressions_reproduced'] = True
++        finally:
++            for path, data in saved.items():
++                (root / path).write_bytes(data)
++        for name, args in [
++            ('fixed-regressions', swift + ['--filter', FILTER]),
++            ('fixed-full-suite', swift),
++            ('fixed-tsan', swift + ['--sanitize', 'thread', '--filter', TSAN]),
++        ]:
++            code, _ = run(name, args)
++            if code:
++                raise RuntimeError(name + ' failed; no retry')
++        subprocess.run(['git', 'diff', '--exit-code'], check=True, timeout=15)
++        if (root / 'Package.resolved').read_bytes() != pins:
++            raise RuntimeError('Dependency pins changed')
++        result['completed'] = True
++    except BaseException as error:
++        result['failure'] = str(error)
++        raise
++    finally:
++        for path, data in saved.items():
++            (root / path).write_bytes(data)
++        result['elapsed_seconds'] = round(time.monotonic() - started, 3)
++        result['candidate_sources_restored'] = all((root / p).read_bytes() == b for p, b in saved.items())
++        report()
++        for sig, handler in previous_handlers.items():
++            signal.signal(sig, handler)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/Scripts/test_bridge_mux_n35_ci.py b/Scripts/test_bridge_mux_n35_ci.py
+new file mode 100644
+index 0000000..7f6d73f
+--- /dev/null
++++ b/Scripts/test_bridge_mux_n35_ci.py
+@@ -0,0 +1,147 @@
++"""Exercise CI orchestration locally with simulated Swift; never starts a build."""
++import importlib.util
++import json
++import os
++from pathlib import Path
++import signal
++import subprocess
++import sys
++import tempfile
++import unittest
++from unittest.mock import patch
++
++sys.dont_write_bytecode = True
++spec = importlib.util.spec_from_file_location('driver', Path(__file__).with_name('run-bridge-mux-n35-ci.py'))
++driver = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(driver)
++
++
++class DriverTests(unittest.TestCase):
++    def exercise(self, mode):
++        calls, killed = [], []
++        old_cwd = Path.cwd()
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            for name in driver.SOURCES:
++                path = root / name
++                path.parent.mkdir(parents=True, exist_ok=True)
++                path.write_bytes(b'candidate')
++            (root / 'Package.resolved').write_bytes(b'pins')
++            red = '\n'.join("Test Case '-[Suite " + name + "]' failed (0.001 seconds)." for name in driver.TESTS)
++            red += '\nExecuted 3 tests, with 3 failures (0 unexpected) in 0.1 seconds\n'
++
++            class Child:
++                pid = 123456
++                returncode = None
++                waits = 0
++                def __init__(self, args, stdout, stderr, start_new_session):
++                    self.index = len(calls)
++                    calls.append(args)
++                    assert start_new_session and stderr == subprocess.STDOUT
++                    expected = b'original' if self.index == 0 else b'candidate'
++                    assert all((root / p).read_bytes() == expected for p in driver.SOURCES)
++                    if mode == 'compiler' and self.index == 0:
++                        stdout.write(b'error: failed to compile\n')
++                    elif mode == 'missing' and self.index == 0:
++                        stdout.write(red.replace(driver.TESTS[1], 'unrelated').encode())
++                    else:
++                        stdout.write((red if self.index == 0 else 'passed\n').encode())
++                    if mode == 'pins' and self.index == 3:
++                        (root / 'Package.resolved').write_bytes(b'drift')
++                def wait(self, timeout):
++                    self.waits += 1
++                    if mode in ('timeout', 'kill') and self.index == 0:
++                        if self.waits == 1 or (mode == 'kill' and self.waits == 2):
++                            raise subprocess.TimeoutExpired(calls[-1], timeout)
++                    if mode == 'signal' and self.index == 0 and self.waits == 1:
++                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
++                    self.returncode = 1 if self.index == 0 or (mode == 'fixed' and self.index == 1) else 0
++                    if mode == 'unexpected-pass' and self.index == 0:
++                        self.returncode = 0
++                    return self.returncode
++                def poll(self):
++                    return self.returncode
++
++            def git_output(args, **kwargs):
++                return 'test-candidate\n' if args[1] == 'rev-parse' else b'original'
++
++            handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
++            error = None
++            try:
++                os.chdir(root)
++                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_TEMP': directory}), \
++                     patch.object(driver.sys, 'platform', 'darwin'), \
++                     patch.object(driver.subprocess, 'check_output', side_effect=git_output), \
++                     patch.object(driver.subprocess, 'run') as git_run, \
++                     patch.object(driver.subprocess, 'Popen', Child), \
++                     patch.object(driver.os, 'killpg', side_effect=lambda pid, sig: killed.append(sig)):
++                    try:
++                        driver.main()
++                    except (RuntimeError, TimeoutError) as caught:
++                        error = caught
++                result = json.loads((root / 'bridge-mux-n35-evidence/result.json').read_text())
++                self.assertTrue(result['candidate_sources_restored'])
++                self.assertTrue(all((root / p).read_bytes() == b'candidate' for p in driver.SOURCES))
++                self.assertEqual(handlers, {sig: signal.getsignal(sig) for sig in handlers})
++                return calls, killed, result, error
++            finally:
++                os.chdir(old_cwd)
++
++    def test_complete_red_green_full_and_tsan_once(self):
++        calls, _, result, error = self.exercise('success')
++        self.assertIsNone(error)
++        self.assertTrue(result['completed'])
++        self.assertEqual(len(calls), 4)
++        self.assertIn('--sanitize', calls[-1])
++        self.assertTrue(all(command[:5] == ['swift', 'test', '--disable-automatic-resolution', '--jobs', '2'] for command in calls))
++
++    def test_compile_error_is_not_red_regression(self):
++        calls, _, result, error = self.exercise('compiler')
++        self.assertEqual(len(calls), 1)
++        self.assertIsNotNone(error)
++        self.assertFalse(result['completed'])
++
++    def test_every_named_regression_must_fail_on_original(self):
++        for mode in ('missing', 'unexpected-pass'):
++            with self.subTest(mode=mode):
++                calls, _, _, error = self.exercise(mode)
++                self.assertEqual(len(calls), 1)
++                self.assertIsNotNone(error)
++
++    def test_fixed_failure_stops_without_retry(self):
++        calls, _, _, error = self.exercise('fixed')
++        self.assertEqual(len(calls), 2)
++        self.assertIsNotNone(error)
++
++    def test_timeout_terminates_process_group(self):
++        calls, killed, result, error = self.exercise('timeout')
++        self.assertEqual(len(calls), 1)
++        self.assertEqual(killed, [signal.SIGTERM])
++        self.assertTrue(result['steps'][0]['timed_out'])
++        self.assertIsInstance(error, TimeoutError)
++
++    def test_noncooperative_child_is_killed(self):
++        _, killed, _, error = self.exercise('kill')
++        self.assertEqual(killed, [signal.SIGTERM, signal.SIGKILL])
++        self.assertIsInstance(error, TimeoutError)
++
++    def test_cancellation_cleans_child_and_restores_sources(self):
++        calls, killed, _, error = self.exercise('signal')
++        self.assertEqual(len(calls), 1)
++        self.assertEqual(killed, [signal.SIGTERM])
++        self.assertIn('interrupted', str(error))
++
++    def test_dependency_drift_fails(self):
++        _, _, result, error = self.exercise('pins')
++        self.assertFalse(result['completed'])
++        self.assertIn('pins changed', str(error))
++
++    def test_local_host_is_refused_before_any_subprocess(self):
++        with patch.dict(os.environ, {'GITHUB_ACTIONS': 'false'}), patch.object(driver.subprocess, 'check_output') as command:
++            with self.assertRaises(SystemExit):
++                driver.main()
++            command.assert_not_called()
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift b/Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift
+index 8d4d220..5baedb3 100644
+--- a/Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift
++++ b/Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift
+@@ -3,6 +3,20 @@
+ 
+ import Foundation
+ 
++/// A locally captured mux destination. Scheduling grants no authority: the
++/// originating gate revalidates every command when this work executes.
++public struct BridgeInboundDispatch: @unchecked Sendable {
++    public let laneID: ObjectIdentifier
++    public let bypassesOrdering: Bool
++    private let body: @Sendable () async throws -> Void
++
++    init(laneID: ObjectIdentifier, bypassesOrdering: Bool = false,
++         body: @escaping @Sendable () async throws -> Void) {
++        self.laneID = laneID; self.bypassesOrdering = bypassesOrdering; self.body = body
++    }
++    public func consume() async throws { try await body() }
++}
++
+ /// Auth gate around one physical transport. Server factory is not called until
+ /// proof consumption, policy recheck and activation succeed. All logical channels
+ /// on a multiplex connection share its proven principal and generation.
+@@ -467,7 +481,7 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
+         do { try await trackedWork(admission: command.cmd.hasPrefix("channelAuth")) { try await self.processCommand(command) } }
+         catch { await close(); throw error }
+     }
+-    private func processCommand(_ command: BridgeCommand) async throws {
++    private func processCommand(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
+         do {
+             if command.cmd.hasPrefix("channelAuth") {
+                 try await consumeAuthentication(command)
+@@ -482,9 +496,30 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
+             }
+             guard let delegate = lock.withLock({ self.delegate }), !lock.withLock({ stopped }) else { throw Auth.Failure.unavailable }
+             try session.check()
+-            try await delegate.consumeCommand(command: command)
++            if let prepared { try await prepared.consume() }
++            else { try await delegate.consumeCommand(command: command) }
+         } catch { await close(); throw error }
+     }
++
++    /// Capture a live logical destination before a transport queues the frame.
++    /// A retired destination never gets looked up again by a reusable wire ID.
++    public func prepareMultiplexDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
++        let target = lock.withLock { stopped ? nil : delegate }
++        let captured: BridgeInboundDispatch?
++        if let mux = target as? BridgeMultiplexServerSession { captured = mux.prepareInboundDispatch(command) }
++        else if let mux = target as? BridgeMultiplexSession { captured = mux.prepareInboundDispatch(command) }
++        else { return nil }
++        guard let captured else { return nil }
++        return BridgeInboundDispatch(laneID: captured.laneID, bypassesOrdering: captured.bypassesOrdering) { [self] in
++            do {
++                try await trackedWork {
++                    if command.command == .response { try await self.processResponse(command, prepared: captured) }
++                    else { try await self.processCommand(command, prepared: captured) }
++                }
++            } catch { await close(); throw error }
++        }
++    }
++
+     /// Scheduling only; all response validation still runs through this gate.
+     public func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+         let target = lock.withLock { stopped ? nil : delegate }
+@@ -498,13 +533,14 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
+         do { try await trackedWork { try await self.processResponse(command) } }
+         catch { await close(); throw error }
+     }
+-    private func processResponse(_ command: BridgeCommand) async throws {
++    private func processResponse(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
+         do {
+             guard lock.withLock({ peerOperation == nil || peerReady }) else { throw Auth.Failure.unexpectedMessage }
+             try checkPeerGeneration(command)
+             try session.checkInbound(command)
+             guard command.command == .response, let delegate = lock.withLock({ self.delegate }) else { throw Auth.Failure.unexpectedMessage }
+-            try await delegate.consumeResponse(command: command)
++            if let prepared { try await prepared.consume() }
++            else { try await delegate.consumeResponse(command: command) }
+         } catch { await close(); throw error }
+     }
+ 
+diff --git a/Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift b/Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift
+index 0255771..58c383e 100644
+--- a/Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift
++++ b/Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift
+@@ -559,6 +559,18 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
+         try await delegate.consumeCommand(command: command)
+     }
+ 
++    func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
++        guard command.protocolVersion == protocolVersion,
++              command.command == .response || command.command == .sign,
++              let channelID = command.channelID, let target = delegate(for: channelID) else { return nil }
++        return BridgeInboundDispatch(laneID: ObjectIdentifier(target)) { [self, target] in
++            guard delegate(for: channelID) === target else { return }
++            if command.command == .response {
++                try await deliverResponse(command, channelID: channelID, delegate: target)
++            } else { try await target.consumeCommand(command: command) }
++        }
++    }
++
+     func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+         guard command.protocolVersion == protocolVersion, let id = command.channelID,
+               let bridge = delegate(for: id) as? BridgeBase else { return false }
+@@ -573,6 +585,11 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
+               let delegate = delegate(for: channelID) else {
+             throw BridgeMultiplexError.channelNotFound
+         }
++        try await deliverResponse(command, channelID: channelID, delegate: delegate)
++    }
++
++    private func deliverResponse(_ command: BridgeCommand, channelID: String,
++                                 delegate: BridgeDelegateProtocol) async throws {
+         if case .flowElement? = command.payload {
+             let trackedStreamID = command.streamID.map { "\(channelID)|\($0)" }
+             switch continuityTracker.observe(streamID: trackedStreamID, sequence: command.sequence) {
+@@ -809,8 +826,8 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
+         }
+         func dispatch(_ command: BridgeCommand, response: Bool = false) async throws {
+             let id = UUID()
+-            let task = try lock.withLock { () throws -> Task<Void, Error> in
+-                guard !retired else { throw BridgeMultiplexError.channelNotFound }
++            let task = try lock.withLock { () throws -> Task<Void, Error>? in
++                guard !retired else { return nil }
+                 guard tasks.count < 64 else { throw BridgeMultiplexError.resourceLimitExceeded }
+                 let task = Task { [delegate] in
+                     try Task.checkCancellation()
+@@ -820,15 +837,25 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
+                 tasks[id] = task
+                 return task
+             }
++            guard let task else { return }
+             defer { _ = lock.withLock { tasks.removeValue(forKey: id) } }
+-            try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
++            do {
++                try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
++            } catch {
++                // Retirement already revoked this logical destination. A late
++                // cancellation/send error cannot retire the physical siblings.
++                if !lock.withLock({ retired }) { throw error }
++            }
+         }
+         func retire() async {
+-            let ownsCleanup = lock.withLock { () -> Bool in
+-                guard !retired else { return false }
+-                retired = true; tasks.values.forEach { $0.cancel() }; return true
++            let pending = lock.withLock { () -> [Task<Void, Error>]? in
++                guard !retired else { return nil }
++                retired = true
++                return Array(tasks.values)
+             }
+-            guard ownsCleanup else { return }
++            guard let pending else { return }
++            // Cancellation handlers may re-enter lifecycle code.
++            pending.forEach { $0.cancel() }
+             if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+             else { await delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
+         }
+@@ -948,19 +975,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
+                   BridgeMultiplexSession.isValidChannelID(channelID) else {
+                 throw BridgeMultiplexError.invalidChannel
+             }
+-            let removed = stateLock.withLock { () -> ChannelRecord? in
+-                let removed = channels.removeValue(forKey: channelID)
+-                if pendingChannelIDs.contains(channelID) {
+-                    cancelledPendingChannelIDs.insert(channelID)
+-                }
+-                outboundStreamSequences = outboundStreamSequences.filter {
+-                    !$0.key.hasPrefix("\(channelID)|")
+-                }
+-                compactOutboundStreamInsertionOrderIfNeeded()
+-                return removed
+-            }
+-            defer { withExtendedLifetime(removed) {} }
+-            await removed?.retire()
++            await closeChannel(channelID)
+         default:
+             guard command.protocolVersion == protocolVersion,
+                   let channelID = command.channelID,
+@@ -972,6 +987,36 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
+         }
+     }
+ 
++    private func closeChannel(_ channelID: String, expected: ChannelRecord? = nil) async {
++        let removed = stateLock.withLock { () -> ChannelRecord? in
++            if let expected, channels[channelID] !== expected { return nil }
++            let removed = channels.removeValue(forKey: channelID)
++            if pendingChannelIDs.contains(channelID) { cancelledPendingChannelIDs.insert(channelID) }
++            outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
++            compactOutboundStreamInsertionOrderIfNeeded()
++            return removed
++        }
++        defer { withExtendedLifetime(removed) {} }
++        await removed?.retire()
++    }
++
++    func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
++        guard command.protocolVersion == protocolVersion, command.command != .openChannel,
++              command.command != .ready, let channelID = command.channelID,
++              BridgeMultiplexSession.isValidChannelID(channelID),
++              let record = stateLock.withLock({ closed ? nil : channels[channelID] }) else { return nil }
++        return BridgeInboundDispatch(laneID: ObjectIdentifier(record),
++                                     bypassesOrdering: command.command == .closeChannel) { [self, record] in
++            guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
++            try channelSession.check(identity: command.identity, requiresIdentity: command.command != .response)
++            if command.command == .closeChannel {
++                await closeChannel(channelID, expected: record)
++            } else {
++                try await record.dispatch(command, response: command.command == .response)
++            }
++        }
++    }
++
+     func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+         guard command.protocolVersion == protocolVersion, let id = command.channelID,
+               let bridge = stateLock.withLock({ channels[id]?.delegate }) as? BridgeBase else { return false }
+diff --git a/Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift b/Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift
+index b10ff11..6d9c83d 100644
+--- a/Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift
++++ b/Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift
+@@ -82,6 +82,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable
+     private var receivesStopped = false
+     private var receiveTail: Task<Void, Never>?
+     private var dispatchTail: Task<Void, Never>?
++    private var multiplexDispatchTails: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] = [:]
+     private var receiveCloseTask: Task<Void, Never>?
+     // Deterministic test seams, installed before traffic; no production bypass.
+     var beforeReceivePreparation: (@Sendable () async -> Void)?
+@@ -270,8 +271,9 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable
+     }
+ 
+     /// Count/bytes are reserved before copying payloads or creating Tasks.
+-    /// Preparation is ordered, including handshake completion. Ordinary dispatch
+-    /// is ordered separately so a held Cell can still complete origin signing.
++    /// Preparation is ordered, including handshake completion. Live mux channels
++    /// have separate ordered dispatch lanes; logical close and origin signing
++    /// can progress while a consumer is held. Every lane retains receive quota.
+     private func enqueueReceive(bytes: Int, copy: () -> Data) {
+         receiveLock.withLock {
+             guard !receivesStopped else { return }
+@@ -297,18 +299,34 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable
+                         return
+                     }
+                     let gate = currentDelegate() as? BridgeChannelTransport
++                    let prepared = gate?.prepareMultiplexDispatch(command)
+                     let control = command.command == .sign || gate?.isOriginSigningResponse(command) == true
++                        || prepared?.bypassesOrdering == true
+                     receiveLock.withLock {
+-                        let prior = control ? nil : dispatchTail
++                        let lane = prepared?.laneID, id = UUID()
++                        let prior: Task<Void, Never>?
++                        if control { prior = nil }
++                        else if let lane { prior = multiplexDispatchTails[lane]?.task }
++                        else { prior = dispatchTail }
+                         let dispatch = Task { [self] in
+-                            defer { releaseReceive(bytes: bytes) }
++                            defer {
++                                if let lane, !control {
++                                    receiveLock.withLock {
++                                        if multiplexDispatchTails[lane]?.id == id { multiplexDispatchTails[lane] = nil }
++                                    }
++                                }
++                                releaseReceive(bytes: bytes)
++                            }
+                             await prior?.value
+                             do {
+                                 try checkReceiving()
+-                                try await dispatchCommand(command)
++                                try await dispatchCommand(command, prepared: prepared)
+                             } catch { rejectReceive() }
+                         }
+-                        if !control { dispatchTail = dispatch }
++                        if !control {
++                            if let lane { multiplexDispatchTails[lane] = (id, dispatch) }
++                            else { dispatchTail = dispatch }
++                        }
+                     }
+                 } catch {
+                     rejectReceive()
+@@ -404,10 +422,11 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable
+         return try JSONDecoder().decode(BridgeCommand.self, from: incomingData)
+     }
+ 
+-    private func dispatchCommand(_ command: BridgeCommand) async throws {
++    private func dispatchCommand(_ command: BridgeCommand, prepared: BridgeInboundDispatch? = nil) async throws {
+         guard let delegate = currentDelegate() else { throw TransportError.TransportNotFound }
+         command.identity?.identityVault = await identityVault(for: command.identity)
+-        if command.command == .response { try await delegate.consumeResponse(command: command) }
++        if let prepared { try await prepared.consume() }
++        else if command.command == .response { try await delegate.consumeResponse(command: command) }
+         else { try await delegate.consumeCommand(command: command) }
+     }
+ 
+diff --git a/Tests/CellBaseTests/BridgeChannelWebSocketTests.swift b/Tests/CellBaseTests/BridgeChannelWebSocketTests.swift
+index 787c5bc..e07c0f4 100644
+--- a/Tests/CellBaseTests/BridgeChannelWebSocketTests.swift
++++ b/Tests/CellBaseTests/BridgeChannelWebSocketTests.swift
+@@ -49,13 +49,26 @@ final class BridgeChannelWebSocketTests: XCTestCase {
+         try await protectedRead(multiplexed: true)
+     }
+ 
+-    private func protectedRead(multiplexed: Bool) async throws {
++    func testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket() async throws {
++        try await protectedRead(multiplexed: true, independentChannels: true)
++    }
++
++    private func protectedRead(multiplexed: Bool, independentChannels: Bool = false) async throws {
+         let oldResolver = CellBase.defaultCellResolver, oldVault = CellBase.defaultIdentityVault
+         defer { CellBase.defaultCellResolver = oldResolver; CellBase.defaultIdentityVault = oldVault }
+         let vault = MockIdentityVault()
+         let owner = await vault.identity(for: "loopback-client", makeNewIfNotFound: true)!
+         let trap = SigningTrapVault(); CellBase.defaultIdentityVault = trap
+         let cell = await GeneralCell(owner: owner.publicIdentitySnapshot())
++        let releaseHeldRead = SocketUpgradeBarrier()
++        let heldEntered = independentChannels ? expectation(description: "A entered actual Cell GET") : nil
++        if let heldEntered {
++            await cell.addInterceptForGet(requester: owner, key: "held") { _, _ in
++                heldEntered.fulfill()
++                await releaseHeldRead.wait()
++                return .string("late-value")
++            }
++        }
+         await cell.addInterceptForGet(requester: owner, key: "secret") { _, _ in .string("socket-value") }
+         let resolver = MockCellResolver(); CellBase.defaultCellResolver = resolver
+         try await resolver.registerNamedEmitCell(name: "Protected", emitCell: cell, scope: .template, identity: owner)
+@@ -103,7 +116,34 @@ final class BridgeChannelWebSocketTests: XCTestCase {
+             try await transport.setup(url, identity: owner)
+             let value = try await bridge.get(keypath: "secret", requester: owner)
+             XCTAssertEqual(value, .string("socket-value"))
+-            XCTAssertEqual(state.count, 1)
++            if let heldEntered, let mux {
++                let pending = Task { _ = try? await bridge.get(keypath: "held", requester: owner) }
++                await fulfillment(of: [heldEntered], timeout: 3)
++                let siblingFinished = expectation(description: "B completed protected GET while A awaits")
++                let sibling = Task {
++                    do {
++                        let otherTransport = try mux.channelTransport(targetEndpoint: "Protected")
++                        let other = try await BridgeBase(.init(owner: owner, transport: otherTransport,
++                            connection: .outbound, identityProofScopes: [
++                                .init(domain: cell.identityDomain, resource: cell.uuid)
++                            ]))
++                        try await other.setTransport(otherTransport, connection: .outbound)
++                        try await otherTransport.setup(url, identity: owner)
++                        let result = try await other.get(keypath: "secret", requester: owner)
++                        XCTAssertEqual(result, .string("socket-value"))
++                        siblingFinished.fulfill()
++                        await otherTransport.close()
++                    } catch { XCTFail("Independent protected read failed: \(error)") }
++                }
++                // The regression fails on the old physical dispatchTail. Always
++                // release the held Cell afterward so red runs cannot hang teardown.
++                await fulfillment(of: [siblingFinished], timeout: 3)
++                await transport.close()
++                await releaseHeldRead.resume()
++                await pending.value
++                await sibling.value
++            }
++            XCTAssertEqual(state.count, 1, "Both logical channels must share one admitted physical socket")
+             let signerCalls = await trap.calls; XCTAssertEqual(signerCalls, 0)
+             await transport.close()
+             await gate.close()
+@@ -113,6 +153,7 @@ final class BridgeChannelWebSocketTests: XCTestCase {
+             await app.server.shutdown()
+             try await app.asyncShutdown()
+         } catch {
++            await releaseHeldRead.resume()
+             for connection in state.gates { await connection.close() }
+             await app.server.shutdown()
+             try await app.asyncShutdown()
+diff --git a/Tests/CellBaseTests/VaporWebSocketAdmissionTests.swift b/Tests/CellBaseTests/VaporWebSocketAdmissionTests.swift
+index 4636093..7097713 100644
+--- a/Tests/CellBaseTests/VaporWebSocketAdmissionTests.swift
++++ b/Tests/CellBaseTests/VaporWebSocketAdmissionTests.swift
+@@ -19,6 +19,65 @@ final class VaporWebSocketAdmissionTests: XCTestCase {
+         return socket
+     }
+ 
++    func testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket() async throws {
++        let a = N30Consumer(), replacement = N30Consumer(), b = N30Consumer(), hold = N30Barrier()
++        a.holdFirst = hold
++        a.replyAfterCommand = true
++        let fixture = try await N30Socket.make(muxConsumers: ["A": [a, replacement], "B": [b]])
++        addTeardownBlock { await hold.release(); await fixture.close() }
++        try await fixture.authenticate()
++        try await fixture.openMuxChannel("A")
++        try await fixture.openMuxChannel("B")
++        _ = try await fixture.inject([fixture.muxCommand("get", channel: "A", value: 0)])
++        try await n30Eventually { a.values == [0] }
++        _ = try await fixture.inject([
++            fixture.muxCommand("get", channel: "A", value: 1),
++            fixture.muxCommand("get", channel: "B", value: 2),
++            fixture.muxCommand("closeChannel", channel: "A")
++        ])
++        // Both assertions must succeed BEFORE releasing the non-cooperative A.
++        try await n30Eventually { b.values == [2] && a.closes.value == 1 }
++        XCTAssertEqual(a.values, [0], "Queued A work must not run after retirement")
++        XCTAssertGreaterThanOrEqual(fixture.transport.receiveSnapshot.count, 1)
++        XCTAssertGreaterThanOrEqual(fixture.limits.outstandingWorkCount, 1,
++                                    "Closing a channel must retain its executing work quota")
++        XCTAssertEqual(fixture.gate.session.state, .authenticated)
++        try await fixture.openMuxChannel("A")
++        _ = try await fixture.inject([fixture.muxCommand("get", channel: "A", value: 5)])
++        try await n30Eventually { replacement.values == [5] }
++        await hold.release()
++        try await n30Eventually { fixture.transport.receiveSnapshot.count == 0 }
++        XCTAssertEqual(replacement.values, [5], "Queued old A must not reach the reused wire ID")
++        XCTAssertEqual(a.lateSendFailures.value, 1, "Retired A cannot publish its late result")
++        XCTAssertEqual(a.values, [0])
++        _ = try await fixture.inject([fixture.muxCommand("get", channel: "B", value: 3)])
++        try await n30Eventually { b.values == [2, 3] }
++        XCTAssertEqual(fixture.gate.session.state, .authenticated,
++                       "A's cancelled consumer must not close B's physical session")
++    }
++
++    func testMuxFlowOrderIsLocalToItsChannelOnSameSocket() async throws {
++        let a = N30Consumer(), b = N30Consumer(), hold = N30Barrier()
++        a.holdFirst = hold
++        let fixture = try await N30Socket.make(muxConsumers: ["A": [a], "B": [b]])
++        addTeardownBlock { await hold.release(); await fixture.close() }
++        try await fixture.authenticate()
++        try await fixture.openMuxChannel("A")
++        try await fixture.openMuxChannel("B")
++        _ = try await fixture.inject([fixture.muxFlow(0, channel: "A")])
++        try await n30Eventually { a.values == [0] }
++        _ = try await fixture.inject([
++            fixture.muxFlow(1, channel: "A"), fixture.muxFlow(2, channel: "A"),
++            fixture.muxFlow(10, channel: "B"), fixture.muxFlow(11, channel: "B")
++        ])
++        try await n30Eventually { b.values == [10, 11] }
++        XCTAssertEqual(a.values, [0])
++        XCTAssertGreaterThanOrEqual(fixture.transport.receiveSnapshot.count, 3)
++        await hold.release()
++        try await n30Eventually { a.values == [0, 1, 2] && fixture.transport.receiveSnapshot.count == 0 }
++        XCTAssertEqual(fixture.gate.session.state, .authenticated)
++    }
++
+     func testPreProofBurstIsAdmittedBeforeTasksAndQuotaPlusOneClosesOnlyOffender() async throws {
+         let budget = VaporBridgeReceiveBudget()
+         let fixture = try await make(budget: budget)
+@@ -281,22 +340,52 @@ private actor N30Barrier {
+ private final class N30Consumer: BridgeDelegateProtocol, @unchecked Sendable {
+     let uuid = UUID().uuidString
+     let signs = N30Counter(), otherResponses = N30Counter()
++    let closes = N30Counter(), lateSendFailures = N30Counter()
++    var replyAfterCommand = false
++    var channelTransport: BridgeTransportProtocol?
+     private let lock = NSLock()
+     private var received: [Int] = []
+     var holdFirst: N30Barrier?
+     var values: [Int] { lock.withLock { received } }
+-    func consumeCommand(command: BridgeCommand) async throws { if command.command == .sign { signs.increment() } }
++    func consumeCommand(command: BridgeCommand) async throws {
++        if command.command == .sign { signs.increment(); return }
++        guard command.command == .get, case let .string(key)? = command.payload, let value = Int(key) else { return }
++        await record(value)
++        if replyAfterCommand, let channelTransport {
++            do {
++                try await channelTransport.sendData(JSONEncoder().encode(BridgeCommand(
++                    cmd: "response", payload: .integer(value), cid: command.cid)))
++            } catch { lateSendFailures.increment(); throw error }
++        }
++    }
+     func consumeResponse(command: BridgeCommand) async throws {
+         guard case .flowElement(let flow) = command.payload, let value = Int(flow.title ?? "") else { otherResponses.increment(); return }
++        await record(value)
++    }
++    private func record(_ value: Int) async {
+         let first = lock.withLock { received.append(value); return received.count == 1 }
+         if first { await holdFirst?.wait() }
+     }
+     func sendCommand(command: Command, identity: Identity, payload: ValueType?) async {}
+     func sendSetValueState(for requestedKey: String, setValueState: SetValueState) async {}
+-    func pushError(errorMessage: String?, error: Error?) async {}
++    func pushError(errorMessage: String?, error: Error?) async { closes.increment() }
+     func ready() async throws {}
+ }
+ 
++private final class N35MuxTargets: @unchecked Sendable {
++    private let lock = NSLock()
++    private var consumers: [String: [N30Consumer]]
++    init(_ consumers: [String: [N30Consumer]]) { self.consumers = consumers }
++    func take(_ target: String) -> N30Consumer? {
++        lock.withLock {
++            guard var pending = consumers[target], !pending.isEmpty else { return nil }
++            let result = pending.removeFirst()
++            consumers[target] = pending
++            return result
++        }
++    }
++}
++
+ private final class N30Socket: @unchecked Sendable {
+     let group: MultiThreadedEventLoopGroup
+     let listener: any Channel
+@@ -320,10 +409,12 @@ private final class N30Socket: @unchecked Sendable {
+         self.physicalCloses = physicalCloses; self.limits = limits; self.endpoint = endpoint
+     }
+ 
+-    static func make(budget: VaporBridgeReceiveBudget? = nil, holdPhysicalClose: N30Barrier? = nil) async throws -> N30Socket {
++    static func make(budget: VaporBridgeReceiveBudget? = nil, holdPhysicalClose: N30Barrier? = nil,
++                     muxConsumers: [String: [N30Consumer]]? = nil) async throws -> N30Socket {
+         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+         let result = group.next().makePromise(of: (any Channel, VaporBridgeTransport, BridgeChannelTransport).self)
+         let consumer = N30Consumer(), closes = N30Counter(), limits = BridgeChannelLimits()
++        let muxTargets = muxConsumers.map(N35MuxTargets.init)
+         let owner = await MockIdentityVault().identity(for: UUID().uuidString, makeNewIfNotFound: true)!
+         let endpoint = try BridgeChannelAuthentication.Endpoint(url: URL(string: "wss://n30.example/bridge")!, domain: "bridge")
+         let listener = try await ServerBootstrap(group: group).childChannelInitializer { channel in
+@@ -341,7 +432,14 @@ private final class N30Socket: @unchecked Sendable {
+                         transport = VaporBridgeTransport(webSocket: socket, closeUnderlyingChannel: close)
+                     }
+                     do {
+-                        let gate = try BridgeChannelTransport(underlying: transport, endpoint: endpoint, limits: limits, source: "loopback") { _, _ in consumer }
++                        let gate = try BridgeChannelTransport(underlying: transport, endpoint: endpoint, limits: limits, source: "loopback") { transport, _ in
++                            guard let muxTargets else { return consumer }
++                            return BridgeMultiplexServerSession(physicalTransport: transport) { target, _, channel in
++                                guard let consumer = muxTargets.take(target) else { throw BridgeMultiplexError.invalidChannel }
++                                consumer.channelTransport = channel
++                                return consumer
++                            }
++                        }
+                         result.succeed((channel, transport, gate))
+                     } catch { result.fail(error) }
+                 }
+@@ -363,6 +461,27 @@ private final class N30Socket: @unchecked Sendable {
+         try await n30Eventually { self.gate.session.state == .authenticated && self.transport.receiveSnapshot.count == 0 }
+     }
+ 
++    func openMuxChannel(_ id: String) async throws {
++        let retained = transport.receiveSnapshot.count
++        _ = try await inject([JSONEncoder().encode(BridgeCommand(cmd: "openChannel",
++            identity: owner.publicIdentitySnapshot(), payload: nil, cid: 1,
++            protocolVersion: 2, channelID: id, targetEndpoint: id))])
++        try await n30Eventually { self.transport.receiveSnapshot.count <= retained }
++        XCTAssertEqual(gate.session.state, .authenticated)
++    }
++
++    func muxCommand(_ command: String, channel: String, value: Int = 0) throws -> Data {
++        try JSONEncoder().encode(BridgeCommand(cmd: command, identity: owner.publicIdentitySnapshot(),
++            payload: command == "get" ? .string(String(value)) : nil, cid: 10 + value,
++            protocolVersion: 2, channelID: channel))
++    }
++
++    func muxFlow(_ value: Int, channel: String) throws -> Data {
++        var command = try JSONDecoder().decode(BridgeCommand.self, from: Self.flow(value))
++        command.protocolVersion = 2; command.channelID = channel
++        return try JSONEncoder().encode(command)
++    }
++
+     @discardableResult
+     func inject(_ data: [Data], binary: Bool? = nil) async throws -> (count: Int, bytes: Int, stopped: Bool) {
+         try await channel.eventLoop.submit { [self] in

@@ -1,0 +1,171 @@
+{
+  "date": "2026-10-03",
+  "pr_url": "https://github.com/Digipomps/CellProtocol/pull/53",
+  "pr_head": "3824cf84b58903f900a49b0987ee660085f3d875",
+  "n35_candidate": "990fffe09e8bdd8058b1d56e1cc17fca6ad71dce",
+  "n35_tested_head": "7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1",
+  "n35_runtime_commit": "091c85b",
+  "n35_workflow_run": 37049974688,
+  "n35_job": 110980652763,
+  "n35_artifact": 11246362978,
+  "patch_sha256": "fc907ee74292e79202fc0beaf434c6c596aece95547a922ba91608a6e255b05b",
+  "patch_check_exit": 0,
+  "patch_applied": false,
+  "workflow_diff_empty": true,
+  "files": [
+    {
+      "path": "Documentation/VaporWebSocketAdmission.md",
+      "candidate_sha256": "f2ea74cd6140d08a3133b6f4dd77d74b4bd76bee3a7277202643530a2e0721df"
+    },
+    {
+      "path": "Scripts/run-bridge-mux-n35-ci.py",
+      "candidate_sha256": "3020bccfab6bf659a83f8994aff00e973d0c15f31f0a9ef63d23519f6a56bee2"
+    },
+    {
+      "path": "Scripts/test_bridge_mux_n35_ci.py",
+      "candidate_sha256": "a8fba6fe66d6e1d1926a896b9e5f06fb593a2b904c8f53b5b7c3f0d7ac0632d1"
+    },
+    {
+      "path": "Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift",
+      "candidate_sha256": "90951a973d69dcb88479065310f7103830dc41510f356ebd55705bbc4039c3af"
+    },
+    {
+      "path": "Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift",
+      "candidate_sha256": "2ddfbc212193fa04690859a2e93e22854ec07a497a16b94aa708626924512de9"
+    },
+    {
+      "path": "Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift",
+      "candidate_sha256": "5913bbba3758e29adc0a8e96f1cf8fad5d06501f20c8c9187034e060dbbbc943"
+    },
+    {
+      "path": "Tests/CellBaseTests/BridgeChannelWebSocketTests.swift",
+      "candidate_sha256": "a6f793fb7805055b31da3e345fe3a39b119068c3b451a3c2eae8143ff83e1269"
+    },
+    {
+      "path": "Tests/CellBaseTests/VaporWebSocketAdmissionTests.swift",
+      "candidate_sha256": "f717a26761fbcdf104bc44cfad6b787641c6d0ba6c1f6434b4cefa35adcf6648"
+    }
+  ],
+  "local_build_gate": {
+    "exit": 75,
+    "free_gib": 56.5,
+    "reserve_gib": 10,
+    "projected_gib": 46.5,
+    "projected_percent": 5,
+    "minimum_gib": 40,
+    "minimum_percent": 10
+  },
+  "new_swift_tests_run": false,
+  "runtime_modified": false,
+  "push_merge_deploy": false,
+  "raw_ci_test_counts_verified": true,
+  "ci_source_hashes_match_exported_candidate": true,
+  "ci_result": {
+    "base": "3824cf84b58903f900a49b0987ee660085f3d875",
+    "candidate": "7ef06e7541d57561f04d1a3ca8d2ced44cbd0eb1",
+    "internal_deadline_seconds": 1320,
+    "steps": [
+      {
+        "name": "original-regressions",
+        "command": [
+          "swift",
+          "test",
+          "--disable-automatic-resolution",
+          "--jobs",
+          "2",
+          "--filter",
+          "testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket|testMuxFlowOrderIsLocalToItsChannelOnSameSocket|testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket"
+        ],
+        "exit": 1,
+        "seconds": 515.343,
+        "timed_out": false
+      },
+      {
+        "name": "fixed-regressions",
+        "command": [
+          "swift",
+          "test",
+          "--disable-automatic-resolution",
+          "--jobs",
+          "2",
+          "--filter",
+          "testMuxHeldOperationAllowsSiblingAndSelectiveCloseOnSameSocket|testMuxFlowOrderIsLocalToItsChannelOnSameSocket|testHeldCellDoesNotBlockAnotherProtectedReadOnSameWebSocket"
+        ],
+        "exit": 0,
+        "seconds": 101.525,
+        "timed_out": false
+      },
+      {
+        "name": "fixed-full-suite",
+        "command": [
+          "swift",
+          "test",
+          "--disable-automatic-resolution",
+          "--jobs",
+          "2"
+        ],
+        "exit": 0,
+        "seconds": 75.517,
+        "timed_out": false
+      },
+      {
+        "name": "fixed-tsan",
+        "command": [
+          "swift",
+          "test",
+          "--disable-automatic-resolution",
+          "--jobs",
+          "2",
+          "--sanitize",
+          "thread",
+          "--filter",
+          "VaporWebSocketAdmissionTests|BridgeChannelWebSocketTests|BridgeMultiplexingTests|BridgeMuxSendLifetimeTests|BridgeResponseLifetimeTests|BridgeFeedAndRPCOrderingTests|BridgeChannelSequenceTests"
+        ],
+        "exit": 0,
+        "seconds": 414.884,
+        "timed_out": false
+      }
+    ],
+    "completed": true,
+    "source_hashes": {
+      "Sources/CellBase/Cells/Bridging/BridgeChannelTransport.swift": "90951a973d69dcb88479065310f7103830dc41510f356ebd55705bbc4039c3af",
+      "Sources/CellBase/Cells/Bridging/BridgeMultiplexing.swift": "2ddfbc212193fa04690859a2e93e22854ec07a497a16b94aa708626924512de9",
+      "Sources/CellVapor/CloudBridge/VaporBridgeTransport.swift": "5913bbba3758e29adc0a8e96f1cf8fad5d06501f20c8c9187034e060dbbbc943"
+    },
+    "original_regressions_reproduced": true,
+    "elapsed_seconds": 1107.538,
+    "candidate_sources_restored": true
+  },
+  "ci_raw_logs": {
+    "fixed-full-suite.log": {
+      "sha256": "fcf1ff8660c4a6aad228103e07a489f31d6f05fa1f584fb6690475535d56bdfc",
+      "last_xctest_summary": "Executed 1539 tests, with 5 tests skipped and 0 failures (0 unexpected) in 72.684 (73.033) seconds"
+    },
+    "fixed-tsan.log": {
+      "sha256": "47f3b4fb2102cafab0ff80bb49b219f313e94b73be3d7142cf31b06a3bd30e2e",
+      "last_xctest_summary": "Executed 55 tests, with 0 failures (0 unexpected) in 7.438 (7.482) seconds"
+    },
+    "original-regressions.log": {
+      "sha256": "180455544d5a1e5cb062262dd741cfd8ff0f88db84b1ca3f8f0cd173f5201eed",
+      "last_xctest_summary": "Executed 3 tests, with 6 failures (2 unexpected) in 15.357 (15.363) seconds"
+    },
+    "fixed-regressions.log": {
+      "sha256": "b83ade541ca03f5a14867bf840d9ad929bf56c4e587741b4189f9be84e126e90",
+      "last_xctest_summary": "Executed 3 tests, with 0 failures (0 unexpected) in 0.469 (0.481) seconds"
+    }
+  },
+  "artifact_zip_sha256": "77d3e207039ffe5807b5d6c35b95a8e42c5820a5e26edf212a6b265b17c7f0a2",
+  "local_orchestration_tests": {
+    "count": 9,
+    "failures": 0,
+    "runtime_evidence": false
+  },
+  "learning": {
+    "id": "L-2026-10-03-bridge-native-latency-boundaries",
+    "applied": true,
+    "synced": true,
+    "global_strict_check_exit": 1,
+    "unrelated_open": 2,
+    "unrelated_unsynced": 12
+  }
+}

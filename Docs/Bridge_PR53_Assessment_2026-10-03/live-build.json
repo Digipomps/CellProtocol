@@ -1,0 +1,33 @@
+{
+  "measured_at": "2026-10-03T11:01:20.027359+00:00",
+  "results": [
+    {
+      "url": "https://staging.haven.digipomps.org/health/build",
+      "http": 200,
+      "body": {
+        "app_revision": "415ea3d278dc85be5547c137d917aa343dadb38a",
+        "environment": "staging",
+        "dimymicropayments_revision": "aa3d10d17b90f692e50343232961c3dfd8a66323",
+        "dimymint_revision": "2dcefac5c21a0b54e4e8677452d591b6169c2057",
+        "cellprotocol_revision": "9c60001ac53abc35ba7ad6e2c0efa2a79ab2a366",
+        "build_timestamp": "2026-09-30T08:13:00Z",
+        "package_resolved_source": "/app/BuildMetadata/Package.resolved",
+        "status": "ok"
+      }
+    },
+    {
+      "url": "https://haven.digipomps.org/health/build",
+      "http": 200,
+      "body": {
+        "package_resolved_source": "/app/BuildMetadata/Package.resolved",
+        "dimymicropayments_revision": "836ba8e6d71663d78836e2ec67a1e6f38bd8655b",
+        "cellprotocol_revision": "473357cf4efee831cb3b55ae87bc921d4bb63c10",
+        "app_revision": "18c14c32cb6e2957c1d13a20a4b2d97ece2f02b6",
+        "status": "ok",
+        "dimymint_revision": "af41630bbc01cece2a26f3004fdf6f83724ca77e",
+        "build_timestamp": "2026-09-25T09:20:21Z",
+        "environment": "production"
+      }
+    }
+  ]
+}
