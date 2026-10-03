@@ -129,3 +129,11 @@ capacity gate; only syntax/static and Python checks ran locally. The full-suite
 skips include optional fixture/worker tests and native Multipeer coverage.
 This evidence addresses established-channel N35 behavior, not other PR53
 findings, iOS Nearby Interaction, a production TLS route or deployment.
+
+Integration check, 2026-10-03: `Sources`, `Tests`, `Package.swift` and
+`Package.resolved` at `990fffe` have identical Git objects to the tested head
+`7ef06e7`. The nine orchestration tests passed again after local integration.
+This reuses the recorded Swift evidence; it is not a new local Swift run.
+Scanner findings N32, N36, N37, N38 and N39 remain open. Physical Native
+NI/UWB acceptance is explicitly deferred and remains unverified. Consumer
+integration and deployment require their own exact-revision evidence.
