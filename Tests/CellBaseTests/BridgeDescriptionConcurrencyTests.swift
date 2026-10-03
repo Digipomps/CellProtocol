@@ -63,6 +63,8 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
     func testOverlappingDescriptionResponsesAndAdvertisementsRetainCoherentSnapshots() async throws {
         let owner = Identity(UUID().uuidString, displayName: "local owner", identityVault: nil)
         let bridge = BridgeBase(owner: owner)
+        try await bridge.setTransport(MockBridgeTransport(), connection: .outbound)
+        try await authenticateBridgeFixture(bridge, principal: owner, signer: MockIdentityVault())
         try await Self.deliver(.description(Self.makeDescriptionFixture()), to: bridge)
         let workers = 8
         let iterations = 128
@@ -108,6 +110,8 @@ final class BridgeDescriptionConcurrencyTests: XCTestCase {
     func testUnexpectedDescriptionPayloadDoesNotReplaceTheLastAcceptedSnapshot() async throws {
         let owner = Identity(UUID().uuidString, displayName: "local owner", identityVault: nil)
         let bridge = BridgeBase(owner: owner)
+        try await bridge.setTransport(MockBridgeTransport(), connection: .outbound)
+        try await authenticateBridgeFixture(bridge, principal: owner, signer: MockIdentityVault())
         let first = Self.makeDescriptionFixture()
         try await Self.deliver(.description(first), to: bridge)
         let retained = try await bridge.advertise(for: owner)

@@ -1432,7 +1432,8 @@ public class CellResolver: CellResolverProtocol {
                 routeSnapshot: routeSnapshot
             )
 
-            if let cachedBridge = withStateLock({ remoteCellBridgeCache[cacheKey]?.emit }) {
+            if let cachedBridge = withStateLock({ remoteCellBridgeCache[cacheKey]?.emit }),
+               (cachedBridge as? BridgeBase)?.hasAuthenticatedChannel == true {
                 try Task.checkCancellation()
                 guard isCurrentRemoteCellHostRoute(routeSnapshot) else {
                     if requiredRemoteRoute != nil {
@@ -2196,7 +2197,8 @@ public class CellResolver: CellResolverProtocol {
     ) async throws -> Emit {
         let cacheKey = legacyBridgeCacheKey(endpoint: endpoint, principal: principal)
 
-        if let cachedBridge = withStateLock({ remoteBridgeCache[cacheKey] }) {
+        if let cachedBridge = withStateLock({ remoteBridgeCache[cacheKey] }),
+           (cachedBridge as? BridgeBase)?.hasAuthenticatedChannel == true {
             return cachedBridge
         }
 
@@ -2242,13 +2244,17 @@ public class CellResolver: CellResolverProtocol {
         }
         
         
-        let transport = try transportForScheme(transportScheme)// Find available transport for protocol
+        let physicalTransport = try transportForScheme(transportScheme)
+        let bridgeID = UUID().uuidString
+        endpointUrl.appendPathComponent(bridgeID)
+        let transport = try BridgeChannelTransport(underlying: physicalTransport,
+            endpoint: .init(url: endpointUrl, domain: "bridge",
+                allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
         // TODO: Consider refactoring 
-        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), transport: transport, connection: .outbound)
+        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), uuid: bridgeID, transport: transport, connection: .outbound)
         let cellBridge = try await BridgeBase(bridgeConfig)
         try await cellBridge.setTransport(transport, connection: .outbound)
         
-        endpointUrl.appendPathComponent(cellBridge.uuid)
         try await transport.setup(endpointUrl, identity: identity)
         do {
             try await cellBridge.retrieveProxyRepresentation(for: identity)
@@ -2286,12 +2292,15 @@ public class CellResolver: CellResolverProtocol {
 
         switch route.connectionSharing {
         case .dedicated:
-            transport = try transportForScheme(transportScheme)
+            let physicalTransport = try transportForScheme(transportScheme)
             finalizedConnectionURL = try remoteWebSocketConnectionURL(
                 from: endpointUrl,
                 publisherUUID: cellBridgeUUID,
                 route: route
             )
+            transport = try BridgeChannelTransport(underlying: physicalTransport,
+                endpoint: .init(url: finalizedConnectionURL, domain: "bridge",
+                    allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
         case .multiplexedV2:
             guard let transportType = withStateLock({ transports[transportScheme] }) else {
                 throw TransportError.TransportNotFound
@@ -2310,7 +2319,11 @@ public class CellResolver: CellResolverProtocol {
             transport = try remoteBridgeConnectionPool.channelTransport(
                 for: key,
                 targetEndpoint: trimmedSlashes(endpointUrl.path),
-                physicalTransportFactory: { transportType.new() }
+                physicalTransportFactory: {
+                    try BridgeChannelTransport(underlying: transportType.new(),
+                        endpoint: .init(url: finalizedConnectionURL, domain: "bridge",
+                            allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
+                }
             )
         }
         let bridgeConfig = BridgeBase.Config(

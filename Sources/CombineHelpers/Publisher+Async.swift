@@ -35,6 +35,27 @@ public enum AsyncError: Error, LocalizedError {
 private final class AsyncPublisherOneShot<Output> {
     private let lock = NSLock()
     private var didResume = false
+    private var cancellable: AnyCancellable?
+    private var timeout: DispatchWorkItem?
+
+    // A publisher may deliver synchronously inside sink, or on another thread
+    // before sink returns. Late installation must cancel, never retain a
+    // subscription after its one-shot result has already completed.
+    func install(_ value: AnyCancellable) {
+        lock.lock()
+        let finished = didResume
+        if !finished { cancellable = value }
+        lock.unlock()
+        if finished { value.cancel() }
+    }
+
+    func installTimeout(_ value: DispatchWorkItem) {
+        lock.lock()
+        let finished = didResume
+        if !finished { timeout = value }
+        lock.unlock()
+        if finished { value.cancel() }
+    }
 
     func resume(
         _ continuation: CheckedContinuation<Output, Error>,
@@ -46,7 +67,13 @@ private final class AsyncPublisherOneShot<Output> {
             return false
         }
         didResume = true
+        let subscription = cancellable, timer = timeout
+        cancellable = nil; timeout = nil
         lock.unlock()
+
+        // Cancellation can call back synchronously; do not hold the state lock.
+        timer?.cancel()
+        subscription?.cancel()
 
         switch result {
         case .success(let output):
@@ -62,40 +89,23 @@ public extension Publisher {
     func getOneWithTimeout(_ timeout: Int = 30) async throws -> Output {
         try await withCheckedThrowingContinuation { continuation in
             let oneShot = AsyncPublisherOneShot<Output>()
-            var cancellable: AnyCancellable?
-
             let timeoutWorkItem = DispatchWorkItem {
-                if oneShot.resume(continuation, with: .failure(AsyncError.timeout)) {
-                    cancellable?.cancel()
-                    cancellable = nil
-                }
+                _ = oneShot.resume(continuation, with: .failure(AsyncError.timeout))
             }
-
-            cancellable = first().sink(
+            oneShot.installTimeout(timeoutWorkItem)
+            oneShot.install(first().sink(
                 receiveCompletion: { completion in
                     switch completion {
                     case .finished:
-                        if oneShot.resume(continuation, with: .failure(AsyncError.finishedWithoutValue)) {
-                            timeoutWorkItem.cancel()
-                            cancellable?.cancel()
-                            cancellable = nil
-                        }
+                        _ = oneShot.resume(continuation, with: .failure(AsyncError.finishedWithoutValue))
                     case .failure(let error):
-                        if oneShot.resume(continuation, with: .failure(AsyncError.other(error))) {
-                            timeoutWorkItem.cancel()
-                            cancellable?.cancel()
-                            cancellable = nil
-                        }
+                        _ = oneShot.resume(continuation, with: .failure(AsyncError.other(error)))
                     }
                 },
                 receiveValue: { output in
-                    if oneShot.resume(continuation, with: .success(output)) {
-                        timeoutWorkItem.cancel()
-                        cancellable?.cancel()
-                        cancellable = nil
-                    }
+                    _ = oneShot.resume(continuation, with: .success(output))
                 }
-            )
+            ))
 
             DispatchQueue.global().asyncAfter(
                 deadline: .now() + .seconds(timeout),
@@ -107,30 +117,19 @@ public extension Publisher {
     func getOneWithoutTimeout() async throws -> Output {
         try await withCheckedThrowingContinuation { continuation in
             let oneShot = AsyncPublisherOneShot<Output>()
-            var cancellable: AnyCancellable?
-
-            cancellable = first().sink(
+            oneShot.install(first().sink(
                 receiveCompletion: { completion in
                     switch completion {
                     case .finished:
-                        if oneShot.resume(continuation, with: .failure(AsyncError.finishedWithoutValue)) {
-                            cancellable?.cancel()
-                            cancellable = nil
-                        }
+                        _ = oneShot.resume(continuation, with: .failure(AsyncError.finishedWithoutValue))
                     case .failure(let error):
-                        if oneShot.resume(continuation, with: .failure(AsyncError.other(error))) {
-                            cancellable?.cancel()
-                            cancellable = nil
-                        }
+                        _ = oneShot.resume(continuation, with: .failure(AsyncError.other(error)))
                     }
                 },
                 receiveValue: { output in
-                    if oneShot.resume(continuation, with: .success(output)) {
-                        cancellable?.cancel()
-                        cancellable = nil
-                    }
+                    _ = oneShot.resume(continuation, with: .success(output))
                 }
-            )
+            ))
         }
     }
 }

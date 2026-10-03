@@ -129,6 +129,8 @@ public struct NearbyProbeSession: Sendable {
         resultsByRemoteUUID[remoteUUID] = result
     }
 
+    mutating func removeResult(for remoteUUID: String) { resultsByRemoteUUID[remoteUUID] = nil }
+
     public mutating func reset() {
         resultsByRemoteUUID.removeAll()
         handledRequestIDs.removeAll()

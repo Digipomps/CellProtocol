@@ -81,13 +81,18 @@ final class BridgeTests: XCTestCase {
             BlockingRouteBridgeTransport()
         }
 
-        func setDelegate(_ delegate: BridgeDelegateProtocol) {}
+        private weak var delegate: BridgeDelegateProtocol?
+        private let handshake = ResolverHandshakeFixture()
+        func setDelegate(_ delegate: BridgeDelegateProtocol) { self.delegate = delegate }
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
+            try handshake.configure(endpointURL)
             await Self.setupGate.recordAndWait(endpointURL, identity: identity)
         }
 
-        func sendData(_ data: Data) async throws {}
+        func sendData(_ data: Data) async throws {
+            _ = try await handshake.consume(JSONDecoder().decode(BridgeCommand.self, from: data), delegate: delegate)
+        }
 
         func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
             CellBase.defaultIdentityVault ?? MockIdentityVault()
@@ -122,16 +127,21 @@ final class BridgeTests: XCTestCase {
             }
         }
 
-        func setDelegate(_ delegate: BridgeDelegateProtocol) {}
+        private weak var delegate: BridgeDelegateProtocol?
+        private let handshake = ResolverHandshakeFixture()
+        func setDelegate(_ delegate: BridgeDelegateProtocol) { self.delegate = delegate }
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
+            try handshake.configure(endpointURL)
             Self.stateLock.withLock {
                 Self.lastSetupURL = endpointURL
                 Self.setupURLs.append(endpointURL)
             }
         }
 
-        func sendData(_ data: Data) async throws {}
+        func sendData(_ data: Data) async throws {
+            _ = try await handshake.consume(JSONDecoder().decode(BridgeCommand.self, from: data), delegate: delegate)
+        }
 
         func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
             CellBase.defaultIdentityVault ?? MockIdentityVault()
@@ -331,6 +341,7 @@ final class BridgeTests: XCTestCase {
         let config = BridgeBase.Config(owner: owner, transport: transport, connection: .inbound(publisherUuid: "publisher-1"))
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "publisher-1"))
+        try await authenticateBridgeFixture(bridge, principal: owner)
 
         let command = BridgeCommand(cmd: Command.admit.rawValue, identity: owner, payload: nil, cid: 42)
         try await bridge.consumeCommand(command: command)
@@ -363,6 +374,7 @@ final class BridgeTests: XCTestCase {
         let config = BridgeBase.Config(owner: bridgeOwner, transport: transport, connection: .inbound(publisherUuid: "Vault"))
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Vault"))
+        try await authenticateBridgeFixture(bridge, principal: requester)
 
         let command = BridgeCommand(cmd: Command.admit.rawValue, identity: requester, payload: nil, cid: 7)
         try await bridge.consumeCommand(command: command)
@@ -410,6 +422,7 @@ final class BridgeTests: XCTestCase {
         )
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .inbound(publisherUuid: "Vault"))
+        try await authenticateBridgeFixture(bridge, principal: requester)
 
         let command = BridgeCommand(
             cmd: Command.get.rawValue,
@@ -627,7 +640,7 @@ final class BridgeTests: XCTestCase {
             BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
         )
         try await bridge.setTransport(transport, connection: .outbound)
-        try await markBridgeReady(bridge, identity: owner)
+        try await authenticateBridgeFixture(bridge, principal: owner, signer: backingVault)
         let challenge = try identityChallengeData(for: owner, nonce: "always-true-vault")
 
         let publisher = bridge.signMessageForIdentity(messageData: challenge, identity: owner)
@@ -674,32 +687,11 @@ final class BridgeTests: XCTestCase {
             BridgeBase.Config(owner: owner, transport: transport, connection: .outbound)
         )
         try await bridge.setTransport(transport, connection: .outbound)
-        try await markBridgeReady(bridge, identity: owner)
-        let challenge = try identityChallengeData(for: owner, nonce: "wrong-curve-metadata")
-        let ed25519Signature = try await vault.signMessageForIdentity(
-            messageData: challenge,
-            identity: owner
-        )
-
-        let publisher = bridge.signMessageForIdentity(messageData: challenge, identity: owner)
-        async let signature = publisher.getOneWithTimeout(1)
-        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
-        let request = try XCTUnwrap(sentCommands.first)
-        try await bridge.consumeResponse(
-            command: BridgeCommand(
-                cmd: Command.response.rawValue,
-                identity: owner,
-                payload: .signature(ed25519Signature),
-                cid: request.cid
-            )
-        )
-
         do {
-            _ = try await signature
-            XCTFail("Expected algorithm/curve metadata mismatch to be rejected")
-        } catch {
-            XCTAssertTrue(String(describing: error).contains("signingFailed"))
-        }
+            try await markBridgeReady(bridge, identity: owner)
+            XCTFail("Unsupported algorithm metadata must fail before admission")
+        } catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .malformed) }
+        XCTAssertTrue(transport.sentData.isEmpty)
     }
 
     func testBridgeBaseSignMessageRejectsRawPayloadBeforeSending() async throws {
@@ -802,16 +794,10 @@ final class BridgeTests: XCTestCase {
             payload: .signData(Data("raw inbound sign".utf8)),
             cid: 99
         )
-        try await bridge.consumeCommand(command: command)
+        do { try await bridge.consumeCommand(command: command); XCTFail("Pre-auth signing must fail") }
+        catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .unavailable) }
+        XCTAssertTrue(transport.sentData.isEmpty)
 
-        XCTAssertEqual(transport.sentData.count, 1)
-        let response = try JSONDecoder().decode(BridgeCommand.self, from: transport.sentData[0])
-        XCTAssertEqual(response.command, .response)
-        if case let .string(message) = response.payload {
-            XCTAssertTrue(message.contains("signing denied"))
-        } else {
-            XCTFail("Expected signing denied string response")
-        }
     }
 
     func testInboundBridgeSignCommandRejectsUnsolicitedLocalIdentityChallenge() async throws {
@@ -843,14 +829,12 @@ final class BridgeTests: XCTestCase {
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: owner)
         let challenge = try identityChallengeData(for: other, nonce: "wrong-principal")
-        try await bridge.consumeCommand(command: BridgeCommand(
-            cmd: Command.sign.rawValue, identity: other.publicIdentitySnapshot(), payload: .signData(challenge), cid: 311
-        ))
-        let commands = try await waitUntilTransportHasSent(1, transport: transport)
-        guard case let .string(reason) = commands.last?.payload else {
-            return XCTFail("Finding a different principal in a local vault must not authorize signing")
-        }
-        XCTAssertTrue(reason.contains("signing denied"))
+        do {
+            try await bridge.consumeCommand(command: BridgeCommand(cmd: Command.sign.rawValue,
+                identity: other.publicIdentitySnapshot(), payload: .signData(challenge), cid: 311))
+            XCTFail("A different local key must not replace the authenticated principal")
+        } catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .identityMismatch) }
+        XCTAssertTrue(transport.sentData.isEmpty)
     }
 
     func testInboundBridgeSignCommandSignsKnownLocalIdentity() async throws {
@@ -1013,17 +997,10 @@ final class BridgeTests: XCTestCase {
             BridgeCommand.self,
             from: JSONEncoder().encode(wireCommand)
         )
-        try await bridge.consumeCommand(command: decodedCommand)
+        do { try await bridge.consumeCommand(command: decodedCommand); XCTFail("Another principal must fail") }
+        catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .identityMismatch) }
+        XCTAssertTrue(transport.sentData.isEmpty)
 
-        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
-        let response = try XCTUnwrap(sentCommands.first)
-        XCTAssertEqual(response.command, .response)
-        XCTAssertEqual(response.cid, 102)
-        if case let .string(message) = response.payload {
-            XCTAssertTrue(message.contains("no active local operation"))
-        } else {
-            XCTFail("Expected signing denied string response")
-        }
     }
 
     func testInboundBridgeSignCommandRejectsValidChallengeBeforeReady() async throws {
@@ -1042,34 +1019,28 @@ final class BridgeTests: XCTestCase {
             payload: .signData(challenge),
             cid: 100
         )
-        try await bridge.consumeCommand(command: command)
-
-        XCTAssertEqual(transport.sentData.count, 1)
-        let response = try JSONDecoder().decode(BridgeCommand.self, from: transport.sentData[0])
-        XCTAssertEqual(response.command, .response)
-        if case let .string(message) = response.payload {
-            XCTAssertTrue(message.contains("not ready"))
-        } else {
-            XCTFail("Expected signing denied string response")
-        }
+        do { try await bridge.consumeCommand(command: command); XCTFail("Pre-auth sign accepted") }
+        catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .unavailable) }
+        XCTAssertTrue(transport.sentData.isEmpty)
     }
 
     func testBridgeBaseAdmitRoutesConcurrentResponsesByCommandID() async throws {
         let transport = MockBridgeTransport()
         let bridgeOwner = TestFixtures.makeIdentity(displayName: "bridge-owner")
-        let firstOwner = TestFixtures.makeIdentity(displayName: "first-owner", uuid: TestFixtures.fixedUUID1)
-        let secondOwner = TestFixtures.makeIdentity(displayName: "second-owner", uuid: TestFixtures.fixedUUID2)
+        let firstOwner = bridgeOwner
+        let secondOwner = bridgeOwner
         let config = BridgeBase.Config(owner: bridgeOwner, transport: transport, connection: .outbound)
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
         try await markBridgeReady(bridge, identity: bridgeOwner)
 
         async let firstState = bridge.admit(context: ConnectContext(source: nil, target: nil, identity: firstOwner))
+        _ = try await waitUntilTransportHasSent(1, transport: transport)
         async let secondState = bridge.admit(context: ConnectContext(source: nil, target: nil, identity: secondOwner))
 
         let sentCommands = try await waitUntilTransportHasSent(2, transport: transport)
-        let firstCommand = try XCTUnwrap(sentCommands.first(where: { $0.identity?.uuid == firstOwner.uuid }))
-        let secondCommand = try XCTUnwrap(sentCommands.first(where: { $0.identity?.uuid == secondOwner.uuid }))
+        let firstCommand = try XCTUnwrap(sentCommands.first)
+        let secondCommand = try XCTUnwrap(sentCommands.last)
 
         try await bridge.consumeResponse(
             command: BridgeCommand(
@@ -1097,8 +1068,8 @@ final class BridgeTests: XCTestCase {
     func testBridgeBaseAgreementRoutesConcurrentResponsesByCommandID() async throws {
         let transport = MockBridgeTransport()
         let bridgeOwner = TestFixtures.makeIdentity(displayName: "bridge-owner")
-        let firstOwner = TestFixtures.makeIdentity(displayName: "first-owner", uuid: TestFixtures.fixedUUID1)
-        let secondOwner = TestFixtures.makeIdentity(displayName: "second-owner", uuid: TestFixtures.fixedUUID2)
+        let firstOwner = bridgeOwner
+        let secondOwner = bridgeOwner
         let config = BridgeBase.Config(owner: bridgeOwner, transport: transport, connection: .outbound)
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
@@ -1108,11 +1079,12 @@ final class BridgeTests: XCTestCase {
         let secondAgreement = Agreement(owner: secondOwner)
 
         async let firstState = bridge.addAgreement(firstAgreement, for: firstOwner)
+        _ = try await waitUntilTransportHasSent(1, transport: transport)
         async let secondState = bridge.addAgreement(secondAgreement, for: secondOwner)
 
         let sentCommands = try await waitUntilTransportHasSent(2, transport: transport)
-        let firstCommand = try XCTUnwrap(sentCommands.first(where: { $0.identity?.uuid == firstOwner.uuid }))
-        let secondCommand = try XCTUnwrap(sentCommands.first(where: { $0.identity?.uuid == secondOwner.uuid }))
+        let firstCommand = try XCTUnwrap(sentCommands.first)
+        let secondCommand = try XCTUnwrap(sentCommands.last)
 
         try await bridge.consumeResponse(
             command: BridgeCommand(
@@ -1163,14 +1135,7 @@ final class BridgeTests: XCTestCase {
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
 
-        try await bridge.consumeCommand(
-            command: BridgeCommand(
-                cmd: Command.ready.rawValue,
-                identity: owner,
-                payload: nil,
-                cid: 1
-            )
-        )
+        try await authenticateBridgeFixture(bridge, principal: owner)
 
         try await bridge.ready(timeout: 1)
     }
@@ -1182,6 +1147,7 @@ final class BridgeTests: XCTestCase {
         let bridge = try await BridgeBase(config)
         try await bridge.setTransport(transport, connection: .outbound)
 
+        try await authenticateBridgeFixture(bridge, principal: owner, activate: false)
         let sendTask = Task {
             await bridge.sendCommand(command: .get, identity: owner, payload: .string("state"))
         }
@@ -1189,14 +1155,8 @@ final class BridgeTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertTrue(transport.sentData.isEmpty)
 
-        try await bridge.consumeCommand(
-            command: BridgeCommand(
-                cmd: Command.ready.rawValue,
-                identity: owner,
-                payload: nil,
-                cid: 2
-            )
-        )
+        _ = try bridge.transport?.channelSession?.activate()
+        try bridge.activateAuthenticatedChannel()
 
         await sendTask.value
         XCTAssertEqual(transport.sentData.count, 1)
@@ -1609,7 +1569,7 @@ final class BridgeTests: XCTestCase {
         XCTAssertNil(globallyRegisteredBridgeUUID)
     }
 
-    func testCellResolverDirectWebSocketBridgeBindsOversizedContractURLByDigest() async throws {
+    func testCellResolverDirectWebSocketBridgeRejectsNonCanonicalQueryBeforeTransport() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()
         CellBase.defaultCellResolver = resolver
@@ -1629,24 +1589,12 @@ final class BridgeTests: XCTestCase {
             makeNewIfNotFound: true
         )
         let owner = try XCTUnwrap(ownerValue)
-        let resolved = try await resolver.cellAtEndpoint(
-            endpoint: endpoint,
-            requester: owner
-        )
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: owner)
+            XCTFail("Channel authentication requires a canonical route without query credentials")
+        } catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .malformed) }
+        XCTAssertTrue(RecordingBridgeTransport.recordedSetupURLs().isEmpty)
 
-        let challengeResource = CellResolver.remoteBridgeAuthorityChallengeResource(
-            for: endpoint
-        )
-        XCTAssertTrue(challengeResource.hasPrefix("urn:cellprotocol:remote-bridge:endpoint:sha256:"))
-        XCTAssertLessThanOrEqual(
-            challengeResource.count,
-            IdentitySigningChallenge.maximumScopeCharacters
-        )
-        XCTAssertFalse(challengeResource.contains(contractPayload))
-        XCTAssertFalse(resolved.uuid.isEmpty)
-        let recordedURL = try XCTUnwrap(RecordingBridgeTransport.recordedSetupURLs().first)
-        XCTAssertEqual(RecordingBridgeTransport.recordedSetupURLs().count, 1)
-        XCTAssertTrue(recordedURL.absoluteString.contains(contractPayload))
     }
 
     func testCellResolverRouteReplacementWhileSetupIsPendingCannotPublishStaleBridge() async throws {
@@ -1800,13 +1748,14 @@ final class BridgeTests: XCTestCase {
         )
         let firstValue = await firstVault.identity(for: "snapshot-first", makeNewIfNotFound: true)
         let secondValue = await secondVault.identity(for: "snapshot-second", makeNewIfNotFound: true)
-        let callerOwnedIdentity = try XCTUnwrap(firstValue)
+        let storedIdentity = try XCTUnwrap(firstValue)
+        let callerOwnedIdentity = storedIdentity.publicIdentitySnapshot()
+        callerOwnedIdentity.identityVault = firstVault
+        callerOwnedIdentity.homeVaultReference = storedIdentity.homeVaultReference
         let replacementIdentity = try XCTUnwrap(secondValue)
         XCTAssertEqual(callerOwnedIdentity.uuid, replacementIdentity.uuid)
         let firstFingerprint = try XCTUnwrap(callerOwnedIdentity.signingPublicKeyFingerprint)
-        let firstHomeVaultReference = try XCTUnwrap(callerOwnedIdentity.homeVaultReference)
         let secondFingerprint = try XCTUnwrap(replacementIdentity.signingPublicKeyFingerprint)
-        let secondHomeVaultReference = try XCTUnwrap(replacementIdentity.homeVaultReference)
 
         let firstResolution = Task {
             try await resolver.cellAtEndpoint(
@@ -1825,7 +1774,7 @@ final class BridgeTests: XCTestCase {
 
         XCTAssertFalse(firstSetupIdentity === callerOwnedIdentity)
         XCTAssertEqual(firstSetupIdentity.signingPublicKeyFingerprint, firstFingerprint)
-        XCTAssertEqual(firstSetupIdentity.homeVaultReference, firstHomeVaultReference)
+        XCTAssertNil(firstSetupIdentity.homeVaultReference, "Transport setup receives only public metadata")
         await BlockingRouteBridgeTransport.setupGate.releaseNext()
         let firstBridge = try await firstResolution.value
 
@@ -1841,7 +1790,7 @@ final class BridgeTests: XCTestCase {
         if setupIdentities.count == 2 {
             XCTAssertFalse(setupIdentities[1] === callerOwnedIdentity)
             XCTAssertEqual(setupIdentities[1].signingPublicKeyFingerprint, secondFingerprint)
-            XCTAssertEqual(setupIdentities[1].homeVaultReference, secondHomeVaultReference)
+            XCTAssertNil(setupIdentities[1].homeVaultReference)
         }
         await BlockingRouteBridgeTransport.setupGate.releaseNext()
         let secondBridge = try await secondResolution.value
@@ -1991,14 +1940,7 @@ final class BridgeTests: XCTestCase {
     }
 
     private func markBridgeReady(_ bridge: BridgeBase, identity: Identity) async throws {
-        try await bridge.consumeCommand(
-            command: BridgeCommand(
-                cmd: Command.ready.rawValue,
-                identity: identity,
-                payload: nil,
-                cid: 0
-            )
-        )
+        try await authenticateBridgeFixture(bridge, principal: identity)
     }
 
     private func bridgeCommandJSON(_ command: BridgeCommand) throws -> [String: Any] {

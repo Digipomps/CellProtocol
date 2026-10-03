@@ -26,6 +26,15 @@ public enum BridgeOperationError: Error, Equatable {
 public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private typealias ConnectPromise = (Result<ConnectState, Error>) -> Void
     private typealias ContractPromise = (Result<AgreementState, Error>) -> Void
+    private typealias ValuePromise = (Result<ValueType, Error>) -> Void
+    private struct RPCReply<Output> {
+        let session: BridgeChannelSession
+        let promise: (Result<Output, Error>) -> Void
+    }
+    private var setReplies = [Int: RPCReply<SetValueResponse>]()
+    private var descriptionReplies = [Int: RPCReply<Bool>]()
+    // Captured per invocation; deterministic timeout tests do not change live requests.
+    var rpcReplyTimeoutSeconds = 30
     private typealias SignPromise = (Result<Data, Error>) -> Void
     private struct SignRequest {
         var promise: SignPromise
@@ -80,6 +89,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var outboundFeedStartTask: Task<Void, Error>?
     private var outboundFeedCommandID: Int?
     private var outboundFeedRequester: Identity?
+    private var queuedFeedDeliveries = 0
+    private var feedAdmissionPending = false
     private var inboundFeedCommandID: Int?
     private var inboundFeedRequester: Identity?
     private var localFeedSubscriberCount = 0
@@ -111,12 +122,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var setValueForKeyCallbackDataPublishers = [String: PassthroughSubject<SetValueState, Error>]()
     private var setValueForKeyCallbackCancellables = [String : AnyCancellable]()
     
-    private var setValueForKeypathCallbackDataPublishers = [String: PassthroughSubject<SetValueResponse, Error>]()
-    private var setValueForKeypathCallbackCancellables = [String : AnyCancellable]()
     
     
-    private var valueForKeyCallbackDataPublishers = [String: PassthroughSubject<ValueType, Error>]()
-    private var valueForKeyCallbackCancellables = [String : AnyCancellable]()
+    private var valuePromises = [Int: ValuePromise]()
     
 //    private var valueForKeypathCallbackDataPublishers = [String: PassthroughSubject<ValueType, Error>]()
 //    private var valueForKeypathCallbackCancellables = [String : AnyCancellable]()
@@ -143,31 +151,60 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var loadPublisherCancellable: AnyCancellable?
     
     private var readyPublisher = PassthroughSubject<Bool, Error>()
-    private var ready = false
+    private var readyValue = false
+    private var ready: Bool {
+        get { connectionStateLock.withLock { readyValue } }
+        set { connectionStateLock.withLock { readyValue = newValue } }
+    }
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
-    var feedActive = false
-    let auditor = BridgeBaseAuditor()
+    private var feedActiveValue = false
+    var feedActive: Bool {
+        get { connectionStateLock.withLock { feedActiveValue } }
+        set { connectionStateLock.withLock { feedActiveValue = newValue } }
+    }
+    var pendingFeedDeliveries: Int { withCallbackStateLock { queuedFeedDeliveries } }
+    let auditor: BridgeBaseAuditor
+    // Deterministic seam after the initial lookup, before atomic consumption.
+    var afterResponseLookup: (@Sendable (BridgeCommand) async -> Void)?
     
     var feedEndpoint : URL?
     var feedProperties: FeedProperties? {
         get { withDescriptionStateLock { descriptionState.feedProperties } }
         set { withDescriptionStateLock { descriptionState.feedProperties = newValue } }
     }
-    var transport: BridgeTransportProtocol?
+    private let connectionStateLock: NSRecursiveLock
+    private var transportValue: BridgeTransportProtocol?
+    private var channelSessionValue: BridgeChannelSession?
+    var transport: BridgeTransportProtocol? {
+        get { connectionStateLock.withLock { transportValue } }
+        set { connectionStateLock.withLock { transportValue = newValue } }
+    }
+    private var channelSession: BridgeChannelSession? {
+        get { connectionStateLock.withLock { channelSessionValue } }
+        set { connectionStateLock.withLock { channelSessionValue = newValue } }
+    }
     var emitCellAtEndpoint: Emit?
     private var inboundEmitCellCache = [String: Emit]()
     private var inboundPublisherLookupIdentity: Identity?
-    private let callbackStateLock = NSLock()
+    private var callbackStateLock: NSRecursiveLock { connectionStateLock }
     private let identityProofAuthorization: BridgeIdentityProofAuthorization
+    // Local clock/replay dependencies; configured before use by deterministic
+    // lifecycle tests. No remote command can supply these values.
+    var signingWallClock: @Sendable () -> Date = { Date() }
+    var signingMonotonic: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var consumeSigningChallenge: @Sendable (IdentitySigningChallenge, Date) async -> CellSecurityReplayDecision = { challenge, now in
+        await CellBase.signingChallengeReplayStore?.consume(challenge, now: now) ?? .accepted
+    }
     
     
-    private var descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
-    private var descriptionFetchedDate: Date?
     
     public init(_ config: Config) async throws {
+        let lifecycleLock = NSRecursiveLock()
+        connectionStateLock = lifecycleLock
+        auditor = BridgeBaseAuditor(lock: lifecycleLock)
         identityProofAuthorization = BridgeIdentityProofAuthorization(owner: config.owner, scopes: config.identityProofScopes)
-        bridgeLog("Bridge base init. identity.uuid: \(config.owner.uuid) identityDomain: \(config.identityDomain)")
+        bridgeLog("Bridge base initialized")
         self.owner = config.owner
         
         let initialAgreement: Agreement
@@ -177,11 +214,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             initialAgreement = await Agreement()
         }
         descriptionState = DescriptionState(
+            uuid: config.uuid,
             agreementTemplate: initialAgreement,
             identityDomain: config.identityDomain
         )
         feedEndpoint = URL(string: "https://localhost/")
-        self.transport = config.transport
+        self.transportValue = config.transport
+        self.channelSessionValue = config.transport.channelSession
         self.inboundPublisherLookupIdentity = config.inboundPublisherLookupIdentity
         self.cellScope = .template // TODO: get from config's 
 //        self.cellScope = config.cellRepresentation?.cellScope
@@ -200,6 +239,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public required init(owner: Identity) {
+        let lifecycleLock = NSRecursiveLock()
+        connectionStateLock = lifecycleLock
+        auditor = BridgeBaseAuditor(lock: lifecycleLock)
         identityProofAuthorization = BridgeIdentityProofAuthorization(owner: owner)
         self.owner = owner
         descriptionState = DescriptionState(
@@ -226,58 +268,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         return try block()
     }
 
-    private func storeValuePublisher(
-        _ publisher: PassthroughSubject<ValueType, Error>,
-        for requestedKey: String
-    ) {
-        withCallbackStateLock {
-            valueForKeyCallbackDataPublishers[requestedKey] = publisher
-        }
-    }
-
-    private func takeValuePublisher(
-        for requestedKey: String
-    ) -> PassthroughSubject<ValueType, Error>? {
-        withCallbackStateLock {
-            let publisher = valueForKeyCallbackDataPublishers[requestedKey]
-            valueForKeyCallbackDataPublishers[requestedKey] = nil
-            valueForKeyCallbackCancellables[requestedKey] = nil
-            return publisher
-        }
-    }
-
-    private func clearValuePublisher(for requestedKey: String) {
-        withCallbackStateLock {
-            valueForKeyCallbackDataPublishers[requestedKey] = nil
-            valueForKeyCallbackCancellables[requestedKey] = nil
-        }
-    }
-
-    private func storeSetValueResponsePublisher(
-        _ publisher: PassthroughSubject<SetValueResponse, Error>,
-        for requestedKey: String
-    ) {
-        withCallbackStateLock {
-            setValueForKeypathCallbackDataPublishers[requestedKey] = publisher
-        }
-    }
-
-    private func takeSetValueResponsePublisher(
-        for requestedKey: String
-    ) -> PassthroughSubject<SetValueResponse, Error>? {
-        withCallbackStateLock {
-            let publisher = setValueForKeypathCallbackDataPublishers[requestedKey]
-            setValueForKeypathCallbackDataPublishers[requestedKey] = nil
-            setValueForKeypathCallbackCancellables[requestedKey] = nil
-            return publisher
-        }
-    }
-
-    private func clearSetValueResponsePublisher(for requestedKey: String) {
-        withCallbackStateLock {
-            setValueForKeypathCallbackDataPublishers[requestedKey] = nil
-            setValueForKeypathCallbackCancellables[requestedKey] = nil
-        }
+    private func takeValuePromise(for commandID: Int) -> ValuePromise? {
+        withCallbackStateLock { valuePromises.removeValue(forKey: commandID) }
     }
 
     private func storeSignRequest(
@@ -296,7 +288,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
             guard let self else { return }
             guard let expiredRequest = self.takeSignRequest(for: commandID) else { return }
-            await self.auditor.removeBridgeCommand(for: commandID)
+            self.auditor.removeBridgeCommand(for: commandID)
             expiredRequest.promise(.failure(BridgeError.timeout))
         }
         withCallbackStateLock {
@@ -425,55 +417,105 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
     
+    public var hasAuthenticatedChannel: Bool {
+        guard let channelSession else { return false }
+        return (try? channelSession.check()) != nil
+    }
+
+    /// Explicit client initiation. Ends old streams and pending operations; never
+    /// retries a write or subscription. A new physical connection proves a fresh
+    /// generation, including when the former connection has already expired.
+    public func renewAuthenticatedChannel(requester: Identity, using physical: BridgeTransportProtocol? = nil) async throws {
+        guard let owner, owner.referencesSameSigningIdentity(as: requester),
+              publisherUuid == nil, let current = transport as? BridgeChannelTransport else {
+            throw BridgeChannelAuthentication.Failure.unavailable
+        }
+        let replacement = try await current.replacementForRenewal(using: physical)
+        try await setTransport(replacement, connection: .outbound)
+        guard let endpoint = replacement.session.endpoint else { throw BridgeChannelAuthentication.Failure.unavailable }
+        try await replacement.setup(URL(string: endpoint.audience)!, identity: requester)
+    }
+
+    /// Called locally by the authenticated physical transport, never by a ready frame.
+    public func activateAuthenticatedChannel() throws {
+        try connectionStateLock.withLock {
+            guard let session = transportValue?.channelSession,
+                  channelSessionValue == nil || session === channelSessionValue else {
+                throw BridgeChannelAuthentication.Failure.unavailable
+            }
+            try session.check()
+            channelSessionValue = session
+            readyValue = true
+            readyPublisher.send(true)
+        }
+    }
+
     public func ready() async throws {
         try await ready(timeout: 5)
     }
 
     public func ready(timeout: Int) async throws {
-        if ready {
-            return
+        let waiting = try connectionStateLock.withLock { () throws -> PassthroughSubject<Bool, Error>? in
+            if readyValue {
+                guard let session = channelSessionValue else { throw BridgeChannelAuthentication.Failure.closed }
+                try session.check()
+                return nil
+            }
+            return readyPublisher
         }
-
-        _ = try await readyPublisher.getOneWithTimeout(timeout)
-        ready = true
+        guard let waiting else { return }
+        _ = try await waiting.getOneWithTimeout(timeout)
+        try connectionStateLock.withLock {
+            guard waiting === readyPublisher, let session = channelSessionValue else {
+                throw BridgeChannelAuthentication.Failure.staleGeneration
+            }
+            try session.check()
+            readyValue = true
+        }
     }
     public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
-        identityProofAuthorization.reset()
-        let previousFeedStartTask = withCallbackStateLock { () -> Task<Void, Error>? in
-            let task = outboundFeedStartTask
-            outboundFeedStartTask = nil
-            outboundFeedCommandID = nil
-            outboundFeedRequester = nil
-            inboundFeedCommandID = nil
-            inboundFeedRequester = nil
-            localFeedSubscriberCount = 0
-            feedActive = false
-            return task
+        if let previous = channelSession, previous !== transport.channelSession {
+            await channelDidClose(previous)
         }
-        previousFeedStartTask?.cancel()
-        flowElementCallbackCancellable?.cancel()
-        flowElementCallbackCancellable = nil
-        feedCancellable?.cancel()
-        feedCancellable = nil
-        self.transport = transport
+        connectionStateLock.withLock {
+            retireFeedDelivery()
+            channelSession = transport.channelSession
+            identityProofAuthorization.reset()
+            let previousFeedStartTask = withCallbackStateLock { () -> Task<Void, Error>? in
+                let task = outboundFeedStartTask
+                outboundFeedStartTask = nil
+                outboundFeedCommandID = nil
+                outboundFeedRequester = nil
+                inboundFeedCommandID = nil
+                inboundFeedRequester = nil
+                localFeedSubscriberCount = 0
+                feedActive = false
+                feedAdmissionPending = false
+                return task
+            }
+            previousFeedStartTask?.cancel()
+            flowElementCallbackCancellable?.cancel()
+            flowElementCallbackCancellable = nil
+            feedCancellable?.cancel()
+            feedCancellable = nil
+            self.transport = transport
+            ready = false
+            readyPublisher = PassthroughSubject<Bool, Error>()
+            feedPublisher2 = PassthroughSubject<FlowElement, Error>()
+            flowElementCallbackDataPublisher = PassthroughSubject<FlowElement, Error>()
+        
+            switch connection {
+            case .inbound(publisherUuid: let publisherUuid):
+                self.publisherUuid = publisherUuid
+                emitCellAtEndpoint = nil
+                withCallbackStateLock { inboundEmitCellCache = [:] }
+            case .outbound:
+                self.publisherUuid = nil
+                emitCellAtEndpoint = nil
+                withCallbackStateLock { inboundEmitCellCache = [:] }
+            }
+        }
         transport.setDelegate(self)
-        ready = false
-        readyPublisher = PassthroughSubject<Bool, Error>()
-        descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
-        descriptionFetchedDate = nil
-        
-        switch connection {
-        case .inbound(publisherUuid: let publisherUuid):
-            self.publisherUuid = publisherUuid
-            emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
-        case .outbound:
-            self.publisherUuid = nil
-            emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
-        }
-        
-        
     }
     
     func validateFeedPermission(identity: Identity) -> Bool {
@@ -487,22 +529,28 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             throw StreamState.denied
         }
         try await ensureOutboundFeed(requester: requester)
-        return feedPublisher2
+        let (generation, publisher) = try withCallbackStateLock { () throws -> (BridgeChannelSession, PassthroughSubject<FlowElement, Error>) in
+            guard let generation = channelSessionValue else { throw BridgeChannelAuthentication.Failure.closed }
+            try generation.check()
+            return (generation, feedPublisher2)
+        }
+        return publisher
             .handleEvents(
                 receiveSubscription: { [weak self] _ in
-                    self?.retainLocalFeedSubscriber()
+                    self?.retainLocalFeedSubscriber(generation: generation)
                 },
                 receiveCompletion: { [weak self] _ in
-                    self?.releaseLocalFeedSubscriber()
+                    self?.releaseLocalFeedSubscriber(generation: generation)
                 },
                 receiveCancel: { [weak self] in
-                    self?.releaseLocalFeedSubscriber()
+                    self?.releaseLocalFeedSubscriber(generation: generation)
                 }
             )
             .eraseToAnyPublisher()
     }
 
     private func ensureOutboundFeed(requester: Identity) async throws {
+        let generation = channelSession
         let task = withCallbackStateLock { () -> Task<Void, Error> in
             if let outboundFeedStartTask {
                 return outboundFeedStartTask
@@ -519,8 +567,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
         do {
             try await task.value
+            try withCallbackStateLock {
+                guard let generation, generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+                try generation.check()
+            }
         } catch {
             withCallbackStateLock {
+                guard generation === channelSessionValue else { return }
                 outboundFeedStartTask = nil
                 outboundFeedCommandID = nil
                 outboundFeedRequester = nil
@@ -531,35 +584,41 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func startOutboundFeed(requester: Identity) async throws {
-        let commandID = await auditor.getNewCommandId()
-        flowElementCallbackCancellable = flowElementCallbackDataPublisher
-            .handleEvents(receiveCancel: {
-                bridgeLog("Cancelled remote feed forwarding")
-            })
-            .sink(receiveCompletion: { [weak self] completion in
-                bridgeLog("Bridge remote feed completed: \(completion)")
-                self?.markOutboundFeedInactive(commandID: commandID)
-            }, receiveValue: { [weak self] flowElement in
-                bridgeLog("Bridge received flow element")
-                self?.feedPublisher2.send(flowElement)
-            })
+        guard let generation = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
+        let commandID = auditor.getNewCommandId()
+        try withCallbackStateLock {
+            guard generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+            try generation.check()
+            let destination = feedPublisher2
+            flowElementCallbackCancellable = flowElementCallbackDataPublisher
+                .sink(receiveCompletion: { [weak self] _ in
+                    self?.markOutboundFeedInactive(commandID: commandID)
+                }, receiveValue: { flowElement in destination.send(flowElement) })
+        }
 
         do {
             try await sendCommandChecked(
                 command: .feed,
                 identity: requester,
                 payload: nil,
-                commandId: commandID
+                commandId: commandID,
+                expectedSession: generation
             )
-            withCallbackStateLock {
+            try withCallbackStateLock {
+                guard generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+                try generation.check()
                 outboundFeedCommandID = commandID
                 outboundFeedRequester = requester
                 feedActive = true
             }
         } catch {
-            flowElementCallbackCancellable?.cancel()
-            flowElementCallbackCancellable = nil
-            await auditor.removeBridgeCommand(for: commandID)
+            withCallbackStateLock {
+                if generation === channelSessionValue {
+                    flowElementCallbackCancellable?.cancel()
+                    flowElementCallbackCancellable = nil
+                }
+                auditor.removeBridgeCommand(for: commandID)
+            }
             throw error
         }
     }
@@ -574,19 +633,20 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             feedActive = false
         }
         Task { [weak self] in
-            await self?.auditor.removeBridgeCommand(for: commandID)
+            self?.auditor.removeBridgeCommand(for: commandID)
         }
     }
 
-    private func retainLocalFeedSubscriber() {
+    private func retainLocalFeedSubscriber(generation: BridgeChannelSession) {
         withCallbackStateLock {
+            guard generation === channelSessionValue else { return }
             localFeedSubscriberCount += 1
         }
     }
 
-    private func releaseLocalFeedSubscriber() {
-        let feedToStop = withCallbackStateLock { () -> (Int, Identity)? in
-            guard localFeedSubscriberCount > 0 else { return nil }
+    private func releaseLocalFeedSubscriber(generation: BridgeChannelSession) {
+        let feedToStop = withCallbackStateLock { () -> (Int, Identity, BridgeTransportProtocol?)? in
+            guard generation === channelSessionValue, localFeedSubscriberCount > 0 else { return nil }
             localFeedSubscriberCount -= 1
             guard localFeedSubscriberCount == 0,
                   let commandID = outboundFeedCommandID,
@@ -597,22 +657,23 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             outboundFeedCommandID = nil
             outboundFeedRequester = nil
             feedActive = false
-            return (commandID, requester)
+            identityProofAuthorization.complete(commandID)
+            auditor.removeBridgeCommand(for: commandID)
+            flowElementCallbackCancellable?.cancel()
+            flowElementCallbackCancellable = nil
+            return (commandID, requester, transportValue)
         }
         guard let feedToStop else { return }
-        identityProofAuthorization.complete(feedToStop.0)
-
-        flowElementCallbackCancellable?.cancel()
-        flowElementCallbackCancellable = nil
         Task { [weak self] in
-            await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1)
+            await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1, using: feedToStop.2, generation: generation)
         }
     }
 
-    private func sendStopFeed(commandID: Int, requester: Identity) async {
+    private func sendStopFeed(commandID: Int, requester: Identity, using transport: BridgeTransportProtocol?, generation: BridgeChannelSession) async {
+        guard (try? generation.check()) != nil else { return }
         defer {
             Task { [weak self] in
-                await self?.auditor.removeBridgeCommand(for: commandID)
+                self?.auditor.removeBridgeCommand(for: commandID)
             }
         }
         let command = BridgeCommand(
@@ -627,7 +688,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             try await transport.sendData(data)
         } catch {
-            bridgeLog("Stopping remote feed failed with transport error: \(error)")
+            bridgeLog("Stopping remote feed failed with transport error: code=operation_failed")
         }
     }
     // Should this be moved to base?
@@ -641,7 +702,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func admit(context: ConnectContext) async -> ConnectState {
         if let identity = context.identity,
            let transport {
-            let commandID = await auditor.getNewCommandId()
+            let commandID = auditor.getNewCommandId()
             let connectFuture = Future<ConnectState, Error> { [weak self] promise in
                 self?.storeConnectPromise(promise, for: commandID)
             }
@@ -653,7 +714,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     commandId: commandID
                 )
             } catch {
-                bridgeLog("Cloud Bridge connect setup failed with error: \(error)")
+                bridgeLog("Cloud Bridge connect setup failed with error: code=operation_failed")
                 _ = transport
                 clearConnectPromise(for: commandID)
                 return .notConnected
@@ -663,7 +724,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 clearConnectPromise(for: commandID)
                 return connectState
             } catch {
-                bridgeLog("Cloud Bridge connect failed with error: \(error)")
+                bridgeLog("Cloud Bridge connect failed with error: code=operation_failed")
                 clearConnectPromise(for: commandID)
             }
         }
@@ -681,7 +742,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             if let identity = context.identity,
                let connectPublisher = self.connectPublisher
             {
-                let commandID = await self.auditor.getNewCommandId()
+                let commandID = self.auditor.getNewCommandId()
                 let callbackPublisher = PassthroughSubject<ConnectState, Error>()
                 self.storeConnectPublisher(callbackPublisher, for: commandID)
                 self.connectCallbackCancellable = callbackPublisher
@@ -690,7 +751,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         connectPublisher.send(completion: .failure(ConnectError.cancelled ))
                     })
                     .sink(receiveCompletion: {[weak self] completion in
-                        bridgeLog("Connect callback publisher completed: \(completion)")
+                        bridgeLog("Connect callback publisher completed")
                         connectPublisher.send(completion: .finished)
                         self?.connectCallbackCancellable = nil
                     }, receiveValue: { connectState in
@@ -715,14 +776,21 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public func close(requester: Identity) {
-        identityProofAuthorization.reset()
-        bridgeLog("Closing bridge base")
-        transport = nil
+        let previous = connectionStateLock.withLock { () -> BridgeTransportProtocol? in
+            let previous = transportValue
+            // Retire the old waiters synchronously. A replacement installed before
+            // physical close finishes must neither inherit them nor be cleared.
+            failPendingChannelWork()
+            channelSessionValue = nil
+            transportValue = nil
+            return previous
+        }
+        Task { await previous?.close() }
     }
-    
+
     public func addAgreement(_ contract: Agreement, for identity: Identity) async throws -> AgreementState {
         var contractState = AgreementState.template
-        let commandID = await auditor.getNewCommandId()
+        let commandID = auditor.getNewCommandId()
         let contractFuture = Future<AgreementState, Error> { [weak self] promise in
             self?.storeContractPromise(promise, for: commandID)
         }
@@ -780,71 +848,69 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func retrieveProxyRepresentation(for identity: Identity) async throws {
         try await ready()
-        try await sendCommandChecked(command: .description, identity: identity, payload: nil)
-        // wait until the command response is returned or timeout
-        
-        
-        if try await descriptionFetchedPublisher.getOneWithTimeout() {
-            //TODO: Set date for fetch? or other way to allow refetch?
-            self.descriptionFetchedDate = Date()
-        } else {
-            throw BridgeError.noDescription
+        let commandID = auditor.getNewCommandId()
+        let (session, timeout, result) = try withCallbackStateLock { () throws -> (BridgeChannelSession, Int, Future<Bool, Error>) in
+            guard let session = channelSessionValue else { throw BridgeChannelAuthentication.Failure.closed }
+            try session.check()
+            let result = Future<Bool, Error> { promise in
+                self.descriptionReplies[commandID] = RPCReply(session: session, promise: promise)
+            }
+            return (session, rpcReplyTimeoutSeconds, result)
         }
+        defer {
+            withCallbackStateLock {
+                descriptionReplies.removeValue(forKey: commandID)
+                auditor.removeBridgeCommand(for: commandID)
+                identityProofAuthorization.complete(commandID)
+            }
+        }
+        try await sendCommandChecked(command: .description, identity: identity, payload: nil,
+                                     commandId: commandID, expectedSession: session)
+        _ = try await result.getOneWithTimeout(timeout)
     }
-    
-    
+
     public func get(keypath: String, requester: Identity) async throws -> ValueType {
-        let valuePublisher = PassthroughSubject<ValueType, Error>()
-        storeValuePublisher(valuePublisher, for: keypath)
-        do {
-            try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath))
-        } catch {
-            clearValuePublisher(for: keypath)
-            throw error
+        let commandID = auditor.getNewCommandId()
+        // Future retains an immediate response, even before this caller reaches
+        // its await. cid ownership also makes old timeout cleanup harmless.
+        let result = Future<ValueType, Error> { promise in
+            self.withCallbackStateLock { self.valuePromises[commandID] = promise }
         }
-        do {
-            let value = try await valuePublisher.getOneWithTimeout()
-            clearValuePublisher(for: keypath)
-            return value
-        } catch {
-            clearValuePublisher(for: keypath)
-            throw error
+        defer {
+            _ = takeValuePromise(for: commandID)
+            auditor.removeBridgeCommand(for: commandID)
+            identityProofAuthorization.complete(commandID)
         }
+        try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath), commandId: commandID)
+        return try await result.getOneWithTimeout()
     }
-    
+
     public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
-        let setValueStatePublisher = PassthroughSubject<SetValueResponse, Error>()
-        storeSetValueResponsePublisher(setValueStatePublisher, for: keypath)
-        
-        let keyValue = KeyValue(key: keypath, value: value)
-        
-        
-        do {
-            try await sendCommandChecked(command: .set, identity: requester, payload: .keyValue(keyValue))
-        } catch {
-            clearSetValueResponsePublisher(for: keypath)
-            throw error
+        try await ready()
+        let commandID = auditor.getNewCommandId()
+        let (session, timeout, result) = try withCallbackStateLock { () throws -> (BridgeChannelSession, Int, Future<SetValueResponse, Error>) in
+            guard let session = channelSessionValue else { throw BridgeChannelAuthentication.Failure.closed }
+            try session.check()
+            let result = Future<SetValueResponse, Error> { promise in
+                self.setReplies[commandID] = RPCReply(session: session, promise: promise)
+            }
+            return (session, rpcReplyTimeoutSeconds, result)
         }
-        let result: SetValueResponse
-        do {
-            result = try await setValueStatePublisher.getOneWithTimeout()
-            clearSetValueResponsePublisher(for: keypath)
-        } catch {
-            clearSetValueResponsePublisher(for: keypath)
-            throw error
+        defer {
+            withCallbackStateLock {
+                setReplies.removeValue(forKey: commandID)
+                auditor.removeBridgeCommand(for: commandID)
+                identityProofAuthorization.complete(commandID)
+            }
         }
-    
-        let response = result.value
-        
-        if result.state != .ok {
-            throw  SetValueError.error
-        }
-        
- 
-        // need to wait for response here
-        return response
+        try await sendCommandChecked(command: .set, identity: requester,
+                                     payload: .keyValue(KeyValue(key: keypath, value: value)),
+                                     commandId: commandID, expectedSession: session)
+        let response = try await result.getOneWithTimeout(timeout)
+        guard response.state == .ok else { throw SetValueError.error }
+        return response.value
     }
-    
+
     public func keys(requester: Identity) async throws -> [String] {
         _ = requester
         throw BridgeOperationError.unsupportedOperation("keys")
@@ -900,14 +966,16 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func resolvedEmitCell(for requester: Identity?) async throws -> Emit {
+        guard let currentSession = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
+        try currentSession.check(identity: requester, requiresIdentity: true)
         if let publisherUuid {
             guard let resolver = CellBase.defaultCellResolver else {
                 throw BridgeError.resolverIsMissing
             }
 
             let resolvingIdentity = try inboundPublisherResolvingIdentity(for: requester)
-            let cacheKey = resolvingIdentity.uuid.lowercased()
-            if let cached = inboundEmitCellCache[cacheKey] {
+            let cacheKey = [channelSession?.generation ?? "host", resolvingIdentity.uuid, resolvingIdentity.signingPublicKeyFingerprint ?? ""].joined(separator: ":")
+            if let cached = withCallbackStateLock({ inboundEmitCellCache[cacheKey] }) {
                 return cached
             }
 
@@ -915,7 +983,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 endpoint: "cell:///\(publisherUuid)",
                 requester: resolvingIdentity
             )
-            inboundEmitCellCache[cacheKey] = resolved
+            guard currentSession === channelSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+            try currentSession.check(identity: requester, requiresIdentity: true)
+            withCallbackStateLock { inboundEmitCellCache[cacheKey] = resolved }
             return resolved
         }
 
@@ -945,19 +1015,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             publisher?.send(completion: .finished)
         }
     
-    public func sendSetValueResponse(for requestedKey: String, setValueResponse: SetValueResponse) {
-        let publisher = takeSetValueResponsePublisher(for: requestedKey)
-        publisher?.send(setValueResponse)
-        publisher?.send(completion: .finished)
-    }
-    
-    private func configure(from description: Data) {
+    // Internal decoding seam; callers must never log the description or decoder error.
+    func configure(from description: Data) {
         do {
             let anyCell = try JSONDecoder().decode(AnyCell.self, from: description)
             self.configure(from: anyCell)
             
         } catch  {
-            bridgeLog("Decoding of AnyCell failed. source: \(String(describing: String(data: description, encoding: .utf8 )))")
+            bridgeLog("Bridge description rejected code=invalid_description bytes=\(description.count)")
         }
         
         
@@ -979,10 +1044,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         // Subscriber callbacks and async proof traffic must never run with the
         // description lock held. No transport-wide serialization is introduced.
         self.sendSetValueState(for: ReservedKeypath.bridgesetup.rawValue, setValueState: .ok)
-         //send a message that description is fetched
-        self.descriptionFetchedPublisher.send(true)
         
-//        print("Configured cell with identityDomain: \(self.identityDomain)")
     }
     
 
@@ -1009,7 +1071,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
         let advertisedEmitter = try await emitter.advertise(for: requester)
         let payload: Object = ["label": .string(label), "publisher": .description(advertisedEmitter)]
-        let commandID = await auditor.getNewCommandId()
+        let commandID = auditor.getNewCommandId()
         let callbackPublisher = PassthroughSubject<ConnectState, Error>()
         storeConnectPublisher(callbackPublisher, for: commandID)
 
@@ -1031,7 +1093,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     
     public func absorbFlow(label: String, requester: Identity) {
-        bridgeLog("Absorb flow requested for label: \(label)")
+        bridgeLog("Absorb flow requested")
         Task {
             await self.sendCommand(command: .absorbFlow, identity: requester, payload: .string(label))
         }
@@ -1087,10 +1149,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         return
                     }
 
-                    let commandID = await self.auditor.getNewCommandId()
+                    let commandID = self.auditor.getNewCommandId()
                     let bridgeCommand = BridgeCommand(
                         cmd: Command.sign.rawValue,
-                        identity: identity,
+                        identity: identity.publicIdentitySnapshot(),
                         payload: .signData(messageData),
                         cid: commandID
                     )
@@ -1100,12 +1162,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         messageData: messageData,
                         for: commandID
                     )
-                    await self.auditor.storeBridgeCommand(bridgeCommand, for: commandID)
+                    guard self.auditor.storeBridgeCommand(bridgeCommand, for: commandID) else {
+                        self.takeSignRequest(for: commandID)?.promise(.failure(BridgeChannelAuthentication.Failure.capacity))
+                        return
+                    }
 
                     guard let bridgeCommandJSON = try? JSONEncoder().encode(bridgeCommand),
                           let transport = self.transport else {
                         self.takeSignRequest(for: commandID)?.promise(.failure(BridgeError.someError))
-                        await self.auditor.removeBridgeCommand(for: commandID)
+                        self.auditor.removeBridgeCommand(for: commandID)
                         return
                     }
 
@@ -1113,22 +1178,22 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         try await transport.sendData(bridgeCommandJSON)
                     } catch {
                         self.takeSignRequest(for: commandID)?.promise(.failure(error))
-                        await self.auditor.removeBridgeCommand(for: commandID)
+                        self.auditor.removeBridgeCommand(for: commandID)
                     }
                 }
             }
         }.eraseToAnyPublisher()
     }
 
-    private func sendResponse(command: Command, identity: Identity, payload: ValueType?, cid: Int) async {
-        let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: cid)
+    private func sendResponse(command: Command, identity: Identity, payload: ValueType?, cid: Int, using transport: BridgeTransportProtocol?) async {
+        let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity.publicIdentitySnapshot(), payload: payload, cid: cid)
         
         if let cloudBridgeCommandJson = try? JSONEncoder().encode(bridgeCommand),
         let transport = transport {
             do {
                 try await transport.sendData(cloudBridgeCommandJson)
             } catch {
-                bridgeLog("Sending response failed with error: \(error)")
+                bridgeLog("Sending response failed with error: code=operation_failed")
             }
         }
     }
@@ -1136,12 +1201,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private func sendSigningDenied(
         _ message: String,
         cid: Int,
+        using transport: BridgeTransportProtocol?,
         identity: Identity? = nil,
         reasonCode: String = CellSecurityReasonCode.bridgeSigningDenied,
         kind: CellSecurityEventKind = .vaultSignRejected,
         requiredAction: String = "retry_with_valid_identity_signing_challenge"
     ) async {
-        bridgeLog("Rejected bridge signing request: \(message)")
+        bridgeLog("Rejected bridge signing request code=signing_denied cid=\(cid)")
         await recordSigningDeniedEvent(
             message,
             identity: identity,
@@ -1222,48 +1288,72 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         command: Command,
         identity: Identity,
         payload: ValueType?,
-        commandId: Int? = nil
+        commandId: Int? = nil,
+        expectedSession: BridgeChannelSession? = nil
     ) async throws -> Int {
         bridgeLog("Send command: \(command.rawValue)")
         try await ready()
-        let resolvedCommandId: Int
-        if let commandId {
-            resolvedCommandId = commandId
-        } else {
-            resolvedCommandId = await auditor.getNewCommandId()
+        let admission = try connectionStateLock.withLock { () throws -> (BridgeChannelSession, BridgeTransportProtocol, Int, Data) in
+            guard let currentSession = channelSessionValue, let transport = transportValue else {
+                throw BridgeChannelAuthentication.Failure.closed
+            }
+            guard expectedSession == nil || expectedSession === currentSession else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+            try currentSession.checkOutbound(identity: identity, requiresIdentity: true)
+            let cid = commandId ?? auditor.getNewCommandId()
+            let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: cid)
+            guard auditor.storeBridgeCommand(bridgeCommand, for: cid) else { throw BridgeChannelAuthentication.Failure.capacity }
+            var wireCommand = bridgeCommand
+            wireCommand.identity = identity.publicIdentitySnapshot()
+            let bytes = try JSONEncoder().encode(wireCommand)
+            identityProofAuthorization.begin(bridgeCommand, now: signingWallClock(), monotonic: signingMonotonic())
+            return (currentSession, transport, cid, bytes)
         }
-        let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: resolvedCommandId)
-        await auditor.storeBridgeCommand(bridgeCommand, for: resolvedCommandId)
-
-        guard let bridgeCommandJson = try? JSONEncoder().encode(bridgeCommand) else {
-            throw BridgeError.someError
-        }
-        guard let transport else {
-            throw BridgeError.transportUnavailable
-        }
-
-        identityProofAuthorization.begin(bridgeCommand)
-        do {
-            try await transport.sendData(bridgeCommandJson)
-        } catch {
-            identityProofAuthorization.complete(resolvedCommandId)
-            await pushError(errorMessage: "Bridge transport send failed", error: error)
+        do { try await admission.1.sendData(admission.3) }
+        catch {
+            identityProofAuthorization.complete(admission.2)
+            auditor.removeBridgeCommand(for: admission.2)
+            await channelDidClose(admission.0)
             throw error
         }
-        return resolvedCommandId
+        return admission.2
     }
     
     public func sendCommand(command: Command, identity: Identity, payload: ValueType?) async {
         do {
             try await sendCommandChecked(command: command, identity: identity, payload: payload)
         } catch {
-            bridgeLog("Sending command failed with error: \(error)")
+            bridgeLog("Sending command failed with error: code=operation_failed")
         }
     }
     
+    private func validateOriginSigning(_ data: Data, identity: Identity, session: BridgeChannelSession,
+                                       deadline: TimeInterval, permit: BridgeIdentityProofAuthorization.Permit? = nil) throws {
+        try Task.checkCancellation()
+        guard signingMonotonic() < deadline, ready, session === channelSession else {
+            throw BridgeChannelAuthentication.Failure.staleGeneration
+        }
+        let now = signingWallClock()
+        _ = try IdentitySigningChallenge.validateSigningData(data, for: identity, now: now)
+        if let permit, !identityProofAuthorization.isCurrent(permit, now: now, monotonic: signingMonotonic()) {
+            throw BridgeChannelAuthentication.Failure.closed
+        }
+        try session.checkOutbound(identity: identity, requiresIdentity: true)
+    }
+
     //Consume command is processing commands relayed over the websocket
     public func consumeCommand(command: BridgeCommand) async throws {
         var command = command
+        let transport = self.transport // A suspended old operation must never send on a replacement.
+        guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
+        do {
+            guard command.command != .ready else { throw BridgeChannelAuthentication.Failure.unexpectedMessage }
+            try channelSession.checkInbound(command)
+            if command.command != .sign, let presented = command.identity {
+                command.identity = try channelSession.requester(for: presented, bridge: self)
+            }
+        }
+        try channelSession.acquire(.operation)
+        defer { channelSession.release(.operation) }
         if command.command != .sign, let presented = command.identity {
             // A transport may hydrate an identity for routing, but a public wire
             // descriptor never grants access to this process's signing vault.
@@ -1275,11 +1365,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             requester.identityVault = BridgeIdentityVault(cloudBridge: self)
             command.identity = requester
         }
-        bridgeLog("Consume command cmd: \(command.cmd)")
+        bridgeLog("Consume command \(command.diagnosticMetadata)")
             switch command.command {
             case .ready:
-                ready = true
-                self.readyPublisher.send(true)
+                throw BridgeChannelAuthentication.Failure.unexpectedMessage
                 
             case .admit:
                 if let identity = command.identity {
@@ -1293,7 +1382,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             do {
                                 try await transport.sendData(connectStateJSONData)
                             } catch {
-                                bridgeLog("Sending response failed with error: \(error)")
+                                bridgeLog("Sending response failed with error: code=operation_failed")
                             }
                         } else {
                             bridgeLog("Could not encode ConnectState: \(connectState)")
@@ -1316,7 +1405,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         case let .agreementPayload(value):
                             agreement =  value
                         default:
-                            bridgeLog("Did not get expected agreement payload: \(String(describing: command.payload))")
+                            bridgeLog("Bridge payload rejected code=expected_agreement \(command.diagnosticMetadata)")
                             return
                         }
                         let contractState = try await publisher.addAgreement(agreement, for: identity)
@@ -1330,7 +1419,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                         try await transport.sendData(responseJSONData)
                                     }
                                 } catch {
-                                    bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+                                    bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
                                 }
 //                            }
                         }
@@ -1372,7 +1461,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                     try await transport.sendData(responseJSONData)
                                 }
                             } catch {
-                                bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+                                bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
                             }
                         
                         
@@ -1387,7 +1476,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                       case let .string(key) = command.payload else {
                     await sendGetErrorResponse(
                         message: "Value for keypath failed: missing identity or keypath payload",
-                        cid: command.cid
+                        cid: command.cid, using: transport
                     )
                     break
                 }
@@ -1396,7 +1485,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     guard let keypathLookupPublisher = try await resolvedEmitCell(for: identity) as? Meddle else {
                         await sendGetErrorResponse(
                             message: "Value for keypath failed: publisher does not expose Meddle",
-                            cid: command.cid
+                            cid: command.cid, using: transport
                         )
                         break
                     }
@@ -1409,7 +1498,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 } catch {
                     await sendGetErrorResponse(
                         message: "Consume command \(command.cmd) failed for get(\(key)): \(error)",
-                        cid: command.cid
+                        cid: command.cid, using: transport
                     )
                 }
             
@@ -1421,20 +1510,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 {
                     let challenge: IdentitySigningChallenge
                     do {
-                        challenge = try IdentitySigningChallenge.validateSigningData(value, for: identity)
+                        challenge = try IdentitySigningChallenge.validateSigningData(value, for: identity, now: signingWallClock())
                     } catch {
                         await sendSigningDenied(
                             String(describing: error),
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: CellSecurityReasonCode.invalidSigningChallenge
                         )
                         return
                     }
+                    // Freeze the remaining challenge window before any lookup.
+                    // A backward wall-clock jump cannot prolong a held request.
+                    let signingDeadline = signingMonotonic() + max(0, min(IdentitySigningChallenge.defaultValidity,
+                        challenge.expiresAt - signingWallClock().timeIntervalSince1970))
                     guard ready else {
                         await sendSigningDenied(
                             "bridge session is not ready",
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: CellSecurityReasonCode.bridgeNotReady,
                             kind: .transportRejected,
@@ -1446,6 +1541,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         await sendSigningDenied(
                             denial.message,
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: denial.reasonCode,
                             kind: .transportRejected,
@@ -1453,22 +1549,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         )
                         return
                     }
-                    guard let permit = identityProofAuthorization.permit(for: challenge, identity: identity),
+                    try validateOriginSigning(value, identity: identity, session: channelSession, deadline: signingDeadline)
+                    guard let permit = identityProofAuthorization.permit(for: challenge, identity: identity, now: signingWallClock(), monotonic: signingMonotonic()),
                           await permit.vault.identityExistInVault(permit.identity) else {
                         await sendSigningDenied(
                             "no active local operation authorizes this identity and challenge scope",
                             cid: command.cid,
+                            using: transport,
                             identity: identity,
                             reasonCode: "unexpected_identity_signing_challenge"
                         )
                         return
                     }
-                    if let replayStore = CellBase.signingChallengeReplayStore {
-                        let replayDecision = await replayStore.consume(challenge)
+                    try validateOriginSigning(value, identity: identity, session: channelSession, deadline: signingDeadline, permit: permit)
+                    do {
+                        let replayDecision = await consumeSigningChallenge(challenge, signingWallClock())
                         guard replayDecision == .accepted else {
                             await sendSigningDenied(
                                 "signing challenge rejected: \(replayDecision)",
                                 cid: command.cid,
+                                using: transport,
                                 identity: identity,
                                 reasonCode: replayDecision.reasonCode,
                                 kind: replayDecision == .replay ? .signingChallengeReplay : .vaultSignRejected,
@@ -1478,16 +1578,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         }
                     }
                     
-                    guard identityProofAuthorization.isCurrent(permit) else { return }
+                    try validateOriginSigning(value, identity: identity, session: channelSession, deadline: signingDeadline, permit: permit)
                         do {
                             let signatureData = try await permit.vault.signMessageForIdentity(messageData: value, identity: permit.identity)
-                            guard identityProofAuthorization.isCurrent(permit) else { return }
-                            await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid)
+                            try validateOriginSigning(value, identity: identity, session: channelSession, deadline: signingDeadline, permit: permit)
+                            await self.sendResponse(command: .response, identity: identity, payload: .signature(signatureData), cid: command.cid, using: transport)
                         } catch {
-                            bridgeLog("Consume command signing data failed with error: \(error)")
+                            bridgeLog("Consume command signing data failed with error: code=operation_failed")
                             await self.sendSigningDenied(
                                 String(describing: error),
                                 cid: command.cid,
+                                using: transport,
                                 identity: identity,
                                 reasonCode: CellSecurityReasonCode.bridgeSigningDenied
                             )
@@ -1558,8 +1659,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
     }
 
-    private func sendGetErrorResponse(message: String, cid: Int) async {
-        bridgeLog(message)
+    private func sendGetErrorResponse(message: String, cid: Int, using transport: BridgeTransportProtocol?) async {
+        bridgeLog("Bridge get rejected code=get_failed cid=\(cid)")
         let response = BridgeCommand(cmd: "response", payload: .string("failure: \(message)"), cid: cid)
         do {
             if let responseJSONData = try? JSONEncoder().encode(response),
@@ -1567,11 +1668,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 try await transport.sendData(responseJSONData)
             }
         } catch {
-            bridgeLog("Sending get error response failed with error: \(error)")
+            bridgeLog("Sending get error response failed with error: code=operation_failed")
         }
     }
   
     private func processDescriptionCommand(command: BridgeCommand) async {
+        let transport = self.transport
         let identity = command.identity
         guard let identity = identity else {
             return
@@ -1580,7 +1682,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             publisher = try await resolvedEmitCell(for: identity)
         } catch {
-            bridgeLog("Failed to resolve emit cell at endpoint: \(error)")
+            bridgeLog("Failed to resolve emit cell at endpoint: code=operation_failed")
             return
         }
         do {
@@ -1593,45 +1695,72 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 try await transport.sendData(responseJSONData)
             }
         } catch {
-            bridgeLog("Consume command \(command.cmd) failed with error: \(error)")
+            bridgeLog("Consume command \(command.command.rawValue) failed with error: code=operation_failed")
         }
     }
 
+    // All mutable delivery state shares the Base lifecycle lock. Exactly one
+    // worker drains a feed; publisher completion is a terminal marker, not teardown.
+    private final class FeedDelivery {
+        let commandID: Int
+        let session: BridgeChannelSession
+        let transport: BridgeTransportProtocol
+        let lease: BridgeChannelResourceLease
+        var queue: [Data] = []
+        var running = false
+        var completion: Subscribers.Completion<Error>?
+        var retired = false
+        init(commandID: Int, session: BridgeChannelSession, transport: BridgeTransportProtocol,
+             lease: BridgeChannelResourceLease) {
+            self.commandID = commandID; self.session = session
+            self.transport = transport; self.lease = lease
+        }
+    }
+    private var feedDelivery: FeedDelivery?
+
     private func processFeedCommand(command: BridgeCommand) async throws {
+        guard let currentSession = channelSession else { throw BridgeChannelAuthentication.Failure.closed }
         if let identity =  command.identity {
-            let emitter = try await resolvedEmitCell(for: identity)
-            if self.feedCancellable == nil {
-                
-                
-                
-                setupFlow(
-                    commandCid: command.cid,
-                    from: try await emitter.flow(requester: identity)
-                )
-                inboundFeedCommandID = command.cid
-                inboundFeedRequester = identity
+            let reserved = withCallbackStateLock { () -> Bool in
+                guard !feedAdmissionPending else { return false }
+                feedAdmissionPending = true
+                return true
             }
-//            await emitter.startFeed(requester: identity)
-            
-            
-            feedActive = true
+            guard reserved else { throw BridgeChannelAuthentication.Failure.capacity }
+            defer { withCallbackStateLock { if currentSession === channelSessionValue { feedAdmissionPending = false } } }
+            let emitter = try await resolvedEmitCell(for: identity)
+            if withCallbackStateLock({ feedDelivery == nil }) {
+                let lease = try BridgeChannelResourceLease(session: currentSession, resource: .feed)
+                let publisher: AnyPublisher<FlowElement, Error>
+                do {
+                    publisher = try await emitter.flow(requester: identity)
+                    try withCallbackStateLock {
+                        guard currentSession === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+                        try currentSession.check(identity: identity, requiresIdentity: true)
+                        inboundFeedCommandID = command.cid
+                        inboundFeedRequester = identity
+                        guard let transport = transportValue else { throw BridgeError.transportUnavailable }
+                        feedActive = true
+                        setupFlow(commandCid: command.cid, from: publisher, lease: lease,
+                                  generation: currentSession, transport: transport)
+                    }
+                } catch { lease.release(); throw error }
+            }
         }
     }
 
     private func processStopFeedCommand(command: BridgeCommand) async throws {
-        guard let identity = command.identity,
-              case let .integer(feedCommandID) = command.payload,
-              feedCommandID == inboundFeedCommandID,
-              let inboundFeedRequester,
-              bridgeIdentitiesReferenceSame(inboundFeedRequester, identity) else {
-            bridgeLog("Rejected stopFeed command that did not match the active feed")
-            return
+        withCallbackStateLock {
+            guard let identity = command.identity,
+                  case let .integer(feedCommandID) = command.payload,
+                  feedCommandID == inboundFeedCommandID,
+                  let inboundFeedRequester,
+                  bridgeIdentitiesReferenceSame(inboundFeedRequester, identity) else {
+                bridgeLog("Rejected stopFeed command that did not match the active feed")
+                return
+            }
+            retireFeedDelivery()
         }
-        feedCancellable?.cancel()
-        feedCancellable = nil
-        inboundFeedCommandID = nil
-        self.inboundFeedRequester = nil
-        feedActive = false
     }
 
     private func bridgeIdentitiesReferenceSame(_ trusted: Identity, _ presented: Identity) -> Bool {
@@ -1643,61 +1772,176 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         return trustedFingerprint == presentedFingerprint
     }
     
-    private func setupFlow(commandCid: Int, from publisher: AnyPublisher<FlowElement, Error>?) {
-        feedCancellable = publisher?
-            .handleEvents(receiveCancel: {
-                bridgeLog("Cancelled flowElement publisher \(self.uuid)")
-            })
-        
-            .sink(receiveCompletion: { [weak self] completion in
-                self?.feedCancellable = nil
-                self?.inboundFeedCommandID = nil
-                self?.inboundFeedRequester = nil
-                self?.feedActive = false
-            }, receiveValue: { [weak self] flowElement in
-                guard let self = self else {return}
-                Task { [weak self] in
-                    guard let self = self else { return }
-                    let payload = ValueType.flowElement(flowElement)
-                    let response = BridgeCommand(cmd: "response", payload: payload, cid: commandCid)
-                    do {
-                        if let responseJSONData = try? JSONEncoder().encode(response),
-                           let transport = self.transport {
-                            
-                            try await transport.sendData(responseJSONData)
-                            self.feedActive = true
-                        }
-                    } catch {
-                        bridgeLog("Consume command \(commandCid) failed with error: \(error)")
+    private func setupFlow(commandCid: Int, from publisher: AnyPublisher<FlowElement, Error>,
+                           lease: BridgeChannelResourceLease, generation: BridgeChannelSession,
+                           transport: BridgeTransportProtocol) {
+        let delivery = FeedDelivery(commandID: commandCid, session: generation, transport: transport, lease: lease)
+        feedDelivery = delivery
+        let subscription = publisher.sink(receiveCompletion: { [weak self] completion in
+            self?.withCallbackStateLock {
+                guard self?.feedDelivery === delivery, !delivery.retired else { return }
+                switch completion {
+                case .finished:
+                    delivery.completion = completion
+                    self?.startFeedDrain(delivery)
+                case .failure:
+                    // Upstream failure can revoke authorization. Explicitly fail
+                    // queued values now; never drain them after that revocation.
+                    self?.failFeedDelivery(delivery)
+                }
+            }
+        }, receiveValue: { [weak self] element in
+            self?.withCallbackStateLock {
+                guard let self, self.feedDelivery === delivery, !delivery.retired,
+                      delivery.completion == nil else { return }
+                do {
+                    guard self.queuedFeedDeliveries < 32 else { throw BridgeChannelAuthentication.Failure.capacity }
+                    try generation.check()
+                    let data = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(element), cid: commandCid))
+                    try generation.acquire(.operation)
+                    do { try generation.acquireSend(bytes: data.count) }
+                    catch { generation.release(.operation); throw error }
+                    // Queued and in-flight values retain both existing operation
+                    // and byte budgets. The transport also accounts for its wire copy.
+                    self.queuedFeedDeliveries += 1
+                    delivery.queue.append(data)
+                    self.startFeedDrain(delivery)
+                } catch {
+                    self.failFeedDelivery(delivery)
+                }
+            }
+        })
+        // A finite publisher can complete synchronously inside sink.
+        if feedDelivery === delivery, !delivery.retired { feedCancellable = subscription }
+        else { subscription.cancel() }
+    }
+
+    private func startFeedDrain(_ delivery: FeedDelivery) {
+        guard !delivery.running else { return }
+        // Empty completion retains the existing synchronous retirement contract.
+        // Queued/in-flight values still require ordered drain before this point.
+        if delivery.queue.isEmpty, let completion = delivery.completion {
+            switch completion {
+            case .finished: retireFeedDelivery()
+            case .failure: failFeedDelivery(delivery)
+            }
+            return
+        }
+        delivery.running = true
+        Task { [self] in await drainFeed(delivery) }
+    }
+
+    private func releaseFeedValue(_ data: Data, from delivery: FeedDelivery) {
+        delivery.session.releaseSend(bytes: data.count)
+        delivery.session.release(.operation)
+        queuedFeedDeliveries -= 1
+    }
+
+    // Called with the lifecycle lock held. An admitted send owns its reservations
+    // until it returns, even if stop/close/reconnect discards the remaining queue.
+    private func retireFeedDelivery() {
+        guard let delivery = feedDelivery else { return }
+        feedDelivery = nil
+        delivery.retired = true
+        for data in delivery.queue { releaseFeedValue(data, from: delivery) }
+        delivery.queue.removeAll()
+        if !delivery.running { delivery.lease.release() }
+        let subscription = feedCancellable
+        feedCancellable = nil
+        inboundFeedCommandID = nil
+        inboundFeedRequester = nil
+        feedActive = false
+        subscription?.cancel()
+    }
+
+    private func failFeedDelivery(_ delivery: FeedDelivery) {
+        guard !delivery.retired else { return }
+        bridgeLog("Feed delivery failed cid=\(delivery.commandID) code=operation_failed")
+        if feedDelivery === delivery { retireFeedDelivery() }
+        // Close the captured transport: a mux logical close does not revoke its
+        // siblings, and an old failure cannot close a replacement transport.
+        Task { await delivery.transport.close() }
+    }
+
+    private func drainFeed(_ delivery: FeedDelivery) async {
+        while true {
+            let data = withCallbackStateLock { () -> Data? in
+                guard !delivery.retired else {
+                    delivery.running = false
+                    delivery.lease.release()
+                    return nil
+                }
+                guard delivery.session === channelSessionValue,
+                      feedDelivery === delivery, (try? delivery.session.check()) != nil else {
+                    failFeedDelivery(delivery)
+                    delivery.running = false
+                    delivery.lease.release()
+                    return nil
+                }
+                if !delivery.queue.isEmpty { return delivery.queue.removeFirst() }
+                delivery.running = false
+                if let completion = delivery.completion {
+                    switch completion {
+                    case .finished: retireFeedDelivery()
+                    case .failure: failFeedDelivery(delivery)
                     }
                 }
-            })
+                return nil
+            }
+            guard let data else { return }
+            do {
+                try await delivery.transport.sendData(data)
+                withCallbackStateLock { releaseFeedValue(data, from: delivery) }
+            } catch {
+                withCallbackStateLock {
+                    releaseFeedValue(data, from: delivery)
+                    failFeedDelivery(delivery)
+                }
+            }
+        }
     }
-    
-    
-    // This is the processing of responses of commands sent over the websocket
-    public func consumeResponse(command: BridgeCommand) async throws {
-        bridgeLog("Consume response cmd: \(command.cmd)")
 
-        if let commandRequest = await auditor.loadBridgeCommandForCommandId(command.cid) {
+    // This is the processing of responses of commands sent over the websocket
+    /// Scheduling hint for an ordered physical adapter, never authorization.
+    /// Use the locally registered request, including failure responses, rather
+    /// than trusting a remote signature-shaped payload to bypass flow ordering.
+    public func isOriginSigningResponse(_ command: BridgeCommand) -> Bool {
+        connectionStateLock.withLock {
+            command.command == .response && auditor.loadBridgeCommandForCommandId(command.cid)?.command == .sign
+        }
+    }
+
+    public func consumeResponse(command: BridgeCommand) async throws {
+        guard let channelSession else { throw BridgeChannelAuthentication.Failure.unavailable }
+        try channelSession.checkInbound(command)
+        bridgeLog("Consume response \(command.diagnosticMetadata)")
+
+        guard let lookedUp = auditor.loadBridgeCommandForCommandId(command.cid) else {
+            bridgeLog("Unmatched response code=unknown_cid \(command.diagnosticMetadata)")
+            return
+        }
+        await afterResponseLookup?(lookedUp)
+        try connectionStateLock.withLock {
+            guard channelSession === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
+            try channelSession.checkInbound(command)
+            // Re-read the registered operation under the lifecycle lock. A copy
+            // returned before retirement/timeout conveys no publication rights.
+            guard let commandRequest = auditor.loadBridgeCommandForCommandId(command.cid) else { return }
             let retainCommandForStream = commandRequest.command == .feed
+            if !retainCommandForStream { auditor.removeBridgeCommand(for: command.cid) }
             if !retainCommandForStream { identityProofAuthorization.complete(command.cid) }
             switch commandRequest.command {
             case .description:
-                if let sentPayload = command.payload {
-                    
-                    switch sentPayload {
-                    case let .description(value):
-                        bridgeLog("Got description")
-                        self.configure(from: value)
-                        
-                        
-                    default:
-                        bridgeLog("Did not get expected description payload: \(String(describing: command.payload))")
-                    }
+                let reply = descriptionReplies.removeValue(forKey: command.cid)
+                guard reply == nil || reply?.session === channelSession else { return }
+                if case let .description(value) = command.payload {
+                    self.configure(from: value)
+                    reply?.promise(.success(true))
+                } else {
+                    bridgeLog("Bridge payload rejected code=expected_description \(command.diagnosticMetadata)")
+                    reply?.promise(.failure(ValueTypeError.unexpectedValueType))
                 }
-                
-                
+
             case .admit, .connectEmitter:
                 let promise = takeConnectPromise(for: command.cid)
                 let publisher = takeConnectPublisher(for: command.cid)
@@ -1709,7 +1953,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         publisher?.send(value)
                         publisher?.send(completion: .finished)
                     default:
-                        bridgeLog("Did not get expected connect payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_connect \(command.diagnosticMetadata)")
                         promise?(.failure(ValueTypeError.unexpectedValueType))
                         publisher?.send(completion: .failure(ValueTypeError.unexpectedValueType))
                     }
@@ -1729,7 +1973,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         publisher?.send(value)
                         publisher?.send(completion: .finished)
                     default:
-                        bridgeLog("Did not get expected contract payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_contract \(command.diagnosticMetadata)")
                         promise?(.failure(ValueTypeError.unexpectedValueType))
                         publisher?.send(completion: .failure(ValueTypeError.unexpectedValueType))
                     }
@@ -1746,7 +1990,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         flowElementCallbackDataPublisher.send(value)
                         
                     default:
-                        bridgeLog("Did not get expected flow payload: \(String(describing: command.payload))")
+                        bridgeLog("Bridge payload rejected code=expected_flow \(command.diagnosticMetadata)")
                     }
                 }
                 
@@ -1755,21 +1999,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 
                 
             case .set:
-                if
-                    case let .setValueResponse(setValueResponse) = command.payload,
-                    case let .keyValue(keyValue) = commandRequest.payload
-                {
-                    self.sendSetValueResponse(for: keyValue.key, setValueResponse: setValueResponse)
+                guard let reply = setReplies.removeValue(forKey: command.cid),
+                      reply.session === channelSession else { return }
+                if case let .setValueResponse(value) = command.payload {
+                    reply.promise(.success(value))
+                } else {
+                    reply.promise(.failure(ValueTypeError.unexpectedValueType))
                 }
-                
+
             case .get:
-                if let sentPayload = command.payload, let requestedKeyValue = commandRequest.payload {
-                    if case let .string(requestedKey) = requestedKeyValue {
-                        let publisher = takeValuePublisher(for: requestedKey)
-                        publisher?.send(sentPayload)
-                        publisher?.send(completion: .finished)
-//                        print("Got valueForKeypath payload. \(String(describing: try? sentPayload.jsonString())) Key: \(requestedKey)") //Do we need registery?
-                    }
+                if let sentPayload = command.payload {
+                    takeValuePromise(for: command.cid)?(.success(sentPayload))
                 }
                 
             case .sign:
@@ -1829,15 +2069,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                signCallbackCancellable = nil
                 
             default:
-                bridgeLog("Response did not match commands: \(commandRequest.cmd)")
+                bridgeLog("Response did not match request \(commandRequest.diagnosticMetadata)")
             }
 
-            if retainCommandForStream == false {
-                await auditor.removeBridgeCommand(for: command.cid)
-            }
-            
-        } else {
-            bridgeLog("Could not find command request for response: \(command)")
         }
     }
    
@@ -1864,24 +2098,85 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 //        }
     }
     
-    public func pushError(errorMessage: String?, error: Error?) async {
-        if let errorMessage = errorMessage {
-            let feedItem = FlowElement(title: "Bridge error", content: .string(errorMessage), properties: FlowElement.Properties(type: .alert, contentType: .string))
-            flowElementCallbackDataPublisher.send(feedItem)
-        }
-        if let error = error {
-            let eventDescription: Object = ["type" : .string("closing"), "origin" : .string(uuid)]
-            let feedItem = FlowElement(title: "closing", content: .object(eventDescription), properties: FlowElement.Properties(type: .event, contentType: .object))
-            flowElementCallbackDataPublisher.send(feedItem)
-            flowElementCallbackDataPublisher.send(completion: .failure(error))
-            if let resolver = CellBase.defaultCellResolver {
-                await resolver.unregisterEmitCell(uuid: uuid)
-            }
+    /// A late callback from a retired socket cannot invalidate its replacement.
+    func channelDidClose(_ session: BridgeChannelSession) async {
+        connectionStateLock.withLock {
+            guard channelSessionValue === session else { return }
+            session.close()
+            failPendingChannelWork()
         }
     }
-    
+
+    /// Ends one logical channel without revoking sibling channels on its socket.
+    func retireLogicalChannel() async {
+        connectionStateLock.withLock {
+            failPendingChannelWork()
+            channelSessionValue = nil
+            transportValue = nil
+        }
+    }
+
+    private func failPendingChannelWork() {
+        connectionStateLock.withLock {
+            ready = false
+            identityProofAuthorization.reset()
+            feedCancellable?.cancel(); feedCancellable = nil
+            withCallbackStateLock { retireFeedDelivery() }
+            flowElementCallbackCancellable?.cancel(); flowElementCallbackCancellable = nil
+            outboundFeedStartTask?.cancel()
+            let requests = withCallbackStateLock { () -> [SignRequest] in
+                let requests = Array(signCallbackRequests.values)
+                signCallbackRequests.removeAll()
+                return requests
+            }
+            for request in requests { request.cleanupTask?.cancel(); request.promise(.failure(BridgeChannelAuthentication.Failure.closed)) }
+            let failPending: [() -> Void] = withCallbackStateLock {
+                let failure = BridgeChannelAuthentication.Failure.closed
+                var callbacks: [() -> Void] = []
+                for promise in connectCallbackPromises.values { callbacks.append { promise(.failure(failure)) } }
+                for promise in contractCallbackPromises.values { callbacks.append { promise(.failure(failure)) } }
+                for subject in connectCallbackDataPublishers.values { callbacks.append { subject.send(completion: .failure(failure)) } }
+                for subject in contractCallbackDataPublishers.values { callbacks.append { subject.send(completion: .failure(failure)) } }
+                for promise in valuePromises.values { callbacks.append { promise(.failure(failure)) } }
+                for subject in setValueForKeyCallbackDataPublishers.values { callbacks.append { subject.send(completion: .failure(failure)) } }
+                for reply in setReplies.values { callbacks.append { reply.promise(.failure(failure)) } }
+                for reply in descriptionReplies.values { callbacks.append { reply.promise(.failure(failure)) } }
+                connectCallbackPromises.removeAll(); contractCallbackPromises.removeAll()
+                connectCallbackDataPublishers.removeAll(); contractCallbackDataPublishers.removeAll()
+                valuePromises.removeAll(); setValueForKeyCallbackDataPublishers.removeAll()
+                setReplies.removeAll(); descriptionReplies.removeAll()
+                inboundFeedCommandID = nil; inboundFeedRequester = nil; feedActive = false
+                return callbacks
+            }
+            failPending.forEach { $0() }
+            readyPublisher.send(completion: .failure(BridgeChannelAuthentication.Failure.closed))
+            feedPublisher2.send(completion: .failure(BridgeChannelAuthentication.Failure.closed))
+            auditor.clear()
+        }
+    }
+
+    public func pushError(errorMessage: String?, error: Error?) async {
+        let legacyUUID: String? = connectionStateLock.withLock {
+            let legacy = channelSessionValue == nil
+            channelSessionValue?.close()
+            failPendingChannelWork()
+            if let errorMessage {
+                flowElementCallbackDataPublisher.send(FlowElement(title: "Bridge error", content: .string(errorMessage),
+                    properties: FlowElement.Properties(type: .alert, contentType: .string)))
+            }
+            if let error {
+                let event: Object = ["type": .string("closing"), "origin": .string(uuid)]
+                flowElementCallbackDataPublisher.send(FlowElement(title: "closing", content: .object(event),
+                    properties: FlowElement.Properties(type: .event, contentType: .object)))
+                flowElementCallbackDataPublisher.send(completion: .failure(error))
+            }
+            return legacy && error != nil ? uuid : nil
+        }
+        if let legacyUUID, let resolver = CellBase.defaultCellResolver { await resolver.unregisterEmitCell(uuid: legacyUUID) }
+    }
+
     public func attachedStatus(for label: String, requester: Identity) async throws -> ConnectionStatus {
-        bridgeLog("Bridge base attachedStatus for: \(label)")
+        bridgeLog("Bridge base attachedStatus")
         return ConnectionStatus(name: "Not implemented", connected: true, active: true)
     }
     

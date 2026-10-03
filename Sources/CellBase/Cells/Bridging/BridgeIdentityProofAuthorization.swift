@@ -21,12 +21,14 @@ final class BridgeIdentityProofAuthorization {
         let identity: Identity
         let vault: IdentityVaultProtocol
         let generation: UInt64
+        let commandID: Int
         let scope: BridgeIdentityProofScope
     }
 
     private struct Lease {
         let scopes: Set<BridgeIdentityProofScope>
         let expiresAt: Date?
+        let monotonicDeadline: TimeInterval?
     }
 
     private let lock = NSLock()
@@ -47,7 +49,7 @@ final class BridgeIdentityProofAuthorization {
         lock.withLock { discoveredScope = BridgeIdentityProofScope(domain: domain, resource: resource) }
     }
 
-    func begin(_ command: BridgeCommand, now: Date = Date()) {
+    func begin(_ command: BridgeCommand, now: Date = Date(), monotonic: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard let identity = command.identity,
               identity.referencesSameSigningIdentity(as: principal),
               identity.identityVault != nil,
@@ -61,24 +63,25 @@ final class BridgeIdentityProofAuthorization {
             return
         }
         lock.withLock {
-            purgeExpired(now: now)
+            purgeExpired(now: now, monotonic: monotonic)
             let scopes = pinnedScopes ?? Set(discoveredScope.map { [$0] } ?? [])
             guard !scopes.isEmpty else { return }
             leases[command.cid] = Lease(
                 scopes: scopes,
-                expiresAt: command.command == .feed ? nil : now.addingTimeInterval(5)
+                expiresAt: command.command == .feed ? nil : now.addingTimeInterval(5),
+                monotonicDeadline: command.command == .feed ? nil : monotonic + 5
             )
         }
     }
 
-    func permit(for challenge: IdentitySigningChallenge, identity: Identity, now: Date = Date()) -> Permit? {
+    func permit(for challenge: IdentitySigningChallenge, identity: Identity, now: Date = Date(), monotonic: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Permit? {
         guard identity.referencesSameSigningIdentity(as: principal), let vault,
               challenge.action == "checkIdentityOrigin", challenge.audience == "GeneralCell" else { return nil }
         return lock.withLock {
-            purgeExpired(now: now)
+            purgeExpired(now: now, monotonic: monotonic)
             let scope = BridgeIdentityProofScope(domain: challenge.domain, resource: challenge.resource)
-            guard leases.values.contains(where: { $0.scopes.contains(scope) }) else { return nil }
-            return Permit(identity: principal, vault: vault, generation: generation, scope: scope)
+            guard let lease = leases.first(where: { $0.value.scopes.contains(scope) }) else { return nil }
+            return Permit(identity: principal, vault: vault, generation: generation, commandID: lease.key, scope: scope)
         }
     }
 
@@ -92,14 +95,17 @@ final class BridgeIdentityProofAuthorization {
         }
     }
 
-    func isCurrent(_ permit: Permit, now: Date = Date()) -> Bool {
+    func isCurrent(_ permit: Permit, now: Date = Date(), monotonic: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         lock.withLock {
-            purgeExpired(now: now)
-            return generation == permit.generation && leases.values.contains { $0.scopes.contains(permit.scope) }
+            purgeExpired(now: now, monotonic: monotonic)
+            return generation == permit.generation && leases[permit.commandID]?.scopes.contains(permit.scope) == true
         }
     }
 
-    private func purgeExpired(now: Date) {
-        leases = leases.filter { $0.value.expiresAt.map { $0 > now } ?? true }
+    private func purgeExpired(now: Date, monotonic: TimeInterval) {
+        leases = leases.filter {
+            ($0.value.expiresAt.map { $0 > now } ?? true) &&
+            ($0.value.monotonicDeadline.map { $0 > monotonic } ?? true)
+        }
     }
 }

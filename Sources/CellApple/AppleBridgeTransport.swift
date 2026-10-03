@@ -61,19 +61,28 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             
             try websocketConn.ping()
         } catch {
-            CellBase.diagnosticLog("Apple websocket connection failed with error: \(error)", domain: .bridge)
+            CellBase.diagnosticLog("Apple websocket connection failed with error: code=transport_failed", domain: .bridge)
             await currentDelegate()?.sendSetValueState(for: ReservedKeypath.bridgesetup.rawValue, setValueState: .paramErr) // Remember to set back to .error
             await currentDelegate()?.pushError(errorMessage: "Websocket connection failed with error: \(error)", error: error)
             await cleanupClosedWebSocketRegistration()
+            throw error
         }
         
     }
     
+    public func close() async {
+        let connection = withStateLock { () -> WebSocketConnection2? in
+            let connection = webSocketConnection; webSocketConnection = nil; return connection
+        }
+        try? await connection?.disconnect()
+        await cleanupClosedWebSocketRegistration()
+    }
+
     public func sendData(_ data: Data) async throws {
         guard let webSocketConnection = currentConnection() else {
             CellBase.diagnosticLog("No Apple websocket; bridge target is not reachable.", domain: .bridge)
             await cleanupClosedWebSocketRegistration()
-            return
+            throw TransportError.TransportNotFound
         }
 
         if CellBase.sendDataAsText {
@@ -83,7 +92,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             do {
                 try await webSocketConnection.send(text: text)
             } catch {
-                CellBase.diagnosticLog("Apple websocket text send failed with error: \(error)", domain: .bridge)
+                CellBase.diagnosticLog("Apple websocket text send failed with error: code=transport_failed", domain: .bridge)
                 await cleanupClosedWebSocketRegistration()
                 throw error
             }
@@ -91,7 +100,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             do {
                 try await webSocketConnection.send(data: data)
             } catch {
-                CellBase.diagnosticLog("Apple websocket binary send failed with error: \(error)", domain: .bridge)
+                CellBase.diagnosticLog("Apple websocket binary send failed with error: code=transport_failed", domain: .bridge)
                 await cleanupClosedWebSocketRegistration()
                 throw error
             }
@@ -109,7 +118,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     }
     
     public func onError(connection: WebSocketConnection2, error: Error) async {
-        CellBase.diagnosticLog("Apple websocket error: \(error)", domain: .bridge)
+        CellBase.diagnosticLog("Apple websocket error: code=transport_failed", domain: .bridge)
         if let delegate = currentDelegate() {
             await delegate.pushError(errorMessage: "WebSocketConnection error", error: error)
         }
@@ -129,6 +138,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
     private func extractCommandFromData(_ data: Data) async {
         do {
             try BridgeInboundPayloadValidator().validate(data)
+            try currentDelegate()?.validateInboundPayload(data)
         } catch let error as BridgeInboundPayloadError {
             await CellBase.recordSecurityEvent(.bridgePayloadRejected(
                 transportIdentifier: "apple-websocket",
@@ -140,6 +150,7 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             )
             return
         } catch {
+            await currentDelegate()?.pushError(errorMessage: "bridge_payload_rejected", error: error)
             return
         }
         let decoder = JSONDecoder()
@@ -150,39 +161,20 @@ public class AppleBridgeTransport: BridgeTransportProtocol, WebSocketConnectionD
             
             switch currentCommand {
             case .response:
-                try? await delegate.consumeResponse(command: bridgeCommand)
+                do { try await delegate.consumeResponse(command: bridgeCommand) }
+                catch { await delegate.pushError(errorMessage: "bridge_dispatch_rejected", error: error) }
             default:
-                try? await delegate.consumeCommand(command: bridgeCommand)
+                do { try await delegate.consumeCommand(command: bridgeCommand) }
+                catch { await delegate.pushError(errorMessage: "bridge_dispatch_rejected", error: error) }
             }
         }
     }
     
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
-        if let identity {
-            let localState = withStateLock {
-                (uuid: localIdentityUUID, vault: localIdentityVault)
-            }
-            if identity.uuid == localState.uuid,
-               let vault = localState.vault,
-               await vault.identityExistInVault(identity) {
-                return vault
-            }
-            if let vault = localState.vault,
-               await vault.identityExistInVault(identity) {
-                return vault
-            }
-            if identity.uuid == currentLocalIdentityUUID(),
-               await IdentityVault.shared.identityExistInVault(identity) {
-                return IdentityVault.shared
-            }
-            if await IdentityVault.shared.identityExistInVault(identity) {
-                return IdentityVault.shared
-            }
-        }
-        if let bridgeProtocol = currentDelegate() as? BridgeProtocol {
-            return BridgeIdentityVault(cloudBridge: bridgeProtocol)
-        }
-        return IdentityVault.shared
+        // This API resolves incoming wire descriptors, never local signing authority.
+        // Even an exact public-key match must prove origin back at the peer.
+        // A missing delegate yields a proxy that fails closed.
+        return BridgeIdentityVault(cloudBridge: currentDelegate() as? BridgeProtocol)
     }
 
     func cleanupClosedWebSocketRegistration() async {
