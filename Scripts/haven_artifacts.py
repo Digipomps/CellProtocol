@@ -18,9 +18,15 @@ import uuid
 
 SCHEMA = "haven.artifacts.v1"
 EXCLUDED = (".git", ".ssh", ".gnupg", ".env*", "*.pem", "*.key", "Keychains")
+DEFAULT_SNAPSHOT_BYTES = 256 * 1024
+MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
 
 
 class Rejected(ValueError):
+    pass
+
+
+class SnapshotTooLarge(Rejected):
     pass
 
 
@@ -278,6 +284,19 @@ class Collector:
         payload["digest"] = hashlib.sha256(canonical(payload).encode()).hexdigest()
         return payload
 
+    def encoded_snapshot(self, maximum_bytes=DEFAULT_SNAPSHOT_BYTES):
+        """Return a complete bounded frame, or nothing; never trim journal rows.
+
+        The caller must drain stdout while this process runs. This bound is a
+        payload bound, not proof that the signed transport's envelope will fit.
+        """
+        if type(maximum_bytes) is not int or not 1024 <= maximum_bytes <= MAX_SNAPSHOT_BYTES:
+            raise Rejected("invalid snapshot limit")
+        encoded = canonical(self.snapshot()).encode("utf-8") + b"\n"
+        if len(encoded) > maximum_bytes:
+            raise SnapshotTooLarge("snapshot exceeds delivery bound")
+        return encoded
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -288,15 +307,22 @@ def main():
     parser.add_argument("--project")
     parser.add_argument("--path")
     parser.add_argument("--result")
+    parser.add_argument("--max-bytes", type=int, default=DEFAULT_SNAPSHOT_BYTES,
+                        help="snapshot stdout limit including newline (1024 to 4194304 bytes)")
     args = parser.parse_args()
     collector = None
     try:
         collector = Collector(args.config)
         if args.command == "snapshot":
-            print(canonical(collector.snapshot()))
+            # Validate the full frame before emitting any bytes. An oversized
+            # snapshot must not look like a successful partial import.
+            sys.stdout.buffer.write(collector.encoded_snapshot(args.max_bytes))
         else:
             print(collector.record(args.command, args.attempt, args.job, args.project, args.path, args.result))
         return 0
+    except SnapshotTooLarge:
+        print("artifact_provenance_pending: snapshot_too_large; local journal retained", file=sys.stderr)
+        return 2
     except (Rejected, OSError, sqlite3.Error, ValueError, KeyError, TypeError):
         # No raw exception text: it may contain private paths or configuration.
         print("artifact_provenance_degraded: rejected scope/configuration, unavailable volume, or full journal", file=sys.stderr)

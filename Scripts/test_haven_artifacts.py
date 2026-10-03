@@ -85,6 +85,42 @@ class ArtifactTests(unittest.TestCase):
         after = self.collector().snapshot()
         self.assertEqual(MODULE.canonical(before), MODULE.canonical(after))
 
+    def test_snapshot_frame_is_complete_at_exact_byte_boundary(self):
+        collector = self.collector()
+        self.start(collector)
+        expected = MODULE.canonical(collector.snapshot()).encode("utf-8") + b"\n"
+        self.assertEqual(collector.encoded_snapshot(len(expected)), expected)
+        with self.assertRaises(MODULE.SnapshotTooLarge):
+            collector.encoded_snapshot(len(expected) - 1)
+        self.assertEqual(collector.encoded_snapshot(len(expected)), expected)
+
+    def test_oversized_snapshot_cli_emits_no_payload_and_preserves_replay(self):
+        for index in range(20):
+            (self.root / ("registrert-\u00e6\u00f8\u00e5-" + str(index))).touch()
+        collector = self.collector()
+        self.start(collector)
+        before = collector.snapshot()
+        command = [os.sys.executable, str(Path(__file__).with_name("haven_artifacts.py")),
+                   "--config", str(self.config), "snapshot", "--max-bytes", "1024"]
+        result = subprocess.run(command, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"snapshot_too_large", result.stderr)
+        self.assertNotIn(str(self.root).encode(), result.stderr)
+        self.assertEqual(before, self.collector().snapshot())
+        # A later delivery with sufficient room gets every retained row.
+        command[-1] = str(MODULE.MAX_SNAPSHOT_BYTES)
+        result = subprocess.run(command, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), before)
+
+    def test_invalid_snapshot_limits_fail_closed(self):
+        collector = self.collector()
+        self.start(collector)
+        for maximum in (0, -1, 1023, MODULE.MAX_SNAPSHOT_BYTES + 1, True, "1024"):
+            with self.assertRaises(MODULE.Rejected):
+                collector.encoded_snapshot(maximum)
+
     def test_terminal_retry_is_idempotent_but_conflict_is_rejected(self):
         collector = self.collector()
         attempt = self.start(collector)

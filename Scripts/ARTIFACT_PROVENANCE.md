@@ -46,6 +46,15 @@ required after a mount/device change. No automatic OS-wide scan is performed.
 /usr/bin/python3 Scripts/haven_artifacts.py --config /owner-private/config.json snapshot
 ```
 
+`snapshot` emits one complete UTF-8 JSON frame, including its trailing newline,
+bounded to 256 KiB by default. `--max-bytes` accepts 1024 through 4194304 bytes.
+Oversized output returns exit 2, an empty stdout and a fixed `snapshot_too_large`
+message; it neither trims records nor deletes journal events. The sender must
+still drain subprocess output while it runs, account for transport-envelope
+overhead and retain pending status until a matching durable receipt arrives.
+This collector does not make network requests. A bounded snapshot is not proof
+of enrollment, a remote grant, or an implemented background sender.
+
 `created` is a declaration by the registered writer immediately after it creates
 the exact path; recursively inventoried children remain observations. The writer
 must not call it for existing files. `recover --result interrupted` closes only
