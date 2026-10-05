@@ -5,6 +5,7 @@ import XCTest
 import Vapor
 @testable import CellBase
 @testable import CellVapor
+@testable import CellApple
 
 /// Real loopback WebSocket framing and callbacks. TLS/proxy deployment evidence
 /// remains a separate staging requirement; this test explicitly enables local WS.
@@ -41,6 +42,37 @@ final class BridgeChannelWebSocketTests: XCTestCase {
         }
     }
 
+    func testAppleCloseCancelsARealSocketStalledBeforeUpgrade() async throws {
+        let app = try await Application.make(.testing)
+        let entered = expectation(description: "Apple HTTP upgrade reached server")
+        let release = SocketUpgradeBarrier()
+        app.get("stall") { _ async -> HTTPStatus in
+            entered.fulfill()
+            await release.wait()
+            return .ok
+        }
+        let transport = AppleBridgeTransport()
+        do {
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
+            let url = URL(string: "ws://127.0.0.1:\(port)/stall")!
+            let pending = Task { try await transport.setup(url, identity: Identity()) }
+            await fulfillment(of: [entered], timeout: 3)
+            do { try await transport.setup(url, identity: Identity()); XCTFail("Second setup replaced active generation") } catch {}
+            let began = ProcessInfo.processInfo.systemUptime
+            await transport.close()
+            do { try await pending.value; XCTFail("Closed setup returned success") } catch {}
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 1, "Close must finish pending setup without its five-second timeout")
+            do { try await transport.setup(url, identity: Identity()); XCTFail("Retired adapter was reused") } catch {}
+            await release.resume()
+            await app.server.shutdown(); try await app.asyncShutdown()
+        } catch {
+            await transport.close(); await release.resume()
+            await app.server.shutdown(); try? await app.asyncShutdown()
+            throw error
+        }
+    }
+
     func testVaporSocketRequiresProofThenPerformsProtectedReadWithNoServerSigner() async throws {
         try await protectedRead(multiplexed: false)
     }
@@ -53,7 +85,15 @@ final class BridgeChannelWebSocketTests: XCTestCase {
         try await protectedRead(multiplexed: true, independentChannels: true)
     }
 
-    private func protectedRead(multiplexed: Bool, independentChannels: Bool = false) async throws {
+    func testAppleSocketRequiresProofThenPerformsProtectedReadWithNoServerSigner() async throws {
+        try await protectedRead(multiplexed: false, nativeClient: true)
+    }
+
+    func testAppleMuxSocketPreservesSigningAndIndependentProtectedReads() async throws {
+        try await protectedRead(multiplexed: true, independentChannels: true, nativeClient: true)
+    }
+
+    private func protectedRead(multiplexed: Bool, independentChannels: Bool = false, nativeClient: Bool = false) async throws {
         let oldResolver = CellBase.defaultCellResolver, oldVault = CellBase.defaultIdentityVault
         defer { CellBase.defaultCellResolver = oldResolver; CellBase.defaultIdentityVault = oldVault }
         let vault = MockIdentityVault()
@@ -97,7 +137,7 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
             let url = try XCTUnwrap(URL(string: "ws://127.0.0.1:\(port)/bridge"))
             state.configure(try .init(url: url, domain: "bridge", allowInsecureLoopback: true))
-            let raw = VaporBridgeTransport()
+            let raw: any BridgeTransportProtocol = nativeClient ? AppleBridgeTransport() : VaporBridgeTransport()
             try await raw.setup(url, identity: owner.publicIdentitySnapshot())
             try await raw.sendData(JSONEncoder().encode(BridgeCommand(cmd: "get", identity: owner.publicIdentitySnapshot(), payload: .string("secret"), cid: 1)))
             for _ in 0..<100 {
@@ -107,7 +147,8 @@ final class BridgeChannelWebSocketTests: XCTestCase {
             XCTAssertEqual(state.count, 0)
             XCTAssertEqual(state.gates.first?.session.state, .closed)
             await raw.close()
-            let gate = try BridgeChannelTransport(underlying: VaporBridgeTransport(), endpoint: state.endpoint())
+            let physical: any BridgeTransportProtocol = nativeClient ? AppleBridgeTransport() : VaporBridgeTransport()
+            let gate = try BridgeChannelTransport(underlying: physical, endpoint: state.endpoint())
             let mux = multiplexed ? BridgeMultiplexSession(physicalTransport: gate) : nil
             let transport = try mux?.channelTransport(targetEndpoint: "Protected") ?? gate
             let bridge = try await BridgeBase(.init(owner: owner, transport: transport, connection: .outbound,
