@@ -9,12 +9,14 @@ public enum CellSecurityReplayDecision: Equatable, Sendable {
     case expired
     case issuedInFuture
     case missingScope
+    case capacity
 }
 
 public actor CellSecuritySigningChallengeReplayStore {
     private var consumedChallenges: [String: TimeInterval] = [:]
 
-    public init() {}
+    private let maximumEntries: Int
+    public init(maximumEntries: Int = 4096) { self.maximumEntries = max(1, maximumEntries) }
 
     public func consume(
         _ challenge: IdentitySigningChallenge,
@@ -37,6 +39,7 @@ public actor CellSecuritySigningChallengeReplayStore {
         guard consumedChallenges[key] == nil else {
             return .replay
         }
+        guard consumedChallenges.count < maximumEntries else { return .capacity }
         consumedChallenges[key] = challenge.expiresAt
         return .accepted
     }
@@ -68,7 +71,7 @@ public actor CellSecuritySigningChallengeReplayStore {
     }
 
     private func replayKey(for challenge: IdentitySigningChallenge) -> String {
-        [
+        let fields = [
             challenge.identityUUID,
             challenge.publicKeyFingerprint ?? "",
             challenge.domain,
@@ -76,6 +79,7 @@ public actor CellSecuritySigningChallengeReplayStore {
             challenge.action,
             challenge.audience,
             challenge.nonce.base64EncodedString()
-        ].joined(separator: "\u{1F}")
+        ]
+        return BridgeChannelAuthentication.digest(try! BridgeChannelAuthentication.encode(fields))
     }
 }

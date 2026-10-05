@@ -101,6 +101,62 @@ final class AppleBridgeTransportTests: XCTestCase {
         super.tearDown()
     }
 
+    func testTransportDiagnosticsNeverLogErrorDescriptionsOrPayloads() async throws {
+        let marker = "SYNTHETIC_PRIVATE_APPLE_N19"
+        let failure = NSError(domain: marker, code: 19, userInfo: [NSLocalizedDescriptionKey: marker])
+        let domains = CellBase.enabledDiagnosticLogDomains, handler = CellBase.diagnosticLogHandler
+        var messages: [String] = []
+        CellBase.enabledDiagnosticLogDomains = [.bridge]
+        CellBase.diagnosticLogHandler = { _, text in messages.append(text) }
+        defer {
+            CellBase.enabledDiagnosticLogDomains = domains
+            CellBase.diagnosticLogHandler = handler
+        }
+        for text in [false, true] {
+            CellBase.sendDataAsText = text
+            let socket = MockAppleWebSocketConnection()
+            socket.sendDataError = failure; socket.sendTextError = failure
+            let transport = AppleBridgeTransport(webSocketConnection: socket)
+            do { try await transport.sendData(Data(marker.utf8)); XCTFail("Expected send failure") } catch {}
+            await transport.onError(connection: socket, error: failure)
+        }
+        XCTAssertEqual(messages.filter { $0.contains("code=transport_failed") }.count, 4)
+        XCTAssertFalse(messages.joined().contains(marker))
+    }
+
+    func testCopiedRealLocalKeyOnCommandAndResponseNeverObtainsSigner() async throws {
+        let previous = CellBase.defaultIdentityVault
+        defer { CellBase.defaultIdentityVault = previous }
+        let vault = MockIdentityVault(); CellBase.defaultIdentityVault = vault
+        let local = await vault.identity(for: "local", makeNewIfNotFound: true)!
+        let descriptor = local.publicIdentitySnapshot()
+        let challenge = try IdentitySigningChallenge.signingData(for: descriptor, trustedIdentity: local,
+            domain: "bridge", resource: "probe", action: "checkIdentityOrigin", audience: "GeneralCell",
+            nonce: Data(repeating: 9, count: 32))
+        let signature = try await vault.signMessageForIdentity(messageData: challenge, identity: local)
+        XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: challenge, identity: descriptor))
+        let socket = MockAppleWebSocketConnection()
+        let transport = AppleBridgeTransport(webSocketConnection: socket)
+        let delegate = RecordingAppleBridgeDelegate()
+        transport.setDelegate(delegate)
+        for name in ["get", "response"] {
+            let command = BridgeCommand(cmd: name, identity: descriptor, payload: nil, cid: 1)
+            await transport.onMessage(connection: socket, data: try JSONEncoder().encode(command))
+        }
+        let commands = await delegate.consumedCommands
+        let responses = await delegate.consumedResponses
+        XCTAssertEqual(commands.count, 1); XCTAssertEqual(responses.count, 1)
+        for command in commands + responses {
+            let received = try XCTUnwrap(command.identity)
+            XCTAssertEqual(received.signingPublicKeyFingerprint, local.signingPublicKeyFingerprint)
+            let remoteVault = try XCTUnwrap(received.identityVault)
+            XCTAssertTrue(remoteVault is BridgeIdentityVault)
+            do { _ = try await remoteVault.signMessageForIdentity(messageData: challenge, identity: received); XCTFail("Borrowed local signing key") }
+            catch {}
+        }
+        await transport.close()
+    }
+
     func testInjectedConnectionBecomesDelegateAndSendsBinaryByDefault() async throws {
         let socket = MockAppleWebSocketConnection()
         let transport = AppleBridgeTransport(webSocketConnection: socket)
@@ -131,8 +187,10 @@ final class AppleBridgeTransportTests: XCTestCase {
         let transport = AppleBridgeTransport()
         transport.setDelegate(RecordingAppleBridgeDelegate(uuid: "missing-socket-delegate"))
 
-        try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
-        try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
+        for _ in 0..<2 {
+            do { try await transport.sendData(Data("{}".utf8)); XCTFail("Missing socket must throw") }
+            catch { XCTAssertTrue(error is TransportError) }
+        }
 
         XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), ["missing-socket-delegate"])
     }
@@ -173,13 +231,13 @@ final class AppleBridgeTransportTests: XCTestCase {
         XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), ["failed-send-delegate"])
     }
 
-    func testIdentityVaultFallsBackToAppleVaultWithoutBridgeDelegate() async {
+    func testMissingDelegateNeverFallsBackToAppleVault() async {
         let transport = AppleBridgeTransport(webSocketConnection: MockAppleWebSocketConnection())
         let visitingIdentity = TestFixtures.makeIdentity(displayName: "visiting", uuid: UUID())
 
         let returnedVault = await transport.identityVault(for: visitingIdentity)
 
-        XCTAssertTrue(returnedVault is IdentityVault)
+        XCTAssertTrue(returnedVault is BridgeIdentityVault)
     }
 
     func testVisitingIdentityUsesBridgeIdentityVaultWhenDelegateIsBridge() async throws {

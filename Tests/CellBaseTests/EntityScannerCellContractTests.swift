@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import XCTest
+import Combine
 @_spi(HAVENRuntime) @testable import CellBase
 @testable import CellApple
 
@@ -22,6 +23,22 @@ final class EntityScannerCellContractTests: XCTestCase {
         CellBase.documentRootPath = previousDocumentRoot
         CellBase.exploreContractEnforcementMode = previousExploreMode
         super.tearDown()
+    }
+
+    func testPeerBridgeFailureReachesScannerStatusFlow() async throws {
+        let vault = MockIdentityVault(), owner = await vault.identity(for: "scanner", makeNewIfNotFound: true)!
+        CellBase.defaultIdentityVault = vault
+        let cell = await EntityScannerCell(owner: owner), service = ScannerService(admission: ScannerAdmission(), owner: owner)
+        defer { service.stop() }
+        let reported = expectation(description: "consumer received peer auth failure")
+        let subscription = cell.getFeedPublisher().sink(receiveCompletion: { _ in }, receiveValue: { flow in
+            guard flow.topic == "scanner.status", case let .object(value) = flow.content,
+                  case .string("bridgeFailed:invalidProof")? = value["status"] else { return }
+            reported.fulfill()
+        })
+        defer { subscription.cancel() }
+        await cell.scannerStatusChanged(manager: service, status: "bridgeFailed:invalidProof", remoteUUID: "test-peer")
+        await fulfillment(of: [reported], timeout: 2)
     }
 
     func testScannerPeerDisplayNameStaysInsideMultipeerConnectivityBoundary() {

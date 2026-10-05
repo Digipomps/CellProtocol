@@ -792,6 +792,15 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
         }
     }
 
+    public func close() async {
+        cancelReconnectLoop()
+        keepAliveTask?.cancel(); keepAliveTask = nil
+        await reconnectCoordinator.clear()
+        let closing = connection
+        clearActiveConnection()
+        try? await closing?.disconnect()
+    }
+
     public func sendData(_ data: Data) async throws {
         guard let connection else {
             throw LightweightBridgeTransportError.notConnected
@@ -819,30 +828,10 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
-        if let identity {
-            if let localIdentityUUID,
-               identity.uuid == localIdentityUUID,
-               let localIdentityVault,
-               await localIdentityVault.identityExistInVault(identity) {
-                return localIdentityVault
-            }
-            if let defaultVault = CellBase.defaultIdentityVault {
-                if await defaultVault.identityExistInVault(identity) {
-                    return defaultVault
-                }
-            }
-            if let localIdentityVault,
-               await localIdentityVault.identityExistInVault(identity) {
-                return localIdentityVault
-            }
-        }
-        if let bridge = delegate as? BridgeProtocol {
-            return BridgeIdentityVault(cloudBridge: bridge)
-        }
-        if let defaultVault = CellBase.defaultIdentityVault {
-            return defaultVault
-        }
-        return BridgeIdentityVault()
+        // This API resolves incoming wire descriptors, never local signing authority.
+        // Even an exact public-key match must prove origin back at the peer.
+        // A missing delegate yields a proxy that fails closed.
+        return BridgeIdentityVault(cloudBridge: delegate as? BridgeProtocol)
     }
 
     func clientDidConnect(_ client: any LightweightWebSocketClient) async {
@@ -944,6 +933,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     private func handleIncomingData(_ data: Data) async {
         do {
             try BridgeInboundPayloadValidator().validate(data)
+            try delegate?.validateInboundPayload(data)
         } catch let error as BridgeInboundPayloadError {
             await CellBase.recordSecurityEvent(.bridgePayloadRejected(
                 transportIdentifier: "lightweight-websocket",
@@ -952,6 +942,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
             await delegate?.pushError(errorMessage: "Rejected invalid bridge payload", error: nil)
             return
         } catch {
+            await delegate?.pushError(errorMessage: "bridge_payload_rejected", error: error)
             return
         }
         guard let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),
