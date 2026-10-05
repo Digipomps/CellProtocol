@@ -99,3 +99,28 @@ final class RadarEntityLedgerTests: XCTestCase {
         XCTAssertNil(RadarVisualizationSpec.decode(from: .string("nonsense")))
     }
 }
+
+
+extension RadarEntityLedgerTests {
+    func testRadarRejectsExcessCountAndRetainedBytesWithoutReplacingAcceptedEntries() {
+        var ledger = RadarEntityLedger()
+        for index in 0..<(RadarEntityLedger.maximumCount + 500) {
+            ledger.consume(.found(RadarEntityUpdate(remoteUUID: "peer-\(index)", displayName: "peer")))
+        }
+        XCTAssertEqual(ledger.entities.count, RadarEntityLedger.maximumCount)
+        XCTAssertLessThanOrEqual(ledger.retainedBytes, RadarEntityLedger.maximumBytes)
+        ledger.consume(.found(RadarEntityUpdate(remoteUUID: "peer-0", displayName: String(repeating: "x", count: 9000))))
+        XCTAssertEqual(ledger.entitiesById["peer-0"]?.displayName, "peer")
+        ledger.consume(.connected(RadarEntityUpdate(connectedDevices: Array(repeating: "x", count: 10000))))
+        XCTAssertTrue(ledger.connectedDevices.isEmpty)
+        ledger.consume(.status(RadarEntityUpdate(status: String(repeating: "x", count: 9000))))
+        XCTAssertEqual(ledger.scannerStatus, "idle")
+        ledger.clear()
+        for index in 0..<500 {
+            ledger.consume(.found(RadarEntityUpdate(remoteUUID: "large-\(index)", displayName: String(repeating: "x", count: 7000))))
+        }
+        XCTAssertGreaterThan(ledger.entities.count, 0)
+        XCTAssertLessThan(ledger.entities.count, RadarEntityLedger.maximumCount, "Byte cap must bind before count")
+        XCTAssertLessThanOrEqual(ledger.retainedBytes, RadarEntityLedger.maximumBytes)
+    }
+}

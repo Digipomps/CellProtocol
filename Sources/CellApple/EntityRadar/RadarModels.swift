@@ -168,6 +168,13 @@ public struct NearbyEntity: Identifiable, Hashable {
         }
     }
 
+    /// Conservative retained-data accounting, including per-element overhead.
+    fileprivate var retainedBytes: Int {
+        let lists = [connectedDevices, probeDisclosure ?? [], matchedPurposeTokens, matchedInterestTokens]
+        return 512 + remoteUUID.utf8.count + displayName.utf8.count + status.utf8.count
+            + lists.reduce(0) { total, list in total + list.reduce(0) { $0 + 32 + $1.utf8.count } }
+    }
+
     public var fallbackAngleRadians: Double {
         RadarStableHash.unitDouble(for: remoteUUID) * 2.0 * .pi
     }
@@ -390,6 +397,16 @@ private enum RadarStableHash {
 /// the events keep the same picture — and the cell can hand it to a skeleton
 /// as a radar spec without a view model in between.
 public struct RadarEntityLedger: Equatable {
+    public static let maximumCount = 128
+    public static let maximumBytes = 256 * 1024
+    public static let maximumEntityBytes = 8 * 1024
+    public static let maximumMetadataBytes = 8 * 1024
+    public var retainedBytes: Int {
+        entitiesById.values.reduce(0) { $0 + $1.retainedBytes }
+            + connectedDevices.reduce(256 + scannerStatus.utf8.count) { $0 + 32 + $1.utf8.count }
+            + (selectedRemoteUUID?.utf8.count ?? 0)
+    }
+
     public private(set) var entitiesById: [String: NearbyEntity] = [:]
     public private(set) var connectedDevices: [String] = []
     public private(set) var scannerStatus: String = "idle"
@@ -422,7 +439,8 @@ public struct RadarEntityLedger: Equatable {
         case let .found(update):
             upsert(update, fallbackStatus: "found")
         case var .connected(update):
-            if let devices = update.connectedDevices { connectedDevices = devices }
+            if let devices = update.connectedDevices, devices.count <= Self.maximumCount,
+               devices.reduce(0, { $0 + 32 + $1.utf8.count }) <= Self.maximumMetadataBytes { connectedDevices = devices }
             if update.remoteUUID != nil, update.connected == nil { update.connected = true }
             upsert(update, fallbackStatus: "connected")
         case let .lost(update):
@@ -433,11 +451,11 @@ public struct RadarEntityLedger: Equatable {
             if lostUpdate.status == nil { lostUpdate.status = "lost" }
             lostUpdate.connected = false
             entity.merge(update: lostUpdate, defaultStatus: "lost")
-            entitiesById[remoteUUID] = entity
+            retain(entity)
         case let .proximity(update):
             upsert(update, fallbackStatus: "nearby")
         case let .status(update):
-            if let status = update.status, !status.isEmpty { scannerStatus = status }
+            if let status = update.status, !status.isEmpty, status.utf8.count <= 256 { scannerStatus = status }
             upsert(update, fallbackStatus: scannerStatus)
         }
     }
@@ -474,15 +492,24 @@ public struct RadarEntityLedger: Equatable {
         if normalized.status?.isEmpty ?? true { normalized.status = fallbackStatus }
         if var entity = entitiesById[remoteUUID] {
             entity.merge(update: normalized, defaultStatus: fallbackStatus)
-            entitiesById[remoteUUID] = entity
+            retain(entity)
         } else {
-            entitiesById[remoteUUID] = NearbyEntity(update: normalized, defaultStatus: fallbackStatus)
+            retain(NearbyEntity(update: normalized, defaultStatus: fallbackStatus))
         }
+    }
+
+    private mutating func retain(_ entity: NearbyEntity) {
+        let oldBytes = entitiesById[entity.remoteUUID]?.retainedBytes ?? 0
+        guard entitiesById[entity.remoteUUID] != nil || entitiesById.count < Self.maximumCount,
+              entity.retainedBytes <= Self.maximumEntityBytes,
+              // Reserve the fixed metadata budget even before a snapshot arrives.
+              retainedBytes - oldBytes + entity.retainedBytes <= Self.maximumBytes - Self.maximumMetadataBytes - 512 else { return }
+        entitiesById[entity.remoteUUID] = entity
     }
 
     static func normalizedRemoteUUID(_ remoteUUID: String?) -> String? {
         let trimmed = remoteUUID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        return trimmed.isEmpty || trimmed.utf8.count > 128 ? nil : trimmed
     }
 
     // MARK: Radar spec

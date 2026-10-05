@@ -778,6 +778,12 @@ class ScannerService :  NSObject, ObservableObject {
         }
     }
 
+    /// The cell owns terminal delivery before dropping its last service reference.
+    @MainActor func stopAndPublishLifecycle() {
+        stop()
+        publishLifecycle()
+    }
+
     func stop() {
         withState {
             restartRequested = false
@@ -819,12 +825,21 @@ class ScannerService :  NSObject, ObservableObject {
     /// Each retained transport owns exactly one gate/delegate.
     var bridgeDelegateCount: Int { withState { bridgeTransportsByRemoteUUID.count } }
 
-    @discardableResult
-    func respondToInvitation(remoteUUID: String, accept: Bool) -> Bool {
+    func invitationDecisionID(remoteUUID: String) -> UUID? {
         withState {
             expireInvitations()
             guard !stopped, let invitation = invitations[remoteUUID], invitation.state == .pending,
-                  invitation.generation == serviceGeneration else { return false }
+                  invitation.generation == serviceGeneration else { return nil }
+            return invitation.id
+        }
+    }
+
+    @discardableResult
+    func respondToInvitation(remoteUUID: String, invitationID: UUID, accept: Bool) -> Bool {
+        withState {
+            expireInvitations()
+            guard !stopped, let invitation = invitations[remoteUUID], invitation.state == .pending,
+                  invitation.generation == serviceGeneration, invitation.id == invitationID else { return false }
             let handler = invitation.handler
             invitation.handler = nil
             // Discovery, expiry and stop cannot interleave between taking the

@@ -31,6 +31,8 @@ final class ScannerRetainedStateTests: XCTestCase {
                 XCTAssertEqual(cell.retainedPeerStateForTesting.states, 1)
                 XCTAssertEqual(cell.retainedPeerStateForTesting.beacons, 1)
                 XCTAssertEqual(cell.retainedPeerStateForTesting.overlaps, 1)
+                XCTAssertEqual(cell.retainedAuxiliaryStateForTesting.radarCount, 1)
+                XCTAssertLessThanOrEqual(cell.retainedAuxiliaryStateForTesting.radarBytes, RadarEntityLedger.maximumBytes)
             }
             for index in 0..<8 {
                 announce(MCPeerID(displayName: "peer-\(window)-\(index)"), "remote-\(window)-\(index)")
@@ -44,6 +46,7 @@ final class ScannerRetainedStateTests: XCTestCase {
             XCTAssertEqual(cell.retainedPeerStateForTesting.beacons, 0)
             XCTAssertEqual(cell.retainedPeerStateForTesting.overlaps, 0)
             XCTAssertEqual(admission.snapshot(.discovery).count, 0)
+            XCTAssertEqual(cell.retainedAuxiliaryStateForTesting.radarCount, 0)
         }
         announce(rotating, "legitimate"); service.drainEventsForTesting()
         XCTAssertEqual(cell.retainedPeerStateForTesting.states, 1)
@@ -176,4 +179,52 @@ private final class RetentionClock: @unchecked Sendable {
     func scannerPeerStateChanged(manager: ScannerService) { cell.scannerPeerStateChanged(manager: manager) }
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
     func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws {}
+}
+
+
+extension ScannerRetainedStateTests {
+    @MainActor func testCellStopPublishesTerminalStatusBeforeDroppingLastServiceOwner() async throws {
+        let owner = await ScannerPair.owner()
+        let cell = await EntityScannerCell(owner: owner)
+        var statuses: [String] = []
+        cell.consumerFlowForTesting = { event in
+            if event.topic == "scanner.status", case let .object(value) = event.content,
+               case let .string(status)? = value["status"] { statuses.append(status) }
+        }
+        cell.connectService = ScannerService(admission: ScannerAdmission(), owner: owner)
+        cell.connectService?.deferEventDrainForTesting = true
+        cell.connectService?.radarDelegate = cell
+        weak var retired = cell.connectService
+        _ = try await cell.set(keypath: "stop", value: .bool(true), requester: owner)
+        XCTAssertEqual(statuses, ["stopped"])
+        XCTAssertNil(cell.connectService)
+        for _ in 0..<100 where retired != nil { try await Task.sleep(nanoseconds: 1_000_000) }
+        XCTAssertNil(retired, "Terminal delivery must not need another long-lived service owner")
+        _ = try await cell.set(keypath: "stop", value: .bool(true), requester: owner)
+        XCTAssertEqual(statuses, ["stopped"])
+    }
+
+    @MainActor func testEveryOldServiceCallbackIsIgnoredAfterReplacement() async throws {
+        let owner = await ScannerPair.owner()
+        let cell = await EntityScannerCell(owner: owner)
+        let old = ScannerService(admission: ScannerAdmission(), owner: owner)
+        let fresh = ScannerService(admission: ScannerAdmission(), owner: owner)
+        defer { old.stop(); fresh.stop(); cell.connectService = nil }
+        old.deferEventDrainForTesting = true; fresh.deferEventDrainForTesting = true
+        old.radarDelegate = cell; fresh.radarDelegate = cell; cell.connectService = old
+        old.start(); old.stop()
+        cell.connectService = fresh
+        var events: [FlowElement] = []
+        cell.consumerFlowForTesting = { events.append($0) }
+        let peer = MCPeerID(displayName: "stale")
+        old.drainEventsForTesting()
+        cell.connectedDevicesChanged(manager: old, connectedDevices: ["stale"])
+        cell.lostDeviceChanged(manager: old, lostDevice: peer, remoteUUID: "same-remote")
+        cell.scannerStatusChanged(manager: old, status: "connected", remoteUUID: "same-remote")
+        cell.proximityChanged(manager: old, remoteUUID: "same-remote", distanceMeters: 1, directionX: 1, directionY: 0, directionZ: 0)
+        cell.scannerChannelRetired(manager: old, generation: "old")
+        XCTAssertTrue(events.isEmpty)
+        cell.scannerStatusChanged(manager: fresh, status: "started", remoteUUID: nil)
+        XCTAssertEqual(events.count, 1)
+    }
 }

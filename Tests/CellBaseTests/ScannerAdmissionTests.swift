@@ -124,7 +124,7 @@ final class ScannerAdmissionTests: XCTestCase {
         service.advertiser(advertiser, didReceiveInvitationFromPeer: fresh, withContext: try BridgeChannelAuthentication.encode(endpoint)) { accepted, _ in responses.add(accepted) }
         await service.drainEventsForTesting()
         XCTAssertEqual(observer.invitations, 1, "Fresh invitation is actually published")
-        XCTAssertTrue(service.respondToInvitation(remoteUUID: "fresh", accept: true))
+        XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "fresh", accept: true))
         XCTAssertEqual(responses.values.last, true)
         service.stop()
         for kind in ScannerAdmission.Kind.allCases { XCTAssertEqual(admission.snapshot(kind).count, 0) }
