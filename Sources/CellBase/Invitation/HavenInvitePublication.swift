@@ -163,6 +163,10 @@ public struct HavenInvitePublication: Codable, Equatable, Sendable, CanonicalPay
     /// Without it, `who has opened invitation X` would be answerable by anyone
     /// who could guess a ticket id — a quiet oracle over the issuer's network.
     public var statusKey: String
+    /// The entity the sender named for this invitation, resolved from the sender's own relations or a registry
+    /// (purpose://candidate.invite.resolve-recipient-to-an-entity). Signed, but NOT in the ticket or link. Only an
+    /// entity named here can be pushed (purpose://candidate.testmatrise.apns.only-who-was-invited-is-pushed).
+    public var audienceEntity: String?
     public var proof: HavenSignatureProof?
 
     public init(
@@ -176,6 +180,7 @@ public struct HavenInvitePublication: Codable, Equatable, Sendable, CanonicalPay
         publishedAt: Int,
         maxContactRequests: Int = 3,
         statusKey: String,
+        audienceEntity: String? = nil,
         proof: HavenSignatureProof? = nil
     ) {
         self.schema = schema
@@ -188,6 +193,7 @@ public struct HavenInvitePublication: Codable, Equatable, Sendable, CanonicalPay
         self.publishedAt = publishedAt
         self.maxContactRequests = maxContactRequests
         self.statusKey = statusKey
+        self.audienceEntity = audienceEntity
         self.proof = proof
     }
 
@@ -559,6 +565,9 @@ public enum HavenInvitePublicationVerifier {
         }
         guard ticket.issuer.uuid == publication.issuerIdentityUUID else {
             throw Failure.issuerMismatch
+        }
+        if let entity = publication.audienceEntity, !HavenPushFormat.isValidEntity(entity) {
+            throw Failure.ticketMismatch("audienceEntity")
         }
 
         try verifyEnvelope(publication, signedBy: ticket.issuer)
