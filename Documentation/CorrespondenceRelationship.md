@@ -98,3 +98,19 @@ shape is unchanged. The focused local suite (53 tests) passed with Thread
 Sanitizer, including 128 parallel sends while snapshotting across expiry and
 reusing an expired ID before its original timer fires. This does not establish
 that every runtime operation is safe under every concurrent schedule.
+
+## Canonical descriptors and removal clocks
+
+`Identity` decoding supplies `{}` for omitted properties. `Contract.signed`
+therefore round-trips its public issuer/subject descriptors before returning a
+wire document. Otherwise pinning canonical bytes before decoding produces a
+different document after decoding, which DeviceIngress correctly rejects.
+
+Each removal advances the subject cutoff even when a test clock is frozen, and
+covers installed contract timestamps. A fresh local owner signature receives a
+timestamp strictly beyond the previous cutoff; final actor installation can
+still reject it after a concurrent removal. External admission rejects an
+issuedAt later than the host clock, including values within the legacy 300-second
+skew allowance. Legacy cryptographic verification retains that allowance.
+Clients with an ahead-of-host clock must correct it or wait before presenting
+external admission; do not change the signed timestamp in transit.

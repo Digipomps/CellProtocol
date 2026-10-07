@@ -281,6 +281,55 @@ final class ExternalAgreementAdmissionTests: XCTestCase {
         XCTAssertEqual(written, .string("owner-write"))
     }
 
+    func testExternalAdmissionRejectsFutureWithinLegacyClockSkewWindow() async throws {
+        let f = await fixture()
+        let contract = try await signed(f, issuedAt: now.addingTimeInterval(60))
+        let legacyValid = await contract.verifySignature(now: now)
+        XCTAssertTrue(legacyValid, "Legacy signature verification keeps its clock-skew policy")
+        try await denied(contract, f)
+    }
+
+    func testRepeatedRemovalAtSameClockDefeatsPendingLocalReissue() async throws {
+        let f = await fixture()
+        let auditor = GeneralAuditor()
+        let initial = await auditor.authorizationSnapshot()
+        let first = await auditor.removeAuthorization(subjectUUID: f.subject.uuid,
+            revokedAt: now.timeIntervalSince1970, restoring: initial)
+        let date = Date(timeIntervalSince1970: now.timeIntervalSince1970.nextUp)
+        let contract = try await signed(f, issuedAt: date)
+        let removedAgain = await auditor.removeAuthorization(subjectUUID: f.subject.uuid,
+            revokedAt: now.timeIntervalSince1970, restoring: first)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(removedAgain.revokedBefore[f.subject.uuid]), contract.issuedAt)
+        let installed = await auditor.installAuthorization(contract: contract,
+            member: f.subject.publicIdentitySnapshot(), restoring: first)
+        XCTAssertTrue(installed.contracts.isEmpty)
+        XCTAssertTrue(installed.members.isEmpty)
+    }
+
+    func testCanonicalSignedContractBytesSurviveRoundTrip() async throws {
+        let f = await fixture()
+        let agreement = try await signed(f).agreement
+        let contract = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.subject, domain: f.cell.identityDomain, issuedAt: now)
+        let data = try SignedAgreementEntitySupport.canonicalData(contract)
+        let restored = try JSONDecoder().decode(Contract.self, from: data)
+        XCTAssertEqual(try SignedAgreementEntitySupport.canonicalData(restored), data)
+    }
+
+    func testFreshLocalOwnerSignatureCanReadmitAtUnchangedClock() async throws {
+        let f = await fixture()
+        await f.cell.removeMember(member: f.subject, requester: f.owner)
+        let request = Agreement(owner: f.owner)
+        request.conditions = []
+        request.duration = 600
+        request.grants = [Grant(keypath: "name", permission: "r---")]
+        let result = await f.cell.addAgreement(request, for: f.subject, authorizedBy: f.owner)
+        XCTAssertEqual(result, .signed)
+        let expected = try await f.cell.get(keypath: "name", requester: f.owner)
+        let actual = try await f.cell.get(keypath: "name", requester: f.subject)
+        XCTAssertEqual(actual, expected)
+    }
+
     func testAuditorFinalInstallRejectsRevokedContractWithStaleCallerSnapshot() async throws {
         let f = await fixture()
         let contract = try await signed(f)

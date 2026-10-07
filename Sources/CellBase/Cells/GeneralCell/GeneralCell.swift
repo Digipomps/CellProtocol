@@ -1420,12 +1420,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 }
                 contractAgreement.owner = signingOwner
                 contractAgreement.signatories = [signingOwner, identity]
+                let beforeSigning = await currentAuthorizationSnapshot()
+                let clock = authorizationClock().timeIntervalSince1970
+                // A fresh local owner signature can re-admit after removal even
+                // when the injected clock has not advanced. Old signatures still
+                // fail the cutoff, including at the final actor transaction.
+                let issuedAt = max(clock, beforeSigning.revokedBefore[identity.uuid]?.nextUp ?? -.infinity)
                 let contract = try await Contract.signed(
                     agreement: contractAgreement,
                     issuer: signingOwner,
                     subject: identity,
                     domain: identityDomain,
-                    issuedAt: authorizationClock()
+                    issuedAt: Date(timeIntervalSince1970: issuedAt)
                 )
                 let persisted = persistedAuthorizationSnapshot()
                 let authorization = await self.auditor.installAuthorization(
@@ -1434,6 +1440,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     restoring: persisted
                 )
                 applyPersistedAuthorizationSnapshot(authorization)
+                guard authorization.contracts.contains(where: { $0.uuid == contract.uuid }) else {
+                    await recordContractRejected(identity: identity,
+                        reasonCode: "contract_installation_revoked", message: "Admission was revoked while signing.")
+                    return .rejected
+                }
                 return .signed
             } catch {
                 CellBase.diagnosticLog("Signing contract failed: \(error)", domain: .contracts)
@@ -1476,6 +1487,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         guard contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
               contract.signaturePurpose == "haven.contract.admission.v2",
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970,
               contract.targetCellUUID == uuid,
               await contract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
@@ -1504,6 +1516,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             )
         }
         guard contract.targetCellUUID == uuid,
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970,
               contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
               conditionsResolved,
               contract.temporalStatus(now: authorizationClock()) == .active else {

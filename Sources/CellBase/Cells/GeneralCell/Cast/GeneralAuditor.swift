@@ -479,7 +479,12 @@ actor GeneralAuditor {
         restoring persisted: AuthorizationSnapshot
     ) -> AuthorizationSnapshot {
         hydrateAuthorizationIfEmpty(from: persisted)
-        revokedBefore[subjectUUID] = max(revokedBefore[subjectUUID] ?? -.infinity, revokedAt)
+        // Advance on every removal, including a frozen clock. Also cover any
+        // currently installed contract timestamp, so removal cannot be undone
+        // by replaying a locally reissued contract just beyond the prior cutoff.
+        let previous = revokedBefore[subjectUUID]?.nextUp ?? -.infinity
+        let installed = contracts.filter { $0.subject.uuid == subjectUUID }.map(\.issuedAt).max() ?? -.infinity
+        revokedBefore[subjectUUID] = max(revokedAt, max(previous, installed))
         contracts.removeAll { $0.subject.uuid == subjectUUID }
         members.removeAll { $0.uuid == subjectUUID }
         authorizationRevision += 1

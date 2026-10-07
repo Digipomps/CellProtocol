@@ -103,8 +103,8 @@ public struct Contract: Codable {
         var contract = Contract(
             uuid: UUID().uuidString,
             agreement: agreementSnapshot,
-            issuer: issuer.publicIdentitySnapshot(),
-            subject: subject.publicIdentitySnapshot(),
+            issuer: try stablePublicSnapshot(issuer),
+            subject: try stablePublicSnapshot(subject),
             domain: domain,
             issuedAt: issuedAt.timeIntervalSince1970,
             expiresAt: issuedAt.addingTimeInterval(TimeInterval(agreementSnapshot.duration)).timeIntervalSince1970,
@@ -237,6 +237,13 @@ public struct Contract: Codable {
             signaturePurpose: signaturePurpose
         )
         return try Self.canonicalEncoder().encode(payload)
+    }
+
+    // Identity decoding supplies empty properties when they are omitted. Normalize
+    // before returning a signed document so its canonical wire bytes survive decode.
+    private static func stablePublicSnapshot(_ identity: Identity) throws -> Identity {
+        let data = try canonicalEncoder().encode(identity.publicIdentitySnapshot())
+        return try JSONDecoder().decode(Identity.self, from: data)
     }
 
     private static func snapshot(_ agreement: Agreement) throws -> Agreement {
