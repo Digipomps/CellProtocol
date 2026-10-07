@@ -235,6 +235,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func keys(requester: Identity) async throws -> [String] {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "keys", requestedAccess: "r---")
         try await ensureRuntimeReady()
         // validate permissions
         
@@ -242,6 +243,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         // validate permissions
         guard let schema = schemaDict[key] else {
@@ -256,6 +258,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         method: ExploreContractMethod,
         requester: Identity
     ) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         guard let schema = operationSchemaDict[key]?[method] else {
             throw GeneralCellErrors.noSchemaForKey
@@ -264,6 +267,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
 
     public func operationContracts(requester: Identity) async throws -> [ValueType] {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "operationContracts", requestedAccess: "r---")
         try await ensureRuntimeReady()
         return operationSchemaDict.keys.sorted().flatMap { key in
             operationSchemaDict[key, default: [:]].keys
@@ -335,6 +339,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
 
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         guard let description = schemaDescriptionDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
@@ -623,6 +628,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 // Cell Absorb functions
     
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: label, requestedAccess: "-w--")
         try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
         if let runtimeReadyEmitter = emitter as? CellRuntimeReady {
@@ -1089,6 +1095,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     // change to absorb flow
     public func absorbFlow(label: String, requester: Identity) async throws {  
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: label, requestedAccess: "-w--")
         try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
         switch await auditor.beginFlowSubscription(for: label) {
@@ -1293,6 +1300,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "feed", requestedAccess: "r---")
         try await ensureRuntimeReady()
         if await validateAccess("r---", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
@@ -1310,7 +1318,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     open func admit(context: ConnectContext) async -> ConnectState {
         do {
+            if let requester = context.identity {
+                try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "admit", requestedAccess: "r---")
+            }
             try await ensureRuntimeReady()
+        } catch is CellAuthorizationError {
+            return .denied
         } catch {
             CellBase.diagnosticLog(
                 "Runtime binding preparation failed before admission: \(error)",
@@ -1358,6 +1371,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         for identity: Identity,
         authorizedBy authority: Identity
     ) async -> AgreementState {
+        do {
+            try await rejectForeignOwnerKeyBeforeReadiness(identity, keypath: "agreement", requestedAccess: "-w--")
+            try await rejectForeignOwnerKeyBeforeReadiness(authority, keypath: "agreement", requestedAccess: "-w--")
+        } catch {
+            return .rejected
+        }
         do {
             try await ensureRuntimeReady()
         } catch {
@@ -1632,6 +1651,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func advertise(for identity: Identity) async throws -> AnyCell {
+        try await rejectForeignOwnerKeyBeforeReadiness(identity, keypath: "advertise", requestedAccess: "r---")
         try await ensureRuntimeReady()
         let manifest = try await self.exploreManifest(requester: identity)
         let template = try publicAgreementTemplateSnapshot()
@@ -1653,6 +1673,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func state(requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "state", requestedAccess: "r---")
         try await ensureRuntimeReady()
         return .string("not implemented")
     }
@@ -1665,6 +1686,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func get(keypath: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "r---")
         try await ensureRuntimeReady()
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
@@ -1801,6 +1823,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "-w--")
         try await ensureRuntimeReady()
         
         
@@ -1911,6 +1934,46 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             at: keypath,
             for: requester
         )
+    }
+
+    /// Rejects a foreign owner reference before binding hooks run. This never
+    /// grants access: verified links and other identities continue through the
+    /// ordinary readiness and authorization paths. Debug policy cannot bypass it.
+    private func rejectForeignOwnerKeyBeforeReadiness(
+        _ requester: Identity, keypath: String, requestedAccess: String
+    ) async throws {
+        guard owner.uuid == requester.uuid,
+              !identitiesReferenceSame(owner, requester) else { return }
+        if await verifiedSameEntityLink(for: requester) != nil { return }
+        let decision = CellAuthorizationDecision(
+            allowed: false,
+            path: .deniedIdentityReferenceMismatch,
+            reason: "Requester UUID matched the owner UUID, but the signing key did not match and no linked-key proof was verified.",
+            request: CellAuthorizationRequest(
+                cellUUID: uuid, identityDomain: identityDomain, keypath: keypath,
+                requestedAccess: requestedAccess, requester: requester
+            ),
+            reasonCode: "identity_public_key_mismatch",
+            userMessage: "Restore the owner identity or present an owner-approved linked identity proof.",
+            requiredAction: "restore_owner_identity_or_link_scaffold",
+            canAutoResolve: false
+        )
+        await recordSecurityEvent(for: decision)
+        throw CellAuthorizationError.denied(decision)
+    }
+
+    /// Same registry constraints and cryptographic proof for preflight and
+    /// ordinary authorization. A registry record alone never proves key control.
+    private func verifiedSameEntityLink(for identity: Identity) async -> IdentityLinkRecord? {
+        guard let link = await IdentityLinkRegistry.shared.sameEntityLink(
+            ownerUUID: owner.uuid,
+            requesterUUID: identity.uuid,
+            requesterSigningKey: identity.publicSecureKey?.compressedKey,
+            domain: identityDomain
+        ) else { return nil }
+        let trustedIdentity = IdentityLinkProtocolService.identity(from: link.linkedIdentity)
+        guard await checkIdentityOrigin(identity, against: trustedIdentity) else { return nil }
+        return link
     }
 
     public final func ensureRuntimeReady() async throws {
@@ -2067,24 +2130,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             print("General \(String(reflecting: type(of: self))). Got owner identity but it failed to prove ownership!")
         }
         if !ownerReferenceMatches,
-           let link = await IdentityLinkRegistry.shared.sameEntityLink(
-               ownerUUID: owner.uuid,
-               requesterUUID: identity.uuid,
-               requesterSigningKey: identity.publicSecureKey?.compressedKey,
-               domain: identityDomain
-           ) {
-            // En identitet lenket som «samme entitet» må bevise kontroll over *sin egen* nøkkel —
-            // nøyaktig som eieren må for sin. Registeret er bare et oppslag; beviset skjer her.
-            let linkedTrustedIdentity = IdentityLinkProtocolService.identity(from: link.linkedIdentity)
-            if await checkIdentityOrigin(identity, against: linkedTrustedIdentity) {
-                return AuthorizationEvidence(
-                    ownerReferenceMatches: true,
-                    ownerProofValid: true,
-                    contracts: [],
-                    linkedIdentityLinkID: link.linkID
-                )
-            }
-            print("General \(String(reflecting: type(of: self))). Linked identity \(identity.uuid) matched link \(link.linkID) but failed to prove control of the linked key.")
+           let link = await verifiedSameEntityLink(for: identity) {
+            return AuthorizationEvidence(
+                ownerReferenceMatches: true,
+                ownerProofValid: true,
+                contracts: [],
+                linkedIdentityLinkID: link.linkID
+            )
         }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
