@@ -65,6 +65,14 @@ final class OwnerReferenceReadinessTests: XCTestCase {
         XCTAssertEqual(cell.installations, 0)
         XCTAssertEqual(cell.writes, 0)
     }
+    func testMissingRequesterKeyAgainstSignedOwnerRejectsBeforeReadiness() async throws {
+        let (owner, cell, _) = try await fixture()
+        let descriptorOnly = Identity(owner.uuid, displayName: "missing-key", identityVault: nil)
+        await assertDenied { _ = try await cell.get(keypath: "probe", requester: descriptorOnly) }
+        await assertDenied { _ = try await cell.set(keypath: "probe", value: .string("changed"), requester: descriptorOnly) }
+        XCTAssertEqual(cell.installations, 0)
+        XCTAssertEqual(cell.writes, 0)
+    }
     func testProvenOwnerRunsReadinessAndReads() async throws {
         let (owner, cell, _) = try await fixture()
         let bound = await cell.bindStoredOwnerToRuntimeIdentity(owner)

@@ -1943,7 +1943,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         _ requester: Identity, keypath: String, requestedAccess: String
     ) async throws {
         guard owner.uuid == requester.uuid,
-              !identitiesReferenceSame(owner, requester) else { return }
+              owner.signingPublicKeyFingerprint != requester.signingPublicKeyFingerprint else { return }
         if await verifiedSameEntityLink(for: requester) != nil { return }
         let decision = CellAuthorizationDecision(
             allowed: false,

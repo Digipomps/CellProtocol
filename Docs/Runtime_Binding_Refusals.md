@@ -36,7 +36,11 @@ provides the operational failure without that source compatibility change.
 ## Requester refusal before readiness
 
 Requester-bearing GeneralCell entry points reject a presented owner UUID with
-an unequal or missing signing-key fingerprint before `ensureRuntimeReady()`.
+an unequal signing-key fingerprint before `ensureRuntimeReady()`. A missing
+requester fingerprint differs from a known owner fingerprint. Two absent
+fingerprints do not trigger this foreign-key check; unsigned runtime setup keeps
+its existing token-scoped behavior and ordinary authorization grants no owner
+proof from absent keys.
 The preflight first preserves the existing IdentityLinkRegistry route: an
 active, same-entity, local-anchor link matching requester UUID, signing key,
 Cell domain and scope must also pass `checkIdentityOrigin` against the linked
