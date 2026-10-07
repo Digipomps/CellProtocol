@@ -13,6 +13,7 @@ final class CorrespondenceRelationshipTests: XCTestCase {
     override func setUp() {
         super.setUp()
         XCTAssertFalse(CellBase.debugValidateAccessForEverything)
+        CellBase.debugValidateAccessForEverything = false
         previousVault = CellBase.defaultIdentityVault
     }
     override func tearDown() {
@@ -27,6 +28,7 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let invitee: Identity
         let cell: CorrespondenceCell
         let contract: Contract
+        let storageRoot: URL
     }
     private func identity(_ vault: EphemeralIdentityVault) async -> Identity {
         let uuid = UUID().uuidString
@@ -63,7 +65,7 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let hostInvitee = await h.identity(forUUID: invitee.uuid)
         XCTAssertNil(hostOwner)
         XCTAssertNil(hostInvitee)
-        return Fixture(e: e, h: h, i: i, owner: owner, invitee: invitee, cell: cell, contract: contract)
+        return Fixture(e: e, h: h, i: i, owner: owner, invitee: invitee, cell: cell, contract: contract, storageRoot: storageRoot)
     }
     private func field(_ key: String, _ value: ValueType) -> ValueType? {
         guard case .object(let object) = value else { return nil }; return object[key]
@@ -302,7 +304,8 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let f = try await fixture()
         try await attachment(f, sender: f.owner, recipient: f.invitee, vault: f.e, receivingVault: f.i, retention: 1)
         let before = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(f.cell)) as? [String: Any])
-        let beforeRoot = try XCTUnwrap(URL(string: try XCTUnwrap(before["attachmentRoot"] as? String)))
+        // Trusted fixture provisioning supplies the root; snapshots must not disclose it.
+        let beforeRoot = f.storageRoot
         let beforeFiles = FileManager.default.enumerator(at: beforeRoot, includingPropertiesForKeys: nil)!
         XCTAssertTrue(beforeFiles.compactMap { $0 as? URL }.contains { $0.lastPathComponent == "0.json" })
         try await Task.sleep(nanoseconds: 1_200_000_000)
@@ -310,10 +313,199 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
         let envelopes = try XCTUnwrap(object["storedEnvelopesByMessageID"] as? [String: Any])
         XCTAssertTrue(envelopes.isEmpty)
-        let attachments = try XCTUnwrap(object["attachmentRoot"] as? String)
-        let root = try XCTUnwrap(URL(string: attachments))
+        XCTAssertNil(object["attachmentRoot"])
+        let root = f.storageRoot
         let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)!
         let chunks = files.compactMap { $0 as? URL }.filter { $0.lastPathComponent.range(of: "^[0-9]+\\.json$", options: .regularExpression) != nil }
         XCTAssertTrue(chunks.isEmpty)
     }
+    private actor Pause {
+        var continuation: CheckedContinuation<Void, Never>?
+        var used = false
+        func stop(_ entered: XCTestExpectation) async {
+            guard !used else { return }
+            used = true
+            await withCheckedContinuation { continuation = $0; entered.fulfill() }
+        }
+        func resume() { continuation?.resume(); continuation = nil }
+    }
+
+    func testExpiredMemberIsNotEncryptionRecipient() async throws {
+        let f = try await fixture()
+        f.cell.authorizationClock = { Date(timeIntervalSince1970: f.contract.expiresAt + 1) }
+        _ = try await f.cell.state(requester: f.owner)
+        let prepared = try await CorrespondenceEnvelopeUtility.prepare(
+            message: ChatMessage(owner: f.owner, content: "after-expiry"), subject: "synthetic",
+            cellID: f.cell.uuid, membershipFingerprint: f.cell.membershipFingerprintSnapshot,
+            recipients: [], provider: f.e)
+        let result = try await f.cell.set(keypath: "sendMessage", value: CorrespondenceSendRequest(
+            preparedEnvelope: prepared, purposeRef: "purpose://contact.communication").valueType(), requester: f.owner)
+        XCTAssertEqual(field("status", result), .string("stored"))
+        let state = try await f.cell.state(requester: f.owner)
+        guard case .list(let messages)? = field("messages", state) else { return XCTFail("Missing history") }
+        let outer = try CorrespondenceCellCodec.decode(try XCTUnwrap(messages.first), as: CorrespondenceOuterEnvelope.self)
+        let value = try await f.cell.set(keypath: "readMessage", value: .object(["messageID": .string(outer.messageID)]), requester: f.owner)
+        let stored = try CorrespondenceCellCodec.decode(value, as: CorrespondenceStoredEnvelope.self)
+        XCTAssertEqual(Set(stored.innerCiphertext.header.recipientKeys.compactMap(\.recipientIdentityUUID)), [f.owner.uuid])
+    }
+
+    func testAcceptRefreshCannotOverwriteConcurrentRevocation() async throws {
+        let f = try await fixture(admit: false)
+        let pause = Pause(), entered = expectation(description: "Accepted snapshot suspended")
+        f.cell.beforeMembershipApplyForTesting = { await pause.stop(entered) }
+        async let accepted = f.cell.acceptExternallySignedAgreement(f.contract, for: f.invitee)
+        await fulfillment(of: [entered], timeout: 5)
+        let command = try await ContractRevocation.signed(contract: f.contract, owner: f.owner)
+        let revoked = await f.cell.acceptExternallySignedRevocation(command)
+        XCTAssertTrue(revoked)
+        let revokedFingerprint = f.cell.membershipFingerprintSnapshot
+        await pause.resume()
+        let admission = await accepted
+        XCTAssertEqual(admission, .signed)
+        XCTAssertEqual(f.cell.membershipFingerprintSnapshot, revokedFingerprint)
+        f.cell.beforeMembershipApplyForTesting = nil
+        _ = try await f.cell.state(requester: f.owner)
+        let prepared = try await CorrespondenceEnvelopeUtility.prepare(
+            message: ChatMessage(owner: f.owner, content: "after-revoke"), subject: "synthetic",
+            cellID: f.cell.uuid, membershipFingerprint: f.cell.membershipFingerprintSnapshot,
+            recipients: [], provider: f.e)
+        let result = try await f.cell.set(keypath: "sendMessage", value: CorrespondenceSendRequest(
+            preparedEnvelope: prepared, purposeRef: "purpose://contact.communication").valueType(), requester: f.owner)
+        XCTAssertEqual(field("status", result), .string("stored"))
+    }
+
+    func testMembershipChangeWhileSendingRejectsCommit() async throws {
+        let f = try await fixture()
+        let prepared = try await CorrespondenceEnvelopeUtility.prepare(
+            message: ChatMessage(owner: f.owner, content: "must-not-store"), subject: "synthetic",
+            cellID: f.cell.uuid, membershipFingerprint: f.cell.membershipFingerprintSnapshot,
+            recipients: [f.invitee.publicIdentitySnapshot()], provider: f.e)
+        let payload = try CorrespondenceSendRequest(preparedEnvelope: prepared,
+            purposeRef: "purpose://contact.communication").valueType()
+        let pause = Pause(), entered = expectation(description: "Send awaits before commit")
+        f.cell.beforeSendCommitForTesting = { await pause.stop(entered) }
+        async let pending = f.cell.set(keypath: "sendMessage", value: payload, requester: f.owner)
+        await fulfillment(of: [entered], timeout: 5)
+        let command = try await ContractRevocation.signed(contract: f.contract, owner: f.owner)
+        let revoked = await f.cell.acceptExternallySignedRevocation(command)
+        XCTAssertTrue(revoked)
+        await pause.resume()
+        let result = try await pending
+        XCTAssertEqual(field("denialReason", result), .string("membershipFingerprintMismatch"))
+        let history = try await f.cell.state(requester: f.owner)
+        guard case .list(let messages)? = field("messages", history) else { return XCTFail("Missing history") }
+        XCTAssertTrue(messages.isEmpty)
+    }
+
+    func testRestoredRevocationAlsoAllowsFreshContract() async throws {
+        let f = try await fixture()
+        let command = try await ContractRevocation.signed(contract: f.contract, owner: f.owner)
+        let revoked = await f.cell.acceptExternallySignedRevocation(command)
+        XCTAssertTrue(revoked)
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: JSONEncoder().encode(f.cell))
+        let replay = await restored.acceptExternallySignedAgreement(f.contract, for: f.invitee)
+        XCTAssertEqual(replay, .rejected)
+        let snapshot = await restored.currentAuthorizationSnapshot()
+        let cutoff = try XCTUnwrap(snapshot.revokedBefore[f.invitee.uuid])
+        restored.authorizationClock = { Date(timeIntervalSince1970: cutoff + 1) }
+        let fresh = try await Contract.signed(agreement: f.contract.agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: restored.identityDomain,
+            issuedAt: Date(timeIntervalSince1970: cutoff.nextUp), targetCellUUID: restored.uuid)
+        let admitted = await restored.acceptExternallySignedAgreement(fresh, for: f.invitee)
+        XCTAssertEqual(admitted, .signed)
+        _ = try await restored.state(requester: f.invitee)
+    }
+
+    func testHostAttachmentMetadataAndProbeDoNotDiscloseNameOrPath() async throws {
+        let f = try await fixture()
+        let marker = "synthetic-private-filename.bin"
+        let stream = try AttachmentStreamV1.seal(plaintext: Data([1]))
+        var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: .init(name: marker, mediaType: "application/octet-stream", byteCount: 1), header: stream.stream.header)
+        let response = try await f.cell.set(keypath: "attachments.prepare", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(response), as: UTF8.self).contains(marker))
+        let plan = try CorrespondenceCellCodec.decode(response, as: CorrespondenceAttachmentPlan.self)
+        XCTAssertEqual(plan.metadata.name, "")
+        request.attachmentID = plan.attachmentID
+        request.sourceID = "arbitrary-source"
+        let probe = try await f.cell.set(keypath: "attachments.probe", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+        let text = String(decoding: try JSONEncoder().encode(probe), as: UTF8.self)
+        XCTAssertFalse(text.contains("referenceURL"))
+        XCTAssertFalse(text.contains(marker))
+        XCTAssertEqual(field("message", probe), .string("attachmentUnavailable"))
+        let snapshot = String(decoding: try JSONEncoder().encode(f.cell), as: UTF8.self)
+        XCTAssertFalse(snapshot.contains("file:"))
+        XCTAssertFalse(snapshot.contains("storageRoot"))
+        XCTAssertFalse(snapshot.contains(marker))
+    }
+
+    func testSmallExternalClockToleranceAndRevocationCutoff() async throws {
+        let f = try await fixture(admit: false)
+        let now = Date()
+        f.cell.authorizationClock = { now }
+        let skewed = try await Contract.signed(agreement: f.contract.agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: now.addingTimeInterval(4), targetCellUUID: f.cell.uuid)
+        let admitted = await f.cell.acceptExternallySignedAgreement(skewed, for: f.invitee)
+        XCTAssertEqual(admitted, .signed)
+        await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner)
+        let replay = await f.cell.acceptExternallySignedAgreement(skewed, for: f.invitee)
+        XCTAssertEqual(replay, .rejected)
+    }
+
+    func testMembershipChangeDuringAttachmentPrepareRejectsResult() async throws {
+        let f = try await fixture()
+        let command = try await ContractRevocation.signed(contract: f.contract, owner: f.owner)
+        f.cell.beforeAttachmentCommitForTesting = {
+            let revoked = await f.cell.acceptExternallySignedRevocation(command)
+            XCTAssertTrue(revoked)
+        }
+        let sealed = try AttachmentStreamV1.seal(plaintext: Data([1]))
+        let request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: .init(name: "synthetic.bin", mediaType: "application/octet-stream", byteCount: 1), header: sealed.stream.header)
+        let response = try await f.cell.set(keypath: "attachments.prepare", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        XCTAssertEqual(field("status", response), .string("error"))
+        XCTAssertEqual(field("message", response), .string("attachmentUnavailable"))
+    }
+
+    func testRestoredCopyUsesHostProvisioningAndEncryptedFilename() async throws {
+        let f = try await fixture()
+        let bytes = Data([1, 2, 3]), sealed = try AttachmentStreamV1.seal(plaintext: Data([1, 2, 3]))
+        let metadata = CorrespondenceAttachmentMetadata(name: "synthetic-encrypted-name.bin", mediaType: "application/octet-stream", byteCount: 3)
+        var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: metadata, header: sealed.stream.header)
+        let response = try await f.cell.set(keypath: "attachments.prepare", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        let plan = try CorrespondenceCellCodec.decode(response, as: CorrespondenceAttachmentPlan.self)
+        request.attachmentID = plan.attachmentID
+        for chunk in sealed.stream.chunks {
+            request.chunk = chunk
+            _ = try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        }
+        request.chunk = nil
+        let manifest = CorrespondenceAttachment(attachmentID: plan.attachmentID, messageID: request.messageID,
+            agreementID: request.agreementID, cellID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: metadata, mode: plan.mode, reason: plan.reason, header: plan.header,
+            contentKey: sealed.contentKey.withUnsafeBytes { Data($0) })
+        let id = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e, attachment: manifest, request: request)
+        let opened = try await read(f, id: id, recipient: f.invitee, sender: f.owner, vault: f.i)
+        XCTAssertEqual(opened.inner.attachment?.metadata.name, metadata.name)
+        let snapshot = try JSONEncoder().encode(f.cell)
+        XCTAssertFalse(String(decoding: snapshot, as: UTF8.self).contains(metadata.name))
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: snapshot)
+        try await restored.configureAttachmentStorage(root: f.storageRoot, requester: f.owner)
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let receiver = try CorrespondenceAttachmentFileReceiver(destination: destination, attachment: manifest)
+        for index in sealed.stream.chunks.indices {
+            request.index = UInt64(index)
+            let chunk = try await restored.set(keypath: "attachments.fetch", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+            try receiver.append(CorrespondenceCellCodec.decode(chunk, as: AttachmentStreamChunk.self))
+        }
+        _ = try receiver.finish()
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
+    }
+
 }

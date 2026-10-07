@@ -24,16 +24,15 @@ public final class CorrespondenceAttachmentCell: GeneralCell {
 
     private enum CodingKeys: String, CodingKey { case storageRoot }
     public required init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        storageRoot = try values.decode(URL.self, forKey: .storageRoot)
+        storageRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("HAVEN/CorrespondenceAttachments/restored")
         storage = CorrespondenceAttachmentStorage(root: storageRoot)
         try super.init(from: decoder)
-        Task { await storage.recover(now: Date()) }
     }
+    func provisionStorage(root: URL) async { await storage.provision(root: root) }
     public override func encode(to encoder: Encoder) throws {
         try super.encode(to: encoder)
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        try values.encode(storageRoot, forKey: .storageRoot)
+
     }
 }
 
@@ -65,6 +64,23 @@ public struct CorrespondenceAttachmentRequest: Codable, Equatable, Sendable {
     public var chunk: AttachmentStreamChunk?
     public var index: UInt64?
     public var confirmation: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case attachmentID, messageID, agreementID, senderIdentityUUID, sourceID, metadata, header, chunk, index, confirmation
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(attachmentID, forKey: .attachmentID)
+        try values.encode(messageID, forKey: .messageID)
+        try values.encode(agreementID, forKey: .agreementID)
+        try values.encode(senderIdentityUUID, forKey: .senderIdentityUUID)
+        try values.encodeIfPresent(sourceID, forKey: .sourceID)
+        if var safe = metadata { safe.name = ""; try values.encode(safe, forKey: .metadata) }
+        try values.encodeIfPresent(header, forKey: .header)
+        try values.encodeIfPresent(chunk, forKey: .chunk)
+        try values.encodeIfPresent(index, forKey: .index)
+        try values.encodeIfPresent(confirmation, forKey: .confirmation)
+    }
 
     public init(messageID: String, agreementID: String, senderIdentityUUID: String,
                 attachmentID: String? = nil, sourceID: String? = nil,
@@ -108,24 +124,51 @@ actor CorrespondenceAttachmentStorage {
         var transferredTo: String?
     }
     struct State: Codable {
+        // Local sources stay in memory on the sender's machine. Never persist
+        // cleartext source names, URLs, or local paths on a relationship host.
         var sources: [String: Source] = [:]
         var entries: [String: Entry] = [:]
+        init() {}
+        enum CodingKeys: CodingKey { case entries }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            entries = try values.decodeIfPresent([String: Entry].self, forKey: .entries) ?? [:]
+            for id in entries.keys {
+                entries[id]?.plan.metadata.name = ""
+                entries[id]?.plan.reference = nil
+            }
+        }
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            var safe = entries
+            for id in safe.keys {
+                safe[id]?.plan.metadata.name = ""
+                safe[id]?.plan.reference = nil
+            }
+            try values.encode(safe, forKey: .entries)
+        }
     }
-    let root: URL
+    private(set) var root: URL
     private var state: State?
     private var committedState: State?
-    private var cleanupFailure: String?
     private var sealers: [String: AttachmentStreamSealer] = [:]
     private var readers: [String: FileHandle] = [:]
     private var cursors: [String: UInt64] = [:]
     // Injectable only through the internal test/host boundary, never on the wire.
     private var writeIndex: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
     var writeFile: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
+    private var eraseDirectory: (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
+    func setEraserForTesting(_ eraser: @escaping (URL) throws -> Void) { eraseDirectory = eraser }
 
     init(root: URL) { self.root = root }
+    func provision(root: URL) {
+        self.root = root
+        state = nil
+        committedState = nil
+        recover(now: Date())
+    }
 
     private func load() throws {
-        if let cleanupFailure { throw CorrespondenceAttachmentError.cleanupFailure(cleanupFailure) }
         guard state == nil else { return }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
@@ -134,6 +177,8 @@ actor CorrespondenceAttachmentStorage {
             state = try JSONDecoder().decode(State.self, from: Data(contentsOf: index))
         } else { state = State() }
         committedState = state
+        // Rewrite legacy indexes through the redacting codec before exposing them.
+        if FileManager.default.fileExists(atPath: index.path) { try save() }
     }
     private func save() throws {
         do {
@@ -155,25 +200,29 @@ actor CorrespondenceAttachmentStorage {
         if let reader = readers.removeValue(forKey: id) { try reader.close() }
         let path = directory(id)
         if FileManager.default.fileExists(atPath: path.path) {
-            do { try FileManager.default.removeItem(at: path) }
-            catch { throw CorrespondenceAttachmentError.cleanupFailure(error.localizedDescription) }
+            do { try eraseDirectory(path) }
+            catch { throw CorrespondenceAttachmentError.cleanupFailure("cleanupFailed") }
         }
     }
     func purge(now: Date) throws {
         try load()
+        var failed = false
         for (id, entry) in state!.entries where entry.expiresAt <= now && entry.transferredTo == nil {
             // Persist denial before cleanup; a full disk or crash cannot make a
             // stale entry readable because expiry is checked on every request.
-            try erase(id)
-            state!.entries.removeValue(forKey: id)
+            do {
+                try erase(id)
+                state!.entries.removeValue(forKey: id)
+            } catch { failed = true }
         }
         try save()
+        if failed { throw CorrespondenceAttachmentError.cleanupFailure("cleanupFailed") }
     }
     func recover(now: Date) {
-        do {
-            try purge(now: now)
-            for entry in state!.entries.values where entry.transferredTo == nil { scheduleExpiry(at: entry.expiresAt) }
-        } catch { cleanupFailure = error.localizedDescription }
+        try? purge(now: now)
+        for entry in state?.entries.values ?? Dictionary<String, Entry>().values where entry.transferredTo == nil {
+            scheduleExpiry(at: entry.expiresAt)
+        }
     }
     func setIndexWriterForTesting(_ writer: @escaping (Data, URL) throws -> Void) { writeIndex = writer }
     func setWriterForTesting(_ writer: @escaping (Data, URL) throws -> Void) { writeFile = writer }
@@ -236,7 +285,7 @@ actor CorrespondenceAttachmentStorage {
                   header.chunkSize == AttachmentStreamV1.defaultChunkSize else {
                 throw CorrespondenceAttachmentError.contextMismatch
             }
-            plan = CorrespondenceAttachmentPlan(attachmentID: id, metadata: metadata, mode: .copy,
+            plan = CorrespondenceAttachmentPlan(attachmentID: id, metadata: .init(name: "", mediaType: metadata.mediaType, byteCount: metadata.byteCount), mode: .copy,
                 reason: "Local source is outside the Cell's reach; encrypted chunks are imported.",
                 reference: nil, header: header, sourceContentKey: nil)
         }
@@ -294,8 +343,8 @@ actor CorrespondenceAttachmentStorage {
         } catch {
             state!.entries[id]?.revoked = true
             do { try erase(id); try save() }
-            catch { throw CorrespondenceAttachmentError.cleanupFailure(error.localizedDescription) }
-            throw CorrespondenceAttachmentError.storageFailure(error.localizedDescription)
+            catch { throw CorrespondenceAttachmentError.cleanupFailure("cleanupFailed") }
+            throw CorrespondenceAttachmentError.storageFailure("storageFailed")
         }
     }
     func publish(_ request: CorrespondenceAttachmentRequest, expiresAt: Date, now: Date) throws {
@@ -311,14 +360,16 @@ actor CorrespondenceAttachmentStorage {
             let seconds = max(0, date.timeIntervalSinceNow)
             try? await Task.sleep(nanoseconds: UInt64(min(seconds, 90 * 86400) * 1_000_000_000))
             do { try await self?.purge(now: Date()) }
-            catch { await self?.recordCleanupFailure(error.localizedDescription) }
+            catch { /* A later purge retries each failed entry; other entries still expire. */ }
         }
     }
-    private func recordCleanupFailure(_ message: String) { cleanupFailure = message }
     func metadata(_ request: CorrespondenceAttachmentRequest, now: Date) throws -> CorrespondenceAttachmentPlan {
         let (_, item) = try entry(request, now: now)
         guard item.published else { throw CorrespondenceAttachmentError.incomplete }
-        return item.plan
+        var safe = item.plan
+        safe.metadata.name = ""
+        safe.reference = nil
+        return safe
     }
     func fetch(_ request: CorrespondenceAttachmentRequest, recipientKey: String, now: Date) throws -> AttachmentStreamChunk {
         let (id, item) = try entry(request, now: now)

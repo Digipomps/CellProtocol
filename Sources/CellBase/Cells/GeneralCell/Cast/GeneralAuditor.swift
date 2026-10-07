@@ -491,21 +491,21 @@ actor GeneralAuditor {
         return authorizationSnapshot()
     }
 
-    func applyRevocation(_ command: ContractRevocation, restoring persisted: AuthorizationSnapshot) -> AuthorizationSnapshot? {
+    func applyRevocation(_ command: ContractRevocation, cutoff: TimeInterval, restoring persisted: AuthorizationSnapshot) -> AuthorizationSnapshot? {
         hydrateAuthorizationIfEmpty(from: persisted)
         guard command.issuedAt > (revokedBefore[command.subjectUUID] ?? -.infinity),
               contracts.contains(where: {
                   $0.uuid == command.contractUUID && $0.agreement.uuid == command.agreementUUID &&
                   $0.subject.uuid == command.subjectUUID && $0.issuedAt <= command.issuedAt
               }) else { return nil }
-        return removeAuthorization(subjectUUID: command.subjectUUID, revokedAt: command.issuedAt, restoring: persisted)
+        return removeAuthorization(subjectUUID: command.subjectUUID, revokedAt: max(command.issuedAt, cutoff), restoring: persisted)
     }
 
     func replaceAuthorization(
         contracts: [Contract],
         members: [Identity],
         revision: Int,
-        revokedBefore: [String: TimeInterval] = [:]
+        revokedBefore: [String: TimeInterval]
     ) -> AuthorizationSnapshot {
         guard revision >= authorizationRevision else {
             return authorizationSnapshot()
@@ -529,6 +529,11 @@ actor GeneralAuditor {
         revokedBefore = persisted.revokedBefore
         members = persisted.members
         authorizationRevision = max(authorizationRevision, persisted.revision)
+    }
+
+    // A synchronous effect here cannot interleave with actor revocation.
+    func withAuthorizationSnapshot<T>(_ effect: (AuthorizationSnapshot) -> T) -> T {
+        effect(authorizationSnapshot())
     }
 
     func authorizationSnapshot() -> AuthorizationSnapshot {

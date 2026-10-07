@@ -61,7 +61,7 @@ Both parties use `sendMessage`, `readMessage`, `ackMessage`, `inbox` and the ten
 the relationship Cell UUID; invited senders use their signed Agreement UUID.
 The original context remains bound into the attachment manifest and envelope
 AAD. Set `clientMessageID` to the attachment message UUID when sealing.
-Recipient signing fingerprints come from all admitted members plus the owner,
+Recipient signing fingerprints come from currently active, nonrevoked contracts plus the owner,
 rather than only the sender's Agreement. Each ordinary action still proves the
 caller's key. Attachment byte chunks use the existing `AttachmentStreamV1`.
 
@@ -109,8 +109,47 @@ different document after decoding, which DeviceIngress correctly rejects.
 Each removal advances the subject cutoff even when a test clock is frozen, and
 covers installed contract timestamps. A fresh local owner signature receives a
 timestamp strictly beyond the previous cutoff; final actor installation can
-still reject it after a concurrent removal. External admission rejects an
-issuedAt later than the host clock, including values within the legacy 300-second
-skew allowance. Legacy cryptographic verification retains that allowance.
-Clients with an ahead-of-host clock must correct it or wait before presenting
-external admission; do not change the signed timestamp in transit.
+still reject it after a concurrent removal. External admission and signed revocation allow five seconds of positive clock
+skew. Owner removal and accepted signed revocation advance their cutoffs by the same five seconds and covers all
+installed timestamps, so a pending, slightly future-dated contract cannot win
+against removal. A new external signature after removal must be later than that
+cutoff; clients whose clock is behind it wait or correct their clock. The larger
+legacy verification allowance does not expand external admission. Signed bytes
+are never rewritten in transit.
+
+## Active encryption membership and attachment privacy
+
+Membership refreshes carry the authorization actor's revision and a refresh
+sequence; a stale refresh cannot overwrite a newer revision or later expiry
+refresh. Sending and inbox access refresh lazily, including contract expiry.
+Sending checks the fingerprint and exact recipient set again after its awaits,
+in a synchronous authorization-actor effect, under the membership lock at insertion. Attachment preparation captures and
+rechecks membership after storage preparation; a changed audience requires retry.
+The legacy owner invitation convenience now creates an owner-signed contract;
+adding a UUID alone no longer changes encryption membership. It requires the
+owner's signing key and the subject's local vault proof.
+
+Attachment request encoding removes the filename. Host copy plans and returned
+metadata use an empty name; clients retain the original filename in their signed,
+encrypted inner manifest. The durable attachment index excludes local source
+records, filenames and reference URLs. Local sender sources remain in memory and
+must be registered again after restart. Peer `attachments.probe` refuses arbitrary
+source discovery with a fixed error code. Storage root paths are runtime
+provisioning and are excluded from Cell snapshots. After decoding a relationship,
+the host must call `configureAttachmentStorage(root:requester:)` with its trusted
+root before attachment actions; this rebinds existing sender components and
+recovers durable copy chunks. Unprovisioned attachment access fails closed. Peer preparation accepts encrypted chunk import only (`sourceID` must be absent).
+Local source APIs are for the
+sender's own machine; they read plaintext and hold a stream sealer key and must
+not be connected to a relationship server's peer ingress.
+
+Peer errors use fixed codes instead of filesystem error descriptions. Purge
+continues through independent entries after an erase failure and leaves failed
+entries available for a later cleanup retry. Expiry still denies every access.
+
+Persisted correspondence snapshots use `correspondenceContractSubject` for the
+public Contract role descriptor, distinguishing it from a plaintext message
+subject. Decode restores `subject` before Contract verification, without changing
+signed bytes. Old `subject` snapshots continue to decode. Existing expiry tests
+use their trusted fixture root and retain both positive chunk-presence and
+post-expiry byte-deletion checks; the root is no longer taken from a snapshot.

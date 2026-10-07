@@ -63,10 +63,13 @@ uses fetch-on-demand and the reason says so; it is not reported as a measured
 network outage. Other reference namespaces require their own adapters. Shared
 storage must give the same URL the same meaning at both ends.
 
-The returned reason records the decision. Pre-fetch display contains name,
-media type and byte count, plus mode/control information. No content hash or key
-is returned to the MCP caller. Reference URLs are shown only for explicitly
-configured shared sources.
+The returned reason records the decision. On a relationship host, pre-fetch
+metadata contains media type and byte count, with an empty name. The client gets
+the filename from the signed, encrypted inner manifest; retain the client's
+original metadata when constructing that manifest, rather than copying the
+redacted host plan. Peer probe never exposes arbitrary source descriptors or
+reference URLs. The direct local storage API supports shared references on the
+sender's machine; those source URLs are not persisted in the host index.
 
 ## Streaming and failures
 

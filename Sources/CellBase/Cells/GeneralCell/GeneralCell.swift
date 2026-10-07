@@ -389,6 +389,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private let feedAuthorizations = FeedAuthorizationRegistry()
     // Instance-local clock permits deterministic contract-expiry verification.
     // It is not encoded or exposed through Meddle/Explore.
+    static let externalAdmissionClockTolerance: TimeInterval = 5
     var authorizationClock: () -> Date = Date.init
     public var identityDomain: String = "private"
     
@@ -1487,7 +1488,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         guard contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
               contract.signaturePurpose == "haven.contract.admission.v2",
-              contract.issuedAt <= authorizationClock().timeIntervalSince1970,
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
               contract.targetCellUUID == uuid,
               await contract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
@@ -1516,7 +1517,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             )
         }
         guard contract.targetCellUUID == uuid,
-              contract.issuedAt <= authorizationClock().timeIntervalSince1970,
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
               contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
               conditionsResolved,
               contract.temporalStatus(now: authorizationClock()) == .active else {
@@ -1542,7 +1543,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
               let data = try? JSONEncoder().encode(presented),
               let revocation = try? JSONDecoder().decode(ContractRevocation.self, from: data),
               revocation.cellUUID == uuid, revocation.domain == identityDomain,
-              revocation.issuedAt <= authorizationClock().timeIntervalSince1970,
+              revocation.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
               revocation.verify(owner: owner) else { return false }
         let current = await currentAuthorizationSnapshot()
         guard revocation.issuedAt > (current.revokedBefore[revocation.subjectUUID] ?? -.infinity),
@@ -1551,6 +1552,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                   $0.subject.uuid == revocation.subjectUUID && $0.issuedAt <= revocation.issuedAt
               }) else { return false }
         guard let snapshot = await auditor.applyRevocation(revocation,
+            cutoff: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
             restoring: persistedAuthorizationSnapshot()) else { return false }
         applyPersistedAuthorizationSnapshot(snapshot)
         await feedAuthorizations.revalidate(subjectUUID: revocation.subjectUUID)
@@ -2072,7 +2074,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await self.auditor.removeMember(member)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: member.uuid,
-                revokedAt: authorizationClock().timeIntervalSince1970,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
@@ -2088,7 +2090,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await self.auditor.removeMember(uuid)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: uuid,
-                revokedAt: authorizationClock().timeIntervalSince1970,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
@@ -2269,7 +2271,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         (await currentAuthorizationSnapshot()).contracts
     }
 
-    private func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
+    func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
         let runtime = await auditor.authorizationSnapshot()
         if runtime.contracts.isEmpty && runtime.members.isEmpty {
             let persisted = persistedAuthorizationSnapshot()
@@ -2303,6 +2305,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         persistedContracts = snapshot.contracts
         persistedMembers = snapshot.members
         persistedRevokedBefore = snapshot.revokedBefore
+    }
+
+    func withCurrentAuthorizationSnapshot<T>(_ effect: (GeneralAuditor.AuthorizationSnapshot) -> T) async -> T {
+        _ = await currentAuthorizationSnapshot()
+        return await auditor.withAuthorizationSnapshot(effect)
     }
 
     func authorizationMembers() async -> [Identity] {

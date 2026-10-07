@@ -73,8 +73,8 @@ public enum CorrespondenceAttachmentError: Error, Equatable, LocalizedError {
         case .transferNotOffered: return "Ownership transfer is available only in copy mode."
         case .recipientHasNotFetched: return "The recipient must finish and verify the download first."
         case .confirmationRequired: return "Explicit consequence confirmation or an existing owner policy is required."
-        case .storageFailure(let detail): return "Attachment storage failed: \(detail)"
-        case .cleanupFailure(let detail): return "Attachment cleanup failed: \(detail)"
+        case .storageFailure: return "attachmentStorageFailed"
+        case .cleanupFailure: return "attachmentCleanupFailed"
         }
     }
 }

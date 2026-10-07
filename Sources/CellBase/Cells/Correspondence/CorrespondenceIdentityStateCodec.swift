@@ -57,6 +57,12 @@ enum CorrespondenceIdentityStateCodec {
                 object.removeValue(forKey: "displayName")
                 object[markerKey] = markerValue
             }
+            // A Contract's public subject is a role descriptor, not message
+            // plaintext. Give it an explicit storage name and restore losslessly.
+            if object["agreement"] != nil, object["issuedAt"] != nil,
+               let subject = object.removeValue(forKey: "subject") {
+                object["correspondenceContractSubject"] = subject
+            }
             for (key, nested) in object {
                 guard !["entityRef", "principalID", "principalLabel", "deviceID"].contains(key) else {
                     throw Failure.identifyingMetadataNotAllowed
@@ -71,6 +77,12 @@ enum CorrespondenceIdentityStateCodec {
 
     static func expand(_ value: Any) throws -> Any {
         if var object = value as? [String: Any] {
+            if let subject = object.removeValue(forKey: "correspondenceContractSubject") {
+                guard object["subject"] == nil, object["agreement"] != nil, object["issuedAt"] != nil else {
+                    throw Failure.invalidIdentityEncoding
+                }
+                object["subject"] = subject
+            }
             if let marker = object.removeValue(forKey: markerKey) {
                 guard marker as? String == markerValue,
                       let uuid = object["uuid"] as? String, UUID(uuidString: uuid) != nil,

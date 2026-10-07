@@ -11,6 +11,7 @@ public enum CorrespondenceDenialReason: String, Codable, Sendable {
     case grantNotHeld
     case delegationRevoked
     case cellClosed
+    case attachmentUnavailable
     case messageExpired
 }
 
@@ -97,12 +98,48 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     public static let identityDomainName = "correspondence"
 
     private var storedEnvelopesByMessageID = CorrespondenceEnvelopeStore()
-    private var memberIdentityUUIDs = [String]()
+    private let membershipLock = NSRecursiveLock()
+    private var appliedAuthorizationRevision = -1
+    private var membershipRefreshTicket = 0
+    private var appliedRefreshTicket = -1
+    private var membershipIDs = [String]()
+    private var memberIdentityUUIDs: [String] {
+        get { membershipLock.withLock { membershipIDs } }
+        set { membershipLock.withLock { membershipIDs = newValue } }
+    }
     private var invitationLedger = [CorrespondenceInvitationLedgerRecord]()
-    private var membershipVersion = 1
-    private var membershipFingerprint = ""
-    private var attachmentCells: [String: CorrespondenceAttachmentCell] = [:]
+    private var version = 1
+    private var fingerprint = ""
+    private var membershipVersion: Int {
+        get { membershipLock.withLock { version } }
+        set { membershipLock.withLock { version = newValue } }
+    }
+    private var membershipFingerprint: String {
+        get { membershipLock.withLock { fingerprint } }
+        set { membershipLock.withLock { fingerprint = newValue } }
+    }
+    private var attachmentCellValues: [String: CorrespondenceAttachmentCell] = [:]
+    private var attachmentCells: [String: CorrespondenceAttachmentCell] {
+        get { membershipLock.withLock { attachmentCellValues } }
+        set { membershipLock.withLock { attachmentCellValues = newValue } }
+    }
+    private var membershipTestHook: (() async -> Void)?
+    private var sendTestHook: (() async -> Void)?
+    private var attachmentTestHook: (() async -> Void)?
+    var beforeMembershipApplyForTesting: (() async -> Void)? {
+        get { membershipLock.withLock { membershipTestHook } }
+        set { membershipLock.withLock { membershipTestHook = newValue } }
+    }
+    var beforeSendCommitForTesting: (() async -> Void)? {
+        get { membershipLock.withLock { sendTestHook } }
+        set { membershipLock.withLock { sendTestHook = newValue } }
+    }
+    var beforeAttachmentCommitForTesting: (() async -> Void)? {
+        get { membershipLock.withLock { attachmentTestHook } }
+        set { membershipLock.withLock { attachmentTestHook = newValue } }
+    }
     private var attachmentRoot: URL?
+    private var attachmentProvisioningRequired = false
     private var attachmentReservations: Set<String> = []
     private var nextSequence: Int {
         get { storedEnvelopesByMessageID.nextSequence }
@@ -150,7 +187,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             CorrespondenceEnvelopeStore.self,
             forKey: .storedEnvelopesByMessageID
         ) ?? CorrespondenceEnvelopeStore()
-        memberIdentityUUIDs = try container.decodeIfPresent(
+        membershipIDs = try container.decodeIfPresent(
             [String].self,
             forKey: .memberIdentityUUIDs
         ) ?? []
@@ -158,16 +195,17 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             [CorrespondenceInvitationLedgerRecord].self,
             forKey: .invitationLedger
         ) ?? []
-        membershipVersion = try container.decodeIfPresent(Int.self, forKey: .membershipVersion) ?? 1
-        membershipFingerprint = try container.decodeIfPresent(String.self, forKey: .membershipFingerprint) ?? ""
+        version = try container.decodeIfPresent(Int.self, forKey: .membershipVersion) ?? 1
+        fingerprint = try container.decodeIfPresent(String.self, forKey: .membershipFingerprint) ?? ""
         let restoredSequence = try container.decodeIfPresent(Int.self, forKey: .nextSequence) ?? 0
         retentionPolicy = try container.decodeIfPresent(
             CorrespondenceRetentionPolicy.self,
             forKey: .retentionPolicy
         ) ?? .relationshipDefault
-        attachmentCells = try container.decodeIfPresent(
+        attachmentCellValues = try container.decodeIfPresent(
             [String: CorrespondenceAttachmentCell].self, forKey: .attachmentCells) ?? [:]
-        attachmentRoot = try container.decodeIfPresent(URL.self, forKey: .attachmentRoot)
+        attachmentRoot = nil
+        attachmentProvisioningRequired = !attachmentCellValues.isEmpty
         try super.init(from: CorrespondenceIdentityStateCodec.decoderRestoringIdentityFallbacks(decoder))
         nextSequence = restoredSequence
         configureFixedPolicy(owner: owner)
@@ -192,7 +230,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         try container.encode(nextSequence, forKey: .nextSequence)
         try container.encode(retentionPolicy, forKey: .retentionPolicy)
         try container.encode(attachmentCells, forKey: .attachmentCells)
-        try container.encodeIfPresent(attachmentRoot, forKey: .attachmentRoot)
+
     }
 
     private func encodeInheritedState(to encoder: Encoder) throws {
@@ -299,12 +337,30 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     override func didChangeAuthorizationMembership() async { await refreshAuthorizedMembership() }
 
     private func refreshAuthorizedMembership() async {
-        let members = await authorizationMembers()
-        let ids = Array(Set(members.map(\.uuid) + [owner.uuid])).sorted()
-        if ids != memberIdentityUUIDs {
-            memberIdentityUUIDs = ids
-            membershipVersion += 1
-            membershipFingerprint = calculateMembershipFingerprint()
+        let ticket = membershipLock.withLock { membershipRefreshTicket += 1; return membershipRefreshTicket }
+        let snapshot = await currentAuthorizationSnapshot()
+        await beforeMembershipApplyForTesting?()
+        applyAuthorizedMembership(snapshot, ticket: ticket)
+    }
+
+    private func applyAuthorizedMembership(_ snapshot: GeneralAuditor.AuthorizationSnapshot, ticket: Int) {
+        let now = authorizationClock()
+        let active = snapshot.contracts.filter {
+            $0.temporalStatus(now: now) == .active && $0.expiresAt > now.timeIntervalSince1970 &&
+            $0.issuedAt > (snapshot.revokedBefore[$0.subject.uuid] ?? -.infinity) &&
+            ($0.targetCellUUID == nil || $0.targetCellUUID == uuid)
+        }
+        let ids = Array(Set(active.map { $0.subject.uuid } + [owner.uuid])).sorted()
+        membershipLock.withLock {
+            guard snapshot.revision >= appliedAuthorizationRevision,
+                  snapshot.revision > appliedAuthorizationRevision || ticket >= appliedRefreshTicket else { return }
+            appliedAuthorizationRevision = snapshot.revision
+            appliedRefreshTicket = ticket
+            if ids != membershipIDs {
+                membershipIDs = ids
+                version += 1
+                fingerprint = calculateMembershipFingerprint()
+            }
         }
     }
 
@@ -329,6 +385,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         guard await validateAccess("r---", at: "state", for: requester) else {
             throw KeyValueErrors.denied
         }
+        await refreshAuthorizedMembership()
         return inbox(requester: requester)
     }
 
@@ -375,6 +432,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             description: .string("Returns envelope metadata only; subject and content never appear."),
             handler: { [weak self] requester in
                 guard let self else { return .null }
+                await self.refreshAuthorizedMembership()
                 return self.inbox(requester: requester)
             }
         )
@@ -435,7 +493,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             description: .string("Owner-only membership action; stores correspondence identity UUIDs only."),
             handler: { [weak self] requester, payload in
                 guard let self else { return .null }
-                return self.inviteIdentities(payload: payload, requester: requester)
+                return await self.inviteIdentities(payload: payload, requester: requester)
             }
         )
     }
@@ -475,6 +533,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     }
 
     private func sendMessage(payload: ValueType, requester: Identity) async -> ValueType {
+        await refreshAuthorizedMembership()
         purgeExpiredMessages(at: nowProvider())
         guard memberIdentityUUIDs.contains(requester.uuid) else {
             return denial(.grantNotHeld)
@@ -517,17 +576,25 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         let now = nowProvider()
         let messageID = request.messageID ?? UUID().uuidString
         guard UUID(uuidString: messageID) != nil, storedEnvelopesByMessageID[messageID] == nil,
-              !attachmentReservations.contains(messageID) else { return denial(.grantNotHeld) }
+              !membershipLock.withLock({ attachmentReservations.contains(messageID) }) else { return denial(.grantNotHeld) }
         if let attachment = request.attachmentRequest {
             guard attachment.messageID == messageID, attachment.senderIdentityUUID == requester.uuid,
                   let sourceCell = attachmentCells[requester.uuid] else { return denial(.grantNotHeld) }
-            attachmentReservations.insert(messageID)
-            defer { attachmentReservations.remove(messageID) }
+            let reserved = membershipLock.withLock { attachmentReservations.insert(messageID).inserted }
+            guard reserved else { return denial(.grantNotHeld) }
+            defer { _ = membershipLock.withLock { attachmentReservations.remove(messageID) } }
             do {
                 try await authorizeAttachment(attachment, action: "attachments.prepare", requester: requester)
                 try await sourceCell.storage.publish(attachment,
                     expiresAt: now.addingTimeInterval(TimeInterval(retentionSeconds)), now: now)
-            } catch { return .object(["status": .string("denied"), "denialReason": .string(String(describing: error))]) }
+            } catch { return denial(.attachmentUnavailable) }
+        }
+        await beforeSendCommitForTesting?()
+        await refreshAuthorizedMembership()
+        guard memberIdentityUUIDs.contains(requester.uuid),
+              request.membershipFingerprint == membershipFingerprint,
+              envelopeRecipientsMatchCurrentMembership(request.envelope) else {
+            return denial(.membershipFingerprintMismatch)
         }
         var outer = CorrespondenceOuterEnvelope(
             messageID: messageID,
@@ -541,9 +608,16 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             ciphertextSize: request.envelope.combinedCiphertext.count
         )
         outer.attachmentAgreementID = request.attachmentRequest?.agreementID
-        guard storedEnvelopesByMessageID.insert(CorrespondenceStoredEnvelope(
-            outer: outer, innerCiphertext: request.envelope
-        )) else { return denial(.grantNotHeld) }
+        let inserted = await withCurrentAuthorizationSnapshot { snapshot in
+            membershipLock.withLock {
+                membershipRefreshTicket += 1
+                applyAuthorizedMembership(snapshot, ticket: membershipRefreshTicket)
+                guard memberIdentityUUIDs.contains(requester.uuid), request.membershipFingerprint == fingerprint,
+                      Set(request.envelope.header.recipientKeys.compactMap(\.recipientIdentityUUID)) == Set(membershipIDs) else { return false }
+                return storedEnvelopesByMessageID.insert(CorrespondenceStoredEnvelope(outer: outer, innerCiphertext: request.envelope))
+            }
+        }
+        guard inserted else { return denial(.membershipFingerprintMismatch) }
         scheduleEnvelopeExpiry(messageID: messageID, sequence: outer.sequence, after: TimeInterval(retentionSeconds))
         emit(event: "message.stored", fields: [
             "envelope": (try? CorrespondenceCellCodec.encode(CorrespondenceStoredEnvelope(outer: outer, innerCiphertext: request.envelope))) ?? .null,
@@ -587,43 +661,24 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         ])
     }
 
-    private func inviteIdentities(payload: ValueType, requester: Identity) -> ValueType {
-        let requestedUUIDs = identityUUIDs(from: payload)
-        guard requestedUUIDs.isEmpty == false else {
-            return .object([
-                "status": .string("error"),
-                "message": .string("At least one identity UUID is required.")
-            ])
-        }
-        let now = Self.timestamp(nowProvider())
+    private func inviteIdentities(payload: ValueType, requester: Identity) async -> ValueType {
+        guard requester.uuid == owner.uuid else { return denial(.grantNotHeld) }
         var changed = false
-        for identityUUID in requestedUUIDs where memberIdentityUUIDs.contains(identityUUID) == false {
-            memberIdentityUUIDs.append(identityUUID)
-            invitationLedger.append(
-                CorrespondenceInvitationLedgerRecord(
-                    identityUUID: identityUUID,
-                    status: "accepted",
-                    invitedAt: now
-                )
-            )
+        for id in identityUUIDs(from: payload) where !memberIdentityUUIDs.contains(id) {
+            guard let vault = CellBase.defaultIdentityVault,
+                  let identity = await vault.identity(forUUID: id) else { return denial(.grantNotHeld) }
+            let agreement = CorrespondenceAgreementTemplates.withAttachments(owner: owner)
+            agreement.state = .signed
+            agreement.signatories = [owner.publicIdentitySnapshot(), identity.publicIdentitySnapshot()]
+            guard let contract = try? await Contract.signed(agreement: agreement, issuer: requester,
+                subject: identity.publicIdentitySnapshot(), domain: identityDomain, targetCellUUID: uuid),
+                await acceptExternallySignedAgreement(contract, for: identity) == .signed else { return denial(.grantNotHeld) }
             changed = true
         }
-        if changed {
-            memberIdentityUUIDs.sort()
-            membershipVersion += 1
-            membershipFingerprint = calculateMembershipFingerprint()
-            emit(event: "membership.changed", fields: [
-                "membershipVersion": .integer(membershipVersion),
-                "membershipFingerprint": .string(membershipFingerprint),
-                "memberCount": .integer(memberIdentityUUIDs.count)
-            ])
-        }
-        return .object([
-            "status": .string(changed ? "invited" : "unchanged"),
-            "membershipVersion": .integer(membershipVersion),
-            "membershipFingerprint": .string(membershipFingerprint),
-            "memberIdentityUUIDs": .list(memberIdentityUUIDs.map(ValueType.string))
-        ])
+        if changed { emit(event: "membership.changed", fields: ["membershipFingerprint": .string(membershipFingerprint)]) }
+        return .object(["status": .string(changed ? "invited" : "unchanged"),
+            "membershipVersion": .integer(membershipVersion), "membershipFingerprint": .string(membershipFingerprint),
+            "memberIdentityUUIDs": .list(memberIdentityUUIDs.map(ValueType.string))])
     }
 
     private func scheduleEnvelopeExpiry(messageID: String, sequence: Int, after seconds: TimeInterval) {
@@ -919,8 +974,13 @@ extension CorrespondenceCell {
     /// This local integration API never accepts a path from an MCP peer.
     public func configureAttachmentStorage(root: URL, requester: Identity) async throws {
         let decision = await authorizationDecision(requestedAccess: "-w--", at: "attachments.prepare", for: requester)
-        guard decision.allowed, attachmentCells.isEmpty else { throw CorrespondenceAttachmentError.wrongSender }
+        guard decision.allowed, attachmentCells.isEmpty || attachmentProvisioningRequired else { throw CorrespondenceAttachmentError.wrongSender }
+        for (id, cell) in attachmentCells {
+            let key = FlowHasher.sha256Hex(Data((id + (cell.owner.signingPublicKeyFingerprint ?? "")).utf8))
+            await cell.provisionStorage(root: root.appendingPathComponent(key))
+        }
         attachmentRoot = root
+        attachmentProvisioningRequired = false
     }
 
     public func registerAttachmentSource(id: String, file: URL,
@@ -942,15 +1002,17 @@ extension CorrespondenceCell {
         let key = FlowHasher.sha256Hex(Data((sender.uuid + (sender.signingPublicKeyFingerprint ?? "")).utf8))
         let cell = await CorrespondenceAttachmentCell(owner: sender.publicIdentitySnapshot(),
             root: base.appendingPathComponent(key))
-        if let existing = attachmentCells[sender.uuid] { return existing }
-        attachmentCells[sender.uuid] = cell
-        return cell
+        return membershipLock.withLock {
+            if let existing = attachmentCellValues[sender.uuid] { return existing }
+            attachmentCellValues[sender.uuid] = cell
+            return cell
+        }
     }
 
     private func authorizeAttachment(_ request: CorrespondenceAttachmentRequest,
                                      action: String, requester: Identity) async throws {
-        guard memberIdentityUUIDs.contains(requester.uuid),
-              memberIdentityUUIDs.contains(request.senderIdentityUUID) else {
+        await refreshAuthorizedMembership()
+        guard memberIdentityUUIDs.contains(requester.uuid) else {
             throw CorrespondenceAttachmentError.wrongRecipient
         }
         let decision = await authorizationDecision(requestedAccess: "-w--", at: action, for: requester)
@@ -984,7 +1046,7 @@ extension CorrespondenceCell {
                         let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceAttachmentRequest.self)
                         return try await self.performAttachment(key, request: request, requester: requester)
                     } catch {
-                        return .object(["status": .string("error"), "message": .string(error.localizedDescription)])
+                        return .object(["status": .string("error"), "message": .string("attachmentUnavailable")])
                     }
                 })
         }
@@ -992,6 +1054,7 @@ extension CorrespondenceCell {
 
     private func performAttachment(_ action: String, request: CorrespondenceAttachmentRequest,
                                    requester: Identity) async throws -> ValueType {
+        guard !attachmentProvisioningRequired else { throw CorrespondenceAttachmentError.unavailable }
         try await authorizeAttachment(request, action: action, requester: requester)
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
         if senderActions.contains(action), requester.uuid != request.senderIdentityUUID {
@@ -1011,21 +1074,29 @@ extension CorrespondenceCell {
         var result: ValueType = .object(["status": .string("ok")])
         switch action {
         case "attachments.probe":
-            guard let id = request.sourceID else { throw CorrespondenceAttachmentError.unavailable }
-            if request.confirmation == "reference-reachable" {
-                result = try CorrespondenceCellCodec.encode(await source.storage.probe(sourceID: id, recipientKey: key, now: now))
-            } else {
-                result = try CorrespondenceCellCodec.encode(await source.storage.sourceDescriptor(sourceID: id))
-            }
+            // Source IDs are local sender capabilities, never peer discovery.
+            throw CorrespondenceAttachmentError.unavailable
         case "attachments.prepare":
-            guard UUID(uuidString: request.messageID) != nil else { throw CorrespondenceAttachmentError.contextMismatch }
+            guard request.sourceID == nil, UUID(uuidString: request.messageID) != nil else { throw CorrespondenceAttachmentError.contextMismatch }
             // Every admitted member is a recipient, including the owner.
-            let members = await authorizationMembers() + [owner]
+            await refreshAuthorizedMembership()
+            let capturedFingerprint = membershipFingerprint
+            let snapshot = await currentAuthorizationSnapshot()
+            let members = snapshot.contracts.filter { $0.temporalStatus(now: authorizationClock()) == .active &&
+                $0.issuedAt > (snapshot.revokedBefore[$0.subject.uuid] ?? -.infinity) }.map(\.subject) + [owner]
             let keys = Set(members.filter { $0.uuid != requester.uuid }
                 .compactMap(\.signingPublicKeyFingerprint))
             guard !keys.isEmpty else { throw CorrespondenceAttachmentError.wrongRecipient }
-            result = try CorrespondenceCellCodec.encode(await source.storage.prepare(request, recipientKeys: keys,
-                reference: "cell:///\(uuid)/attachments.fetch?source=\(request.sourceID ?? "")", now: now))
+            var plan = try await source.storage.prepare(request, recipientKeys: keys,
+                reference: "cell:///\(uuid)/attachments.fetch", now: now)
+            plan.metadata.name = ""
+            plan.reference = nil
+            result = try CorrespondenceCellCodec.encode(plan)
+            await beforeAttachmentCommitForTesting?()
+            await refreshAuthorizedMembership()
+            guard capturedFingerprint == membershipFingerprint, memberIdentityUUIDs.contains(requester.uuid) else {
+                throw CorrespondenceAttachmentError.contextMismatch
+            }
         case "attachments.upload": try await source.storage.upload(request, now: now)
         case "attachments.metadata": result = try CorrespondenceCellCodec.encode(await source.storage.metadata(request, now: now))
         case "attachments.fetch": result = try CorrespondenceCellCodec.encode(await source.storage.fetch(request, recipientKey: key, now: now))
