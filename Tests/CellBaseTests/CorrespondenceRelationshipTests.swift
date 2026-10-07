@@ -34,11 +34,11 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         await vault.addIdentity(identity: &identity, for: UUID().uuidString)
         return identity
     }
-    private func fixture(admit: Bool = true) async throws -> Fixture {
+    private func fixture(admit: Bool = true, nowProvider: @escaping () -> Date = Date.init) async throws -> Fixture {
         let e = EphemeralIdentityVault(), h = EphemeralIdentityVault(), i = EphemeralIdentityVault()
         let owner = await identity(e), invitee = await identity(i)
         CellBase.defaultIdentityVault = h
-        let cell = await CorrespondenceCell(owner: owner.publicIdentitySnapshot())
+        let cell = await CorrespondenceCell(owner: owner.publicIdentitySnapshot(), nowProvider: nowProvider)
         let storageRoot = FileManager.default.temporaryDirectory.appendingPathComponent("korr-relation-" + UUID().uuidString)
         try await cell.configureAttachmentStorage(root: storageRoot, requester: owner)
         addTeardownBlock { if FileManager.default.fileExists(atPath: storageRoot.path) { try FileManager.default.removeItem(at: storageRoot) } }
@@ -70,14 +70,14 @@ final class CorrespondenceRelationshipTests: XCTestCase {
     }
     private func send(_ f: Fixture, sender: Identity, recipient: Identity,
                       vault: EphemeralIdentityVault, attachment: CorrespondenceAttachment? = nil,
-                      request: CorrespondenceAttachmentRequest? = nil, retention: Int? = nil) async throws -> String {
+                      request: CorrespondenceAttachmentRequest? = nil, retention: Int? = nil, messageID: String? = nil) async throws -> String {
         let prepared = try await CorrespondenceEnvelopeUtility.prepare(
             message: ChatMessage(owner: sender, content: "synthetic-body"), subject: "synthetic-subject", clientMessageID: request?.messageID,
             cellID: f.cell.uuid, membershipFingerprint: f.cell.membershipFingerprintSnapshot,
             recipients: [recipient.publicIdentitySnapshot()], provider: vault, attachment: attachment)
         let response = try await f.cell.set(keypath: "sendMessage", value: CorrespondenceSendRequest(
             preparedEnvelope: prepared, purposeRef: "purpose://contact.communication",
-            retentionSeconds: retention, messageID: request?.messageID, attachmentRequest: request).valueType(), requester: sender)
+            retentionSeconds: retention, messageID: request?.messageID ?? messageID, attachmentRequest: request).valueType(), requester: sender)
         XCTAssertEqual(field("status", response), .string("stored"))
         guard case .string(let id)? = field("messageID", response) else { throw GeneralCell.KeyValueErrors.otherError }
         return id
@@ -253,6 +253,49 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         catch { XCTAssertTrue(error is IdentityVaultError || error is ContractError) }
         let id = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e)
         _ = try await read(f, id: id, recipient: f.invitee, sender: f.owner, vault: f.i)
+    }
+
+    private final class Clock {
+        var now = Date()
+    }
+    func testOldExpiryTimerCannotDeleteNewEnvelopeReusingMessageID() async throws {
+        let clock = Clock()
+        let f = try await fixture(nowProvider: { clock.now })
+        let id = UUID().uuidString
+        _ = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e, retention: 1, messageID: id)
+        clock.now = clock.now.addingTimeInterval(2)
+        _ = try await f.cell.get(keypath: "inbox", requester: f.owner)
+        _ = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e, retention: 30, messageID: id)
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(f.cell)) as? [String: Any])
+        let envelopes = try XCTUnwrap(object["storedEnvelopesByMessageID"] as? [String: Any])
+        XCTAssertNotNil(envelopes[id])
+        XCTAssertEqual(envelopes.count, 1)
+    }
+
+    func testParallelSendAndSnapshotRemainConsistentDuringAutomaticExpiry() async throws {
+        let f = try await fixture()
+        _ = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e, retention: 1)
+        async let snapshotting: Void = snapshotUntilExpiry(f.cell)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<128 {
+                group.addTask { _ = try await self.send(f, sender: f.owner, recipient: f.invitee, vault: f.e) }
+            }
+            try await group.waitForAll()
+        }
+        try await snapshotting
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(f.cell)) as? [String: Any])
+        let envelopes = try XCTUnwrap(object["storedEnvelopesByMessageID"] as? [String: [String: Any]])
+        XCTAssertEqual(envelopes.count, 128)
+        let sequences = envelopes.values.compactMap { ($0["outer"] as? [String: Any])?["sequence"] as? Int }
+        XCTAssertEqual(Set(sequences).count, 128)
+    }
+    private func snapshotUntilExpiry(_ cell: CorrespondenceCell) async throws {
+        let deadline = Date().addingTimeInterval(1.3)
+        while Date() < deadline {
+            _ = try JSONEncoder().encode(cell)
+            await Task.yield()
+        }
     }
 
     func testEnvelopeExpiresWithoutInboxRead() async throws {

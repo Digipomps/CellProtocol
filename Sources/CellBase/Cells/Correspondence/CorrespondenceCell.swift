@@ -42,6 +42,53 @@ private enum CorrespondenceCellRuntimeError: Error {
     case flowEmitterUnavailable
 }
 
+/// Snapshotting and expiry can run concurrently with incoming client operations.
+/// Keep dictionary mutations, sequence allocation and expiry comparisons atomic.
+private final class CorrespondenceEnvelopeStore: Codable {
+    private let lock = NSLock()
+    private var entries: [String: CorrespondenceStoredEnvelope] = [:]
+    private var sequence = 0
+    init() {}
+    required init(from decoder: Decoder) throws {
+        entries = try decoder.singleValueContainer().decode([String: CorrespondenceStoredEnvelope].self)
+    }
+    func encode(to encoder: Encoder) throws {
+        let snapshot = lock.withLock { entries }
+        var container = encoder.singleValueContainer()
+        try container.encode(snapshot)
+    }
+    var values: [CorrespondenceStoredEnvelope] { lock.withLock { Array(entries.values) } }
+    subscript(id: String) -> CorrespondenceStoredEnvelope? { lock.withLock { entries[id] } }
+    var nextSequence: Int {
+        get { lock.withLock { sequence } }
+        set { lock.withLock { sequence = newValue } }
+    }
+    func reserveSequence() -> Int {
+        lock.withLock { let result = sequence; sequence += 1; return result }
+    }
+    func insert(_ record: CorrespondenceStoredEnvelope) -> Bool {
+        lock.withLock {
+            guard entries[record.outer.messageID] == nil else { return false }
+            entries[record.outer.messageID] = record
+            return true
+        }
+    }
+    func update(_ record: CorrespondenceStoredEnvelope) -> Bool {
+        lock.withLock {
+            guard entries[record.outer.messageID]?.outer.sequence == record.outer.sequence else { return false }
+            entries[record.outer.messageID] = record
+            return true
+        }
+    }
+    func remove(_ id: String, matchingSequence sequence: Int) -> Bool {
+        lock.withLock {
+            guard entries[id]?.outer.sequence == sequence else { return false }
+            entries.removeValue(forKey: id)
+            return true
+        }
+    }
+}
+
 /// A relationship-scoped, envelope-only message Cell for correspondence-domain
 /// identities. Plaintext is accepted only by the client-side envelope utility.
 public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorizationRequirementProviding {
@@ -49,7 +96,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     public static let envelopePurposeRef = "purpose://correspondence.envelope"
     public static let identityDomainName = "correspondence"
 
-    private var storedEnvelopesByMessageID = [String: CorrespondenceStoredEnvelope]()
+    private var storedEnvelopesByMessageID = CorrespondenceEnvelopeStore()
     private var memberIdentityUUIDs = [String]()
     private var invitationLedger = [CorrespondenceInvitationLedgerRecord]()
     private var membershipVersion = 1
@@ -57,7 +104,10 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     private var attachmentCells: [String: CorrespondenceAttachmentCell] = [:]
     private var attachmentRoot: URL?
     private var attachmentReservations: Set<String> = []
-    private var nextSequence = 0
+    private var nextSequence: Int {
+        get { storedEnvelopesByMessageID.nextSequence }
+        set { storedEnvelopesByMessageID.nextSequence = newValue }
+    }
     private var retentionPolicy = CorrespondenceRetentionPolicy.relationshipDefault
     private var nowProvider: () -> Date = Date.init
     private var cellOwnedFlowEmitter: ((FlowElement) -> Void)?
@@ -97,9 +147,9 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     public required init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         storedEnvelopesByMessageID = try container.decodeIfPresent(
-            [String: CorrespondenceStoredEnvelope].self,
+            CorrespondenceEnvelopeStore.self,
             forKey: .storedEnvelopesByMessageID
-        ) ?? [:]
+        ) ?? CorrespondenceEnvelopeStore()
         memberIdentityUUIDs = try container.decodeIfPresent(
             [String].self,
             forKey: .memberIdentityUUIDs
@@ -110,7 +160,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         ) ?? []
         membershipVersion = try container.decodeIfPresent(Int.self, forKey: .membershipVersion) ?? 1
         membershipFingerprint = try container.decodeIfPresent(String.self, forKey: .membershipFingerprint) ?? ""
-        nextSequence = try container.decodeIfPresent(Int.self, forKey: .nextSequence) ?? 0
+        let restoredSequence = try container.decodeIfPresent(Int.self, forKey: .nextSequence) ?? 0
         retentionPolicy = try container.decodeIfPresent(
             CorrespondenceRetentionPolicy.self,
             forKey: .retentionPolicy
@@ -119,6 +169,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             [String: CorrespondenceAttachmentCell].self, forKey: .attachmentCells) ?? [:]
         attachmentRoot = try container.decodeIfPresent(URL.self, forKey: .attachmentRoot)
         try super.init(from: CorrespondenceIdentityStateCodec.decoderRestoringIdentityFallbacks(decoder))
+        nextSequence = restoredSequence
         configureFixedPolicy(owner: owner)
         establishInitialMembership(ownerUUID: owner.uuid)
     }
@@ -158,7 +209,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         await registerOperations(owner: owner)
         for record in storedEnvelopesByMessageID.values {
             if let expiry = Self.date(from: record.outer.expiresAt) {
-                scheduleEnvelopeExpiry(messageID: record.outer.messageID,
+                scheduleEnvelopeExpiry(messageID: record.outer.messageID, sequence: record.outer.sequence,
                     after: expiry.timeIntervalSince(nowProvider()))
             }
         }
@@ -480,7 +531,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         }
         var outer = CorrespondenceOuterEnvelope(
             messageID: messageID,
-            sequence: nextSequence,
+            sequence: storedEnvelopesByMessageID.reserveSequence(),
             cellID: uuid,
             senderIdentityUUID: requester.uuid,
             purposeRef: Self.envelopePurposeRef,
@@ -490,12 +541,10 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             ciphertextSize: request.envelope.combinedCiphertext.count
         )
         outer.attachmentAgreementID = request.attachmentRequest?.agreementID
-        nextSequence += 1
-        storedEnvelopesByMessageID[messageID] = CorrespondenceStoredEnvelope(
-            outer: outer,
-            innerCiphertext: request.envelope
-        )
-        scheduleEnvelopeExpiry(messageID: messageID, after: TimeInterval(retentionSeconds))
+        guard storedEnvelopesByMessageID.insert(CorrespondenceStoredEnvelope(
+            outer: outer, innerCiphertext: request.envelope
+        )) else { return denial(.grantNotHeld) }
+        scheduleEnvelopeExpiry(messageID: messageID, sequence: outer.sequence, after: TimeInterval(retentionSeconds))
         emit(event: "message.stored", fields: [
             "envelope": (try? CorrespondenceCellCodec.encode(CorrespondenceStoredEnvelope(outer: outer, innerCiphertext: request.envelope))) ?? .null,
             "messageID": .string(messageID),
@@ -527,7 +576,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             return denial(.messageExpired)
         }
         stored.outer.receiptState = "acknowledged"
-        storedEnvelopesByMessageID[messageID] = stored
+        guard storedEnvelopesByMessageID.update(stored) else { return denial(.messageExpired) }
         emit(event: "message.receipt", fields: [
             "messageID": .string(messageID),
             "receiptState": .string("acknowledged")
@@ -577,10 +626,10 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         ])
     }
 
-    private func scheduleEnvelopeExpiry(messageID: String, after seconds: TimeInterval) {
+    private func scheduleEnvelopeExpiry(messageID: String, sequence: Int, after seconds: TimeInterval) {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
-            guard let self, let record = self.storedEnvelopesByMessageID[messageID] else { return }
+            guard let self, let record = self.storedEnvelopesByMessageID[messageID], record.outer.sequence == sequence else { return }
             self.removeExpiredMessage(messageID, record: record)
         }
     }
@@ -595,7 +644,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     }
 
     private func removeExpiredMessage(_ messageID: String, record: CorrespondenceStoredEnvelope) {
-        storedEnvelopesByMessageID.removeValue(forKey: messageID)
+        guard storedEnvelopesByMessageID.remove(messageID, matchingSequence: record.outer.sequence) else { return }
         emit(event: "message.expired", fields: [
             "messageID": .string(messageID),
             "sequence": .integer(record.outer.sequence)

@@ -87,3 +87,14 @@ E/H/I ephemeral vaults, Resolver-routed admission, both text directions,
 1100037-byte copy attachments each way, retained Flow revocation, renewal,
 replay and restored-state rejection. It does not establish a network handshake,
 staging service, OS user-presence policy or production client behavior.
+
+## Concurrent expiry
+
+The mailbox locks sequence allocation, insertion, receipt updates, removals and
+serialization snapshots. Automatic expiry captures the message sequence; it
+cannot remove a later envelope that reuses the same message ID. Receipt updates
+cannot resurrect an envelope already removed by expiry. The JSON dictionary
+shape is unchanged. The focused local suite (53 tests) passed with Thread
+Sanitizer, including 128 parallel sends while snapshotting across expiry and
+reusing an expired ID before its original timer fires. This does not establish
+that every runtime operation is safe under every concurrent schedule.
