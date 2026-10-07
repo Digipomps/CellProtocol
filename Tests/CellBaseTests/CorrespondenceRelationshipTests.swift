@@ -128,24 +128,48 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         print("PURPOSE E/H/I: independent vaults; host contains neither participant key")
         let delivered = expectation(description: "Unpolled encrypted delivery")
         delivered.expectedFulfillmentCount = 4
+        let attachmentEvents = expectation(description: "Attachment prepare events arrive on member Flow")
+        attachmentEvents.expectedFulfillmentCount = 2
+        let receiptEvent = expectation(description: "Receipt arrives on member Flow")
         let revokedFeed = expectation(description: "Existing feed terminates on revocation")
         let publisher = try await f.cell.flow(requester: f.invitee)
         let subscription = publisher.sink(receiveCompletion: { completion in
             if case .failure = completion { revokedFeed.fulfill() }
         }, receiveValue: { element in
-            guard case .object(let object) = element.content, object["event"] == .string("message.stored") else { return }
-            XCTAssertNotNil(object["envelope"])
-            delivered.fulfill()
+            guard case .object(let object) = element.content else { return }
+            if object["event"] == .string("attachments.prepare") { attachmentEvents.fulfill(); return }
+            if object["event"] == .string("message.receipt") { receiptEvent.fulfill(); return }
+            guard object["event"] == .string("message.stored") else { return }
+            guard let value = object["envelope"] else { XCTFail("Flow omitted encrypted envelope"); return }
+            Task {
+                do {
+                    let stored = try CorrespondenceCellCodec.decode(value, as: CorrespondenceStoredEnvelope.self)
+                    let sender = stored.outer.senderIdentityUUID == f.owner.uuid ? f.owner : f.invitee
+                    let opened = try await CorrespondenceEnvelopeUtility.open(storedEnvelope: stored,
+                        recipient: f.invitee, sender: sender.publicIdentitySnapshot(), provider: f.i)
+                    XCTAssertEqual(opened.inner.subject, "synthetic-subject")
+                    XCTAssertEqual(opened.inner.content, "synthetic-body")
+                    let serialized = try JSONEncoder().encode(value)
+                    XCTAssertFalse(String(decoding: serialized, as: UTF8.self).contains("synthetic-body"))
+                    delivered.fulfill()
+                } catch { XCTFail("Flow envelope did not open: \(error)") }
+            }
         })
         defer { subscription.cancel() }
         let first = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e)
         _ = try await read(f, id: first, recipient: f.invitee, sender: f.owner, vault: f.i)
+        let receipt = try await f.cell.set(keypath: "ackMessage",
+            value: .object(["messageID": .string(first)]), requester: f.invitee)
+        XCTAssertEqual(field("status", receipt), .string("acknowledged"))
         let second = try await send(f, sender: f.invitee, recipient: f.owner, vault: f.i)
         _ = try await read(f, id: second, recipient: f.owner, sender: f.invitee, vault: f.e)
         print("PURPOSE text: owner -> invitee and invitee -> owner opened")
         try await attachment(f, sender: f.owner, recipient: f.invitee, vault: f.e, receivingVault: f.i)
         try await attachment(f, sender: f.invitee, recipient: f.owner, vault: f.i, receivingVault: f.e)
-        await fulfillment(of: [delivered], timeout: 5)
+        await fulfillment(of: [delivered, attachmentEvents, receiptEvent], timeout: 5)
+        let history = try await f.cell.get(keypath: "state", requester: f.invitee)
+        guard case .list(let messages)? = field("messages", history) else { XCTFail("Missing member history"); return }
+        XCTAssertEqual(messages.count, 4)
         print("PURPOSE attachments: 1100037 bytes each direction, byte exact; Flow delivered without inbox polling")
         let outsider = await identity(EphemeralIdentityVault())
         do { _ = try await f.cell.flow(requester: outsider); XCTFail("Nonmember received feed") } catch { XCTAssertTrue(error is StreamState) }
