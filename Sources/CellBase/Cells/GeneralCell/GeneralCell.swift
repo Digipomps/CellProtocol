@@ -15,6 +15,21 @@ enum GeneralCellErrors: Error {
     case noSchemaForKey
 }
 
+public enum CellRuntimeBindingError: Error {
+    case setupRefused
+}
+
+private actor CellBindingRefusals {
+    private var rows: [ValueType] = []
+    func record(key: String, operation: String, condition: String, requester: String) {
+        rows.append(.object(["key": .string(key), "operation": .string(operation),
+                             "condition": .string(condition), "requesterUUID": .string(requester),
+                             "runtimeToken": .string("missingOrUnauthorized")]))
+    }
+    func snapshot() -> [ValueType] { rows }
+    func count() -> Int { rows.count }
+}
+
 public enum AgreementAdmissionPolicy: String, Codable, Sendable {
     case ownerApprovalRequired
     case automaticWhenConditionsMet
@@ -197,6 +212,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private static let missingIdentityVaultLogLock = NSLock()
     nonisolated(unsafe) private static var missingIdentityVaultLoggedUUIDs: Set<String> = []
     @TaskLocal private static var isEvaluatingAuthorizationConditions = false
+    private let bindingRefusals = CellBindingRefusals()
+
     @TaskLocal private static var runtimeBindingInstallationToken: CellRuntimeBindingInstallationToken?
     @TaskLocal private static var attachedStatusTraversalVisitedCells: Set<ObjectIdentifier> = []
 
@@ -258,7 +275,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     /// Measures one invariant: **the surface a cell answers on is the surface
     /// Explore declares.**
     ///
-    /// Two ways to break it, and both are reported:
+    /// Missing/extra handlers and historical refused setup are reported:
     ///
     /// - `declaredOnly` — Explore promises a keypath that has no handler
     ///   wired. A caller who trusts the contract gets `KeyValueErrors.notFound`
@@ -268,11 +285,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     ///   no agent reading Explore can discover it, so it is not part of the
     ///   protocol in any useful sense.
     ///
+    /// - `refused` — setup was denied; each row names its operation, key and
+    ///   failed authorization condition. Historical refusals keep `ok=false`.
+    ///
     /// This measures; it does not enforce. Nothing here changes registration,
     /// authorization or state, and no handler is invoked — the audit compares
-    /// two sets of names. Scope is the keypath dictionaries only, matching
+    /// handler sets plus refusal diagnostics. Handler scope is keypath dictionaries, matching
     /// what `get` and `set` actually look up.
     public func registeredKeypathAudit() async -> ValueType {
+        let refused = await bindingRefusals.snapshot()
         let registered = await intercepts.registeredKeypaths()
         var declared: Set<String> = []
         var declaredGet: Set<String> = []
@@ -305,7 +326,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var value: Object = [:]
         value["cell"] = .string(String(String(describing: type(of: self)).split(separator: ".").last ?? "GeneralCell"))
         value["uuid"] = .string(uuid)
-        value["ok"] = .bool(declaredOnly.isEmpty && interceptOnly.isEmpty)
+        value["ok"] = .bool(declaredOnly.isEmpty && interceptOnly.isEmpty && refused.isEmpty)
+        value["refused"] = .list(refused)
         value["consistent"] = .integer(consistent)
         value["declaredOnly"] = .list(declaredOnly)
         value["interceptOnly"] = .list(interceptOnly)
@@ -326,7 +348,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         schema: ValueType,
         description: ValueType = .string("*")
     ) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "registerExploreSchema") {
             self.register(key: key, schema: schema, description: description)
         }
     }
@@ -1894,10 +1916,14 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public final func ensureRuntimeReady() async throws {
         try await runtimeReadinessCoordinator.ensure { [weak self] in
             guard let self else { return }
+            let refusalCount = await self.bindingRefusals.count()
             let token = CellRuntimeBindingInstallationToken(cell: self)
             defer { token.invalidate() }
             try await Self.$runtimeBindingInstallationToken.withValue(token) {
                 try await self.installCellRuntimeBindingsForAccess()
+                guard await self.bindingRefusals.count() == refusalCount else {
+                    throw CellRuntimeBindingError.setupRefused
+                }
             }
         }
     }
@@ -2321,7 +2347,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func addIntercept(requester: Identity, intercept: @escaping FlowElementIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: "*", operation: "addIntercept") {
             await self.intercepts.storeFeedIntercept(intercept)
         }
     }
@@ -2338,7 +2364,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         topic: String,
         intercept: @escaping LabelledFlowElementIntercept
     ) async -> Bool {
-        guard await isAllowedToSetupIntercepts(requester: requester) else { return false }
+        guard await isAllowedToSetupIntercepts(requester: requester, key: topic, operation: "addInterceptForTopic") else { return false }
         return await self.intercepts.storeFeedIntercept(topic: topic, intercept)
     }
 
@@ -2349,29 +2375,38 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     @available(*, deprecated)
     public func setInterceptSetValueForKey(requester: Identity, key: String, setValueForKeyIntercept: @escaping SetValueForKeyIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "setInterceptSetValueForKey") {
             await self.intercepts.storeInterceptSetValueForKey(key: key, intercept: setValueForKeyIntercept)
         }
     }
     
-    private func isAllowedToSetupIntercepts(requester: Identity) async -> Bool { // TODO: change permission chack to something more meaningful
-        // Runtime binding installation is authorized by an active, instance-bound
-        // token rather than by caller identity. This allows a freshly created Cell
-        // with a public/unsigned owner descriptor to install its own handlers while
-        // keeping every registration attempt outside that scope proof-gated.
+    private func isAllowedToSetupIntercepts(requester: Identity, key: String, operation: String) async -> Bool {
+        // Preserve the instance-bound token and the owner proof policy.
         if Self.runtimeBindingInstallationToken?.authorizes(self) == true {
             return true
         }
-        guard identitiesReferenceSame(owner, requester) else {
-            return false
+        let condition: String
+        if !identitiesReferenceSame(owner, requester) {
+            condition = "requesterNotOwner"
+        } else if await checkIdentityOrigin(requester, against: owner) {
+            return true
+        } else {
+            condition = requester.identityVault == nil ? "identityMissingVault" : "signatureProofFailed"
         }
-        return await checkIdentityOrigin(requester, against: owner)
+        await bindingRefusals.record(key: key, operation: operation, condition: condition, requester: requester.uuid)
+        let message = "Binding setup refused cell=\(String(describing: type(of: self))) uuid=\(uuid) key=\(key) operation=\(operation) requesterUUID=\(requester.uuid) runtimeToken=missingOrUnauthorized condition=\(condition)"
+        // A refusal is operational evidence, even with diagnostic domains disabled.
+        if let handler = CellBase.diagnosticLogHandler {
+            handler(.lifecycle, message)
+        } else {
+            print("[CellBase][lifecycle] \(message)")
+        }
+        return false
     }
-    
-    
+
     @available(*, deprecated)
     public func setInterceptValueForKey(requester: Identity, key: String, setValueForKeyIntercept: @escaping ValueForKeyIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "setInterceptValueForKey") {
             await self.intercepts.storeInterceptValueForKey(key: key, intercept: setValueForKeyIntercept)
         }
     }
@@ -2432,7 +2467,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     //Meddle
     public func addInterceptForGet(requester: Identity, key: String, getValueIntercept: @escaping GetValueIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "addInterceptForGet") {
             switch exploreContractRegistrationDecision(for: key, method: .get) {
             case .useExisting:
                 break
@@ -2451,7 +2486,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func addInterceptForSet(requester: Identity, key: String, setValueIntercept: @escaping SetValueIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "addInterceptForSet") {
             switch exploreContractRegistrationDecision(for: key, method: .set) {
             case .useExisting:
                 break
@@ -2550,7 +2585,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public func makeCellOwnedFlowEmitterForRuntimeBinding(
         requester: Identity
     ) async -> ((FlowElement) -> Void)? {
-        guard await isAllowedToSetupIntercepts(requester: requester) else {
+        guard await isAllowedToSetupIntercepts(requester: requester, key: "*", operation: "makeCellOwnedFlowEmitterForRuntimeBinding") else {
             return nil
         }
         return { [weak self] flowElement in
