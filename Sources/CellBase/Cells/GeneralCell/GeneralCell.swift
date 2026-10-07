@@ -1450,6 +1450,60 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
     }
 
+    /// Installs an owner-signed, cell-bound Contract presented by its proven subject.
+    /// The host needs only the owner's public identity. No owner signing proxy is used.
+    public func acceptExternallySignedAgreement(
+        _ presented: Contract,
+        for identity: Identity
+    ) async -> AgreementState {
+        // Freeze all mutable Agreement/Identity references before any suspension.
+        guard !CellBase.debugValidateAccessForEverything,
+              let bytes = try? JSONEncoder().encode(presented),
+              let contract = try? JSONDecoder().decode(Contract.self, from: bytes) else {
+            return .rejected
+        }
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            return .rejected
+        }
+        guard contract.targetCellUUID == uuid,
+              await contract.verifyAuthorizationBinding(
+                expectedIssuer: owner,
+                expectedSubject: identity,
+                expectedDomain: identityDomain,
+                now: authorizationClock()
+              ),
+              await checkIdentityOrigin(identity, against: contract.subject) else {
+            return .rejected
+        }
+        // Reuse the exact local-admission template check without rewriting signed bytes.
+        guard let request = try? contract.agreement.publicDescriptorSnapshot() else {
+            return .rejected
+        }
+        request.state = .template
+        guard agreementDerivedFromTemplate(request: request, subject: identity) != nil else {
+            return .rejected
+        }
+        let conditionsResolved = await Self.$isEvaluatingAuthorizationConditions.withValue(true) {
+            await allConditionsResolved(
+                contract.agreement.conditions,
+                context: ConnectContext(source: nil, target: self, identity: identity)
+            )
+        }
+        guard conditionsResolved,
+              contract.temporalStatus(now: authorizationClock()) == .active else {
+            return .rejected
+        }
+        let authorization = await auditor.installAuthorization(
+            contract: contract,
+            member: contract.subject.publicIdentitySnapshot(),
+            restoring: persistedAuthorizationSnapshot()
+        )
+        applyPersistedAuthorizationSnapshot(authorization)
+        return .signed
+    }
+
     private func admissionPolicyAllows(
         _ agreement: Agreement,
         ownerAuthorized: Bool
@@ -2200,6 +2254,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         var relevantContracts = [Contract]()
         for currentContract in await authorizationContracts() {
+            guard currentContract.targetCellUUID == nil || currentContract.targetCellUUID == uuid else {
+                continue
+            }
             guard await currentContract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
                 expectedSubject: identity,

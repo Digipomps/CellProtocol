@@ -1,0 +1,231 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
+import XCTest
+@_spi(HAVENRuntime) @testable import CellBase
+
+final class ExternalAgreementAdmissionTests: XCTestCase {
+    private var previousVault: IdentityVaultProtocol?
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    override func setUp() {
+        super.setUp()
+        XCTAssertFalse(CellBase.debugValidateAccessForEverything, "Probe requires real authorization")
+        previousVault = CellBase.defaultIdentityVault
+        CellBase.defaultIdentityVault = EphemeralIdentityVault()
+    }
+    override func tearDown() {
+        CellBase.defaultIdentityVault = previousVault
+        super.tearDown()
+    }
+    // Uses the existing trusted runtime-binding scope only to install handlers;
+    // access and membership still use the production authorization path.
+    private final class ProbeCell: GeneralCell {
+        required init(owner: Identity) async {
+            await super.init(owner: owner)
+            name = "probe-name"
+        }
+        required init(from decoder: Decoder) throws { try super.init(from: decoder) }
+        override func installCellRuntimeBindingsForAccess() async throws {
+            await addInterceptForGet(requester: storedOwnerIdentity, key: "name") { _, _ in
+                .string(self.name)
+            }
+            await addInterceptForSet(requester: storedOwnerIdentity, key: "name") { _, value, _ in
+                if case .string(let value) = value { self.name = value }
+                return .string(self.name)
+            }
+        }
+    }
+    private struct Fixture {
+        let a: EphemeralIdentityVault
+        let b: EphemeralIdentityVault
+        let sVault: EphemeralIdentityVault
+        let owner: Identity
+        let subject: Identity
+        let cell: GeneralCell
+    }
+    private func identity(_ vault: EphemeralIdentityVault, _ label: String) async -> Identity {
+        var identity = Identity(UUID().uuidString, displayName: label, identityVault: vault)
+        await vault.addIdentity(identity: &identity, for: "private")
+        return identity
+    }
+    private func fixture() async -> Fixture {
+        let a = EphemeralIdentityVault(), b = EphemeralIdentityVault(), s = EphemeralIdentityVault()
+        let owner = await identity(a, "test-owner")
+        let subject = await identity(s, "test-subject")
+        CellBase.defaultIdentityVault = b
+        let cell = await ProbeCell(owner: owner.publicIdentitySnapshot())
+        cell.authorizationClock = { self.now }
+        cell.agreementTemplate.conditions = []
+        cell.agreementTemplate.grants = [Grant(keypath: "name", permission: "r---")]
+        cell.agreementTemplate.duration = 3600
+        return Fixture(a: a, b: b, sVault: s, owner: owner, subject: subject, cell: cell)
+    }
+    private func signed(_ f: Fixture, issuer: Identity? = nil, resource: String? = nil,
+                        duration: Int = 600, issuedAt: Date? = nil, path: String = "name", domain: String? = nil) async throws -> Contract {
+        let agreement = Agreement(owner: f.owner.publicIdentitySnapshot())
+        agreement.state = .signed
+        agreement.signatories = [f.owner.publicIdentitySnapshot(), f.subject.publicIdentitySnapshot()]
+        agreement.conditions = []
+        agreement.grants = [Grant(keypath: path, permission: "r---")]
+        agreement.duration = duration
+        let contract = try await Contract.signed(agreement: agreement, issuer: issuer ?? f.owner,
+            subject: f.subject.publicIdentitySnapshot(), domain: domain ?? f.cell.identityDomain,
+            issuedAt: issuedAt ?? now, targetCellUUID: resource ?? f.cell.uuid)
+        let wire = try JSONDecoder().decode(Contract.self, from: JSONEncoder().encode(contract))
+        let validSignature = await wire.verifyCryptographicSignature()
+        XCTAssertTrue(validSignature, "Negative tests must start with authentic signed bytes")
+        return wire
+    }
+    private struct Snapshot: Decodable {
+        let contracts: [Contract]
+        let members: [Identity]
+    }
+    private func snapshot(_ cell: GeneralCell) throws -> Snapshot {
+        try JSONDecoder().decode(Snapshot.self, from: JSONEncoder().encode(cell))
+    }
+    private func denied(_ contract: Contract, _ f: Fixture, presenter: Identity? = nil) async throws {
+        let state = await f.cell.acceptExternallySignedAgreement(contract, for: presenter ?? f.subject)
+        XCTAssertEqual(state, .rejected)
+        let snapshot = try snapshot(f.cell)
+        XCTAssertEqual(snapshot.contracts.count, 0)
+        XCTAssertEqual(snapshot.members.count, 0)
+    }
+    func testExternalOwnerSignatureAdmitsSubjectWithoutOwnerKeyInHostAndRejectsWrite() async throws {
+        let f = await fixture()
+        XCTAssertNil(f.cell.owner.identityVault)
+        let ownerInB = await f.b.identity(forUUID: f.owner.uuid)
+        XCTAssertNil(ownerInB)
+        do { _ = try await f.b.signMessageForIdentity(messageData: Data("probe".utf8), identity: f.owner); XCTFail("B signed as owner") } catch {}
+        let contract = try await signed(f)
+        XCTAssertNil(contract.issuer.identityVault)
+        XCTAssertNil(contract.subject.identityVault)
+        let result = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(result, .signed)
+        let read = try await f.cell.get(keypath: "name", requester: f.subject)
+        XCTAssertEqual(read, .string("probe-name"))
+        do { _ = try await f.cell.set(keypath: "name", value: .string("forbidden"), requester: f.subject); XCTFail("Write admitted") } catch {}
+        XCTAssertEqual(f.cell.name, "probe-name")
+        let snapshot = try snapshot(f.cell)
+        XCTAssertEqual(snapshot.members.count, 1)
+        XCTAssertEqual(snapshot.contracts.count, 1)
+        XCTAssertNil(snapshot.members.first?.identityVault)
+    }
+    func testRejectsSignatureFromOtherKeyWithOwnerUUID() async throws {
+        let f = await fixture()
+        let vault = EphemeralIdentityVault()
+        var impostor = Identity(f.owner.uuid, displayName: "test-impostor", identityVault: vault)
+        await vault.addIdentity(identity: &impostor, for: "private")
+        try await denied(try await signed(f, issuer: impostor), f)
+    }
+    func testRejectsOwnerSignatureForOtherCellWithSameTemplateAndDomain() async throws {
+        let f = await fixture()
+        let other = await GeneralCell(owner: f.owner.publicIdentitySnapshot())
+        other.identityDomain = f.cell.identityDomain
+        other.agreementTemplate = f.cell.agreementTemplate
+        try await denied(try await signed(f, resource: other.uuid), f)
+    }
+    func testRejectsExpiredSignature() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f, issuedAt: now.addingTimeInterval(-1200)), f)
+    }
+    func testRejectsNotYetValidSignature() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f, issuedAt: now.addingTimeInterval(601)), f)
+    }
+    func testRejectsSubjectWithoutPrivateKeyProof() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f), f, presenter: f.subject.publicIdentitySnapshot())
+    }
+    func testRejectsGrantOutsideTemplate() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f, path: "members"), f)
+    }
+    func testRejectsDurationBeyondTemplate() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f, duration: 3601), f)
+    }
+    func testRejectsThirdIdentityPresentingSubjectsContractAndReading() async throws {
+        let f = await fixture()
+        let third = await identity(EphemeralIdentityVault(), "test-third")
+        let contract = try await signed(f)
+        try await denied(contract, f, presenter: third)
+        let admitted = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(admitted, .signed)
+        do { _ = try await f.cell.get(keypath: "name", requester: third); XCTFail("Third identity read") } catch {}
+    }
+    func testRepeatedPresentationDoesNotGrowMembersOrContracts() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        for _ in 0..<2 {
+            let result = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+            XCTAssertEqual(result, .signed)
+        }
+        let snapshot = try snapshot(f.cell)
+        XCTAssertEqual(snapshot.members.count, 1)
+        XCTAssertEqual(snapshot.contracts.count, 1)
+    }
+    func testRejectsHostAddAgreementWithoutOwnerPrivateKey() async throws {
+        let f = await fixture()
+        let request = try f.cell.agreementTemplate.publicDescriptorSnapshot()
+        let result = await f.cell.addAgreement(request, for: f.subject, authorizedBy: f.cell.owner)
+        XCTAssertEqual(result, .rejected)
+        let snapshot = try snapshot(f.cell)
+        XCTAssertTrue(snapshot.contracts.isEmpty)
+    }
+    func testOwnerSameIdentityRequiresKeyProofForOrdinaryRead() async throws {
+        let f = await fixture()
+        _ = try await f.cell.get(keypath: "name", requester: f.owner)
+        do { _ = try await f.cell.get(keypath: "name", requester: f.owner.publicIdentitySnapshot()); XCTFail("Owner without proof read") } catch {}
+    }
+    func testOwnerAndSeparateAgentIdentityBothRequireTheirOwnKeyProof() async throws {
+        let f = await fixture()
+        let result = await f.cell.acceptExternallySignedAgreement(try await signed(f), for: f.subject)
+        XCTAssertEqual(result, .signed)
+        _ = try await f.cell.get(keypath: "name", requester: f.subject)
+        do { _ = try await f.cell.get(keypath: "name", requester: f.subject.publicIdentitySnapshot()); XCTFail("Agent without proof read") } catch {}
+        _ = try await f.cell.get(keypath: "name", requester: f.owner)
+    }
+    func testRejectsChangedCellBindingAfterWireRoundTrip() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(contract)) as? [String: Any])
+        json["targetCellUUID"] = "test-other-cell"
+        let modified = try JSONDecoder().decode(Contract.self, from: JSONSerialization.data(withJSONObject: json))
+        let valid = await modified.verifyCryptographicSignature()
+        XCTAssertFalse(valid)
+    }
+    func testRejectsUnboundLegacyContractWhileKeepingItsSignatureValid() async throws {
+        let f = await fixture()
+        let agreement = Agreement(owner: f.owner.publicIdentitySnapshot())
+        agreement.state = .signed
+        agreement.conditions = []
+        agreement.signatories = [f.owner.publicIdentitySnapshot(), f.subject.publicIdentitySnapshot()]
+        agreement.grants = f.cell.agreementTemplate.grants
+        agreement.duration = 600
+        let legacy = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.subject.publicIdentitySnapshot(), domain: f.cell.identityDomain, issuedAt: now)
+        let wire = try JSONDecoder().decode(Contract.self, from: JSONEncoder().encode(legacy))
+        XCTAssertNil(wire.targetCellUUID)
+        XCTAssertEqual(wire.signingSemantics, Contract.issuerOnlySubjectBoundSemantics)
+        let valid = await wire.verifyCryptographicSignature()
+        XCTAssertTrue(valid)
+        try await denied(wire, f)
+    }
+    func testRejectsOwnerSignatureForWrongDomain() async throws {
+        let f = await fixture()
+        try await denied(try await signed(f, domain: "other-domain"), f)
+    }
+    func testRejectsConditionsDifferentFromCurrentTemplate() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        f.cell.agreementTemplate.conditions = [GrantCondition(requestedGrant: "identity.displayName", requestedPermission: "r---")]
+        try await denied(contract, f)
+    }
+    func testPublicRemoteSubjectWithoutSigningProxyCannotProveControl() async throws {
+        let f = await fixture()
+        let proved = await f.cell.verifyRequesterIdentityControl(f.subject.publicIdentitySnapshot())
+        XCTAssertFalse(proved)
+        let localProof = await f.cell.verifyRequesterIdentityControl(f.subject)
+        XCTAssertTrue(localProof)
+    }
+}
+
