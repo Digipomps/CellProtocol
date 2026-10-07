@@ -156,6 +156,12 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         }
         cellOwnedFlowEmitter = emitter
         await registerOperations(owner: owner)
+        for record in storedEnvelopesByMessageID.values {
+            if let expiry = Self.date(from: record.outer.expiresAt) {
+                scheduleEnvelopeExpiry(messageID: record.outer.messageID,
+                    after: expiry.timeIntervalSince(nowProvider()))
+            }
+        }
     }
 
     public override func authorizationDecision(
@@ -177,6 +183,14 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         return decision
     }
 
+    public override func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        guard !CellBase.debugValidateAccessForEverything, requestedAccess == "-w--",
+              keypath == "agreement.accept" || keypath == "agreement.revoke" else { return false }
+        // Permission to submit a signed command is not membership or signing authority.
+        // The command handler verifies the owner's signature and all bindings.
+        return await verifyRequesterIdentityControl(identity)
+    }
+
     public func meddleAuthorizationRequirement(
         for method: ExploreContractMethod,
         keypath: String
@@ -185,7 +199,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             return "-w--"
         }
         switch (method, keypath) {
-        case (.get, "inbox"):
+        case (.get, "inbox"), (.get, "state"):
             return "r---"
         case (.set, "readMessage"),
              (.set, "sendMessage"),
@@ -199,6 +213,72 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
 
     var membershipFingerprintSnapshot: String {
         membershipFingerprint
+    }
+
+    public override func acceptExternallySignedAgreement(_ contract: Contract, for identity: Identity) async -> AgreementState {
+        guard let bytes = try? JSONEncoder().encode(contract),
+              let frozen = try? JSONDecoder().decode(Contract.self, from: bytes),
+              frozen.subject.publicKeyAgreementSecureKey != nil,
+              frozen.issuer.publicKeyAgreementSecureKey != nil else { return .rejected }
+        guard let subjectSigner = frozen.agreement.signatories.first(where: {
+                  $0.uuid == frozen.subject.uuid && $0.signingPublicKeyFingerprint == frozen.subject.signingPublicKeyFingerprint
+              }),
+              let subjectKey = frozen.subject.publicKeyAgreementSecureKey,
+              subjectKey.privateKey == false, subjectKey.use == .keyAgreement,
+              subjectKey.algorithm == .X25519, subjectKey.compressedKey != nil,
+              subjectKey.compressedKey == subjectSigner.publicKeyAgreementSecureKey?.compressedKey,
+              let ownerKey = owner.publicKeyAgreementSecureKey?.compressedKey,
+              frozen.issuer.publicKeyAgreementSecureKey?.compressedKey == ownerKey,
+              frozen.agreement.owner.publicKeyAgreementSecureKey?.compressedKey == ownerKey else { return .rejected }
+        let expected = CorrespondenceAgreementTemplates.withAttachments(owner: owner).grants
+        let key: (Grant) -> String = { "\($0.keypath):\($0.permission.fullPermissionString)" }
+        guard frozen.agreement.grants.count == expected.count,
+              Set(frozen.agreement.grants.map(key)) == Set(expected.map(key)) else { return .rejected }
+        let result = await super.acceptExternallySignedAgreement(frozen, for: identity)
+        if result == .signed { await refreshAuthorizedMembership() }
+        return result
+    }
+
+    public override func acceptExternallySignedRevocation(_ revocation: ContractRevocation) async -> Bool {
+        let accepted = await super.acceptExternallySignedRevocation(revocation)
+        if accepted { await refreshAuthorizedMembership() }
+        return accepted
+    }
+
+    override func didChangeAuthorizationMembership() async { await refreshAuthorizedMembership() }
+
+    private func refreshAuthorizedMembership() async {
+        let members = await authorizationMembers()
+        let ids = Array(Set(members.map(\.uuid) + [owner.uuid])).sorted()
+        if ids != memberIdentityUUIDs {
+            memberIdentityUUIDs = ids
+            membershipVersion += 1
+            membershipFingerprint = calculateMembershipFingerprint()
+        }
+    }
+
+    /// These transport commands carry their own owner signature and subject proof.
+    /// They grant no authority merely by reaching a registered handler.
+    public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType {
+        if keypath == "agreement.accept" {
+            let contract = try CorrespondenceCellCodec.decode(value, as: Contract.self)
+            let status = await acceptExternallySignedAgreement(contract, for: requester)
+            return .object(["status": .string(status == .signed ? "accepted" : "rejected")])
+        }
+        if keypath == "agreement.revoke" {
+            let revocation = try CorrespondenceCellCodec.decode(value, as: ContractRevocation.self)
+            let accepted = await acceptExternallySignedRevocation(revocation)
+            return .object(["status": .string(accepted ? "revoked" : "rejected")])
+        }
+        return try await super.set(keypath: keypath, value: value, requester: requester) ?? .null
+    }
+
+    public override func state(requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
+        guard await validateAccess("r---", at: "state", for: requester) else {
+            throw KeyValueErrors.denied
+        }
+        return inbox(requester: requester)
     }
 
     private func configureFixedPolicy(owner: Identity) {
@@ -217,6 +297,23 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     }
 
     private func registerOperations(owner: Identity) async {
+        await registerGet(key: "state", owner: owner, returns: Self.inboxSchema,
+            permissions: ["r---"], required: true,
+            description: .string("Member-only envelope history."),
+            handler: { [weak self] requester in
+                guard let self else { return .null }
+                return (try? await self.state(requester: requester)) ?? .null
+            })
+        for command in ["agreement.accept", "agreement.revoke"] {
+            await registerSet(key: command, owner: owner,
+                input: ExploreContract.schema(type: "object"), returns: ExploreContract.schema(type: "object"),
+                permissions: ["-w--"], required: true,
+                description: .string("Owner-signed command; admission additionally proves the subject key."),
+                handler: { [weak self] requester, value in
+                    guard let self else { return .null }
+                    return try? await self.set(keypath: command, value: value, requester: requester)
+                })
+        }
         await registerAttachmentOperations(owner: owner)
         await registerGet(
             key: "inbox",
@@ -322,10 +419,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             removeExpiredMessage(messageID, record: stored)
             return denial(.messageExpired)
         }
-        emit(event: "message.read", fields: [
-            "messageID": .string(messageID),
-            "requesterIdentityUUID": .string(requester.uuid)
-        ])
+        emit(event: "message.read", fields: ["messageID": .string(messageID)])
         return (try? CorrespondenceCellCodec.encode(stored)) ?? .null
     }
 
@@ -401,11 +495,13 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             outer: outer,
             innerCiphertext: request.envelope
         )
+        scheduleEnvelopeExpiry(messageID: messageID, after: TimeInterval(retentionSeconds))
         emit(event: "message.stored", fields: [
+            "envelope": (try? CorrespondenceCellCodec.encode(CorrespondenceStoredEnvelope(outer: outer, innerCiphertext: request.envelope))) ?? .null,
             "messageID": .string(messageID),
             "sequence": .integer(outer.sequence),
             "senderIdentityUUID": .string(requester.uuid),
-            "purposeRef": .string(request.purposeRef),
+            "purposeRef": .string(Self.envelopePurposeRef),
             "expiresAt": .string(outer.expiresAt),
             "ciphertextSize": .integer(outer.ciphertextSize)
         ])
@@ -434,7 +530,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         storedEnvelopesByMessageID[messageID] = stored
         emit(event: "message.receipt", fields: [
             "messageID": .string(messageID),
-            "requesterIdentityUUID": .string(requester.uuid)
+            "receiptState": .string("acknowledged")
         ])
         return .object([
             "status": .string("acknowledged"),
@@ -470,8 +566,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             emit(event: "membership.changed", fields: [
                 "membershipVersion": .integer(membershipVersion),
                 "membershipFingerprint": .string(membershipFingerprint),
-                "memberCount": .integer(memberIdentityUUIDs.count),
-                "requesterIdentityUUID": .string(requester.uuid)
+                "memberCount": .integer(memberIdentityUUIDs.count)
             ])
         }
         return .object([
@@ -480,6 +575,14 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             "membershipFingerprint": .string(membershipFingerprint),
             "memberIdentityUUIDs": .list(memberIdentityUUIDs.map(ValueType.string))
         ])
+    }
+
+    private func scheduleEnvelopeExpiry(messageID: String, after seconds: TimeInterval) {
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+            guard let self, let record = self.storedEnvelopesByMessageID[messageID] else { return }
+            self.removeExpiredMessage(messageID, record: record)
+        }
     }
 
     private func purgeExpiredMessages(at date: Date) {
@@ -804,11 +907,14 @@ extension CorrespondenceCell {
         let decision = await authorizationDecision(requestedAccess: "-w--", at: action, for: requester)
         guard decision.allowed else { throw CorrespondenceAttachmentError.wrongRecipient }
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
-        if senderActions.contains(action) {
+        if senderActions.contains(action), requester.uuid != owner.uuid {
             let agreements = await contractsForIdentity(requester)
             guard agreements.contains(where: { $0.uuid == request.agreementID && $0.checkGrant(requestedGrant: Grant(keypath: action, permission: "-w--")) }) else {
                 throw CorrespondenceAttachmentError.contextMismatch
             }
+        }
+        if senderActions.contains(action), requester.uuid == owner.uuid, request.agreementID != uuid {
+            throw CorrespondenceAttachmentError.contextMismatch
         }
         // Recipient authority was checked by the Resolver above. The storage
         // entry additionally checks the original sender's Agreement ID, signed
@@ -864,12 +970,9 @@ extension CorrespondenceCell {
             }
         case "attachments.prepare":
             guard UUID(uuidString: request.messageID) != nil else { throw CorrespondenceAttachmentError.contextMismatch }
-            // Recipient keys are taken from admitted, signed Agreements.
-            let agreements = await contractsForIdentity(requester)
-            guard let agreement = agreements.first(where: { $0.uuid == request.agreementID }) else {
-                throw CorrespondenceAttachmentError.contextMismatch
-            }
-            let keys = Set(agreement.signatories.filter { $0.uuid != requester.uuid }
+            // Every admitted member is a recipient, including the owner.
+            let members = await authorizationMembers() + [owner]
+            let keys = Set(members.filter { $0.uuid != requester.uuid }
                 .compactMap(\.signingPublicKeyFingerprint))
             guard !keys.isEmpty else { throw CorrespondenceAttachmentError.wrongRecipient }
             result = try CorrespondenceCellCodec.encode(await source.storage.prepare(request, recipientKeys: keys,
@@ -887,7 +990,7 @@ extension CorrespondenceCell {
         default: throw CorrespondenceAttachmentError.unavailable
         }
         emit(event: action, fields: ["messageID": .string(request.messageID),
-            "attachmentID": .string(request.attachmentID ?? ""), "requesterIdentityUUID": .string(requester.uuid)])
+            "senderIdentityUUID": .string(request.senderIdentityUUID)])
         return result
     }
 }

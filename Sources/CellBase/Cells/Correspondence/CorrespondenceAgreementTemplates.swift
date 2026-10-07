@@ -22,7 +22,7 @@ public enum CorrespondenceAgreementTemplates {
     /// Explicitly opt in by signing this Agreement; existing v0 contracts gain no rights.
     public static func withAttachments(owner: Identity) -> Agreement {
         make(name: "Correspondence with attachments v1", owner: owner,
-             grants: externalGrantSpecifications + attachmentGrantSpecifications)
+             grants: externalGrantSpecifications + [("feed", "r---"), ("state", "r---")] + attachmentGrantSpecifications)
     }
 
     public static let ownerGrantSpecifications: [(keypath: String, permission: String)] = [

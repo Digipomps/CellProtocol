@@ -192,6 +192,7 @@ final class ExternalAgreementAdmissionTests: XCTestCase {
         let modified = try JSONDecoder().decode(Contract.self, from: JSONSerialization.data(withJSONObject: json))
         let valid = await modified.verifyCryptographicSignature()
         XCTAssertFalse(valid)
+        try await denied(modified, f)
     }
     func testRejectsUnboundLegacyContractWhileKeepingItsSignatureValid() async throws {
         let f = await fixture()
@@ -227,5 +228,130 @@ final class ExternalAgreementAdmissionTests: XCTestCase {
         let localProof = await f.cell.verifyRequesterIdentityControl(f.subject)
         XCTAssertTrue(localProof)
     }
+    func testRevocationRejectsReplayAndSurvivesSnapshot() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        let admitted = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(admitted, .signed)
+        let revocation = try await ContractRevocation.signed(contract: contract, owner: f.owner, at: now)
+        let revoked = await f.cell.acceptExternallySignedRevocation(revocation)
+        XCTAssertTrue(revoked)
+        let replay = await f.cell.acceptExternallySignedRevocation(revocation)
+        XCTAssertFalse(replay)
+        let readmission = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(readmission, .rejected)
+        let restored = try JSONDecoder().decode(ProbeCell.self, from: JSONEncoder().encode(f.cell))
+        restored.authorizationClock = { self.now }
+        let restoredResult = await restored.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(restoredResult, .rejected)
+        XCTAssertTrue(try snapshot(restored).members.isEmpty)
+    }
+
+    func testOwnerRemovalBeforeAdmissionBlocksPreviouslySignedContract() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        await f.cell.removeMember(uuid: f.subject.uuid, requester: f.owner)
+        let result = await f.cell.acceptExternallySignedAgreement(contract, for: f.subject)
+        XCTAssertEqual(result, .rejected)
+        XCTAssertTrue(try snapshot(f.cell).contracts.isEmpty)
+    }
+
+    func testRenewalWithLaterExpiryReplacesPreviousSubjectContract() async throws {
+        let f = await fixture()
+        let original = try await signed(f)
+        let renewed = try await signed(f, duration: 1200)
+        let first = await f.cell.acceptExternallySignedAgreement(original, for: f.subject)
+        let second = await f.cell.acceptExternallySignedAgreement(renewed, for: f.subject)
+        XCTAssertEqual(first, .signed)
+        XCTAssertEqual(second, .signed)
+        XCTAssertEqual(try snapshot(f.cell).contracts.map(\.uuid), [renewed.uuid])
+        XCTAssertEqual(try snapshot(f.cell).members.count, 1)
+        let stale = await f.cell.acceptExternallySignedAgreement(original, for: f.subject)
+        XCTAssertEqual(stale, .rejected)
+    }
+
+    func testRemovedBindingIsRejectedAndOwnerCanWrite() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(contract)) as? [String: Any])
+        json.removeValue(forKey: "targetCellUUID")
+        let changed = try JSONDecoder().decode(Contract.self, from: JSONSerialization.data(withJSONObject: json))
+        try await denied(changed, f)
+        let written = try await f.cell.set(keypath: "name", value: .string("owner-write"), requester: f.owner)
+        XCTAssertEqual(written, .string("owner-write"))
+    }
+
+    func testAuditorFinalInstallRejectsRevokedContractWithStaleCallerSnapshot() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        let auditor = GeneralAuditor()
+        let initial = await auditor.authorizationSnapshot()
+        let removed = await auditor.removeAuthorization(subjectUUID: f.subject.uuid,
+            revokedAt: now.timeIntervalSince1970, restoring: initial)
+        XCTAssertEqual(removed.revokedBefore[f.subject.uuid], now.timeIntervalSince1970)
+        let installed = await auditor.installAuthorization(contract: contract,
+            member: f.subject.publicIdentitySnapshot(), restoring: initial)
+        XCTAssertTrue(installed.contracts.isEmpty)
+        XCTAssertTrue(installed.members.isEmpty)
+    }
+
+    func testBoundContractCannotAuthorizeDifferentCellUUIDAfterLocalRestoration() async throws {
+        let f = await fixture()
+        let result = await f.cell.acceptExternallySignedAgreement(try await signed(f), for: f.subject)
+        XCTAssertEqual(result, .signed)
+        let encoded = try JSONEncoder().encode(f.cell)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json["uuid"] = UUID().uuidString
+        let restored = try JSONDecoder().decode(ProbeCell.self, from: JSONSerialization.data(withJSONObject: json))
+        restored.authorizationClock = { self.now }
+        do { _ = try await restored.get(keypath: "name", requester: f.subject); XCTFail("Bound contract authorized a clone") }
+        catch let CellAuthorizationError.denied(decision) { XCTAssertFalse(decision.allowed) }
+    }
+
+    func testRemovalWhileSubjectProofIsSuspendedCannotInstallMember() async throws {
+        let f = await fixture()
+        let contract = try await signed(f)
+        let gate = SuspendedAdmissionVault(base: f.sVault)
+        f.subject.identityVault = gate
+        let pending = Task { await f.cell.acceptExternallySignedAgreement(contract, for: f.subject) }
+        await gate.waitUntilSuspended()
+        await f.cell.removeMember(uuid: f.subject.uuid, requester: f.owner)
+        await gate.release()
+        let result = await pending.value
+        XCTAssertEqual(result, .rejected)
+        XCTAssertTrue(try snapshot(f.cell).members.isEmpty)
+        XCTAssertTrue(try snapshot(f.cell).contracts.isEmpty)
+    }
+
 }
 
+
+
+private actor SuspendedAdmissionVault: IdentityVaultProtocol {
+    let base: EphemeralIdentityVault
+    var suspended = false
+    var waiter: CheckedContinuation<Void, Never>?
+    var blocked: CheckedContinuation<Void, Never>?
+    init(base: EphemeralIdentityVault) { self.base = base }
+    func waitUntilSuspended() async {
+        if suspended { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release() { blocked?.resume(); blocked = nil }
+    func identityVaultReference() async -> String? { await base.identityVaultReference() }
+    func initialize() async -> IdentityVaultProtocol { self }
+    func addIdentity(identity: inout Identity, for context: String) async { await base.addIdentity(identity: &identity, for: context) }
+    func identity(for context: String, makeNewIfNotFound: Bool) async -> Identity? { await base.identity(for: context, makeNewIfNotFound: makeNewIfNotFound) }
+    func identity(forUUID uuid: String) async -> Identity? { await base.identity(forUUID: uuid) }
+    func identityExistInVault(_ identity: Identity) async -> Bool { await base.identityExistInVault(identity) }
+    func saveIdentity(_ identity: Identity) async { await base.saveIdentity(identity) }
+    func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data {
+        suspended = true
+        waiter?.resume(); waiter = nil
+        await withCheckedContinuation { blocked = $0 }
+        return try await base.signMessageForIdentity(messageData: messageData, identity: identity)
+    }
+    func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool { try await base.verifySignature(signature: signature, messageData: messageData, for: identity) }
+    func randomBytes64() async -> Data? { await base.randomBytes64() }
+    func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) { try await base.aquireKeyForTag(tag: tag) }
+}

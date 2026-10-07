@@ -32,6 +32,7 @@ public struct Contract: Codable {
     public var signature: Data?
     /// Required by external admission. Nil retains the existing local-contract wire format.
     public var targetCellUUID: String? = nil
+    public var signaturePurpose: String? = nil
 
     /// Human- and machine-readable semantics for the existing wire format.
     /// This is derived rather than encoded, preserving wire compatibility.
@@ -73,6 +74,7 @@ public struct Contract: Codable {
         case expiresAt
         case signature
         case targetCellUUID
+        case signaturePurpose
     }
 
     private struct SigningPayload: Codable {
@@ -86,6 +88,7 @@ public struct Contract: Codable {
         var issuedAt: TimeInterval
         var expiresAt: TimeInterval
         var targetCellUUID: String?
+        var signaturePurpose: String?
     }
 
     public static func signed(
@@ -100,13 +103,14 @@ public struct Contract: Codable {
         var contract = Contract(
             uuid: UUID().uuidString,
             agreement: agreementSnapshot,
-            issuer: issuer,
-            subject: subject,
+            issuer: issuer.publicIdentitySnapshot(),
+            subject: subject.publicIdentitySnapshot(),
             domain: domain,
             issuedAt: issuedAt.timeIntervalSince1970,
             expiresAt: issuedAt.addingTimeInterval(TimeInterval(agreementSnapshot.duration)).timeIntervalSince1970,
             signature: nil,
-            targetCellUUID: targetCellUUID
+            targetCellUUID: targetCellUUID,
+            signaturePurpose: targetCellUUID == nil ? nil : "haven.contract.admission.v2"
         )
         guard let signature = try await issuer.sign(data: contract.signingData()) else {
             throw ContractError.signingFailed
@@ -229,7 +233,8 @@ public struct Contract: Codable {
             domain: domain,
             issuedAt: issuedAt,
             expiresAt: expiresAt,
-            targetCellUUID: targetCellUUID
+            targetCellUUID: targetCellUUID,
+            signaturePurpose: signaturePurpose
         )
         return try Self.canonicalEncoder().encode(payload)
     }
