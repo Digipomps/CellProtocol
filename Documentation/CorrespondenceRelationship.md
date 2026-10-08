@@ -109,9 +109,12 @@ different document after decoding, which DeviceIngress correctly rejects.
 Each removal advances the subject cutoff even when a test clock is frozen, and
 covers installed contract timestamps. A fresh local owner signature receives a
 timestamp strictly beyond the previous cutoff; final actor installation can
-still reject it after a concurrent removal. External admission and signed revocation allow five seconds of positive clock
-skew. Owner removal and accepted signed revocation advance their cutoffs by the same five seconds and covers all
-installed timestamps, so a pending, slightly future-dated contract cannot win
+still reject it after a concurrent removal. Any forward shift consumes the local
+requested duration, rounded up to a whole second, so it cannot extend the
+requested expiration deadline. A duration entirely consumed by the cutoff is
+rejected. External admission and signed revocation allow five seconds of positive
+clock skew. Owner removal and accepted signed revocation advance their cutoffs
+by the same five seconds and cover all installed timestamps, so a pending, slightly future-dated contract cannot win
 against removal. A new external signature after removal must be later than that
 cutoff; clients whose clock is behind it wait or correct their clock. The larger
 legacy verification allowance does not expand external admission. Signed bytes

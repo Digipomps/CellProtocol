@@ -89,6 +89,25 @@ final class ExternalAgreementAdmissionTests: XCTestCase {
         XCTAssertEqual(snapshot.contracts.count, 0)
         XCTAssertEqual(snapshot.members.count, 0)
     }
+    func testLocalReadmissionDoesNotExtendRequestedExpirationDeadline() async throws {
+        let f = await fixture()
+        await f.cell.removeMember(member: f.subject, requester: f.owner)
+        let request = Agreement(owner: f.owner)
+        request.grants = [Grant(keypath: "name", permission: "r---")]
+        request.duration = 60
+        request.conditions = []
+        let state = await f.cell.addAgreement(request, for: f.subject, authorizedBy: f.owner)
+        XCTAssertEqual(state, .signed)
+        let installed = try XCTUnwrap(snapshot(f.cell).contracts.first)
+        XCTAssertGreaterThan(installed.issuedAt, now.timeIntervalSince1970 + GeneralCell.externalAdmissionClockTolerance)
+        XCTAssertLessThanOrEqual(installed.expiresAt, now.timeIntervalSince1970 + 60)
+        let signatureValid = await installed.verifyCryptographicSignature()
+        XCTAssertTrue(signatureValid)
+        _ = try await f.cell.get(keypath: "name", requester: f.subject)
+        f.cell.authorizationClock = { self.now.addingTimeInterval(61) }
+        do { _ = try await f.cell.get(keypath: "name", requester: f.subject); XCTFail("Expired readmission allowed access") } catch {}
+    }
+
     func testExternalOwnerSignatureAdmitsSubjectWithoutOwnerKeyInHostAndRejectsWrite() async throws {
         let f = await fixture()
         XCTAssertNil(f.cell.owner.identityVault)

@@ -1427,6 +1427,19 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 // when the injected clock has not advanced. Old signatures still
                 // fail the cutoff, including at the final actor transaction.
                 let issuedAt = max(clock, beforeSigning.revokedBefore[identity.uuid]?.nextUp ?? -.infinity)
+                // Moving issuedAt beyond a revocation cutoff must not move the
+                // requested expiration deadline as well. Agreement durations are
+                // whole seconds, so round the consumed window up conservatively.
+                if issuedAt > clock {
+                    let consumed = ceil(issuedAt - clock)
+                    guard consumed < Double(contractAgreement.duration) else {
+                        await recordContractRejected(identity: identity,
+                            reasonCode: "contract_duration_consumed_by_cutoff",
+                            message: "Requested duration does not extend beyond the revocation cutoff.")
+                        return .rejected
+                    }
+                    contractAgreement.duration -= Int(consumed)
+                }
                 let contract = try await Contract.signed(
                     agreement: contractAgreement,
                     issuer: signingOwner,
