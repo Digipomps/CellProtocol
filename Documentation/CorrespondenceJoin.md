@@ -64,3 +64,19 @@ membership itself. Existing admission replaces the authorization Contract rather
 than appending members or Contracts. Snapshots retain the latest result and the
 existing revocation cutoff. These are CellProtocol candidate semantics, not
 evidence of a deployed client, automatic polling, or a live WebSocket ceremony.
+
+## Separately signed owner Agreement and legacy invite
+
+`audience.inviteIdentities` retains the legacy idempotent operation for a
+requester holding the verified exact `CorrespondenceAgreementTemplates.owner`
+Agreement. Membership and the external/attachment templates grant no invitation
+right. Resolver authorization still verifies issuer/subject proof, signature,
+domain, time, revocation, template constraints and any cell binding before dispatch;
+the handler additionally requires the complete owner grant set, name, empty
+conditions and matching policy binding. Partial owner grants are rejected.
+
+A separately authorized requester can re-invite existing members and receives
+`unchanged`, without changing membership or signing another admission. A batch
+containing any new identity is rejected before mutation. New admission continues
+to require the actual owner's signing proof and owner-signed member Contract.
+This restores the S54 contract without making a delegate the relation's signer.

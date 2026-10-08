@@ -814,7 +814,25 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     }
 
     private func inviteIdentities(payload: ValueType, requester: Identity) async -> ValueType {
-        guard requester.uuid == owner.uuid else { return denial(.grantNotHeld) }
+        let ownerProven = await checkIdentityOrigin(requester, against: owner)
+        if !ownerProven {
+            // Resolver-verified, separately owner-signed authority is not membership.
+            // Keep the exact owner template; a single invite grant is insufficient.
+            let expected = CorrespondenceAgreementTemplates.owner(owner: owner)
+            let agreements = await contractsForIdentity(requester)
+            guard agreements.contains(where: {
+                $0.name == expected.name && $0.conditions.isEmpty &&
+                $0.authorizationPolicyBinding == expected.authorizationPolicyBinding &&
+                $0.grants.count == expected.grants.count &&
+                Set($0.grants.map { "\($0.keypath):\($0.permission.fullPermissionString)" }) ==
+                    Set(expected.grants.map { "\($0.keypath):\($0.permission.fullPermissionString)" })
+            }) else { return denial(.grantNotHeld) }
+            // A delegate can repeat the existing owner operation, but cannot
+            // sign an admission as the cell owner. Reject the entire batch first.
+            guard identityUUIDs(from: payload).allSatisfy(memberIdentityUUIDs.contains) else {
+                return denial(.grantNotHeld)
+            }
+        }
         var changed = false
         for id in identityUUIDs(from: payload) where !memberIdentityUUIDs.contains(id) {
             guard let vault = CellBase.defaultIdentityVault,
