@@ -142,8 +142,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     private var loadPublisherCancellable: AnyCancellable?
     
-    private var readyPublisher = PassthroughSubject<Bool, Error>()
-    private var ready = false
+    // Readiness is state, not a transient event. A ready frame can arrive
+    // between checking the value and installing an async subscriber.
+    private let readyPublisher = CurrentValueSubject<Bool, Error>(false)
+    private var ready: Bool { readyPublisher.value }
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
     var feedActive = false
@@ -434,8 +436,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return
         }
 
-        _ = try await readyPublisher.getOneWithTimeout(timeout)
-        ready = true
+        _ = try await readyPublisher.filter { $0 }.getOneWithTimeout(timeout)
     }
     public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
         identityProofAuthorization.reset()
@@ -457,8 +458,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         feedCancellable = nil
         self.transport = transport
         transport.setDelegate(self)
-        ready = false
-        readyPublisher = PassthroughSubject<Bool, Error>()
+        readyPublisher.send(false)
         descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
         descriptionFetchedDate = nil
         
@@ -1278,7 +1278,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Consume command cmd: \(command.cmd)")
             switch command.command {
             case .ready:
-                ready = true
                 self.readyPublisher.send(true)
                 
             case .admit:
