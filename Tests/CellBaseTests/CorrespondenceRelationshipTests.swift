@@ -429,6 +429,11 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertEqual(plan.metadata.name, "")
         request.attachmentID = plan.attachmentID
         request.sourceID = "arbitrary-source"
+        let sourceFile = f.storageRoot.appendingPathComponent(marker)
+        try Data([1]).write(to: sourceFile)
+        try await f.cell.registerAttachmentSource(id: "arbitrary-source", file: sourceFile,
+            metadata: .init(name: marker, mediaType: "application/octet-stream", byteCount: 1),
+            sharedReference: sourceFile, requester: f.owner)
         let probe = try await f.cell.set(keypath: "attachments.probe", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
         let text = String(decoding: try JSONEncoder().encode(probe), as: UTF8.self)
         XCTAssertFalse(text.contains("referenceURL"))
