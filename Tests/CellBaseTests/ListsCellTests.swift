@@ -246,8 +246,8 @@ final class ListsCellTests: XCTestCase {
 
     // MARK: WP5 — eksport av cellens ekte tilstand til web-harnessen (images/render.js)
 
-    /// Skriver `lists.state` for tre lister til loggen mellom markører. Byggeskriptet klipper den ut til
-    /// `skeleton/state-fra-cellen.json`, og `images/render.js` rendrer monteringene fra den.
+    /// Skriver `lists.state` for tre lister til en fil i TMPDIR og navngir den i loggen. Byggeskriptet kopierer
+    /// den til `skeleton/state-fra-cellen.json`, og `images/render-wp5.js` rendrer monteringene fra den.
     func testPrintsRealStateForTheWebHarness() async throws {
         let (cell, owner, _) = await makeCell()
         let createdHandle = try await set(cell, "lists.list.create", .object(["title": .string("Handleliste"), "kind": .string("shopping")]), as: owner)
@@ -277,10 +277,11 @@ final class ListsCellTests: XCTestCase {
         let rootData: ValueType = .object(["my": .object(["lists": .object(["state": state])])])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let json = String(decoding: try encoder.encode(rootData), as: UTF8.self)
-        print("===LISTS-STATE-BEGIN===")
-        print(json)
-        print("===LISTS-STATE-END===")
+        let data = try encoder.encode(rootData)
+        // Til fil, ikke stdout: XCTests egen logging flettes inn i stdout og ødela JSON-en (sett 08.10).
+        let exportURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("lists-state-export.json")
+        try data.write(to: exportURL, options: .atomic)
+        print("===LISTS-STATE-FILE=== \(exportURL.path)")
     }
 
     private func canonical(_ value: ValueType) throws -> String {
