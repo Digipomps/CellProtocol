@@ -80,7 +80,21 @@ final class BridgeIdentityProofAuthorization {
         return lock.withLock {
             purgeExpired(now: now, monotonic: monotonic)
             let scope = BridgeIdentityProofScope(domain: challenge.domain, resource: challenge.resource)
-            guard let lease = leases.first(where: { $0.value.scopes.contains(scope) }) else { return nil }
+            // Prefer the authority with the longest remaining lifetime. Dictionary
+            // order must not bind a streaming proof to a transient operation.
+            let lease = leases.filter { $0.value.scopes.contains(scope) }.sorted {
+                switch ($0.value.monotonicDeadline, $1.value.monotonicDeadline) {
+                case (nil, .some): return true
+                case (.some, nil): return false
+                case let (.some(lhs), .some(rhs)) where lhs != rhs: return lhs > rhs
+                default: break
+                }
+                if let lhs = $0.value.expiresAt, let rhs = $1.value.expiresAt, lhs != rhs {
+                    return lhs > rhs
+                }
+                return $0.key < $1.key
+            }.first
+            guard let lease else { return nil }
             return Permit(identity: principal, vault: vault, generation: generation, commandID: lease.key, scope: scope)
         }
     }
