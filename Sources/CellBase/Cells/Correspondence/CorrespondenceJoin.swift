@@ -78,7 +78,10 @@ public struct CorrespondenceJoinRequest: Codable, CanonicalPayloadSignable {
               identityUUID != owner.uuid, agreementPublicKey.count == 32,
               requester.uuid == identityUUID,
               requester.signingPublicKeyFingerprint == identity.signingPublicKeyFingerprint,
-              requester.publicKeyAgreementSecureKey?.compressedKey == agreementPublicKey,
+              // The authenticated bridge proves UUID/signing key only. The request
+              // signature binds X25519; a supplied requester key must still agree.
+              (requester.publicKeyAgreementSecureKey == nil ||
+               requester.publicKeyAgreementSecureKey?.compressedKey == agreementPublicKey),
               let ownerDescriptor = try? ChatInvitationProofUtility.signingDescriptor(for: owner),
               let invitationSignature = invitation.signature,
               let invitationBytes = try? invitation.canonicalPayloadData(),

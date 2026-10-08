@@ -67,7 +67,8 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertNil(hostInvitee)
         return Fixture(e: e, h: h, i: i, owner: owner, invitee: invitee, cell: cell, contract: contract, storageRoot: storageRoot)
     }
-    private func join(_ f: Fixture) async throws -> String {
+    private func join(_ f: Fixture, requester: Identity? = nil) async throws -> String {
+        let presenter = requester ?? f.invitee
         let resolver = CellResolver.makeIsolatedForTesting()
         let name = "join-" + UUID().uuidString
         try await resolver.registerNamedEmitCell(name: name, emitCell: f.cell, scope: .scaffoldUnique, identity: f.owner)
@@ -76,7 +77,7 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
             expiresAt: Date().addingTimeInterval(3600))
         let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
-        let response = try await resolver.set(value: CorrespondenceCellCodec.encode(request), into: endpoint("join.request"), requester: f.invitee) ?? .null
+        let response = try await resolver.set(value: CorrespondenceCellCodec.encode(request), into: endpoint("join.request"), requester: presenter) ?? .null
         let receipt = try CorrespondenceCellCodec.decode(response, as: CorrespondenceJoinResult.self)
         XCTAssertEqual(receipt.status, "pending")
         let pending = try CorrespondenceCellCodec.decode(try await resolver.get(from: endpoint("join.pending"), requester: f.owner) ?? .null, as: [CorrespondenceJoinPending].self)
@@ -94,7 +95,7 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         let decision = try await resolver.set(value: CorrespondenceCellCodec.encode(
             CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true, contract: f.contract)), into: endpoint("join.decide"), requester: f.owner) ?? .null
         XCTAssertEqual(field("status", decision), .string("approved"))
-        let result = try CorrespondenceCellCodec.decode(try await resolver.get(from: endpoint("join.result." + receipt.requestID), requester: f.invitee) ?? .null, as: CorrespondenceJoinResult.self)
+        let result = try CorrespondenceCellCodec.decode(try await resolver.get(from: endpoint("join.result." + receipt.requestID), requester: presenter) ?? .null, as: CorrespondenceJoinResult.self)
         XCTAssertEqual(result.status, "approved")
         let contract = try XCTUnwrap(result.contract)
         let snapshot = try JSONEncoder().encode(f.cell)
@@ -102,15 +103,89 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertFalse(json.contains("displayName"))
         XCTAssertFalse(json.contains("privateKey\":true"))
         let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: snapshot)
-        let restoredResult = try CorrespondenceCellCodec.decode(try await restored.get(keypath: "join.result." + receipt.requestID, requester: f.invitee), as: CorrespondenceJoinResult.self)
+        let restoredResult = try CorrespondenceCellCodec.decode(try await restored.get(keypath: "join.result." + receipt.requestID, requester: presenter), as: CorrespondenceJoinResult.self)
         let restoredContract = try XCTUnwrap(restoredResult.contract)
         let verified = await restoredContract.verifyCryptographicSignature()
         XCTAssertTrue(verified)
-        let accepted = try await resolver.set(value: CorrespondenceCellCodec.encode(contract), into: endpoint("agreement.accept"), requester: f.invitee) ?? .null
+        let accepted = try await resolver.set(value: CorrespondenceCellCodec.encode(contract), into: endpoint("agreement.accept"), requester: presenter) ?? .null
         await resolver.unregisterEmitCell(uuid: f.cell.uuid)
         XCTAssertEqual(field("status", accepted), .string("accepted"))
         print("PURPOSE join: I requested; E matched six-digit code and approved; I retrieved agreement and accepted")
         return receipt.requestID
+    }
+
+    // Same public reconstruction as BridgeChannelSession; only the invitee's own
+    // isolated vault supplies the live signing proof. The host has neither key.
+    private func signOnly(_ identity: Identity, vault: EphemeralIdentityVault) throws -> Identity {
+        let requester = try BridgeChannelAuthentication.PublicIdentity(identity).makeIdentity()
+        XCTAssertNil(requester.publicKeyAgreementSecureKey)
+        requester.identityVault = vault
+        return requester
+    }
+
+    func testSignOnlyBridgeRequesterJoinsAcceptsAndReadsEncryptedMessage() async throws {
+        let f = try await fixture(admit: false)
+        let requester = try signOnly(f.invitee, vault: f.i)
+        let otherVault = EphemeralIdentityVault()
+        let other = await identity(otherVault)
+        let conflicting = try signOnly(f.invitee, vault: f.i)
+        conflicting.publicKeyAgreementSecureKey = other.publicKeyAgreementSecureKey
+        let rejected = await f.cell.acceptExternallySignedAgreement(f.contract, for: conflicting)
+        XCTAssertEqual(rejected, .rejected)
+        _ = try await join(f, requester: requester)
+        let id = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e)
+        let opened = try await read(f, id: id, recipient: requester, sender: f.owner, vault: f.i)
+        XCTAssertEqual(opened.inner.content, "synthetic-body")
+        let replyID = try await send(f, sender: f.invitee, recipient: f.owner, vault: f.i, requester: requester)
+        let reply = try await read(f, id: replyID, recipient: f.owner, sender: f.invitee, vault: f.e)
+        XCTAssertEqual(reply.inner.content, "synthetic-body")
+        XCTAssertNil(requester.publicKeyAgreementSecureKey)
+    }
+
+    func testSignOnlyBridgeRequesterRejectsAlteredJoinProofsAndResultSigner() async throws {
+        let f = try await fixture(admit: false)
+        let requester = try signOnly(f.invitee, vault: f.i)
+        let otherVault = EphemeralIdentityVault()
+        let other = await identity(otherVault)
+        let otherRequester = try signOnly(other, vault: otherVault)
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid,
+            owner: f.owner, expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        var alteredKey = request
+        alteredKey.agreementPublicKey = try XCTUnwrap(other.publicKeyAgreementSecureKey?.compressedKey)
+        var alteredUUID = request
+        alteredUUID.identityUUID = other.uuid
+        var unsigned = request
+        unsigned.signature = nil
+        let wrongInvitation = try await CorrespondenceJoinInvitation.signed(cellUUID: UUID().uuidString,
+            owner: f.owner, expiresAt: Date().addingTimeInterval(3600))
+        let wrongCell = try await CorrespondenceJoinRequest.signed(invitation: wrongInvitation, invitee: f.invitee)
+        // A genuine different signer copying the claimed UUID/key cannot sign for I.
+        var otherSigned = request
+        otherSigned.signature = try await other.sign(data: otherSigned.canonicalPayloadData())
+        for bad in [alteredKey, alteredUUID, unsigned, wrongCell, otherSigned] {
+            let response = try await f.cell.set(keypath: "join.request",
+                value: CorrespondenceCellCodec.encode(bad), requester: requester)
+            XCTAssertEqual(field("status", response), .string("rejected"))
+        }
+        let foreignResponse = try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: otherRequester)
+        XCTAssertEqual(field("code", foreignResponse), .string("join.proof.invalid"))
+        let conflicting = try signOnly(f.invitee, vault: f.i)
+        conflicting.publicKeyAgreementSecureKey = other.publicKeyAgreementSecureKey
+        let conflictResponse = try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: conflicting)
+        XCTAssertEqual(field("code", conflictResponse), .string("join.proof.invalid"))
+        let response = try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: requester)
+        let receipt = try CorrespondenceCellCodec.decode(response, as: CorrespondenceJoinResult.self)
+        XCTAssertEqual(receipt.status, "pending")
+        let result = try await f.cell.get(keypath: "join.result." + receipt.requestID, requester: otherRequester)
+        XCTAssertEqual(result, .null)
+        let forged = Identity(f.invitee.uuid, displayName: "", identityVault: otherVault)
+        forged.publicSecureKey = other.publicSecureKey
+        let forgedResult = try await f.cell.get(keypath: "join.result." + receipt.requestID, requester: forged)
+        XCTAssertEqual(forgedResult, .null)
     }
 
     func testJoinCodeGoldenAndPendingExpiry() async throws {
@@ -279,14 +354,14 @@ final class CorrespondenceRelationshipTests: XCTestCase {
     }
     private func send(_ f: Fixture, sender: Identity, recipient: Identity,
                       vault: EphemeralIdentityVault, attachment: CorrespondenceAttachment? = nil,
-                      request: CorrespondenceAttachmentRequest? = nil, retention: Int? = nil, messageID: String? = nil) async throws -> String {
+                      request: CorrespondenceAttachmentRequest? = nil, retention: Int? = nil, messageID: String? = nil, requester: Identity? = nil) async throws -> String {
         let prepared = try await CorrespondenceEnvelopeUtility.prepare(
             message: ChatMessage(owner: sender, content: "synthetic-body"), subject: "synthetic-subject", clientMessageID: request?.messageID,
             cellID: f.cell.uuid, membershipFingerprint: f.cell.membershipFingerprintSnapshot,
             recipients: [recipient.publicIdentitySnapshot()], provider: vault, attachment: attachment)
         let response = try await f.cell.set(keypath: "sendMessage", value: CorrespondenceSendRequest(
             preparedEnvelope: prepared, purposeRef: "purpose://contact.communication",
-            retentionSeconds: retention, messageID: request?.messageID ?? messageID, attachmentRequest: request).valueType(), requester: sender)
+            retentionSeconds: retention, messageID: request?.messageID ?? messageID, attachmentRequest: request).valueType(), requester: requester ?? sender)
         XCTAssertEqual(field("status", response), .string("stored"))
         guard case .string(let id)? = field("messageID", response) else { throw GeneralCell.KeyValueErrors.otherError }
         return id

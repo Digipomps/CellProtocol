@@ -25,3 +25,20 @@ Topic `haven.correspondence` carries `join.requested` with `requestID`, `recipie
 `CorrespondenceJoinCode.code(cellUUID:invitationID:signingPublicKey:agreementPublicKey:)` hashes the concatenation of UTF-8 cellUUID, UTF-8 invitationID, raw signingPublicKey, raw agreementPublicKey, in that order. Interpret the first four SHA-256 digest bytes as unsigned big-endian UInt32, take modulo 1000000, and format with six decimal digits and leading zeros. Use exact strings from the signed invitation, without normalization. Six-digit codes can collide; a different key is not mathematically guaranteed to produce a different code.
 
 The persisted join ledger has public keys, signed proofs, IDs, timestamps, decision state and an approved public Contract. It keeps invitation consumption permanently. Runtime vault references/private keys and personal labels are not serialized by the correspondence identity codec. Host disk persistence and backup rollback protection remain integration responsibilities.
+
+## Signing-only authenticated requesters
+
+The bridge principal deliberately carries only UUID and signing key. Join matches
+both against the request and verifies the invitee signature over the entire
+request, including X25519, cell/invitation and timestamp. A requester X25519 key
+is optional; when present it must equal the signed request key. `join.result`
+still requires control of the same UUID and signing key.
+
+`agreement.accept` obtains X25519 from the owner-signed Contract, checking the
+subject/signatory key pair and owner/issuer keys. A supplied presenter X25519
+must match; an absent one is accepted after the existing subject UUID/signing-key
+binding and live key-control proof. `join.decide` binds the Contract to the
+pending request's signed X25519 and signing identity; it does not derive the
+invitee key from the owner's transport identity. Revocation is cell/domain-bound
+and owner-signed and needs no requester agreement key. None of these paths
+changes the transport principal or grants membership from join approval alone.

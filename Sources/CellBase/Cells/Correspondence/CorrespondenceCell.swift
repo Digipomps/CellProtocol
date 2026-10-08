@@ -330,6 +330,8 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
               subjectKey.privateKey == false, subjectKey.use == .keyAgreement,
               subjectKey.algorithm == .X25519, subjectKey.compressedKey != nil,
               subjectKey.compressedKey == subjectSigner.publicKeyAgreementSecureKey?.compressedKey,
+              (identity.publicKeyAgreementSecureKey == nil ||
+               identity.publicKeyAgreementSecureKey?.compressedKey == subjectKey.compressedKey),
               let ownerKey = owner.publicKeyAgreementSecureKey?.compressedKey,
               frozen.issuer.publicKeyAgreementSecureKey?.compressedKey == ownerKey,
               frozen.agreement.owner.publicKeyAgreementSecureKey?.compressedKey == ownerKey else { return .rejected }
