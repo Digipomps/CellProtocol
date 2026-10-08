@@ -123,6 +123,204 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         return requester
     }
 
+    private func verifyExpiredJoinRenewal(signingOnly: Bool) async throws {
+        let f = try await fixture(admit: false)
+        let requester = signingOnly ? try signOnly(f.invitee, vault: f.i) : f.invitee
+        let id = try await join(f, requester: requester)
+        let before = await f.cell.currentAuthorizationSnapshot()
+        XCTAssertEqual(before.contracts.count, 1)
+        XCTAssertEqual(before.members.count, 1)
+        let now = Date(timeIntervalSince1970: f.contract.expiresAt + 1)
+        f.cell.authorizationClock = { now }
+        do { _ = try await f.cell.state(requester: requester); XCTFail("Expired member read history") }
+        catch { XCTAssertTrue(error is GeneralCell.KeyValueErrors) }
+        let oldResult = try CorrespondenceCellCodec.decode(try await f.cell.get(keypath: "join.result." + id,
+            requester: requester), as: CorrespondenceJoinResult.self)
+        XCTAssertEqual(oldResult.contract?.uuid, f.contract.uuid)
+        let agreement = try f.contract.agreement.publicDescriptorSnapshot()
+        agreement.duration = 7200
+        let renewal = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: now, targetCellUUID: f.cell.uuid)
+        let decision = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: id, approve: true, contract: renewal)), requester: f.owner)
+        XCTAssertEqual(field("status", decision), .string("approved"))
+        // Renewal is retrievable without active membership, including on cold decode.
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: JSONEncoder().encode(f.cell))
+        restored.authorizationClock = { now }
+        let result = try CorrespondenceCellCodec.decode(try await restored.get(keypath: "join.result." + id,
+            requester: requester), as: CorrespondenceJoinResult.self)
+        let latest = try XCTUnwrap(result.contract)
+        XCTAssertEqual(latest.uuid, renewal.uuid)
+        XCTAssertEqual(latest.agreement.uuid, f.contract.agreement.uuid)
+        let verified = await latest.verifyCryptographicSignature()
+        XCTAssertTrue(verified)
+        let stillOld = await restored.currentAuthorizationSnapshot()
+        XCTAssertEqual(stillOld.contracts.map(\.uuid), [f.contract.uuid])
+        let accepted = try await restored.set(keypath: "agreement.accept",
+            value: CorrespondenceCellCodec.encode(latest), requester: requester)
+        XCTAssertEqual(field("status", accepted), .string("accepted"))
+        let after = await restored.currentAuthorizationSnapshot()
+        XCTAssertEqual(after.contracts.map(\.uuid), [renewal.uuid])
+        XCTAssertEqual(after.members.count, before.members.count)
+        _ = try await restored.state(requester: requester)
+        let outsider = await identity(EphemeralIdentityVault())
+        let hidden = try await restored.get(keypath: "join.result." + id, requester: outsider)
+        XCTAssertEqual(hidden, .null)
+        if signingOnly { XCTAssertNil(requester.publicKeyAgreementSecureKey) }
+    }
+
+    func testJoinRenewalAfterExpiryReplacesContractAndSurvivesDecode() async throws {
+        try await verifyExpiredJoinRenewal(signingOnly: false)
+    }
+
+    func testSignOnlyBridgeRequesterRenewsAfterExpiryAndAcceptsLatestResult() async throws {
+        try await verifyExpiredJoinRenewal(signingOnly: true)
+    }
+
+    func testJoinRenewalRejectsReplayOlderKeysGrantsCellAndAgreementChanges() async throws {
+        let f = try await fixture(admit: false)
+        let requester = try signOnly(f.invitee, vault: f.i)
+        let id = try await join(f, requester: requester)
+        let now = Date(timeIntervalSince1970: f.contract.expiresAt + 1)
+        f.cell.authorizationClock = { now }
+        let other = await identity(EphemeralIdentityVault())
+        for scenario in 0..<12 {
+            let agreement = try f.contract.agreement.publicDescriptorSnapshot()
+            agreement.duration = 7200
+            var subject = f.invitee.publicIdentitySnapshot()
+            var issuedAt = now
+            var cellUUID = f.cell.uuid
+            var issuer = f.owner
+            var approve = true
+            switch scenario {
+            case 0: break // exact original decision replay below
+            case 1: issuedAt = Date(timeIntervalSince1970: f.contract.issuedAt - 1)
+            case 2: issuedAt = Date(timeIntervalSince1970: f.contract.issuedAt) // equal issuance, later expiry
+            case 3: agreement.duration = 1 // newer issuance, earlier expiry
+                issuedAt = Date(timeIntervalSince1970: f.contract.issuedAt + 1)
+            case 4: subject.publicSecureKey = other.publicSecureKey
+                agreement.signatories = [f.owner.publicIdentitySnapshot(), subject]
+            case 5: subject.publicKeyAgreementSecureKey = other.publicKeyAgreementSecureKey
+                agreement.signatories = [f.owner.publicIdentitySnapshot(), subject]
+            case 6: agreement.addGrant("-w--", for: "members")
+            case 7: cellUUID = UUID().uuidString
+            case 8: agreement.uuid = UUID().uuidString
+            case 9: issuer = other
+            case 10: approve = false
+            default: agreement.signatories[0].publicKeyAgreementSecureKey = other.publicKeyAgreementSecureKey
+            }
+            // Keep freshness-only failures active so expiry cannot mask them.
+            let testNow = scenario <= 3 ? Date(timeIntervalSince1970: f.contract.issuedAt + 1.5) : now
+            f.cell.authorizationClock = { testNow }
+            let candidate = scenario == 0 ? f.contract : try await Contract.signed(agreement: agreement,
+                issuer: issuer, subject: subject, domain: f.cell.identityDomain, issuedAt: issuedAt,
+                targetCellUUID: cellUUID)
+            let response = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+                CorrespondenceJoinDecision(requestID: id, approve: approve, contract: approve ? candidate : nil)), requester: f.owner)
+            XCTAssertEqual(field("status", response), .string("rejected"), "scenario \(scenario)")
+            let result = try CorrespondenceCellCodec.decode(try await f.cell.get(keypath: "join.result." + id,
+                requester: requester), as: CorrespondenceJoinResult.self)
+            XCTAssertEqual(result.contract?.uuid, f.contract.uuid, "scenario \(scenario)")
+            let snapshot = await f.cell.currentAuthorizationSnapshot()
+            XCTAssertEqual(snapshot.contracts.count, 1)
+        }
+    }
+
+    func testJoinRenewalRejectsFreshSignatureAfterRevocationAndDecode() async throws {
+        let f = try await fixture(admit: false)
+        let requester = try signOnly(f.invitee, vault: f.i)
+        let id = try await join(f, requester: requester)
+        let cutoff = Date(timeIntervalSince1970: f.contract.issuedAt + 1)
+        f.cell.authorizationClock = { cutoff }
+        let revocation = try await ContractRevocation.signed(contract: f.contract, owner: f.owner, at: cutoff)
+        let revoked = await f.cell.acceptExternallySignedRevocation(revocation)
+        XCTAssertTrue(revoked)
+        let now = cutoff.addingTimeInterval(1)
+        let agreement = try f.contract.agreement.publicDescriptorSnapshot()
+        agreement.duration = 7200
+        let renewal = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: now, targetCellUUID: f.cell.uuid)
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: JSONEncoder().encode(f.cell))
+        for cell in [f.cell, restored] {
+            cell.authorizationClock = { now }
+            let response = try await cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+                CorrespondenceJoinDecision(requestID: id, approve: true, contract: renewal)), requester: f.owner)
+            XCTAssertEqual(field("status", response), .string("rejected"))
+            let result = try CorrespondenceCellCodec.decode(try await cell.get(keypath: "join.result." + id,
+                requester: requester), as: CorrespondenceJoinResult.self)
+            XCTAssertEqual(result.contract?.uuid, f.contract.uuid)
+            do { _ = try await cell.state(requester: requester); XCTFail("Revoked member read history") }
+            catch { XCTAssertTrue(error is GeneralCell.KeyValueErrors) }
+        }
+    }
+
+    func testPendingDecisionCannotRenewAcrossConcurrentApprovalAndRevocation() async throws {
+        let f = try await fixture(admit: false)
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid,
+            owner: f.owner, expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let receipt = try CorrespondenceCellCodec.decode(try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: f.invitee), as: CorrespondenceJoinResult.self)
+        let now = Date(timeIntervalSince1970: f.contract.issuedAt + 3)
+        f.cell.authorizationClock = { now }
+        let agreement = try f.contract.agreement.publicDescriptorSnapshot()
+        agreement.duration = 7200
+        let late = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: Date(timeIntervalSince1970: f.contract.issuedAt + 2), targetCellUUID: f.cell.uuid)
+        let pause = Pause(), entered = expectation(description: "Pending approval validated before commit")
+        f.cell.beforeJoinDecisionCommitForTesting = { await pause.stop(entered) }
+        async let delayed = f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true, contract: late)), requester: f.owner)
+        await fulfillment(of: [entered], timeout: 5)
+        f.cell.beforeJoinDecisionCommitForTesting = nil
+        let approved = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true, contract: f.contract)), requester: f.owner)
+        XCTAssertEqual(field("status", approved), .string("approved"))
+        let admitted = await f.cell.acceptExternallySignedAgreement(f.contract, for: f.invitee)
+        XCTAssertEqual(admitted, .signed)
+        let revocation = try await ContractRevocation.signed(contract: f.contract, owner: f.owner,
+            at: Date(timeIntervalSince1970: f.contract.issuedAt + 1))
+        let revoked = await f.cell.acceptExternallySignedRevocation(revocation)
+        XCTAssertTrue(revoked)
+        await pause.resume()
+        let response = try await delayed
+        XCTAssertEqual(field("status", response), .string("rejected"))
+        let result = try CorrespondenceCellCodec.decode(try await f.cell.get(keypath: "join.result." + receipt.requestID,
+            requester: f.invitee), as: CorrespondenceJoinResult.self)
+        XCTAssertEqual(result.contract?.uuid, f.contract.uuid)
+    }
+
+    func testJoinLedgerRenewalIgnoresInvitationExpiryAndRejectsLateReplay() async throws {
+        let f = try await fixture(admit: false)
+        let base = Date()
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid,
+            owner: f.owner, issuedAt: base, expiresAt: base.addingTimeInterval(1))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee, at: base)
+        let ledger = CorrespondenceJoinLedger()
+        let receipt = ledger.insert(request, now: base)
+        XCTAssertEqual(ledger.decide(CorrespondenceJoinDecision(requestID: receipt.requestID,
+            approve: true, contract: f.contract), now: base)?.status, "approved")
+        let now = Date(timeIntervalSince1970: f.contract.expiresAt + 2)
+        let agreement = try f.contract.agreement.publicDescriptorSnapshot()
+        agreement.duration = 7200
+        let earlier = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: now.addingTimeInterval(-1), targetCellUUID: f.cell.uuid)
+        let newer = try await Contract.signed(agreement: agreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain,
+            issuedAt: now, targetCellUUID: f.cell.uuid)
+        let latest = CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true, contract: newer)
+        XCTAssertEqual(ledger.decide(latest, now: now)?.status, "approved")
+        XCTAssertNil(ledger.decide(latest, now: now))
+        XCTAssertNil(ledger.decide(CorrespondenceJoinDecision(requestID: receipt.requestID,
+            approve: true, contract: earlier), now: now))
+        XCTAssertEqual(ledger.result(id: receipt.requestID, requester: f.invitee, now: now)?.contract?.uuid, newer.uuid)
+        XCTAssertTrue(ledger.pending(now: now).isEmpty)
+    }
+
     func testSignOnlyBridgeRequesterJoinsAcceptsAndReadsEncryptedMessage() async throws {
         let f = try await fixture(admit: false)
         let requester = try signOnly(f.invitee, vault: f.i)

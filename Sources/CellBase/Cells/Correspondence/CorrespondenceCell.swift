@@ -130,6 +130,11 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         set { membershipLock.withLock { attachmentCellValues = newValue } }
     }
     private var membershipTestHook: (() async -> Void)?
+    private var joinDecisionTestHook: (() async -> Void)?
+    var beforeJoinDecisionCommitForTesting: (() async -> Void)? {
+        get { membershipLock.withLock { joinDecisionTestHook } }
+        set { membershipLock.withLock { joinDecisionTestHook = newValue } }
+    }
     private var sendTestHook: (() async -> Void)?
     private var attachmentTestHook: (() async -> Void)?
     var beforeMembershipApplyForTesting: (() async -> Void)? {
@@ -467,7 +472,10 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                   let raw = try? JSONSerialization.jsonObject(with: bytes),
                   (try? CorrespondenceIdentityStateCodec.compact(raw)) != nil else { return .object(["status": .string("rejected")]) }
         }
-        guard let pending = joins.record(id: decision.requestID), pending.status == "pending" else { return .null }
+        guard let pending = joins.record(id: decision.requestID),
+              pending.status == "pending" || pending.status == "approved" else { return .null }
+        let renewing = pending.status == "approved"
+        guard !renewing || decision.approve else { return .object(["status": .string("rejected")]) }
         if decision.approve {
             let template = CorrespondenceAgreementTemplates.withAttachments(owner: owner)
             let expectedGrants = template.grants
@@ -481,7 +489,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                   contract.agreement.grants.allSatisfy({ grant in
                       UUID(uuidString: grant.uuid) != nil && expectedGrants.contains(where: { $0.keypath == grant.keypath && $0.name == grant.name })
                   }),
-                  contract.issuedAt <= Date().timeIntervalSince1970 + 5,
+                  contract.issuedAt <= authorizationClock().timeIntervalSince1970 + 5,
                   contract.agreement.grants.count == expectedGrants.count,
                   Set(contract.agreement.grants.map(grantKey)) == Set(expectedGrants.map(grantKey)),
                   contract.agreement.signatories.contains(where: { $0.uuid == pending.request.identityUUID && $0.publicKeyAgreementSecureKey?.compressedKey == pending.request.agreementPublicKey }),
@@ -493,9 +501,30 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                   [contract.issuer, contract.subject, contract.agreement.owner] .allSatisfy({ $0.displayName == $0.uuid }),
                   contract.agreement.signatories.allSatisfy({ $0.displayName == $0.uuid }),
                   await contract.verifyAuthorizationBinding(expectedIssuer: owner, expectedSubject: pending.request.identity,
-                    expectedDomain: identityDomain) else { return .object(["status": .string("rejected")]) }
+                    expectedDomain: identityDomain, now: authorizationClock()) else { return .object(["status": .string("rejected")]) }
+            if renewing {
+                guard let previous = pending.contract,
+                      contract.agreement.uuid == previous.agreement.uuid,
+                      contract.agreement.owner.publicKeyAgreementSecureKey?.compressedKey == previous.agreement.owner.publicKeyAgreementSecureKey?.compressedKey,
+                      contract.agreement.signatories.allSatisfy({ signer in
+                          previous.agreement.signatories.contains(where: {
+                              $0.uuid == signer.uuid && $0.signingPublicKeyFingerprint == signer.signingPublicKeyFingerprint &&
+                              $0.publicKeyAgreementSecureKey?.compressedKey == signer.publicKeyAgreementSecureKey?.compressedKey
+                          })
+                      }) else { return .object(["status": .string("rejected")]) }
+            }
         } else if decision.contract != nil { return .object(["status": .string("rejected")]) }
-        guard let result = joins.decide(decision, now: Date()) else { return .null }
+        // Serialize the revocation check and result replacement with authorization
+        // mutations. Expiry permits renewal; a recorded revocation does not.
+        await beforeJoinDecisionCommitForTesting?()
+        let result = await withCurrentAuthorizationSnapshot { snapshot in
+            // A pending decision validated before another approval must not turn
+            // into a renewal after that approval (or its subsequent revocation).
+            guard joins.record(id: decision.requestID)?.status == pending.status else { return nil as CorrespondenceJoinResult? }
+            guard !renewing || snapshot.revokedBefore[pending.request.identityUUID] == nil else { return nil as CorrespondenceJoinResult? }
+            return joins.decide(decision, now: authorizationClock())
+        }
+        guard let result else { return .object(["status": .string("rejected")]) }
         emit(event: "join.decided", fields: ["requestID": .string(result.requestID), "status": .string(result.status),
             "recipientIdentityUUID": .string(pending.request.identityUUID),
             "recipientSigningFingerprint": .string(pending.request.identity.signingPublicKeyFingerprint ?? "")])

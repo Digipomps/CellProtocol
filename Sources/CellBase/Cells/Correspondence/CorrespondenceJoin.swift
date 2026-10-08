@@ -175,8 +175,17 @@ final class CorrespondenceJoinLedger: Codable {
     }
     func decide(_ decision: CorrespondenceJoinDecision, now: Date) -> CorrespondenceJoinResult? {
         lock.withLock {
-            guard var record = records[decision.requestID], record.status == "pending" else { return nil }
-            if record.request.invitation.expiresAt <= now.timeIntervalSince1970 {
+            guard var record = records[decision.requestID] else { return nil }
+            if record.status == "approved" {
+                // Compare against the latest stored decision while holding the lock:
+                // concurrent renewals cannot replace a newer result with an older one.
+                guard decision.approve, let previous = record.contract, let next = decision.contract,
+                      next.uuid != previous.uuid, next.agreement.uuid == previous.agreement.uuid,
+                      next.issuedAt > previous.issuedAt, next.expiresAt > previous.expiresAt,
+                      next.temporalStatus(now: now) == .active else { return nil }
+                record.contract = next
+            } else if record.status != "pending" { return nil
+            } else if record.request.invitation.expiresAt <= now.timeIntervalSince1970 {
                 record.status = "expired"
             } else { record.status = decision.approve ? "approved" : "denied"; record.contract = decision.contract }
             records[decision.requestID] = record
