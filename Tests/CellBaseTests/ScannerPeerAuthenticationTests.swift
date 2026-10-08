@@ -109,7 +109,12 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         clock.set(9.999); await pair.pa.gate.checkPeerProgress()
         XCTAssertNoThrow(try pair.pa.gate.session.check())
         clock.set(10)
-        for _ in 0..<3000 where pair.pa.gate.session.state != .closed { try await Task.sleep(nanoseconds: 1_000_000) }
+        // Logical close precedes awaited physical retirement and byte release.
+        // Wait for all asserted cleanup outcomes within the original bound.
+        for _ in 0..<3000 where pair.pa.gate.session.state != .closed ||
+            pair.a.retainedPhysicalCount != 1 || pair.pa.gate.peerOutstandingUsage.bytes != 0 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
         XCTAssertGreaterThan(pair.pa.gate.peerProgressDiagnostics.checks, 1, "The installed timer must tick without receive/send callbacks")
         XCTAssertEqual(pair.pa.gate.session.state, .closed)
         XCTAssertEqual(pair.a.retainedPhysicalCount, 1)
