@@ -13,6 +13,37 @@ import NIOWebSocket
 /// One event-loop turn makes admission assertions independent of Task scheduling.
 /// The existing BridgeChannelWebSocketTests additionally cover HTTP upgrade/wire.
 final class VaporWebSocketAdmissionTests: XCTestCase {
+    func testCheckedFutureAwaitPreservesImmediateEventLoopErrorsAndCancellation() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        addTeardownBlock { try await group.shutdownGracefully() }
+        let loop = group.next()
+        let immediate = try await loop.makeSucceededFuture(41).n30CheckedGet()
+        XCTAssertEqual(immediate, 41)
+        for value in 0..<64 {
+            let promise = loop.makePromise(of: Int.self)
+            loop.execute { promise.succeed(value) }
+            let received = try await promise.futureResult.n30CheckedGet()
+            XCTAssertEqual(received, value)
+        }
+        do {
+            let failed: EventLoopFuture<Int> = loop.makeFailedFuture(N30Error.timeout)
+            _ = try await failed.n30CheckedGet()
+            XCTFail("Future failure must remain a thrown error")
+        } catch {
+            guard case N30Error.timeout = error else {
+                XCTFail("Expected the original N30 timeout error, got \(error)")
+                return
+            }
+        }
+        // Like NIO get(), task cancellation does not cancel the underlying future.
+        let promise = loop.makePromise(of: Int.self)
+        let waiting = Task { try await promise.futureResult.n30CheckedGet() }
+        waiting.cancel()
+        loop.execute { promise.succeed(73) }
+        let received = try await waiting.value
+        XCTAssertEqual(received, 73)
+    }
+
     private func make(budget: VaporBridgeReceiveBudget? = nil, holdPhysicalClose: N30Barrier? = nil) async throws -> N30Socket {
         let socket = try await N30Socket.make(budget: budget, holdPhysicalClose: holdPhysicalClose)
         addTeardownBlock { await socket.close() }
@@ -315,6 +346,17 @@ final class VaporWebSocketAdmissionTests: XCTestCase {
     }
 }
 
+// Keep the fixture's real NIO callbacks and Sendable requirement, with runtime
+// exactly-once checks at the async boundary. Do not suppress sanitizer findings
+// or alter the production transport's Future.get() path.
+private extension EventLoopFuture where Value: Sendable {
+    func n30CheckedGet() async throws -> Value {
+        try await withCheckedThrowingContinuation { continuation in
+            self.whenComplete { result in continuation.resume(with: result) }
+        }
+    }
+}
+
 private func n30Eventually(_ check: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
     let deadline = ProcessInfo.processInfo.systemUptime + 5
     while !check(), ProcessInfo.processInfo.systemUptime < deadline { try await Task.sleep(nanoseconds: 1_000_000) }
@@ -423,7 +465,7 @@ private final class N30Socket: @unchecked Sendable {
                     let close: @Sendable () async -> Void = {
                         closes.increment()
                         await holdPhysicalClose?.wait()
-                        try? await channel.close().get()
+                        try? await channel.close().n30CheckedGet()
                     }
                     let transport: VaporBridgeTransport
                     if let budget {
@@ -444,9 +486,9 @@ private final class N30Socket: @unchecked Sendable {
                     } catch { result.fail(error) }
                 }
             }
-        }.bind(host: "127.0.0.1", port: 0).get()
-        let peer = try await ClientBootstrap(group: group).connect(host: "127.0.0.1", port: listener.localAddress!.port!).get()
-        let (channel, transport, gate) = try await result.futureResult.get()
+        }.bind(host: "127.0.0.1", port: 0).n30CheckedGet()
+        let peer = try await ClientBootstrap(group: group).connect(host: "127.0.0.1", port: listener.localAddress!.port!).n30CheckedGet()
+        let (channel, transport, gate) = try await result.futureResult.n30CheckedGet()
         return .init(group: group, listener: listener, peer: peer, channel: channel, transport: transport,
                      gate: gate, consumer: consumer, owner: owner, physicalCloses: closes, limits: limits, endpoint: endpoint)
     }
@@ -491,7 +533,7 @@ private final class N30Socket: @unchecked Sendable {
                 channel.pipeline.fireChannelRead(NIOAny(frame))
             }
             return transport.receiveSnapshot
-        }.get()
+        }.n30CheckedGet()
     }
 
     static func flow(_ value: Int) throws -> Data {
@@ -502,7 +544,7 @@ private final class N30Socket: @unchecked Sendable {
     func close() async {
         guard closeLock.withLock({ if closed { return false }; closed = true; return true }) else { return }
         await gate.close(); await transport.close()
-        try? await channel.close().get(); try? await peer.close().get(); try? await listener.close().get()
+        try? await channel.close().n30CheckedGet(); try? await peer.close().n30CheckedGet(); try? await listener.close().n30CheckedGet()
         try? await group.shutdownGracefully()
     }
 }
