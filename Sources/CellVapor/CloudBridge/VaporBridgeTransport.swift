@@ -94,7 +94,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         if let websocketEndpointURL = websocketEndpointURL {
 //            let promise = eventLoopGroup.next().makePromise(of: String.self) // We should probably use promise and not semaphore
             let identitySnapshot = VaporBridgeIdentitySnapshot(identity)
-            let _ = try await WebSocket.connect(to: websocketEndpointURL.absoluteString, on: VaporBridgeTransportEventLoops.shared) { [weak self] ws in
+            let connection: EventLoopFuture<Void> = WebSocket.connect(to: websocketEndpointURL.absoluteString, on: VaporBridgeTransportEventLoops.shared) { [weak self] ws -> Void in
                     // Connected WebSocket.
                    guard let self = self else {return}
                   self.setWebSocket(ws)
@@ -109,7 +109,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
                        )
                    }
                 }
-            
+            try await connection.get()
         }
     }
     
@@ -150,14 +150,16 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
 
     private func setupWebSocketCallbacks(on webSocket: WebSocket) {
-        webSocket.onText{[weak self] ws, text in
+        // Register synchronously before NIO replays frames buffered at upgrade.
+        // Only command processing is asynchronous; callback installation must not be.
+        webSocket.onText { [weak self] _, text -> Void in
             if let incomingData = text.data(using: .utf8) {
-                try? await self?.extractCommand(incomingData)
+                Task { try? await self?.extractCommand(incomingData) }
             }
         }
-        webSocket.onBinary{ [weak self] ws, buf in
+        webSocket.onBinary { [weak self] _, buf -> Void in
             if let incomingData = buf.getData(at: 0, length: buf.readableBytes) {
-                try? await self?.extractCommand(incomingData)
+                Task { try? await self?.extractCommand(incomingData) }
             }
         }
         webSocket.onClose.whenComplete { [weak self] result in

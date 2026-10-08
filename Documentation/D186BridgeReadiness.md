@@ -19,3 +19,19 @@ non-owner restart regression. The readiness fix is not yet verified on Linux.
 The CellScaffold regression suite retains its positive and negative credential,
 revocation, expiry, restart and proof-scope assertions. An additional stress test
 races 2,048 ready callbacks with readiness waiters and verifies late waiters.
+
+Further Linux evidence: CellScaffold 37747913744 passed five additional admin
+suites after the readiness-state patch, but the full gate still failed one admin
+test. Its second channel never received the ready frame; flow diagnostics record
+bridge_description_deferred:timeout. This is distinct from the received-ready
+handoff above, so the retained-state patch alone is insufficient.
+
+VaporBridgeTransport now selects WebSocketKit's synchronous upgrade callback and
+registers synchronous text/binary callbacks immediately. Processing is dispatched
+inside each installed callback. In locked WebSocketKit 2.16.2 the async callback
+registration overload enqueues registration on the event loop, leaving its initial
+no-op handler active while buffered frames may be replayed. The analogous
+Scaffold authenticated transport and Linux test transports are corrected too.
+A deterministic NIO pipeline regression delivers the first frame inside the
+upgrade callback, before queued registration tasks can run; Linux verification
+of this additional correction is pending.
