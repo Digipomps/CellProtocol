@@ -144,8 +144,22 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     // Readiness is state, not a transient event. A ready frame can arrive
     // between checking the value and installing an async subscriber.
-    private let readyPublisher = CurrentValueSubject<Bool, Error>(false)
-    private var ready: Bool { readyPublisher.value }
+    private let readinessStateLock = NSLock()
+    private var readyPublisher = CurrentValueSubject<Bool, Error>(false)
+    private var ready: Bool { readinessPublisherSnapshot().value }
+
+    private func readinessPublisherSnapshot() -> CurrentValueSubject<Bool, Error> {
+        readinessStateLock.lock()
+        defer { readinessStateLock.unlock() }
+        return readyPublisher
+    }
+
+    private func resetReadiness() {
+        readinessStateLock.lock()
+        defer { readinessStateLock.unlock() }
+        // A waiter for the previous transport keeps its previous subject.
+        readyPublisher = CurrentValueSubject<Bool, Error>(false)
+    }
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
     var feedActive = false
@@ -432,11 +446,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     public func ready(timeout: Int) async throws {
-        if ready {
+        let publisher = readinessPublisherSnapshot()
+        if publisher.value {
             return
         }
 
-        _ = try await readyPublisher.filter { $0 }.getOneWithTimeout(timeout)
+        _ = try await publisher.filter { $0 }.getOneWithTimeout(timeout)
     }
     public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
         identityProofAuthorization.reset()
@@ -458,7 +473,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         feedCancellable = nil
         self.transport = transport
         transport.setDelegate(self)
-        readyPublisher.send(false)
+        resetReadiness()
         descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
         descriptionFetchedDate = nil
         
@@ -1278,7 +1293,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Consume command cmd: \(command.cmd)")
             switch command.command {
             case .ready:
-                self.readyPublisher.send(true)
+                readinessPublisherSnapshot().send(true)
                 
             case .admit:
                 if let identity = command.identity {

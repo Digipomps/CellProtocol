@@ -1,8 +1,8 @@
 # D186 bridge readiness handoff
 
 Source change: BridgeBase retains readiness with a CurrentValueSubject and
-filters false states when awaiting readiness. Transport replacement resets the
-same retained state. This replaces an unsynchronised Bool plus a transient
+filters false states when awaiting readiness. Transport replacement resets a fresh
+retained state for the replacement transport. This replaces an unsynchronised Bool plus a transient
 PassthroughSubject whose ready event could be lost between checking and subscribing.
 
 Invariant: receiving ready for the current transport must unblock both current
