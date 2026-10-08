@@ -1,0 +1,503 @@
+{
+  "name": "Mine lister",
+  "description": "Brukerens egne lister (handleliste, huskeliste, idéliste …) fra cell:///Lists: velg liste, legg til, kryss av, flytt, fjern. Utførte sorteres i bunn.",
+  "discovery": {
+    "sourceCellEndpoint": "cell:///Lists",
+    "sourceCellName": "ListsCell",
+    "purpose": "Mine lister",
+    "purposeDescription": "Holde brukerens lister og krysse av det som er gjort.",
+    "interests": [
+      "lists",
+      "handleliste",
+      "huskeliste",
+      "ideer",
+      "todo"
+    ],
+    "menuSlots": [
+      "lowerMid"
+    ]
+  },
+  "cellReferences": [
+    {
+      "endpoint": "cell:///Lists",
+      "label": "my"
+    }
+  ],
+  "skeleton": {
+    "VStack": {
+      "spacing": 16,
+      "elements": [
+        {
+          "HStack": {
+            "spacing": 24,
+            "elements": [
+              {
+                "VStack": {
+                  "elements": [
+                    {
+                      "VStack": {
+                        "spacing": 10,
+                        "elements": [
+                          {
+                            "Text": {
+                              "text": "Mine lister",
+                              "modifiers": {
+                                "fontStyle": "title",
+                                "fontWeight": "bold"
+                              }
+                            }
+                          },
+                          {
+                            "TextField": {
+                              "targetKeypath": "my.lists.list.create",
+                              "placeholder": "Ny liste … (Enter)",
+                              "modifiers": {
+                                "maxWidthInfinity": true
+                              }
+                            }
+                          },
+                          {
+                            "List": {
+                              "keypath": "my.lists.state.lists",
+                              "selectionMode": "single",
+                              "selectionValueKeypath": "id",
+                              "selectionPayloadMode": "item_id",
+                              "selectionActionKeypath": "my.lists.list.select",
+                              "allowsEmptySelection": false,
+                              "flowElementSkeleton": {
+                                "VStack": {
+                                  "elements": [
+                                    {
+                                      "HStack": {
+                                        "spacing": 8,
+                                        "elements": [
+                                          {
+                                            "Text": {
+                                              "keypath": "title",
+                                              "modifiers": {
+                                                "fontStyle": "body",
+                                                "fontWeight": "semibold",
+                                                "visibility": {
+                                                  "when": {
+                                                    "scope": "item",
+                                                    "keypath": "isActive",
+                                                    "equals": true
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "Text": {
+                                              "keypath": "title",
+                                              "modifiers": {
+                                                "fontStyle": "body",
+                                                "visibility": {
+                                                  "when": {
+                                                    "scope": "item",
+                                                    "keypath": "isActive",
+                                                    "equals": false
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "Spacer": {}
+                                          },
+                                          {
+                                            "Text": {
+                                              "keypath": "summaryText",
+                                              "modifiers": {
+                                                "fontStyle": "caption",
+                                                "foregroundColor": "#8E8E93"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "modifiers": {
+                                "itemSpacing": 0
+                              }
+                            }
+                          },
+                          {
+                            "List": {
+                              "keypath": "my.lists.state.emptyHint",
+                              "flowElementSkeleton": {
+                                "VStack": {
+                                  "elements": [
+                                    {
+                                      "Text": {
+                                        "keypath": "text",
+                                        "modifiers": {
+                                          "fontStyle": "callout",
+                                          "foregroundColor": "#8E8E93"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "modifiers": {
+                    "layoutVariants": [
+                      {
+                        "minAvailableWidth": 701,
+                        "width": 300
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "VStack": {
+                  "elements": [
+                    {
+                      "VStack": {
+                        "spacing": 10,
+                        "elements": [
+                          {
+                            "List": {
+                              "keypath": "my.lists.state.notice",
+                              "flowElementSkeleton": {
+                                "VStack": {
+                                  "elements": [
+                                    {
+                                      "Text": {
+                                        "keypath": "text",
+                                        "modifiers": {
+                                          "fontStyle": "callout",
+                                          "foregroundColor": "#FFB4AB"
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "modifiers": {
+                                    "background": "#B0002033",
+                                    "cornerRadius": 8,
+                                    "padding": 10
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "List": {
+                              "keypath": "my.lists.state.activeAsRows",
+                              "flowElementSkeleton": {
+                                "VStack": {
+                                  "spacing": 10,
+                                  "elements": [
+                                    {
+                                      "HStack": {
+                                        "spacing": 8,
+                                        "elements": [
+                                          {
+                                            "TextField": {
+                                              "sourceKeypath": "title",
+                                              "targetKeypath": "my.lists.list.rename",
+                                              "placeholder": "Listenavn",
+                                              "modifiers": {
+                                                "fontStyle": "title2",
+                                                "fontWeight": "semibold"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "Spacer": {}
+                                          },
+                                          {
+                                            "Text": {
+                                              "keypath": "summaryText",
+                                              "modifiers": {
+                                                "fontStyle": "caption",
+                                                "foregroundColor": "#8E8E93"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "Button": {
+                                              "keypath": "my.lists.list.remove",
+                                              "label": "",
+                                              "icon": "trash",
+                                              "payloadKeypath": "removeListPayload",
+                                              "modifiers": {
+                                                "controlStyle": "plain",
+                                                "foregroundColor": "#8E8E93",
+                                                "accessibilityLabel": "Slett listen"
+                                              }
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "TextField": {
+                                        "targetKeypath": "my.lists.item.add",
+                                        "placeholder": "Legg til …",
+                                        "modifiers": {
+                                          "maxWidthInfinity": true
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "List": {
+                                        "keypath": "items",
+                                        "flowElementSkeleton": {
+                                          "VStack": {
+                                            "elements": [
+                                              {
+                                                "HStack": {
+                                                  "spacing": 8,
+                                                  "elements": [
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.item.toggle",
+                                                        "label": "○",
+                                                        "payloadKeypath": "togglePayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "fontSize": 22,
+                                                          "foregroundColor": "#8E8E93",
+                                                          "accessibilityLabel": "Merk som utført",
+                                                          "width": 28,
+                                                          "visibility": {
+                                                            "when": {
+                                                              "scope": "item",
+                                                              "keypath": "done",
+                                                              "equals": false
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.item.toggle",
+                                                        "label": "",
+                                                        "icon": "checkmark.circle.fill",
+                                                        "payloadKeypath": "togglePayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "fontSize": 22,
+                                                          "foregroundColor": "#007AFF",
+                                                          "accessibilityLabel": "Merk som ikke utført",
+                                                          "width": 28,
+                                                          "visibility": {
+                                                            "when": {
+                                                              "scope": "item",
+                                                              "keypath": "done",
+                                                              "equals": true
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "Text": {
+                                                        "keypath": "title",
+                                                        "modifiers": {
+                                                          "fontStyle": "body",
+                                                          "foregroundColorKeypath": "titleColor"
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "Spacer": {}
+                                                    },
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.item.move",
+                                                        "label": "",
+                                                        "icon": "chevron.up",
+                                                        "payloadKeypath": "moveUpPayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "foregroundColor": "#8E8E93",
+                                                          "accessibilityLabel": "Flytt opp",
+                                                          "layoutVariants": [
+                                                            {
+                                                              "requiresCapability": [
+                                                                "drag"
+                                                              ],
+                                                              "hidden": true
+                                                            }
+                                                          ],
+                                                          "visibility": {
+                                                            "when": {
+                                                              "scope": "item",
+                                                              "keypath": "done",
+                                                              "equals": false
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.item.move",
+                                                        "label": "",
+                                                        "icon": "chevron.down",
+                                                        "payloadKeypath": "moveDownPayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "foregroundColor": "#8E8E93",
+                                                          "accessibilityLabel": "Flytt ned",
+                                                          "layoutVariants": [
+                                                            {
+                                                              "requiresCapability": [
+                                                                "drag"
+                                                              ],
+                                                              "hidden": true
+                                                            }
+                                                          ],
+                                                          "visibility": {
+                                                            "when": {
+                                                              "scope": "item",
+                                                              "keypath": "done",
+                                                              "equals": false
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.item.remove",
+                                                        "label": "",
+                                                        "icon": "trash",
+                                                        "payloadKeypath": "removePayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "foregroundColor": "#8E8E93",
+                                                          "accessibilityLabel": "Fjern"
+                                                        }
+                                                      }
+                                                    }
+                                                  ],
+                                                  "modifiers": {
+                                                    "draggableRole": "list-item",
+                                                    "dragPayloadKeypath": "dragPayload",
+                                                    "dropTargetRole": "list-item-slot",
+                                                    "acceptedDragRoles": [
+                                                      "list-item"
+                                                    ],
+                                                    "dropTargetPayloadKeypath": "dropPayload",
+                                                    "dropActionKeypath": "my.lists.item.move",
+                                                    "accessibilityDragLabel": "Dra for å flytte",
+                                                    "paddingInsets": {
+                                                      "top": 6,
+                                                      "bottom": 6,
+                                                      "leading": 0,
+                                                      "trailing": 0
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "modifiers": {
+                                          "itemSpacing": 0,
+                                          "rowDecoration": "none"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "List": {
+                                        "keypath": "emptyRows",
+                                        "flowElementSkeleton": {
+                                          "VStack": {
+                                            "elements": [
+                                              {
+                                                "Text": {
+                                                  "keypath": "text",
+                                                  "modifiers": {
+                                                    "fontStyle": "callout",
+                                                    "foregroundColor": "#8E8E93"
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "List": {
+                                        "keypath": "doneRows",
+                                        "flowElementSkeleton": {
+                                          "VStack": {
+                                            "elements": [
+                                              {
+                                                "HStack": {
+                                                  "elements": [
+                                                    {
+                                                      "Spacer": {}
+                                                    },
+                                                    {
+                                                      "Button": {
+                                                        "keypath": "my.lists.list.clearDone",
+                                                        "label": "Fjern utførte",
+                                                        "payloadKeypath": "clearDonePayload",
+                                                        "modifiers": {
+                                                          "controlStyle": "plain",
+                                                          "foregroundColor": "#007AFF",
+                                                          "fontStyle": "callout"
+                                                        }
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "modifiers": {
+                                "itemSpacing": 0
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "modifiers": {
+                    "maxWidthInfinity": true
+                  }
+                }
+              }
+            ],
+            "modifiers": {
+              "vAlignment": "top",
+              "layoutVariants": [
+                {
+                  "maxAvailableWidth": 700,
+                  "axis": "vertical"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "modifiers": {
+        "padding": 16
+      }
+    }
+  }
+}
