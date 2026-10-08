@@ -2,6 +2,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import Foundation
+#if canImport(Combine)
+import Combine
+#else
+import OpenCombine
+#endif
 
 public enum CorrespondenceDenialReason: String, Codable, Sendable {
     case plaintextRejected
@@ -107,6 +112,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         get { membershipLock.withLock { membershipIDs } }
         set { membershipLock.withLock { membershipIDs = newValue } }
     }
+    private var joins = CorrespondenceJoinLedger()
     private var invitationLedger = [CorrespondenceInvitationLedgerRecord]()
     private var version = 1
     private var fingerprint = ""
@@ -159,6 +165,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         case retentionPolicy
         case attachmentCells
         case attachmentRoot
+        case joins
     }
 
     public required init(owner: Identity) async {
@@ -204,6 +211,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         ) ?? .relationshipDefault
         attachmentCellValues = try container.decodeIfPresent(
             [String: CorrespondenceAttachmentCell].self, forKey: .attachmentCells) ?? [:]
+        joins = try container.decodeIfPresent(CorrespondenceJoinLedger.self, forKey: .joins) ?? CorrespondenceJoinLedger()
         attachmentRoot = nil
         attachmentProvisioningRequired = !attachmentCellValues.isEmpty
         try super.init(from: CorrespondenceIdentityStateCodec.decoderRestoringIdentityFallbacks(decoder))
@@ -230,6 +238,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         try container.encode(nextSequence, forKey: .nextSequence)
         try container.encode(retentionPolicy, forKey: .retentionPolicy)
         try container.encode(attachmentCells, forKey: .attachmentCells)
+        try container.encode(joins, forKey: .joins)
 
     }
 
@@ -273,6 +282,11 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     }
 
     public override func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        if keypath == "join.pending" || keypath.hasPrefix("join.result.") || keypath == "join.request" || keypath == "join.decide" {
+            guard !CellBase.debugValidateAccessForEverything else { return false }
+            if keypath == "join.pending" || keypath == "join.decide" { return await checkIdentityOrigin(identity, against: owner) }
+            return await verifyRequesterIdentityControl(identity)
+        }
         guard !CellBase.debugValidateAccessForEverything, requestedAccess == "-w--",
               keypath == "agreement.accept" || keypath == "agreement.revoke" else { return false }
         // Permission to submit a signed command is not membership or signing authority.
@@ -367,6 +381,9 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     /// These transport commands carry their own owner signature and subject proof.
     /// They grant no authority merely by reaching a registered handler.
     public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType {
+        if keypath == "join.request" || keypath == "join.decide" {
+            return try await handleJoin(keypath: keypath, value: value, requester: requester)
+        }
         if keypath == "agreement.accept" {
             let contract = try CorrespondenceCellCodec.decode(value, as: Contract.self)
             let status = await acceptExternallySignedAgreement(contract, for: requester)
@@ -378,6 +395,109 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             return .object(["status": .string(accepted ? "revoked" : "rejected")])
         }
         return try await super.set(keypath: keypath, value: value, requester: requester) ?? .null
+    }
+
+    public override func get(keypath: String, requester: Identity) async throws -> ValueType {
+        if keypath == "join.pending" {
+            guard await checkIdentityOrigin(requester, against: owner) else { throw KeyValueErrors.denied }
+            return try CorrespondenceCellCodec.encode(joins.pending(now: Date()))
+        }
+        if keypath.hasPrefix("join.result.") {
+            guard await verifyRequesterIdentityControl(requester),
+                  let result = joins.result(id: String(keypath.dropFirst("join.result.".count)), requester: requester, now: Date()) else { return .null }
+            return try CorrespondenceCellCodec.encode(result)
+        }
+        return try await super.get(keypath: keypath, requester: requester)
+    }
+
+    public override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
+        let upstream = try await super.flow(requester: requester)
+        return upstream.filter { element in
+            guard case .object(let fields) = element.content,
+                  case .string(let event)? = fields["event"], event.hasPrefix("join.") else { return true }
+            return fields["recipientIdentityUUID"] == .string(requester.uuid) &&
+                fields["recipientSigningFingerprint"] == .string(requester.signingPublicKeyFingerprint ?? "")
+        }.eraseToAnyPublisher()
+    }
+
+    private func registerJoinOperations(owner: Identity) async {
+        for command in ["join.request", "join.decide"] {
+            await registerSet(key: command, owner: owner,
+                input: ExploreContract.schema(type: "object"), returns: ExploreContract.schema(type: "object"),
+                permissions: ["-w--"], required: true,
+                flowEffects: [Self.flowEffect()],
+                description: .string("Signed join request or owner decision; does not itself admit a member."),
+                handler: { [weak self] requester, value in
+                    guard let self else { return .null }
+                    return try? await self.handleJoin(keypath: command, value: value, requester: requester)
+                })
+        }
+        for command in ["join.pending", "join.result"] {
+            await registerGet(key: command, owner: owner, returns: ExploreContract.schema(type: "object"),
+                permissions: ["r---"], required: true,
+                description: .string("Owner pending list; result uses join.result.<requestID> and same-key proof."),
+                handler: { [weak self] requester in
+                    guard let self else { return .null }
+                    return (try? await self.get(keypath: command, requester: requester)) ?? .null
+                })
+        }
+    }
+
+    private func handleJoin(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType {
+        try await ensureRuntimeReady()
+        if keypath == "join.request" {
+            let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceJoinRequest.self)
+            let validation = await request.validate(cellUUID: uuid, owner: owner, requester: requester)
+            guard validation == nil, await verifyRequesterIdentityControl(requester) else {
+                return .object(["status": .string("rejected"), "code": .string(validation ?? "join.proof.invalid")])
+            }
+            let result = joins.insert(request, now: Date())
+            if result.status == "pending" {
+                emit(event: "join.requested", fields: ["requestID": .string(result.requestID), "recipientIdentityUUID": .string(owner.uuid),
+                    "recipientSigningFingerprint": .string(owner.signingPublicKeyFingerprint ?? "")])
+            }
+            return try CorrespondenceCellCodec.encode(result)
+        }
+        guard await checkIdentityOrigin(requester, against: owner) else { throw KeyValueErrors.denied }
+        let decision = try CorrespondenceCellCodec.decode(value, as: CorrespondenceJoinDecision.self)
+        if let contract = decision.contract {
+            guard let bytes = try? JSONEncoder().encode(contract),
+                  let raw = try? JSONSerialization.jsonObject(with: bytes),
+                  (try? CorrespondenceIdentityStateCodec.compact(raw)) != nil else { return .object(["status": .string("rejected")]) }
+        }
+        guard let pending = joins.record(id: decision.requestID), pending.status == "pending" else { return .null }
+        if decision.approve {
+            let template = CorrespondenceAgreementTemplates.withAttachments(owner: owner)
+            let expectedGrants = template.grants
+            let grantKey: (Grant) -> String = { "\($0.keypath):\($0.permission.fullPermissionString)" }
+            guard let contract = decision.contract,
+                  UUID(uuidString: contract.uuid) != nil, UUID(uuidString: contract.agreement.uuid) != nil,
+                  contract.agreement.name == template.name,
+                  contract.agreement.conditions.isEmpty, contract.agreement.authorizationPolicyBinding == nil,
+                  contract.agreement.signatories.count == 2,
+                  Set(contract.agreement.signatories.map { $0.uuid }) == Set([owner.uuid, pending.request.identityUUID]),
+                  contract.agreement.grants.allSatisfy({ grant in
+                      UUID(uuidString: grant.uuid) != nil && expectedGrants.contains(where: { $0.keypath == grant.keypath && $0.name == grant.name })
+                  }),
+                  contract.issuedAt <= Date().timeIntervalSince1970 + 5,
+                  contract.agreement.grants.count == expectedGrants.count,
+                  Set(contract.agreement.grants.map(grantKey)) == Set(expectedGrants.map(grantKey)),
+                  contract.agreement.signatories.contains(where: { $0.uuid == pending.request.identityUUID && $0.publicKeyAgreementSecureKey?.compressedKey == pending.request.agreementPublicKey }),
+                  contract.targetCellUUID == uuid,
+                  contract.signaturePurpose == "haven.contract.admission.v2",
+                  contract.issuedAt >= pending.receivedAt - 5,
+                  contract.subject.publicKeyAgreementSecureKey?.compressedKey == pending.request.agreementPublicKey,
+                  contract.issuer.publicKeyAgreementSecureKey?.compressedKey == owner.publicKeyAgreementSecureKey?.compressedKey,
+                  [contract.issuer, contract.subject, contract.agreement.owner] .allSatisfy({ $0.displayName == $0.uuid }),
+                  contract.agreement.signatories.allSatisfy({ $0.displayName == $0.uuid }),
+                  await contract.verifyAuthorizationBinding(expectedIssuer: owner, expectedSubject: pending.request.identity,
+                    expectedDomain: identityDomain) else { return .object(["status": .string("rejected")]) }
+        } else if decision.contract != nil { return .object(["status": .string("rejected")]) }
+        guard let result = joins.decide(decision, now: Date()) else { return .null }
+        emit(event: "join.decided", fields: ["requestID": .string(result.requestID), "status": .string(result.status),
+            "recipientIdentityUUID": .string(pending.request.identityUUID),
+            "recipientSigningFingerprint": .string(pending.request.identity.signingPublicKeyFingerprint ?? "")])
+        return try CorrespondenceCellCodec.encode(result)
     }
 
     public override func state(requester: Identity) async throws -> ValueType {
@@ -422,6 +542,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                     return try? await self.set(keypath: command, value: value, requester: requester)
                 })
         }
+        await registerJoinOperations(owner: owner)
         await registerAttachmentOperations(owner: owner)
         await registerGet(
             key: "inbox",
@@ -975,6 +1096,16 @@ extension CorrespondenceCell {
     public func configureAttachmentStorage(root: URL, requester: Identity) async throws {
         let decision = await authorizationDecision(requestedAccess: "-w--", at: "attachments.prepare", for: requester)
         guard decision.allowed, attachmentCells.isEmpty || attachmentProvisioningRequired else { throw CorrespondenceAttachmentError.wrongSender }
+        for (id, cell) in attachmentCells {
+            let key = FlowHasher.sha256Hex(Data((id + (cell.owner.signingPublicKeyFingerprint ?? "")).utf8))
+            await cell.provisionStorage(root: root.appendingPathComponent(key))
+        }
+        attachmentRoot = root
+        attachmentProvisioningRequired = false
+    }
+
+    /// Trusted process-local host binding. Never exposed as an operation or a grant.
+    public func configureTrustedHostAttachmentStorage(root: URL) async {
         for (id, cell) in attachmentCells {
             let key = FlowHasher.sha256Hex(Data((id + (cell.owner.signingPublicKeyFingerprint ?? "")).utf8))
             await cell.provisionStorage(root: root.appendingPathComponent(key))

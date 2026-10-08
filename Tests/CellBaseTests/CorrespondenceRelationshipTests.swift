@@ -67,6 +67,213 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertNil(hostInvitee)
         return Fixture(e: e, h: h, i: i, owner: owner, invitee: invitee, cell: cell, contract: contract, storageRoot: storageRoot)
     }
+    private func join(_ f: Fixture) async throws -> String {
+        let resolver = CellResolver.makeIsolatedForTesting()
+        let name = "join-" + UUID().uuidString
+        try await resolver.registerNamedEmitCell(name: name, emitCell: f.cell, scope: .scaffoldUnique, identity: f.owner)
+        func endpoint(_ key: String) -> URL { URL(string: "cell:///\(name)/\(key)")! }
+
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let response = try await resolver.set(value: CorrespondenceCellCodec.encode(request), into: endpoint("join.request"), requester: f.invitee) ?? .null
+        let receipt = try CorrespondenceCellCodec.decode(response, as: CorrespondenceJoinResult.self)
+        XCTAssertEqual(receipt.status, "pending")
+        let pending = try CorrespondenceCellCodec.decode(try await resolver.get(from: endpoint("join.pending"), requester: f.owner) ?? .null, as: [CorrespondenceJoinPending].self)
+        XCTAssertEqual(pending.count, 1)
+        let item = try XCTUnwrap(pending.first)
+        let ownerCode = CorrespondenceJoinCode.code(cellUUID: f.cell.uuid, invitationID: item.invitationID,
+            signingPublicKey: item.signingPublicKey, agreementPublicKey: item.agreementPublicKey)
+        let inviteeCode = CorrespondenceJoinCode.code(cellUUID: f.cell.uuid, invitationID: invitation.invitationID,
+            signingPublicKey: request.signingPublicKey, agreementPublicKey: request.agreementPublicKey)
+        XCTAssertEqual(ownerCode, inviteeCode)
+        XCTAssertEqual(ownerCode.count, 6)
+        let alteredCode = CorrespondenceJoinCode.code(cellUUID: f.cell.uuid, invitationID: invitation.invitationID,
+            signingPublicKey: Data(repeating: 1, count: 32), agreementPublicKey: request.agreementPublicKey)
+        XCTAssertNotEqual(ownerCode, alteredCode)
+        let decision = try await resolver.set(value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true, contract: f.contract)), into: endpoint("join.decide"), requester: f.owner) ?? .null
+        XCTAssertEqual(field("status", decision), .string("approved"))
+        let result = try CorrespondenceCellCodec.decode(try await resolver.get(from: endpoint("join.result." + receipt.requestID), requester: f.invitee) ?? .null, as: CorrespondenceJoinResult.self)
+        XCTAssertEqual(result.status, "approved")
+        let contract = try XCTUnwrap(result.contract)
+        let snapshot = try JSONEncoder().encode(f.cell)
+        let json = String(decoding: snapshot, as: UTF8.self)
+        XCTAssertFalse(json.contains("displayName"))
+        XCTAssertFalse(json.contains("privateKey\":true"))
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: snapshot)
+        let restoredResult = try CorrespondenceCellCodec.decode(try await restored.get(keypath: "join.result." + receipt.requestID, requester: f.invitee), as: CorrespondenceJoinResult.self)
+        let restoredContract = try XCTUnwrap(restoredResult.contract)
+        let verified = await restoredContract.verifyCryptographicSignature()
+        XCTAssertTrue(verified)
+        let accepted = try await resolver.set(value: CorrespondenceCellCodec.encode(contract), into: endpoint("agreement.accept"), requester: f.invitee) ?? .null
+        await resolver.unregisterEmitCell(uuid: f.cell.uuid)
+        XCTAssertEqual(field("status", accepted), .string("accepted"))
+        print("PURPOSE join: I requested; E matched six-digit code and approved; I retrieved agreement and accepted")
+        return receipt.requestID
+    }
+
+    func testJoinCodeGoldenAndPendingExpiry() async throws {
+        XCTAssertEqual(CorrespondenceJoinCode.code(cellUUID: "00000000-0000-0000-0000-000000000001",
+            invitationID: "00000000-0000-0000-0000-000000000002", signingPublicKey: Data(0..<32),
+            agreementPublicKey: Data(32..<64)), "983780")
+        let f = try await fixture(admit: false)
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let ledger = CorrespondenceJoinLedger()
+        let receipt = ledger.insert(request, now: Date())
+        let later = Date().addingTimeInterval(7200)
+        XCTAssertEqual(ledger.result(id: receipt.requestID, requester: f.invitee, now: later)?.status, "expired")
+        XCTAssertTrue(ledger.pending(now: later).isEmpty)
+        XCTAssertEqual(ledger.decide(CorrespondenceJoinDecision(requestID: receipt.requestID, approve: true,
+            contract: f.contract), now: later)?.status, "expired")
+    }
+
+    func testJoinRejectionsPrivacyRestartAndFlow() async throws {
+        let f = try await fixture(admit: false)
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let ownerEvent = expectation(description: "Owner receives join.requested")
+        let token = try await f.cell.flow(requester: f.owner).sink(receiveCompletion: { _ in }, receiveValue: { event in
+            if event.title == "join.requested" { ownerEvent.fulfill() }
+        })
+        defer { token.cancel() }
+        do { _ = try await f.cell.flow(requester: f.invitee); XCTFail("Nonmember received Flow") } catch { XCTAssertTrue(error is StreamState) }
+        var invalid = request; invalid.agreementPublicKey = Data(repeating: 7, count: 32)
+        let bad = try await f.cell.set(keypath: "join.request", value: CorrespondenceCellCodec.encode(invalid), requester: f.invitee)
+        XCTAssertEqual(field("code", bad), .string("join.proof.invalid"))
+        let submitted = try await f.cell.set(keypath: "join.request", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+        let id = try CorrespondenceCellCodec.decode(submitted, as: CorrespondenceJoinResult.self).requestID
+        await fulfillment(of: [ownerEvent], timeout: 2)
+        let replay = try await f.cell.set(keypath: "join.request", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+        XCTAssertEqual(field("code", replay), .string("invitation.used"))
+        let other = await identity(EphemeralIdentityVault())
+        let otherResult = try await f.cell.get(keypath: "join.result." + id, requester: other)
+        XCTAssertEqual(otherResult, .null)
+        let differentVault = EphemeralIdentityVault()
+        var sameUUID = Identity(f.invitee.uuid, displayName: f.invitee.uuid, identityVault: differentVault)
+        await differentVault.addIdentity(identity: &sameUUID, for: UUID().uuidString)
+        let hasProof = await f.cell.verifyRequesterIdentityControl(sameUUID)
+        XCTAssertTrue(hasProof)
+        let sameUUIDResult = try await f.cell.get(keypath: "join.result." + id, requester: sameUUID)
+        XCTAssertEqual(sameUUIDResult, .null)
+
+        do {
+            _ = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+                CorrespondenceJoinDecision(requestID: id, approve: true, contract: f.contract)), requester: f.owner.publicIdentitySnapshot())
+            XCTFail("Host approved without owner proof")
+        } catch { XCTAssertTrue(error is GeneralCell.KeyValueErrors) }
+        let namedAgreement = CorrespondenceAgreementTemplates.withAttachments(owner: f.owner.publicIdentitySnapshot())
+        namedAgreement.state = .signed; namedAgreement.duration = 3600
+        namedAgreement.signatories = [f.owner.publicIdentitySnapshot(), f.invitee.publicIdentitySnapshot()]
+        namedAgreement.name = "synthetic-contact-label"
+        let namedContract = try await Contract.signed(agreement: namedAgreement, issuer: f.owner,
+            subject: f.invitee.publicIdentitySnapshot(), domain: f.cell.identityDomain, targetCellUUID: f.cell.uuid)
+        let namedDecision = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: id, approve: true, contract: namedContract)), requester: f.owner)
+        XCTAssertEqual(field("status", namedDecision), .string("rejected"))
+        let denied = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: id, approve: false)), requester: f.owner)
+        XCTAssertEqual(field("status", denied), .string("denied"))
+        let snapshot = try JSONEncoder().encode(f.cell)
+        let json = try XCTUnwrap(String(data: snapshot, encoding: .utf8))
+        XCTAssertFalse(json.contains("privateKey\":true"))
+        XCTAssertFalse(json.contains("displayName"))
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: snapshot)
+        let result = try await restored.get(keypath: "join.result." + id, requester: f.invitee)
+        XCTAssertEqual(field("status", result), .string("denied"))
+        let restoredReplay = try await restored.set(keypath: "join.request", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+        XCTAssertEqual(field("code", restoredReplay), .string("invitation.used"))
+        let expired = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            issuedAt: Date().addingTimeInterval(-100), expiresAt: Date().addingTimeInterval(-1))
+        let expiredRequest = try await CorrespondenceJoinRequest.signed(invitation: expired, invitee: f.invitee)
+        let expiredResult = try await f.cell.set(keypath: "join.request", value: CorrespondenceCellCodec.encode(expiredRequest), requester: f.invitee)
+        XCTAssertEqual(field("code", expiredResult), .string("invitation.expired"))
+    }
+
+    func testJoinFlowIsBoundToKeyAndRecipient() async throws {
+        let f = try await fixture()
+        let ownerRequested = expectation(description: "Owner gets requested")
+        let memberDecided = expectation(description: "Requesting member gets decided")
+        let wrongKeyDecision = expectation(description: "Old key does not receive new-key decision")
+        wrongKeyDecision.isInverted = true
+        let memberRequested = expectation(description: "Member does not see owner's request")
+        memberRequested.isInverted = true
+        let ownerDecided = expectation(description: "Owner does not see member's decision")
+        ownerDecided.isInverted = true
+        let ownerToken = try await f.cell.flow(requester: f.owner).sink(receiveCompletion: { _ in }, receiveValue: { event in
+            if event.title == "join.requested" { ownerRequested.fulfill() }
+            if event.title == "join.decided" { ownerDecided.fulfill() }
+        })
+        var wrongID = ""
+        let lock = NSLock()
+        let memberToken = try await f.cell.flow(requester: f.invitee).sink(receiveCompletion: { _ in }, receiveValue: { event in
+            if event.title == "join.requested" { memberRequested.fulfill() }
+            if event.title == "join.decided", case .object(let fields) = event.content {
+                if fields["requestID"] == .string(lock.withLock { wrongID }) { wrongKeyDecision.fulfill() }
+                else { memberDecided.fulfill() }
+            }
+        })
+        defer { ownerToken.cancel(); memberToken.cancel() }
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let receipt = try CorrespondenceCellCodec.decode(try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: f.invitee), as: CorrespondenceJoinResult.self)
+        _ = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: receipt.requestID, approve: false)), requester: f.owner)
+        await fulfillment(of: [ownerRequested, memberDecided], timeout: 2)
+        ownerToken.cancel()
+        let vault = EphemeralIdentityVault()
+        var otherKey = Identity(f.invitee.uuid, displayName: f.invitee.uuid, identityVault: vault)
+        await vault.addIdentity(identity: &otherKey, for: UUID().uuidString)
+        let secondInvitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let secondRequest = try await CorrespondenceJoinRequest.signed(invitation: secondInvitation, invitee: otherKey)
+        let secondReceipt = try CorrespondenceCellCodec.decode(try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(secondRequest), requester: otherKey), as: CorrespondenceJoinResult.self)
+        lock.withLock { wrongID = secondReceipt.requestID }
+        _ = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: secondReceipt.requestID, approve: false)), requester: f.owner)
+        await fulfillment(of: [wrongKeyDecision, memberRequested, ownerDecided], timeout: 0.2)
+    }
+
+    func testTrustedHostAttachmentRootPurgesAtColdRestartWithoutMember() async throws {
+        let f = try await fixture()
+        let sealed = try AttachmentStreamV1.seal(plaintext: Data([1, 2, 3]))
+        var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString, agreementID: f.cell.uuid,
+            senderIdentityUUID: f.owner.uuid, metadata: CorrespondenceAttachmentMetadata(name: "synthetic.bin", mediaType: "application/octet-stream", byteCount: 3), header: sealed.stream.header)
+        let plan = try CorrespondenceCellCodec.decode(try await f.cell.set(keypath: "attachments.prepare",
+            value: CorrespondenceCellCodec.encode(request), requester: f.owner), as: CorrespondenceAttachmentPlan.self)
+        request.attachmentID = plan.attachmentID; request.chunk = sealed.stream.chunks[0]
+        _ = try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        let snapshot = try JSONEncoder().encode(f.cell)
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: f.storageRoot, includingPropertiesForKeys: nil))
+        var index: URL?
+        for case let url as URL in enumerator where url.lastPathComponent == "state.json" { index = url }
+        let indexURL = try XCTUnwrap(index)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: indexURL)) as? [String: Any])
+        // Edit only the offline disk image expiry, simulating elapsed time while stopped.
+        func expire(_ value: Any) -> Any {
+            if var dict = value as? [String: Any] {
+                for (key, item) in dict { dict[key] = key == "expiresAt" ? -1.0 : expire(item) }
+                return dict
+            }
+            if let array = value as? [Any] { return array.map(expire) }
+            return value
+        }
+        object = try XCTUnwrap(expire(object) as? [String: Any])
+        try JSONSerialization.data(withJSONObject: object).write(to: indexURL)
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: snapshot)
+        await restored.configureTrustedHostAttachmentStorage(root: f.storageRoot)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: indexURL.deletingLastPathComponent().appendingPathComponent(plan.attachmentID).path))
+        let remaining = try Data(contentsOf: indexURL)
+        XCTAssertFalse(String(decoding: remaining, as: UTF8.self).contains(plan.attachmentID))
+        print("PURPOSE cold restart: trusted host root purged expired disk entry without member reconnect")
+    }
+
     private func field(_ key: String, _ value: ValueType) -> ValueType? {
         guard case .object(let object) = value else { return nil }; return object[key]
     }
@@ -126,7 +333,8 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), bytes)
     }
     func testLocalPurposeThreeVaultsTextAttachmentsFlowRenewalAndRevocation() async throws {
-        let f = try await fixture()
+        let f = try await fixture(admit: false)
+        _ = try await join(f)
         print("PURPOSE E/H/I: independent vaults; host contains neither participant key")
         let delivered = expectation(description: "Unpolled encrypted delivery")
         delivered.expectedFulfillmentCount = 4
