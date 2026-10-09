@@ -323,11 +323,36 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         membershipFingerprint
     }
 
+    /// Strip fields outside Contract.signingData; never rewrite the signed Agreement.
+    private static func canonicalIdentity(_ identity: Identity) -> Identity {
+        let snapshot = identity.publicIdentitySnapshot()
+        snapshot.displayName = snapshot.uuid
+        snapshot.properties = [:]
+        snapshot.homeVaultReference = nil
+        return snapshot
+    }
+
+    public override func localContractIdentityDescriptor(_ identity: Identity) -> Identity {
+        Self.canonicalIdentity(identity)
+    }
+
+    private static func canonicalContract(_ contract: Contract) -> Contract {
+        var snapshot = contract
+        snapshot.issuer = canonicalIdentity(contract.issuer)
+        snapshot.subject = canonicalIdentity(contract.subject)
+        return snapshot
+    }
+
     public override func acceptExternallySignedAgreement(_ contract: Contract, for identity: Identity) async -> AgreementState {
         guard let bytes = try? JSONEncoder().encode(contract),
-              let frozen = try? JSONDecoder().decode(Contract.self, from: bytes),
-              frozen.subject.publicKeyAgreementSecureKey != nil,
-              frozen.issuer.publicKeyAgreementSecureKey != nil else { return .rejected }
+              let decoded = try? JSONDecoder().decode(Contract.self, from: bytes),
+              decoded.subject.publicKeyAgreementSecureKey != nil,
+              decoded.issuer.publicKeyAgreementSecureKey != nil else { return .rejected }
+        let frozen = Self.canonicalContract(decoded)
+        // Signed agreement metadata cannot be redacted after signing. Fail closed.
+        guard let canonicalBytes = try? JSONEncoder().encode(frozen),
+              let raw = try? JSONSerialization.jsonObject(with: canonicalBytes),
+              (try? CorrespondenceIdentityStateCodec.compact(raw)) != nil else { return .rejected }
         guard let subjectSigner = frozen.agreement.signatories.first(where: {
                   $0.uuid == frozen.subject.uuid && $0.signingPublicKeyFingerprint == frozen.subject.signingPublicKeyFingerprint
               }),
@@ -466,7 +491,8 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             return try CorrespondenceCellCodec.encode(result)
         }
         guard await checkIdentityOrigin(requester, against: owner) else { throw KeyValueErrors.denied }
-        let decision = try CorrespondenceCellCodec.decode(value, as: CorrespondenceJoinDecision.self)
+        var decision = try CorrespondenceCellCodec.decode(value, as: CorrespondenceJoinDecision.self)
+        decision.contract = decision.contract.map(Self.canonicalContract)
         if let contract = decision.contract {
             guard let bytes = try? JSONEncoder().encode(contract),
                   let raw = try? JSONSerialization.jsonObject(with: bytes),
@@ -839,7 +865,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                   let identity = await vault.identity(forUUID: id) else { return denial(.grantNotHeld) }
             let agreement = CorrespondenceAgreementTemplates.withAttachments(owner: owner)
             agreement.state = .signed
-            agreement.signatories = [owner.publicIdentitySnapshot(), identity.publicIdentitySnapshot()]
+            agreement.signatories = [Self.canonicalIdentity(owner), Self.canonicalIdentity(identity)]
             guard let contract = try? await Contract.signed(agreement: agreement, issuer: requester,
                 subject: identity.publicIdentitySnapshot(), domain: identityDomain, targetCellUUID: uuid),
                 await acceptExternallySignedAgreement(contract, for: identity) == .signed else { return denial(.grantNotHeld) }

@@ -39,6 +39,24 @@ are not remote path-reading tools. Register only immutable file versions. The
 source reader checks size and modification date on each chunk. This detects
 ordinary edits, not malicious same-size/mtime replacement by the storage host.
 
+## Identity descriptors at admission
+
+CorrespondenceCell canonicalizes Contract issuer and subject descriptors before
+external admission and join-decision storage: displayName equals uuid, properties
+are empty, and homeVaultReference is absent. Public keys are retained; subject
+key-agreement material must still match the signed Agreement signatory and the
+issuer key-agreement material must match the owner. Contract.signingData excludes
+the outer descriptors' labels and vault metadata, so this normalization preserves
+the signature. The signed Agreement is never rewritten after signing; identifying
+metadata inside it is rejected at external admission.
+
+Vault invitations build canonical Agreement signatories before signing. Local
+addAgreement uses GeneralCell.localContractIdentityDescriptor, overridden only
+by CorrespondenceCell, before signing the Agreement and installing the member.
+The live identity still proves control and signs. The default hook preserves
+other cells' descriptor policy. Existing grants and authorization checks remain
+required; normalization confers no authority.
+
 ## Mode selection
 
 There is no caller-selectable mode field.

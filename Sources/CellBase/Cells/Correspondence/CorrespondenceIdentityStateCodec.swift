@@ -7,7 +7,8 @@ import Foundation
 /// a displayName on decode, but correspondence identities use their UUID as that
 /// runtime fallback. Store that rule instead of a person-mapping field. Restore
 /// the exact fallback before decoding signed Contracts, preserving their bytes.
-/// Never redact an actual label from a signed Contract: reject that snapshot.
+/// Admission canonicalizes unsigned issuer/subject metadata before installation.
+/// Never redact identifying metadata inside the signed Agreement: reject it.
 enum CorrespondenceIdentityStateCodec {
     static let markerKey = "correspondenceIdentityEncoding"
     static let markerValue = "uuid-display-fallback-v1"

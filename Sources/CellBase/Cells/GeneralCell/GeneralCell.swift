@@ -1354,6 +1354,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         
     }
     
+    /// Cell-specific descriptor policy for locally signed contracts. The live
+    /// identity still performs key proof and signing; the default preserves behavior.
+    open func localContractIdentityDescriptor(_ identity: Identity) -> Identity { identity }
+
     public func addAgreement(_ agreement: Agreement, for identity: Identity) async -> AgreementState {
         await addAgreement(agreement, for: identity, authorizedBy: identity)
     }
@@ -1419,8 +1423,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 guard let signingOwner = await contractSigningOwner(preferredOwner: preferredSigningOwner) else {
                     throw IdentityVaultError.wrongVault
                 }
-                contractAgreement.owner = signingOwner
-                contractAgreement.signatories = [signingOwner, identity]
+                contractAgreement.owner = localContractIdentityDescriptor(signingOwner)
+                let memberDescriptor = localContractIdentityDescriptor(identity)
+                contractAgreement.signatories = [contractAgreement.owner, memberDescriptor]
                 let beforeSigning = await currentAuthorizationSnapshot()
                 let clock = authorizationClock().timeIntervalSince1970
                 // A fresh local owner signature can re-admit after removal even
@@ -1440,17 +1445,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                     }
                     contractAgreement.duration -= Int(consumed)
                 }
-                let contract = try await Contract.signed(
+                var contract = try await Contract.signed(
                     agreement: contractAgreement,
                     issuer: signingOwner,
-                    subject: identity,
+                    subject: memberDescriptor,
                     domain: identityDomain,
                     issuedAt: Date(timeIntervalSince1970: issuedAt)
                 )
+                contract.issuer = localContractIdentityDescriptor(contract.issuer)
                 let persisted = persistedAuthorizationSnapshot()
                 let authorization = await self.auditor.installAuthorization(
                     contract: contract,
-                    member: identity,
+                    member: memberDescriptor,
                     restoring: persisted
                 )
                 applyPersistedAuthorizationSnapshot(authorization)

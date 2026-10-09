@@ -67,6 +67,100 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         XCTAssertNil(hostInvitee)
         return Fixture(e: e, h: h, i: i, owner: owner, invitee: invitee, cell: cell, contract: contract, storageRoot: storageRoot)
     }
+    func testUnsignedContractLabelsCannotPreventPersistence() async throws {
+        let f = try await fixture(admit: false)
+        var contract = f.contract
+        contract.subject.displayName = "unsigned-member-label"
+        contract.subject.properties = ["label": .string("unsigned-property")]
+        contract.subject.homeVaultReference = "unsigned-vault"
+        contract.issuer.displayName = "unsigned-issuer-label"
+        contract.issuer.properties = ["label": .string("unsigned-issuer-property")]
+        contract.issuer.homeVaultReference = "unsigned-issuer-vault"
+        let verified = await contract.verifyCryptographicSignature()
+        XCTAssertTrue(verified)
+        let result = try await f.cell.set(keypath: "agreement.accept",
+            value: CorrespondenceCellCodec.encode(contract), requester: f.invitee)
+        XCTAssertEqual(field("status", result), .string("accepted"))
+        try await assertCanonicalMemberSurvivesPersistence(f.cell, member: f.invitee)
+    }
+
+    func testNamedVaultIdentityInviteSurvivesPersistence() async throws {
+        let f = try await fixture(admit: false)
+        var member = Identity(UUID().uuidString, displayName: "vault-real-name", identityVault: f.e)
+        member.properties = ["label": .string("vault-property")]
+        await f.e.addIdentity(identity: &member, for: UUID().uuidString)
+        CellBase.defaultIdentityVault = f.e
+        let result = try await f.cell.set(keypath: "audience.inviteIdentities",
+            value: .object(["identityUUID": .string(member.uuid)]), requester: f.owner)
+        XCTAssertEqual(field("status", result), .string("invited"))
+        try await assertCanonicalMemberSurvivesPersistence(f.cell, member: member)
+    }
+
+    func testNamedLocalAgreementMemberSurvivesPersistence() async throws {
+        let f = try await fixture(admit: false)
+        f.invitee.displayName = "vault-real-name"
+        f.invitee.properties = ["label": .string("vault-property")]
+        let result = await f.cell.addAgreement(f.cell.agreementTemplate, for: f.invitee, authorizedBy: f.owner)
+        XCTAssertEqual(result, .signed)
+        try await assertCanonicalMemberSurvivesPersistence(f.cell, member: f.invitee)
+    }
+
+    func testUnsignedJoinContractLabelsAreCanonicalBeforeLedgerStorage() async throws {
+        let f = try await fixture(admit: false)
+        let invitation = try await CorrespondenceJoinInvitation.signed(cellUUID: f.cell.uuid, owner: f.owner,
+            expiresAt: Date().addingTimeInterval(3600))
+        let request = try await CorrespondenceJoinRequest.signed(invitation: invitation, invitee: f.invitee)
+        let pending = try CorrespondenceCellCodec.decode(try await f.cell.set(keypath: "join.request",
+            value: CorrespondenceCellCodec.encode(request), requester: f.invitee), as: CorrespondenceJoinResult.self)
+        var contract = f.contract
+        contract.subject.displayName = "unsigned-member-label"
+        contract.issuer.properties = ["label": .string("unsigned-issuer-property")]
+        let decision = try await f.cell.set(keypath: "join.decide", value: CorrespondenceCellCodec.encode(
+            CorrespondenceJoinDecision(requestID: pending.requestID, approve: true, contract: contract)), requester: f.owner)
+        XCTAssertEqual(field("status", decision), .string("approved"))
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: JSONEncoder().encode(f.cell))
+        let result = try CorrespondenceCellCodec.decode(try await restored.get(keypath: "join.result." + pending.requestID,
+            requester: f.invitee), as: CorrespondenceJoinResult.self)
+        let stored = try XCTUnwrap(result.contract)
+        XCTAssertEqual(stored.subject.displayName, stored.subject.uuid)
+        XCTAssertTrue(stored.issuer.properties?.isEmpty ?? true)
+        let verified = await stored.verifyCryptographicSignature()
+        XCTAssertTrue(verified)
+    }
+
+    func testCanonicalizationDoesNotAuthorizeAlteredSignedAgreement() async throws {
+        let f = try await fixture(admit: false)
+        var contract = f.contract
+        contract.subject.displayName = "unsigned-member-label"
+        contract.agreement.duration += 1
+        let result = await f.cell.acceptExternallySignedAgreement(contract, for: f.invitee)
+        XCTAssertEqual(result, .rejected)
+        let snapshot = await f.cell.currentAuthorizationSnapshot()
+        XCTAssertFalse(snapshot.members.contains { $0.uuid == f.invitee.uuid })
+        _ = try JSONEncoder().encode(f.cell)
+    }
+
+    private func assertCanonicalMemberSurvivesPersistence(_ cell: CorrespondenceCell, member: Identity) async throws {
+        let bytes = try JSONEncoder().encode(cell)
+        let text = String(decoding: bytes, as: UTF8.self)
+        for label in ["unsigned-member-label", "unsigned-property", "unsigned-vault",
+                      "unsigned-issuer-label", "unsigned-issuer-property", "unsigned-issuer-vault",
+                      "vault-real-name", "vault-property"] {
+            XCTAssertFalse(text.contains(label))
+        }
+        let restored = try JSONDecoder().decode(CorrespondenceCell.self, from: bytes)
+        let snapshot = await restored.currentAuthorizationSnapshot()
+        let installed = try XCTUnwrap(snapshot.members.first { $0.uuid == member.uuid })
+        XCTAssertEqual(installed.displayName, installed.uuid)
+        XCTAssertTrue(installed.properties?.isEmpty ?? true)
+        XCTAssertNil(installed.homeVaultReference)
+        let contract = try XCTUnwrap(snapshot.contracts.first { $0.subject.uuid == member.uuid })
+        XCTAssertEqual(contract.issuer.displayName, contract.issuer.uuid)
+        let verified = await contract.verifyCryptographicSignature()
+        XCTAssertTrue(verified)
+        _ = try await restored.state(requester: member)
+    }
+
     private func join(_ f: Fixture, requester: Identity? = nil) async throws -> String {
         let presenter = requester ?? f.invitee
         let resolver = CellResolver.makeIsolatedForTesting()
