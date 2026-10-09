@@ -25,6 +25,7 @@ public struct CorrespondenceOuterEnvelope: Codable, Equatable, Sendable {
     public var membershipFingerprint: String
     public var ciphertextSize: Int
     public var receiptState: String
+    public var attachmentAgreementID: String? = nil
 
     public init(
         messageID: String,
@@ -60,6 +61,7 @@ public struct CorrespondenceInnerEnvelope: Codable {
     public var clientMessageID: String
     public var owner: Identity
     public var senderSignature: Data
+    public var attachment: CorrespondenceAttachment?
 
     public init(
         subject: String?,
@@ -67,7 +69,8 @@ public struct CorrespondenceInnerEnvelope: Codable {
         content: String,
         clientMessageID: String,
         owner: Identity,
-        senderSignature: Data
+        senderSignature: Data,
+        attachment: CorrespondenceAttachment? = nil
     ) {
         self.subject = subject
         self.contentType = contentType
@@ -75,6 +78,7 @@ public struct CorrespondenceInnerEnvelope: Codable {
         self.clientMessageID = clientMessageID
         self.owner = owner
         self.senderSignature = senderSignature
+        self.attachment = attachment
     }
 
     public func chatMessage(
@@ -99,7 +103,8 @@ public struct CorrespondenceInnerEnvelope: Codable {
             content: content,
             clientMessageID: clientMessageID,
             ownerIdentityUUID: owner.uuid,
-            ownerSigningKeyFingerprint: owner.signingPublicKeyFingerprint ?? ""
+            ownerSigningKeyFingerprint: owner.signingPublicKeyFingerprint ?? "",
+            attachment: attachment
         )
     }
 
@@ -110,6 +115,7 @@ public struct CorrespondenceInnerEnvelope: Codable {
         var clientMessageID: String
         var ownerIdentityUUID: String
         var ownerSigningKeyFingerprint: String
+        var attachment: CorrespondenceAttachment?
     }
 }
 
@@ -135,17 +141,23 @@ public struct CorrespondenceSendRequest: Codable, Equatable, Sendable {
     public var membershipFingerprint: String
     public var purposeRef: String
     public var retentionSeconds: Int?
+    public var messageID: String?
+    public var attachmentRequest: CorrespondenceAttachmentRequest?
 
     public init(
         preparedEnvelope: CorrespondencePreparedEnvelope,
         purposeRef: String,
-        retentionSeconds: Int? = nil
+        retentionSeconds: Int? = nil,
+        messageID: String? = nil,
+        attachmentRequest: CorrespondenceAttachmentRequest? = nil
     ) {
         envelope = preparedEnvelope.envelope
         senderIdentityUUID = preparedEnvelope.senderIdentityUUID
         membershipFingerprint = preparedEnvelope.membershipFingerprint
         self.purposeRef = purposeRef
         self.retentionSeconds = retentionSeconds
+        self.messageID = messageID
+        self.attachmentRequest = attachmentRequest
     }
 
     public func valueType() throws -> ValueType {
@@ -185,7 +197,8 @@ public enum CorrespondenceEnvelopeUtility {
         cellID: String,
         membershipFingerprint: String,
         recipients: [Identity],
-        provider: IdentityKeyRoleProviderProtocol
+        provider: IdentityKeyRoleProviderProtocol,
+        attachment: CorrespondenceAttachment? = nil
     ) async throws -> CorrespondencePreparedEnvelope {
         guard message.owner.signingPublicKeyFingerprint?.isEmpty == false else {
             throw CorrespondenceEnvelopeError.signingFailed
@@ -197,7 +210,8 @@ public enum CorrespondenceEnvelopeUtility {
             content: message.content,
             clientMessageID: clientMessageID ?? message.id,
             ownerIdentityUUID: message.owner.uuid,
-            ownerSigningKeyFingerprint: message.owner.signingPublicKeyFingerprint ?? ""
+            ownerSigningKeyFingerprint: message.owner.signingPublicKeyFingerprint ?? "",
+            attachment: attachment
         )
         let signingData = try CanonicalPayloadEncoder.data(for: signingPayload)
         guard let innerSignature = try await message.owner.sign(data: signingData) else {
@@ -209,7 +223,8 @@ public enum CorrespondenceEnvelopeUtility {
             content: message.content,
             clientMessageID: clientMessageID ?? message.id,
             owner: message.owner.publicIdentitySnapshot(),
-            senderSignature: innerSignature
+            senderSignature: innerSignature,
+            attachment: attachment
         )
         let plaintext = try JSONEncoder().encode(inner)
         let envelope = try await ContentCryptoEnvelopeUtility.seal(
@@ -220,7 +235,8 @@ public enum CorrespondenceEnvelopeUtility {
             suite: suite,
             associatedDataContext: associatedDataContext(
                 cellID: cellID,
-                membershipFingerprint: membershipFingerprint
+                membershipFingerprint: membershipFingerprint,
+                messageID: attachment?.messageID, agreementID: attachment?.agreementID
             )
         )
         return CorrespondencePreparedEnvelope(
@@ -255,14 +271,37 @@ public enum CorrespondenceEnvelopeUtility {
         guard await inner.owner.verify(signature: inner.senderSignature, for: signingData) else {
             throw CorrespondenceEnvelopeError.innerSignatureInvalid
         }
+        if let attachment = inner.attachment {
+            guard attachment.agreementID == storedEnvelope.outer.attachmentAgreementID,
+                  storedEnvelope.innerCiphertext.header.associatedDataContext == associatedDataContext(
+                    cellID: storedEnvelope.outer.cellID,
+                    membershipFingerprint: storedEnvelope.outer.membershipFingerprint,
+                    messageID: storedEnvelope.outer.messageID,
+                    agreementID: storedEnvelope.outer.attachmentAgreementID) else {
+                throw CorrespondenceAttachmentError.contextMismatch
+            }
+            try attachment.validate(messageID: storedEnvelope.outer.messageID,
+                agreementID: attachment.agreementID, cellID: storedEnvelope.outer.cellID,
+                senderIdentityUUID: sender.uuid)
+            guard inner.clientMessageID == attachment.messageID else {
+                throw CorrespondenceAttachmentError.contextMismatch
+            }
+        } else if storedEnvelope.outer.attachmentAgreementID != nil {
+            throw CorrespondenceAttachmentError.contextMismatch
+        }
         return CorrespondenceOpenedEnvelope(inner: inner, senderVerified: opened.senderVerified)
     }
 
     public static func associatedDataContext(
         cellID: String,
-        membershipFingerprint: String
+        membershipFingerprint: String,
+        messageID: String? = nil,
+        agreementID: String? = nil
     ) -> String {
-        "correspondence:v1:\(cellID):\(membershipFingerprint)"
+        let base = "correspondence:v1:\(cellID):\(membershipFingerprint)"
+        guard let messageID, let agreementID else { return base }
+        return base + ":attachment:" + FlowHasher.sha256Hex(
+            (try? JSONEncoder().encode([messageID, agreementID])) ?? Data())
     }
 
     static func verifyTransportSignature(

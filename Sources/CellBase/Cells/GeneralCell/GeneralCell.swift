@@ -394,6 +394,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private let feedAuthorizations = FeedAuthorizationRegistry()
     // Instance-local clock permits deterministic contract-expiry verification.
     // It is not encoded or exposed through Meddle/Explore.
+    static let externalAdmissionClockTolerance: TimeInterval = 5
     var authorizationClock: () -> Date = Date.init
     public var identityDomain: String = "private"
     
@@ -405,6 +406,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private var persistedContracts = [Contract]()
     private var persistedMembers = [Identity]()
     private var persistedAuthorizationRevision = 0
+    private var persistedRevokedBefore: [String: TimeInterval] = [:]
     private let persistedAuthorizationLock = NSLock()
     private let runtimeReadinessCoordinator = CellRuntimeReadinessCoordinator()
     
@@ -518,6 +520,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         case name
         case contracts
         case members
+        case revokedBefore
     }
     
     public required init(from decoder: Decoder) throws {
@@ -546,6 +549,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         self.persistedContracts = (try? values.decodeIfPresent([Contract].self, forKey: .contracts)) ?? []
         self.persistedMembers = (try? values.decodeIfPresent([Identity].self, forKey: .members)) ?? []
         
+        persistedRevokedBefore = try values.decodeIfPresent([String: TimeInterval].self, forKey: .revokedBefore) ?? [:]
         if let tmpName = try values.decodeIfPresent(String.self, forKey: .name) {
             name = tmpName
         } else {
@@ -568,6 +572,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         let authorization = persistedAuthorizationSnapshot()
         try container.encode(authorization.contracts, forKey: .contracts)
         try container.encode(authorization.members, forKey: .members)
+        try container.encode(authorization.revokedBefore, forKey: .revokedBefore)
         
             }
     
@@ -1362,6 +1367,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         
     }
     
+    /// Cell-specific descriptor policy for locally signed contracts. The live
+    /// identity still performs key proof and signing; the default preserves behavior.
+    open func localContractIdentityDescriptor(_ identity: Identity) -> Identity { identity }
+
     public func addAgreement(_ agreement: Agreement, for identity: Identity) async -> AgreementState {
         await addAgreement(agreement, for: identity, authorizedBy: identity)
     }
@@ -1433,22 +1442,48 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 guard let signingOwner = await contractSigningOwner(preferredOwner: preferredSigningOwner) else {
                     throw IdentityVaultError.wrongVault
                 }
-                contractAgreement.owner = signingOwner
-                contractAgreement.signatories = [signingOwner, identity]
-                let contract = try await Contract.signed(
+                contractAgreement.owner = localContractIdentityDescriptor(signingOwner)
+                let memberDescriptor = localContractIdentityDescriptor(identity)
+                contractAgreement.signatories = [contractAgreement.owner, memberDescriptor]
+                let beforeSigning = await currentAuthorizationSnapshot()
+                let clock = authorizationClock().timeIntervalSince1970
+                // A fresh local owner signature can re-admit after removal even
+                // when the injected clock has not advanced. Old signatures still
+                // fail the cutoff, including at the final actor transaction.
+                let issuedAt = max(clock, beforeSigning.revokedBefore[identity.uuid]?.nextUp ?? -.infinity)
+                // Moving issuedAt beyond a revocation cutoff must not move the
+                // requested expiration deadline as well. Agreement durations are
+                // whole seconds, so round the consumed window up conservatively.
+                if issuedAt > clock {
+                    let consumed = ceil(issuedAt - clock)
+                    guard consumed < Double(contractAgreement.duration) else {
+                        await recordContractRejected(identity: identity,
+                            reasonCode: "contract_duration_consumed_by_cutoff",
+                            message: "Requested duration does not extend beyond the revocation cutoff.")
+                        return .rejected
+                    }
+                    contractAgreement.duration -= Int(consumed)
+                }
+                var contract = try await Contract.signed(
                     agreement: contractAgreement,
                     issuer: signingOwner,
-                    subject: identity,
+                    subject: memberDescriptor,
                     domain: identityDomain,
-                    issuedAt: authorizationClock()
+                    issuedAt: Date(timeIntervalSince1970: issuedAt)
                 )
+                contract.issuer = localContractIdentityDescriptor(contract.issuer)
                 let persisted = persistedAuthorizationSnapshot()
                 let authorization = await self.auditor.installAuthorization(
                     contract: contract,
-                    member: identity,
+                    member: memberDescriptor,
                     restoring: persisted
                 )
                 applyPersistedAuthorizationSnapshot(authorization)
+                guard authorization.contracts.contains(where: { $0.uuid == contract.uuid }) else {
+                    await recordContractRejected(identity: identity,
+                        reasonCode: "contract_installation_revoked", message: "Admission was revoked while signing.")
+                    return .rejected
+                }
                 return .signed
             } catch {
                 CellBase.diagnosticLog("Signing contract failed: \(error)", domain: .contracts)
@@ -1467,6 +1502,99 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             )
             return .rejected
         }
+    }
+
+    /// Installs an owner-signed, cell-bound Contract presented by its proven subject.
+    /// The host needs only the owner's public identity. No owner signing proxy is used.
+    open func acceptExternallySignedAgreement(
+        _ presented: Contract,
+        for identity: Identity
+    ) async -> AgreementState {
+        // Freeze the contract references; retain the presenter only for live key proof.
+        let principal = identity.publicIdentitySnapshot()
+        guard !CellBase.debugValidateAccessForEverything,
+              let bytes = try? JSONEncoder().encode(presented),
+              let contract = try? JSONDecoder().decode(Contract.self, from: bytes) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_invalid_snapshot_or_debug", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            await recordContractRejected(identity: principal, reasonCode: "external_runtime_unavailable", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        guard contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
+              contract.signaturePurpose == "haven.contract.admission.v2",
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              contract.targetCellUUID == uuid,
+              await contract.verifyAuthorizationBinding(
+                expectedIssuer: owner,
+                expectedSubject: principal,
+                expectedDomain: identityDomain,
+                now: authorizationClock()
+              ),
+              await checkIdentityOrigin(identity, against: contract.subject) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_binding_or_proof_invalid", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        // Reuse the exact local-admission template check without rewriting signed bytes.
+        guard let request = try? contract.agreement.publicDescriptorSnapshot() else {
+            await recordContractRejected(identity: principal, reasonCode: "external_invalid_agreement_snapshot", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        request.state = .template
+        guard agreementDerivedFromTemplate(request: request, subject: principal) != nil else {
+            await recordContractRejected(identity: principal, reasonCode: "external_template_mismatch", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        let conditionsResolved = await Self.$isEvaluatingAuthorizationConditions.withValue(true) {
+            await allConditionsResolved(
+                contract.agreement.conditions,
+                context: ConnectContext(source: nil, target: self, identity: principal)
+            )
+        }
+        guard contract.targetCellUUID == uuid,
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
+              conditionsResolved,
+              contract.temporalStatus(now: authorizationClock()) == .active else {
+            await recordContractRejected(identity: principal, reasonCode: "external_conditions_expiry_or_revocation", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        let authorization = await auditor.installAuthorization(
+            contract: contract,
+            member: contract.subject.publicIdentitySnapshot(),
+            restoring: persistedAuthorizationSnapshot()
+        )
+        applyPersistedAuthorizationSnapshot(authorization)
+        guard authorization.contracts.contains(where: { $0.uuid == contract.uuid }) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_install_rejected", message: "External admission lost to revocation or a newer contract.")
+            return .rejected
+        }
+        return .signed
+    }
+
+    /// Applies a cell-bound owner signature without requiring an owner key on the host.
+    open func acceptExternallySignedRevocation(_ presented: ContractRevocation) async -> Bool {
+        guard !CellBase.debugValidateAccessForEverything,
+              let data = try? JSONEncoder().encode(presented),
+              let revocation = try? JSONDecoder().decode(ContractRevocation.self, from: data),
+              revocation.cellUUID == uuid, revocation.domain == identityDomain,
+              revocation.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              revocation.verify(owner: owner) else { return false }
+        let current = await currentAuthorizationSnapshot()
+        guard revocation.issuedAt > (current.revokedBefore[revocation.subjectUUID] ?? -.infinity),
+              current.contracts.contains(where: {
+                  $0.uuid == revocation.contractUUID && $0.agreement.uuid == revocation.agreementUUID &&
+                  $0.subject.uuid == revocation.subjectUUID && $0.issuedAt <= revocation.issuedAt
+              }) else { return false }
+        guard let snapshot = await auditor.applyRevocation(revocation,
+            cutoff: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+            restoring: persistedAuthorizationSnapshot()) else { return false }
+        applyPersistedAuthorizationSnapshot(snapshot)
+        await feedAuthorizations.revalidate(subjectUUID: revocation.subjectUUID)
+        return true
     }
 
     private func admissionPolicyAllows(
@@ -2021,14 +2149,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return isMember
     }
     
+    func didChangeAuthorizationMembership() async {}
+
     public func removeMember(member: Identity, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
             await self.auditor.removeMember(member)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: member.uuid,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await didChangeAuthorizationMembership()
             await feedAuthorizations.revalidate(subjectUUID: member.uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
@@ -2040,9 +2172,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await self.auditor.removeMember(uuid)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: uuid,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await didChangeAuthorizationMembership()
             await feedAuthorizations.revalidate(subjectUUID: uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
@@ -2208,15 +2342,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         (await currentAuthorizationSnapshot()).contracts
     }
 
-    private func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
+    func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
         let runtime = await auditor.authorizationSnapshot()
         if runtime.contracts.isEmpty && runtime.members.isEmpty {
             let persisted = persistedAuthorizationSnapshot()
-            if persisted.contracts.isEmpty == false || persisted.members.isEmpty == false {
+            if persisted.contracts.isEmpty == false || persisted.members.isEmpty == false || !persisted.revokedBefore.isEmpty {
                 let restored = await auditor.replaceAuthorization(
                     contracts: persisted.contracts,
                     members: persisted.members,
-                    revision: persisted.revision
+                    revision: persisted.revision,
+                    revokedBefore: persisted.revokedBefore
                 )
                 applyPersistedAuthorizationSnapshot(restored)
                 return restored
@@ -2228,7 +2363,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private func persistedAuthorizationSnapshot() -> GeneralAuditor.AuthorizationSnapshot {
         persistedAuthorizationLock.lock()
         defer { persistedAuthorizationLock.unlock() }
-        return (persistedAuthorizationRevision, persistedContracts, persistedMembers)
+        return (persistedAuthorizationRevision, persistedContracts, persistedMembers, persistedRevokedBefore)
     }
 
     private func applyPersistedAuthorizationSnapshot(_ snapshot: GeneralAuditor.AuthorizationSnapshot) {
@@ -2240,9 +2375,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         persistedAuthorizationRevision = snapshot.revision
         persistedContracts = snapshot.contracts
         persistedMembers = snapshot.members
+        persistedRevokedBefore = snapshot.revokedBefore
     }
 
-    private func authorizationMembers() async -> [Identity] {
+    func withCurrentAuthorizationSnapshot<T>(_ effect: (GeneralAuditor.AuthorizationSnapshot) -> T) async -> T {
+        _ = await currentAuthorizationSnapshot()
+        return await auditor.withAuthorizationSnapshot(effect)
+    }
+
+    func authorizationMembers() async -> [Identity] {
         (await currentAuthorizationSnapshot()).members
     }
     
@@ -2252,6 +2393,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         var relevantContracts = [Contract]()
         for currentContract in await authorizationContracts() {
+            guard currentContract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[currentContract.subject.uuid] ?? -.infinity) else { continue }
+            guard currentContract.targetCellUUID == nil || currentContract.targetCellUUID == uuid else {
+                continue
+            }
             guard await currentContract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
                 expectedSubject: identity,
@@ -2278,6 +2423,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                   await checkIdentityOrigin(identity, against: currentContract.subject) else {
                 continue
             }
+            guard currentContract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[currentContract.subject.uuid] ?? -.infinity) else { continue }
             relevantContracts.append(currentContract)
         }
         return relevantContracts
