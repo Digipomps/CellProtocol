@@ -10,6 +10,8 @@ public actor BridgeChannelClientOperation {
     public nonisolated let hello: Auth.Hello
     public nonisolated let endpoint: Auth.Endpoint
     private let owner: Identity
+    private let holder: BridgeConnectHolderCapability?
+    private var signingContext: BridgeConnectSigningContext?
     private let deadline: TimeInterval
     private let wallClock: @Sendable () -> Date
     private let monotonic: @Sendable () -> TimeInterval
@@ -21,6 +23,7 @@ public actor BridgeChannelClientOperation {
                 wallClock: @escaping @Sendable () -> Date = { Date() },
                 monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         try endpoint.validate()
+        holder = owner.bridgeConnectHolder
         self.owner = owner.publicIdentitySnapshot()
         self.owner.identityVault = owner.identityVault
         self.endpoint = endpoint
@@ -28,7 +31,8 @@ public actor BridgeChannelClientOperation {
         self.wallClock = wallClock; self.monotonic = monotonic
         deadline = monotonic() + 10
     }
-    public func cancel() { active = false; challengeValue = nil }
+    public func cancel() { signingContext?.invalidate(); active = false; challengeValue = nil }
+    deinit { signingContext?.invalidate() }
 
     private func validate(_ challenge: Auth.Challenge, now: Date) throws {
         try Task.checkCancellation()
@@ -59,20 +63,36 @@ public actor BridgeChannelClientOperation {
         signingStarted = true
         guard await vault.identityExistInVault(owner), active else { throw Auth.Failure.identityMismatch }
         // The vault lookup may suspend past either deadline without observing
-        // cancellation. Revalidate the local permit at private-key admission.
+        // cancellation. Revalidate before dispatch; strict context admission is
+        // performed on the signing vault actor after its own final await.
         try validate(challenge, now: wallClock())
-        let signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner)
+        var returnedProof = false
+        defer { if !returnedProof { signingContext?.invalidate() } }
+        let signature: Data
+        if let holder {
+            let context = try BridgeConnectSigningContext(holder: holder, challenge: challenge, identity: owner,
+                deadline: deadline, monotonic: monotonic, wallClock: wallClock)
+            signingContext = context
+            signature = try await withTaskCancellationHandler(operation: {
+                try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner,
+                    bridgeConnectContext: context)
+            }, onCancel: { context.invalidate() })
+        } else {
+            signature = try await vault.signMessageForIdentity(messageData: challenge.signingData, identity: owner)
+        }
         guard active, monotonic() < deadline,
               IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: challenge.signingData, identity: hello.identity.makeIdentity()) else {
             throw Auth.Failure.staleGeneration
         }
         try validate(challenge, now: wallClock())
         challengeValue = challenge
+        returnedProof = true
         return Auth.Proof(sessionID: t.sessionID, generation: t.generation, signature: signature)
     }
     func finish(_ acknowledgement: Auth.Authenticated, session: BridgeChannelSession) throws {
         guard active, let challengeValue, monotonic() < deadline else { throw Auth.Failure.unexpectedMessage }
         try session.acceptAcknowledgement(acknowledgement, challenge: challengeValue)
+        signingContext?.invalidate()
         active = false
         self.challengeValue = nil
     }

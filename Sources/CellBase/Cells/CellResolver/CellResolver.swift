@@ -2428,6 +2428,7 @@ public class CellResolver: CellResolverProtocol {
         ownedRequester.publicSecureKey = requester.publicSecureKey
         ownedRequester.publicKeyAgreementSecureKey = requester.publicKeyAgreementSecureKey
         ownedRequester.homeVaultReference = requester.homeVaultReference
+        ownedRequester.bridgeConnectHolder = requester.bridgeConnectHolder
         let provedControl = await IdentitySigningChallenge.proveControl(
             of: ownedRequester,
             domain: "cellprotocol.remote-bridge",
