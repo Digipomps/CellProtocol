@@ -3176,6 +3176,10 @@ public struct SkeletonButton: Codable, Identifiable {
     public var keypathKeypath: String?
     public var labelKeypath: String?
     public var payloadKeypath: String?
+    /// Row field that holds this button's link. Lets a list row supply its own
+    /// `url` the way `labelKeypath` supplies its label. Renderers still decide
+    /// which links they open (web: https or loopback only).
+    public var urlKeypath: String?
     /// SF Symbol name (e.g. "person.circle", "calendar", "message"), matching the
     /// convention `SkeletonImage.name` already uses for `type == "system"` images.
     /// Web renderers translate this into their own icon set (see the
@@ -3192,7 +3196,8 @@ public struct SkeletonButton: Codable, Identifiable {
         keypathKeypath: String? = nil,
         labelKeypath: String? = nil,
         payloadKeypath: String? = nil,
-        icon: String? = nil
+        icon: String? = nil,
+        urlKeypath: String? = nil
     ) {
         self.keypath = keypath
         self.label = label
@@ -3202,6 +3207,7 @@ public struct SkeletonButton: Codable, Identifiable {
         self.labelKeypath = labelKeypath
         self.payloadKeypath = payloadKeypath
         self.icon = icon
+        self.urlKeypath = urlKeypath
     }
 
     public enum CodingKeys: CodingKey {
@@ -3213,6 +3219,7 @@ public struct SkeletonButton: Codable, Identifiable {
         case keypathKeypath
         case labelKeypath
         case payloadKeypath
+        case urlKeypath
         case icon
         case modifiers
     }
@@ -3234,6 +3241,7 @@ public struct SkeletonButton: Codable, Identifiable {
         self.keypathKeypath = try container.decodeIfPresent(String.self, forKey: .keypathKeypath)
         self.labelKeypath = try container.decodeIfPresent(String.self, forKey: .labelKeypath)
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
+        self.urlKeypath = try container.decodeIfPresent(String.self, forKey: .urlKeypath)
         self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
 
@@ -3253,6 +3261,7 @@ public struct SkeletonButton: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.keypathKeypath, forKey: .keypathKeypath)
         try elementContainer.encodeIfPresent(self.labelKeypath, forKey: .labelKeypath)
         try elementContainer.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
+        try elementContainer.encodeIfPresent(self.urlKeypath, forKey: .urlKeypath)
         try elementContainer.encodeIfPresent(self.icon, forKey: .icon)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
