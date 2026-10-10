@@ -1,0 +1,101 @@
+{
+  "date": "2026-10-05",
+  "base_commit": "1ec56d59d13c20edb83b54687aaf393399ad0a15",
+  "scope": "N32, N36, N37, N38, N39; follow-up to PR53",
+  "toolchain": {
+    "swift": "Apple Swift 6.4 (swiftlang-6.4.0.34.1)",
+    "xcode": "27.0 (27A266a)",
+    "platform": "arm64 macOS 27.0"
+  },
+  "capacity": {
+    "minimum_free_gib": 40,
+    "minimum_free_percent": 5,
+    "reserve_gib": 10,
+    "jobs": 2,
+    "automatic_cache_deletion": false
+  },
+  "full_suite": {
+    "exit": 0,
+    "xctest_targets": [
+      {
+        "target": "HavenCommonsTests",
+        "tests": 26,
+        "skipped": 0,
+        "failures": 0
+      },
+      {
+        "target": "CellNearbyTests",
+        "tests": 3,
+        "skipped": 0,
+        "failures": 0
+      },
+      {
+        "target": "CellBaseTests",
+        "tests": 1538,
+        "skipped": 5,
+        "failures": 0
+      }
+    ],
+    "total_tests": 1567,
+    "total_skips": 5,
+    "total_failures": 0,
+    "command": "run_swift_bounded.sh test --disable-sandbox",
+    "log": "cp53-scanner-full-verified-test-20261005.log"
+  },
+  "red_green": {
+    "method": "Remove only the two local instance checks; retain the new published-action tests and all other authentication checks.",
+    "source_sha256": {
+      "Sources/CellApple/EntityRadar/ScannerConsumerContext.swift": "ada7585ca57d72ac3494c14ae1c56846e63f278063925ec3511419274f3c890b",
+      "Sources/CellApple/EntityRadar/ScannerService.swift": "6e78a83f0071a582c857cbd791e7794b6b98807a6211e191acacb0c8336ccb6b"
+    },
+    "red_exit": 1,
+    "restored_exactly": true,
+    "green_exit": 0,
+    "failed_tests": 3,
+    "red_failures": 34,
+    "green_tests": 3
+  },
+  "preflight": {
+    "stock_exit": 2,
+    "interpretation": "ENV-001 uses stale 10% policy; user explicitly authorized 40 GiB AND 5% with 10 GiB reserve. TEST-001 ignores the unfiltered swift test in security-regression-macos.yml when it sees a separate TSAN filter. Full package has been built and tested locally; no CI workflow or global preflight rule was weakened. Other warnings are recorded in the raw report."
+  },
+  "not_verified": [
+    "Physical NI/UWB explicitly deferred",
+    "Native Apple WebSocket sibling progress",
+    "Automatic subscription continuity over authentication expiry",
+    "Deployed consumer chain and latency distribution"
+  ],
+  "sha256": {
+    "Sources/CellApple/EntityRadar/EntityScannerCell.swift": "39437dc233ded3bbeb2f26f710fa720c7873fb8afe1a746be68444606933e2a6",
+    "Sources/CellApple/EntityRadar/NearbyProbe.swift": "55ceb3e0d35e03e08fd6cf8716c1a1a83881f1ceea1f7e524ca8cd0354fc9900",
+    "Sources/CellApple/EntityRadar/RadarModels.swift": "adcaf47b2e0b64bca490a222cd0b1b09e75e673545a830f2940f63a1cc4312ca",
+    "Sources/CellApple/EntityRadar/ScannerConsumerContext.swift": "ada7585ca57d72ac3494c14ae1c56846e63f278063925ec3511419274f3c890b",
+    "Sources/CellApple/EntityRadar/ScannerService.swift": "6e78a83f0071a582c857cbd791e7794b6b98807a6211e191acacb0c8336ccb6b",
+    "Tests/CellBaseTests/EntityScannerCellContractTests.swift": "027d5e927000bf17c0b0b3f3fe1b055409d14692ecf23a08c5c9c14b6cc6af78",
+    "Tests/CellBaseTests/EntityScannerConsumerSecurityTests.swift": "71d274c703895ae42caeb9bc3b387a1be8864851637c3696da4e9d8e53d280cf",
+    "Tests/CellBaseTests/NearbyProbeTests.swift": "3e36981210212aff645bba6c7eec7ce7321f6090e9a79e864f59af0d220f3f61",
+    "Tests/CellBaseTests/RadarEntityLedgerTests.swift": "68a23610ddd9b30ea3ce3ebb735fcc7e3f1f32c9920702fa194f9c452bab63bb",
+    "Tests/CellBaseTests/ScannerAdmissionTests.swift": "4aa2b7b616721754bb73798ea805f6b058a79c2e0df4325c921033ccb64e4e6f",
+    "Tests/CellBaseTests/ScannerMultipeerProcessTests.swift": "8e1e1d6f612d16e26a16f9c6174d68807c9c9f0d26a1639a1e55da6dbcab8b29",
+    "Tests/CellBaseTests/ScannerPeerAuthenticationTests.swift": "b053818db4f5fe50aea2a3b239c757be8ab36eed72997d6ad209d07960adbae5",
+    "Tests/CellBaseTests/ScannerPhysicalIsolationTests.swift": "f4023bfd9c7e476156582881bec1c60c87608830715c11a484667bc69822c662",
+    "Tests/CellBaseTests/ScannerRetainedStateTests.swift": "a6f2020f196077749fc609a363d795cf8ba4baff28b0eb5b6ecd77ee8cfde583",
+    "Tests/CellBaseTests/ScannerServiceInvitationTests.swift": "3bdbb856257deb2b67994fa11af9ba7be2be27774d9dd7f61f1bff7ffb882e1c",
+    "Tests/CellBaseTests/ScannerPublishedActions.swift": "893ce7d4221fe510d336cf28a951ded8327d37c0d3f87e11c5a02ed8feeb5d23",
+    "Package.swift": "fa87c8620c789e9baf406dfb31f8cd5c4187d7c0225367634025ae0fa7445fd1",
+    "Package.resolved": "2384777e8aee837a02588d8d9540125155cbdee5bbc50056c65d4d60a598ae2d"
+  },
+  "log_sha256": {
+    "cp53-scanner-actions-test-20261005.log": "df8a926982e258ea3321b777a3d9c9f595c53888aa070831dcb920d11c6c9518",
+    "cp53-scanner-actions-lifecycle-test-20261005.log": "45ffb28f4b0ecef39cf2e142066280c4704050ab8b98505a3a177b5b8411981c",
+    "cp53-scanner-hardening-test-20261005.log": "15168ebe76609ea46cfc4055e6f7619ad4a40471a947470d3e7c101dd25a0402",
+    "cp53-scanner-full-test-20261005.log": "aa1d0abaa85358dd0b50b5028bfa07c64bf8432b652708a32378e5ddd7eb10f5",
+    "cp53-scanner-full-final-test-20261005.log": "c9f832f2c50d5cab22e5a641050f34541180559a19cfc521ec5c796965c85570",
+    "cp53-scanner-full-verified-test-20261005.log": "9a9db6deeffb7defc5e5a49f87124d673905192829154db5683d45aa62d5293e",
+    "cp53-decision-red-20261005.log": "5d30e91f4e2851da58abbec144bed3d8003ee0dd0cff09a993d03ffbafa4ea70",
+    "cp53-decision-green-20261005.log": "1d1f5cf4d653db6469ba4b36f63db44f2ce8884ff8105088acdc76668507e7fa",
+    "cp53-decision-red-green-20261005.json": "5ccd0d8477185993a3c39b08c8879b25c498086d0bd68aed644c0c107a3ec5d7",
+    "cp53-scanner-preflight-20261005.json": "999161e63970229bc78242eb6d40a871549af39ab7db8017e2f333212b6487d8",
+    "cp53-decision-red-green-20261005.py": "d4c2b95c05132235a6b6d00c06bac61e05105a68b07407f30ad791c488241602"
+  }
+}
