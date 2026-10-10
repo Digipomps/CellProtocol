@@ -237,15 +237,20 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public func keys(requester: Identity) async throws -> [String] {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "keys", requestedAccess: "r---")
         try await ensureRuntimeReady()
-        // validate permissions
-        
-        return Array(schemaDict.keys)
+        let runtimeAvailable = await OwnerAttachExtensionRuntime.shared.host != nil
+        return Array(schemaDict.keys.filter { !OwnerAttachExplore.contains($0) })
+            + (runtimeAvailable ? OwnerAttachExplore.keys : [])
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
-        // validate permissions
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return OwnerAttachExplore.contract(for: key)
+        }
         guard let schema = schemaDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -260,6 +265,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     ) async throws -> ValueType {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil,
+                  OwnerAttachExplore.method(for: key) == method else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return OwnerAttachExplore.contract(for: key)
+        }
         guard let schema = operationSchemaDict[key]?[method] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -269,8 +281,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public func operationContracts(requester: Identity) async throws -> [ValueType] {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "operationContracts", requestedAccess: "r---")
         try await ensureRuntimeReady()
-        return operationSchemaDict.keys.sorted().flatMap { key in
-            operationSchemaDict[key, default: [:]].keys
+        let runtimeAvailable = await OwnerAttachExtensionRuntime.shared.host != nil
+        let runtimeKeys = runtimeAvailable ? OwnerAttachExplore.keys : []
+        let keys = Set(operationSchemaDict.keys.filter { !OwnerAttachExplore.contains($0) }).union(runtimeKeys)
+        return keys.sorted().flatMap { key -> [ValueType] in
+            if OwnerAttachExplore.contains(key) { return [OwnerAttachExplore.contract(for: key)] }
+            return operationSchemaDict[key, default: [:]].keys
                 .sorted { $0.rawValue < $1.rawValue }
                 .compactMap { operationSchemaDict[key]?[$0] }
         }
@@ -302,7 +318,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var declared: Set<String> = []
         var declaredGet: Set<String> = []
         var declaredSet: Set<String> = []
-        for (key, methods) in operationSchemaDict {
+        for (key, methods) in operationSchemaDict where !OwnerAttachExplore.contains(key) {
             for method in methods.keys {
                 declared.insert(key)
                 switch method {
@@ -311,8 +327,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 }
             }
         }
-        let interceptGet = Set(registered.get)
-        let interceptSet = Set(registered.set)
+        var interceptGet = Set(registered.get.filter { !OwnerAttachExplore.contains($0) })
+        var interceptSet = Set(registered.set.filter { !OwnerAttachExplore.contains($0) })
+        // These two handlers live in GeneralCell's guarded get/set entrypoints,
+        // not the intercept dictionary. Their metadata follows host lifetime.
+        if await OwnerAttachExtensionRuntime.shared.host != nil {
+            declaredGet.insert(OwnerAttachEntityExtensionHost.offerKeypath)
+            declaredSet.insert(OwnerAttachEntityExtensionHost.acceptKeypath)
+            interceptGet.insert(OwnerAttachEntityExtensionHost.offerKeypath)
+            interceptSet.insert(OwnerAttachEntityExtensionHost.acceptKeypath)
+        }
 
         func rows(_ keys: Set<String>, _ method: ExploreContractMethod) -> [ValueType] {
             keys.sorted().map { key in
@@ -341,6 +365,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
+        if OwnerAttachExplore.contains(key) {
+            guard await OwnerAttachExtensionRuntime.shared.host != nil else {
+                throw GeneralCellErrors.noSchemaForKey
+            }
+            return .string(OwnerAttachExplore.summary(for: key))
+        }
         guard let description = schemaDescriptionDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
         }
@@ -643,6 +673,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         let connectState = await emitter.admit(context: connectContext )
         CellBase.diagnosticLog("attach label=\(label) connectState=\(connectState)", domain: .flow)
         let adjustedConnectState =  try await self.consumeConnectResponseForIdentity(connectState: connectState, label: label, identity: requester, emitCell: emitter)
+        if adjustedConnectState == .connected, let handler = OwnerAttachExtensionContext.handler {
+            await handler(self, emitter, label, requester)
+        }
         return adjustedConnectState
     }
 
@@ -1816,6 +1849,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     open func get(keypath: String, requester: Identity) async throws -> ValueType {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "r---")
         try await ensureRuntimeReady()
+        if keypath == OwnerAttachEntityExtensionHost.offerKeypath {
+            guard let host = await OwnerAttachExtensionRuntime.shared.host else {
+                throw OwnerAttachExtensionError.unavailable
+            }
+            return try await OwnerAttachWire.value(from: host.offer(cell: self, requester: requester))
+        }
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
         let operationAuthorizationDecision = try await explicitMeddleAuthorizationDecision(
@@ -1953,6 +1992,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "-w--")
         try await ensureRuntimeReady()
+        if keypath == OwnerAttachEntityExtensionHost.acceptKeypath {
+            guard let host = await OwnerAttachExtensionRuntime.shared.host else {
+                throw OwnerAttachExtensionError.unavailable
+            }
+            let consent = try OwnerAttachWire.decode(OwnerAttachExtensionConsent.self, from: value)
+            return try await OwnerAttachWire.value(from: host.accept(consent, cell: self, requester: requester))
+        }
         
         
         var response: ValueType?
@@ -2255,6 +2301,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var linkedIdentityLinkID: String? = nil
     }
 
+    /// Closed implementation: neither an overridden validateAccess nor a
+    /// serialized CellAuthorizationDecision can mint owner-attach evidence.
+    final func requireOwnerAttachProof(requester: Identity) async throws {
+        guard !CellBase.debugValidateAccessForEverything else {
+            throw OwnerAttachExtensionError.ownerProofRequired
+        }
+        let evidence = await authorizationEvidence(for: requester)
+        guard evidence.ownerReferenceMatches, evidence.ownerProofValid else {
+            throw OwnerAttachExtensionError.ownerProofRequired
+        }
+    }
+
     private func authorizationEvidence(for identity: Identity) async -> AuthorizationEvidence {
         let ownerReferenceMatches = identitiesReferenceSame(owner, identity)
         let ownerProofValid = ownerReferenceMatches
@@ -2442,8 +2500,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     func determineIdentityState(identity: Identity) async -> IdentityState {
         var identityState = IdentityState.other
-        if identitiesReferenceSame(owner, identity),
-           await checkIdentityOrigin(identity, against: owner) {
+        // Admission must honor the same verified, domain-bound same-entity
+        // owner path as get/set. A linked owner still proves its own key.
+        let evidence = await authorizationEvidence(for: identity)
+        if evidence.ownerReferenceMatches, evidence.ownerProofValid {
             identityState = IdentityState.owner
         } else {
             

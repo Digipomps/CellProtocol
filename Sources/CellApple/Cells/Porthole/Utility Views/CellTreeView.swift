@@ -239,6 +239,16 @@ private struct SkeletonTreeFocus: ViewModifier {
     }
 }
 
+private struct SkeletonTreeDisclosureFocus: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.focusable(false)
+        #else
+        if #available(iOS 17, *) { content.focusable(false) } else { content }
+        #endif
+    }
+}
+
 #if os(macOS)
 import AppKit
 /// The local monitor consumes only this focused tree's unmodified navigation
