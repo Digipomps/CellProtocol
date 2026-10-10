@@ -2,6 +2,20 @@
 
 set -euo pipefail
 
+# Metadata only. When configured, capture the managed cache's registered writer
+# and the job boundary inventories without changing Swift or lease semantics.
+haven_artifact_start() { :; }
+haven_artifact_created() { :; }
+haven_artifact_finish() { :; }
+if [ -n "${HAVEN_ARTIFACT_CONFIG:-}" ]; then
+    artifact_hook="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/haven-artifacts-hook.sh"
+    if [ -f "$artifact_hook" ] && [ ! -L "$artifact_hook" ]; then
+        source "$artifact_hook"
+    else
+        printf '[haven-artifacts] degraded: configured collector hook unavailable\n' >&2
+    fi
+fi
+
 readonly MARKER_VALUE="haven-swiftpm-cache-v1"
 readonly EX_USAGE=64
 readonly EX_TEMPFAIL=75
@@ -606,6 +620,7 @@ cleanup_on_exit() {
         esac
     fi
     release_main_lease
+    haven_artifact_finish "$status"
     exit "$status"
 }
 
@@ -654,6 +669,7 @@ CURRENT_CACHE_DIR="$CACHES_DIR/$CACHE_HASH"
 
 run_gc "$CACHE_HASH"
 acquire_main_lease
+haven_artifact_start "${HAVEN_ARTIFACT_JOB_ID:-swiftpm-$MAIN_LEASE_TOKEN}" "${HAVEN_ARTIFACT_PROJECT_ID:-$CACHE_HASH}" "$CURRENT_CACHE_DIR"
 
 if [ -L "$CURRENT_CACHE_DIR" ]; then
     die "cache path must not be a symbolic link"
@@ -664,6 +680,7 @@ if [ -e "$CURRENT_CACHE_DIR" ]; then
     fi
 else
     mkdir "$CURRENT_CACHE_DIR"
+    haven_artifact_created "$CURRENT_CACHE_DIR"
     chmod 700 "$CURRENT_CACHE_DIR"
     printf '%s\n' "$MARKER_VALUE" > "$CURRENT_CACHE_DIR/.haven-swiftpm-cache-v1"
     printf 'version=1\ncreated_at=%s\n' "$(date +%s)" > "$CURRENT_CACHE_DIR/.haven-swiftpm-metadata"
