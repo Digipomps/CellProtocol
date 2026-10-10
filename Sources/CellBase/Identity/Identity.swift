@@ -31,6 +31,9 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
     
     public var identityVault: IdentityVaultProtocol?
     public var homeVaultReference: String?
+
+    // Local holder startup authority; deliberately absent from CodingKeys and public snapshots.
+    var bridgeConnectHolder: BridgeConnectHolderCapability?
     
     var valueCancellable: AnyCancellable?
     

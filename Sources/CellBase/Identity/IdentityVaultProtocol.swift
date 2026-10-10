@@ -13,6 +13,7 @@ public protocol IdentityVaultProtocol: Sendable {
     func identityDomainBinding(for identity: Identity) async -> IdentityDomainBinding?
     func saveIdentity(_ identity: Identity) async
     func signMessageForIdentity(messageData: Data, identity: Identity) async throws -> Data
+    func signMessageForIdentity(messageData: Data, identity: Identity, bridgeConnectContext: BridgeConnectSigningContext) async throws -> Data
     func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool
     func randomBytes64() async -> Data?
     func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) // TODO: This should probably be elsewhere
@@ -20,6 +21,12 @@ public protocol IdentityVaultProtocol: Sendable {
 }
 
 public extension IdentityVaultProtocol {
+    /// Source compatibility for ordinary vaults. Strict holder vaults override this
+    /// requirement and perform live one-shot admission at their private signer.
+    func signMessageForIdentity(messageData: Data, identity: Identity, bridgeConnectContext: BridgeConnectSigningContext) async throws -> Data {
+        try await signMessageForIdentity(messageData: messageData, identity: identity)
+    }
+
     func identityVaultReference() async -> String? {
         nil
     }
