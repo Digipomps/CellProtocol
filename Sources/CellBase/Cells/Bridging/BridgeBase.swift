@@ -453,6 +453,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             outboundFeedRequester = nil
             inboundFeedCommandID = nil
             inboundFeedRequester = nil
+            feedInstallation = nil
             localFeedSubscriberCount = 0
             feedActive = false
             return task
@@ -510,7 +511,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     private func ensureOutboundFeed(requester: Identity) async throws {
-        let task = withCallbackStateLock { () -> Task<Void, Error> in
+        let task = try withCallbackStateLock { () throws -> Task<Void, Error> in
+            guard !retired else { throw BridgeError.transportUnavailable }
             if let outboundFeedStartTask {
                 return outboundFeedStartTask
             }
@@ -558,7 +560,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 payload: nil,
                 commandId: commandID
             )
-            withCallbackStateLock {
+            try withCallbackStateLock {
+                guard !retired else { throw BridgeError.transportUnavailable }
                 outboundFeedCommandID = commandID
                 outboundFeedRequester = requester
                 feedActive = true
@@ -580,7 +583,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             outboundFeedRequester = nil
             feedActive = false
         }
-        Task { [weak self] in
+        retirementWork.submit { [weak self] in
             await self?.auditor.removeBridgeCommand(for: commandID)
         }
     }
@@ -611,14 +614,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
         flowElementCallbackCancellable?.cancel()
         flowElementCallbackCancellable = nil
-        Task { [weak self] in
+        retirementWork.submit { [weak self] in
             await self?.sendStopFeed(commandID: feedToStop.0, requester: feedToStop.1)
         }
     }
 
     private func sendStopFeed(commandID: Int, requester: Identity) async {
         defer {
-            Task { [weak self] in
+            retirementWork.submit { [weak self] in
                 await self?.auditor.removeBridgeCommand(for: commandID)
             }
         }
@@ -684,7 +687,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         let connectPublisher = PassthroughSubject<ConnectState, Error>()
         self.connectPublisher = connectPublisher
         
-        Task {
+        retirementWork.submit { [self] in
             if let identity = context.identity,
                let connectPublisher = self.connectPublisher
             {
@@ -755,6 +758,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         await retirementWork.finishStop()
         let feedTask = withCallbackStateLock { retiringFeedStartTask }
         _ = try? await feedTask?.value
+        await auditor.retire()
         withCallbackStateLock {
             retiringFeedStartTask = nil
             transport = nil
@@ -912,26 +916,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
     public func detach(label: String, requester: Identity) {
-        Task {
+        retirementWork.submit { [self] in
             await sendCommand(command: .removeConnecion, identity: requester, payload: .string(label))
         }
         
     }
     
     public func dropFlow(label: String, requester: Identity) {
-        Task {
+        retirementWork.submit { [self] in
             await sendCommand(command: .dropFlow, identity: requester, payload: .string(label))
         }
     }
     
     public func dropAllFlows(requester: Identity) {
-        Task {
+        retirementWork.submit { [self] in
             await sendCommand(command: .unsubscribeAll, identity: requester, payload: nil)
         }
     }
     
     public func detachAll(requester: Identity) {
-        Task {
+        retirementWork.submit { [self] in
             await sendCommand(command: .disconnectAll, identity: requester, payload: nil)
         }
     }
@@ -1049,7 +1053,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 //    public func connectCellPublisher(cellPublisher: Emit, label: String, requester: Identity) -> AnyPublisher<ConnectState, Error> {
 //        
 //        let payload: Object = ["label": .string(label), "publisher": .description(cellPublisher.announce(for: requester))]
-//        Task {
+//        retirementWork.submit { [self] in
 //            await self.sendCommand(command: .connectEmitter, identity: requester, payload: .object(payload))
 //        }
 //        return PassthroughSubject<ConnectState, Error>().eraseToAnyPublisher()  // Not implemented
@@ -1081,7 +1085,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func absorbFlow(label: String, requester: Identity) {
         bridgeLog("Absorb flow requested for label: \(label)")
-        Task {
+        retirementWork.submit { [self] in
             await self.sendCommand(command: .absorbFlow, identity: requester, payload: .string(label))
         }
     }
@@ -1149,7 +1153,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         messageData: messageData,
                         for: commandID
                     )
-                    await self.auditor.storeBridgeCommand(bridgeCommand, for: commandID)
+                    guard await self.auditor.storeBridgeCommand(bridgeCommand, for: commandID) else {
+                        self.takeSignRequest(for: commandID)?.promise(.failure(BridgeError.transportUnavailable))
+                        return
+                    }
 
                     guard let bridgeCommandJSON = try? JSONEncoder().encode(bridgeCommand),
                           let transport = self.transport else {
@@ -1283,7 +1290,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             resolvedCommandId = await auditor.getNewCommandId()
         }
         let bridgeCommand = BridgeCommand(cmd: command.rawValue, identity: identity, payload: payload, cid: resolvedCommandId)
-        await auditor.storeBridgeCommand(bridgeCommand, for: resolvedCommandId)
+        guard await auditor.storeBridgeCommand(bridgeCommand, for: resolvedCommandId) else {
+            throw BridgeError.transportUnavailable
+        }
 
         guard let bridgeCommandJson = try? JSONEncoder().encode(bridgeCommand) else {
             throw BridgeError.someError
@@ -1359,7 +1368,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             case .agreement:
                 if let identity = command.identity {
                     let publisher = try await resolvedEmitCell(for: identity)
-//                    Task {
+//                    retirementWork.submit { [self] in
                         var agreement: Agreement
                         let sentPayload = command.payload
                         
@@ -1374,7 +1383,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         if contractState != .template {
                             let payload = ValueType.contractState(contractState)
                             let response = BridgeCommand(cmd: "response", payload: payload, cid: command.cid)
-//                            Task {
+//                            retirementWork.submit { [self] in
                                 do {
                                     if let responseJSONData = try? JSONEncoder().encode(response),
                                        let transport = transport {
@@ -1892,7 +1901,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
    
     private func extractCommand(_ incomingData: Data) async throws {
-//        Task {
+//        retirementWork.submit { [self] in
             if let command = try? JSONDecoder().decode(BridgeCommand.self, from: incomingData)
                
             {

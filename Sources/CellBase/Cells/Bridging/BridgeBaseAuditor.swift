@@ -14,10 +14,14 @@ actor BridgeBaseAuditor {
     private struct RegisteredCommand {
         var command: BridgeCommand
         var storedAt: Date
+        var bytes: Int
     }
 
     private var commandRegistry = [Int: RegisteredCommand]()
     private var commandId = 0
+    private var retired = false
+    private let maximumCount = 1024
+    private let maximumBytes = 4 * 1024 * 1024
     private let commandRetentionSeconds: TimeInterval
 
     init(commandRetentionSeconds: TimeInterval = 300) {
@@ -29,15 +33,24 @@ actor BridgeBaseAuditor {
         return commandId
     }
     
-    func storeBridgeCommand(_ command: BridgeCommand?, for commandId: Int, now: Date = Date()) {
+    @discardableResult
+    func storeBridgeCommand(_ command: BridgeCommand?, for commandId: Int, now: Date = Date()) -> Bool {
         purgeExpired(now: now)
-        guard let command else {
-            commandRegistry[commandId] = nil
-            return
-        }
-        commandRegistry[commandId] = RegisteredCommand(command: command, storedAt: now)
+        guard let command else { commandRegistry[commandId] = nil; return true }
+        guard !retired, let data = try? JSONEncoder().encode(command), data.count <= 1024 * 1024 else { return false }
+        let old = commandRegistry[commandId]
+        let count = commandRegistry.count - (old == nil ? 0 : 1)
+        let bytes = commandRegistry.values.reduce(0) { $0 + $1.bytes } - (old?.bytes ?? 0)
+        guard count < maximumCount, data.count <= maximumBytes - bytes else { return false }
+        commandRegistry[commandId] = RegisteredCommand(command: command, storedAt: now, bytes: data.count)
+        return true
     }
-    
+
+    func retire() {
+        retired = true
+        commandRegistry.removeAll()
+    }
+
     func loadBridgeCommandForCommandId(_ commandId: Int, now: Date = Date()) -> BridgeCommand? {
         purgeExpired(now: now)
         return commandRegistry[commandId]?.command
