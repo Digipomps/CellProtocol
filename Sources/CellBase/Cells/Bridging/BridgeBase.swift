@@ -285,12 +285,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
+    @discardableResult
     private func storeSignRequest(
         _ promise: @escaping SignPromise,
         identity: Identity,
         messageData: Data,
         for commandID: Int
-    ) {
+    ) -> Bool {
         let timeoutNanoseconds = signRequestTimeoutNanoseconds
         let cleanupTask = retirementWork.submit { [weak self] in
             guard timeoutNanoseconds > 0 else { return }
@@ -311,6 +312,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return true
         }
         if !admitted { cleanupTask?.cancel(); promise(.failure(BridgeError.transportUnavailable)) }
+        return admitted
 
     }
 
@@ -682,48 +684,20 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     
     public func connect(context: ConnectContext) -> AnyPublisher<ConnectState, Error> {
-        bridgeLog("Cloud Bridge connect")
-//        currentCommand = .connect
-        let connectPublisher = PassthroughSubject<ConnectState, Error>()
-        self.connectPublisher = connectPublisher
-        
-        retirementWork.submit { [self] in
-            if let identity = context.identity,
-               let connectPublisher = self.connectPublisher
-            {
-                let commandID = await self.auditor.getNewCommandId()
-                let callbackPublisher = PassthroughSubject<ConnectState, Error>()
-                self.storeConnectPublisher(callbackPublisher, for: commandID)
-                self.connectCallbackCancellable = callbackPublisher
-                    .handleEvents(receiveCancel: {
-                        bridgeLog("Cancelled cloud bridge connect")
-                        connectPublisher.send(completion: .failure(ConnectError.cancelled ))
-                    })
-                    .sink(receiveCompletion: {[weak self] completion in
-                        bridgeLog("Connect callback publisher completed: \(completion)")
-                        connectPublisher.send(completion: .finished)
-                        self?.connectCallbackCancellable = nil
-                    }, receiveValue: { connectState in
-                        bridgeLog("Connection state: \(connectState)")
-                        connectPublisher.send(connectState)
-                    })
-                do {
-                    try await self.sendCommandChecked(
-                        command: .admit,
-                        identity: identity,
-                        payload: nil,
-                        commandId: commandID
-                    )
-                } catch {
-                    connectPublisher.send(completion: .failure(error))
-                    self.connectCallbackCancellable = nil
-                    self.clearConnectPublisher(for: commandID)
-                }
+        // Preserve eager, one-request-per-call behaviour and replay the result
+        // to late subscribers. The existing CID-routed promise is failed by
+        // retirement; refused admission must also complete the publisher.
+        Future<ConnectState, Error> { [weak self] promise in
+            guard let self else { promise(.failure(BridgeError.transportUnavailable)); return }
+            let task = self.retirementWork.submit { [weak self] in
+                guard let self else { promise(.failure(BridgeError.transportUnavailable)); return }
+                let state = await self.admit(context: context)
+                promise(.success(state))
             }
-        }
-        return connectPublisher.eraseToAnyPublisher()
+            guard task != nil else { promise(.failure(BridgeError.transportUnavailable)); return }
+        }.eraseToAnyPublisher()
     }
-    
+
     /// Terminal, owner-driven EOF cleanup. This does not change requester
     /// authorization or the wire protocol and cannot reopen this bridge object.
     public func requestRetirement() {
@@ -1147,12 +1121,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         payload: .signData(messageData),
                         cid: commandID
                     )
-                    self.storeSignRequest(
+                    let signRegistered = self.storeSignRequest(
                         promise,
                         identity: identity,
                         messageData: messageData,
                         for: commandID
                     )
+                    guard signRegistered else { return }
                     guard await self.auditor.storeBridgeCommand(bridgeCommand, for: commandID) else {
                         self.takeSignRequest(for: commandID)?.promise(.failure(BridgeError.transportUnavailable))
                         return
