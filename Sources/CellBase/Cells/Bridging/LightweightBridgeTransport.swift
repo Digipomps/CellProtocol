@@ -137,74 +137,53 @@ private struct URLSessionLightweightWebSocketSnapshot {
     let shouldNotifyDisconnect: Bool
 }
 
-private actor URLSessionLightweightWebSocketState {
-    private enum Phase {
-        case idle
-        case connecting
-        case connected
-        case closed
-    }
-
+private final class URLSessionLightweightWebSocketState: @unchecked Sendable {
+    private let lock = NSLock()
+    private enum Phase { case idle, connecting, connected, closed }
     private var urlSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
     private var connectContinuation: CheckedContinuation<Void, Error>?
     private var phase: Phase = .idle
 
-    func prepare(session: URLSession, task: URLSessionWebSocketTask) {
-        urlSession = session
-        webSocketTask = task
-        connectContinuation = nil
-        phase = .connecting
-    }
-
-    func installContinuation(_ continuation: CheckedContinuation<Void, Error>) {
-        guard phase == .connecting else {
-            continuation.resume(throwing: LightweightBridgeTransportError.connectionCancelled)
-            return
+    func prepare(session: URLSession, task: URLSessionWebSocketTask) -> Bool {
+        lock.withLock {
+            guard phase == .idle else { return false }
+            urlSession = session; webSocketTask = task; phase = .connecting
+            return true
         }
-        connectContinuation = continuation
     }
-
-    func completeConnection() -> CheckedContinuation<Void, Error>? {
-        guard phase == .connecting else {
-            return nil
+    func installContinuation(_ continuation: CheckedContinuation<Void, Error>) -> Bool {
+        let admitted = lock.withLock { () -> Bool in
+            guard phase == .connecting, connectContinuation == nil else { return false }
+            connectContinuation = continuation
+            return true
         }
-        phase = .connected
-        let continuation = connectContinuation
-        connectContinuation = nil
-        return continuation
+        if !admitted { continuation.resume(throwing: LightweightBridgeTransportError.connectionCancelled) }
+        return admitted
     }
-
-    func timeoutConnectionAttempt() -> URLSessionLightweightWebSocketSnapshot? {
-        guard phase == .connecting else {
-            return nil
+    func completeConnection(session: URLSession, task: URLSessionWebSocketTask) -> CheckedContinuation<Void, Error>? {
+        lock.withLock {
+            guard phase == .connecting, urlSession === session, webSocketTask === task,
+                  let continuation = connectContinuation else { return nil }
+            phase = .connected; connectContinuation = nil
+            return continuation
         }
-        return close(shouldNotifyDisconnect: false)
     }
-
+    func matches(session: URLSession, task: URLSessionTask) -> Bool {
+        lock.withLock { phase != .closed && urlSession === session && webSocketTask === task }
+    }
     func close(shouldNotifyDisconnect: Bool = true) -> URLSessionLightweightWebSocketSnapshot {
-        let snapshot = URLSessionLightweightWebSocketSnapshot(
-            task: webSocketTask,
-            session: urlSession,
-            continuation: connectContinuation,
-            shouldNotifyDisconnect: shouldNotifyDisconnect && phase == .connected
-        )
-        webSocketTask = nil
-        urlSession = nil
-        connectContinuation = nil
-        phase = .closed
-        return snapshot
-    }
-
-    func activeTask() -> URLSessionWebSocketTask? {
-        guard phase == .connected else {
-            return nil
+        lock.withLock {
+            let snapshot = URLSessionLightweightWebSocketSnapshot(task: webSocketTask, session: urlSession,
+                continuation: connectContinuation, shouldNotifyDisconnect: shouldNotifyDisconnect && phase == .connected)
+            webSocketTask = nil; urlSession = nil; connectContinuation = nil; phase = .closed
+            return snapshot
         }
-        return webSocketTask
     }
+    func activeTask() -> URLSessionWebSocketTask? { lock.withLock { phase == .connected ? webSocketTask : nil } }
 }
 
-private enum URLSessionLightweightWebSocketOperation {
+enum URLSessionLightweightWebSocketOperation {
     case sendText
     case sendData
     case ping
@@ -237,64 +216,65 @@ private enum URLSessionLightweightWebSocketOperation {
     }
 }
 
-private final class URLSessionLightweightWebSocketCompletion: @unchecked Sendable {
+final class URLSessionLightweightWebSocketCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Void, Error>?
+    private var terminal: Result<Void, Error>?
+    let beforeTimeoutReturn: (@Sendable () async -> Void)?
+    init(beforeTimeoutReturn: (@Sendable () async -> Void)? = nil) { self.beforeTimeoutReturn = beforeTimeoutReturn }
     private var timeoutTask: Task<Void, Never>?
 
-    func install(
-        _ continuation: CheckedContinuation<Void, Error>,
-        operation: URLSessionLightweightWebSocketOperation
-    ) {
+    @discardableResult
+    func install(_ continuation: CheckedContinuation<Void, Error>, operation: URLSessionLightweightWebSocketOperation) -> Bool {
         lock.lock()
+        if let terminal { lock.unlock(); continuation.resume(with: terminal); return false }
         self.continuation = continuation
-        lock.unlock()
-
-        let timeoutTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: operation.timeoutNanoseconds)
-            } catch {
-                return
-            }
-            self?.resume(with: .failure(operation.timeoutError))
+        let hook = beforeTimeoutReturn
+        timeoutTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: operation.timeoutNanoseconds) } catch {}
+            if !Task.isCancelled { self?.resume(with: .failure(operation.timeoutError)) }
+            await hook?()
         }
-
+        lock.unlock()
+        return true
+    }
+    func resume(with result: Result<Void, Error>) {
         lock.lock()
-        if self.continuation == nil {
-            lock.unlock()
-            timeoutTask.cancel()
-            return
-        }
-        self.timeoutTask = timeoutTask
+        guard terminal == nil else { lock.unlock(); return }
+        terminal = result
+        let continuation = self.continuation; self.continuation = nil
+        let timeout = timeoutTask
         lock.unlock()
+        timeout?.cancel()
+        continuation?.resume(with: result)
+    }
+    func finishTimeout() async {
+        let task = lock.withLock { timeoutTask }
+        task?.cancel()
+        await task?.value
+        lock.withLock { timeoutTask = nil }
     }
 
-    func resume(with result: Result<Void, Error>) {
-        let continuation: CheckedContinuation<Void, Error>?
-        let timeoutTask: Task<Void, Never>?
+}
 
-        lock.lock()
-        continuation = self.continuation
-        self.continuation = nil
-        timeoutTask = self.timeoutTask
-        self.timeoutTask = nil
-        lock.unlock()
-
-        guard let continuation else {
-            return
-        }
-
-        timeoutTask?.cancel()
-        switch result {
-        case .success:
-            continuation.resume()
-        case .failure(let error):
-            continuation.resume(throwing: error)
+private final class LightweightInvalidation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func complete() {
+        let waiter = lock.withLock { completed = true; let current = self.waiter; self.waiter = nil; return current }
+        waiter?.resume()
+    }
+    // Only the shared disconnect finalizer waits here.
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let ready = lock.withLock { if completed { return true }; waiter = continuation; return false }
+            if ready { continuation.resume() }
         }
     }
 }
 
-private final class URLSessionLightweightWebSocketClient: NSObject, LightweightWebSocketClient, URLSessionWebSocketDelegate, @unchecked Sendable {
+final class URLSessionLightweightWebSocketClient: NSObject, LightweightWebSocketClient, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let delegateBox = WeakLightweightWebSocketDelegateBox()
 
     var delegate: LightweightWebSocketClientDelegate? {
@@ -309,6 +289,11 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
     private let url: URL
     private let delegateQueue = OperationQueue()
     private let state = URLSessionLightweightWebSocketState()
+    private let callbacks = BridgeOwnedTasks()
+    private let invalidated = LightweightInvalidation()
+    private let closeLock = NSLock()
+    private var connectStarted = false
+    private var closeTask: Task<Void, Never>?
     private static let connectTimeoutNanoseconds: UInt64 = 20_000_000_000
     private static let requestTimeoutInterval: TimeInterval = 300
     private static let resourceTimeoutInterval: TimeInterval = 86_400
@@ -327,51 +312,66 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
         configuration.timeoutIntervalForRequest = Self.requestTimeoutInterval
         configuration.timeoutIntervalForResource = Self.resourceTimeoutInterval
 
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
-        let task = session.webSocketTask(with: url)
+        let task = try closeLock.withLock { () throws -> URLSessionWebSocketTask in
+            guard closeTask == nil, !connectStarted else { throw LightweightBridgeTransportError.connectionCancelled }
+            connectStarted = true
+            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+            let task = session.webSocketTask(with: url)
+            task.maximumMessageSize = 1024 * 1024
+            // Construction/registration and close share one admission lock.
+            precondition(state.prepare(session: session, task: task))
+            return task
+        }
 
-        await state.prepare(session: session, task: task)
-
-        let timeoutTask = Task { [weak self] in
+        let timeoutTask = callbacks.submit { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: Self.connectTimeoutNanoseconds)
             } catch {
                 return
             }
-            await self?.failPendingConnect(error: URLError(
+            _ = self?.requestDisconnect(error: URLError(
                 .timedOut,
                 userInfo: [NSLocalizedDescriptionKey: "Lightweight websocket connect timed out"]
             ))
         }
 
         defer {
-            timeoutTask.cancel()
+            timeoutTask?.cancel()
         }
 
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                Task {
-                    await state.installContinuation(continuation)
-                    task.resume()
-                }
+                if state.installContinuation(continuation) { task.resume() }
             }
         } onCancel: {
-            Task {
-                await self.cancelPendingConnect()
-            }
+            _ = self.requestDisconnect(error: CancellationError())
         }
     }
 
-    func disconnect() async throws {
-        let snapshot = await state.close(shouldNotifyDisconnect: false)
-        snapshot.continuation?.resume(throwing: LightweightBridgeTransportError.connectionCancelled)
-        snapshot.task?.cancel(with: .goingAway, reason: nil)
-        snapshot.session?.invalidateAndCancel()
-        delegateQueue.cancelAllOperations()
+    @discardableResult
+    private func requestDisconnect(error: Error? = nil, notify: Bool = false) -> Task<Void, Never> {
+        closeLock.withLock {
+            if let closeTask { return closeTask }
+            callbacks.requestStop()
+            let snapshot = state.close(shouldNotifyDisconnect: notify)
+            let observer = delegate
+            delegate = nil
+            snapshot.continuation?.resume(throwing: error ?? LightweightBridgeTransportError.connectionCancelled)
+            snapshot.task?.cancel(with: .goingAway, reason: nil)
+            snapshot.session?.invalidateAndCancel()
+            let task = Task { [self] in
+                if snapshot.session != nil { await invalidated.wait() }
+                await callbacks.finishStop()
+                if snapshot.shouldNotifyDisconnect { await observer?.clientDidDisconnect(self, error: error) }
+            }
+            closeTask = task
+            return task
+        }
     }
+    func disconnect() async throws { await requestDisconnect().value }
 
     func send(text: String) async throws {
-        guard let task = await state.activeTask() else {
+        guard let task = state.activeTask() else {
             throw LightweightBridgeTransportError.notConnected
         }
         try await perform(operation: .sendText) { completion in
@@ -380,7 +380,7 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
     }
 
     func send(data: Data) async throws {
-        guard let task = await state.activeTask() else {
+        guard let task = state.activeTask() else {
             throw LightweightBridgeTransportError.notConnected
         }
         try await perform(operation: .sendData) { completion in
@@ -389,7 +389,7 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
     }
 
     func ping() async throws {
-        guard let task = await state.activeTask() else {
+        guard let task = state.activeTask() else {
             throw LightweightBridgeTransportError.notConnected
         }
         try await perform(operation: .ping) { completion in
@@ -398,46 +398,38 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        Task {
-            let continuation = await state.completeConnection()
-            continuation?.resume()
+        guard let task = callbacks.submit({ [self] in
+            guard let continuation = state.completeConnection(session: session, task: webSocketTask) else { return }
+            continuation.resume()
+            guard !callbacks.isClosed else { return }
             receiveNextMessage()
             await delegate?.clientDidConnect(self)
-        }
+        }) else { _ = requestDisconnect(); return }
+        _ = task
     }
-
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        Task {
-            await terminateConnection(error: nil, shouldNotifyDisconnect: true)
-        }
+        guard state.matches(session: session, task: webSocketTask) else { return }
+        _ = requestDisconnect(notify: true)
     }
-
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error else {
-            return
-        }
-        Task {
-            await terminateConnection(error: error, shouldNotifyDisconnect: true)
-        }
+        guard let error, state.matches(session: session, task: task) else { return }
+        _ = requestDisconnect(error: error, notify: true)
     }
-
     func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
-        guard let error else {
-            return
-        }
-        Task {
-            await terminateConnection(error: error, shouldNotifyDisconnect: true)
-        }
+        invalidated.complete()
+        _ = requestDisconnect(error: error, notify: true)
     }
 
-    private func perform(
+    var beforeTimeoutReturn: (@Sendable () async -> Void)?
+    func perform(
         operation: URLSessionLightweightWebSocketOperation,
         using block: @escaping (@escaping @Sendable (Error?) -> Void) -> Void
     ) async throws {
-        let completion = URLSessionLightweightWebSocketCompletion()
+        let completion = URLSessionLightweightWebSocketCompletion(beforeTimeoutReturn: beforeTimeoutReturn)
+        do {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                completion.install(continuation, operation: operation)
+                guard completion.install(continuation, operation: operation) else { return }
                 block { error in
                     if let error {
                         completion.resume(with: .failure(error))
@@ -449,85 +441,53 @@ private final class URLSessionLightweightWebSocketClient: NSObject, LightweightW
         } onCancel: {
             completion.resume(with: .failure(CancellationError()))
         }
-    }
-
-    private func failPendingConnect(error: Error) async {
-        guard let snapshot = await state.timeoutConnectionAttempt() else {
-            return
+        } catch {
+            await completion.finishTimeout()
+            throw error
         }
-        snapshot.task?.cancel(with: .goingAway, reason: nil)
-        snapshot.session?.invalidateAndCancel()
-        snapshot.continuation?.resume(throwing: error)
-        delegateQueue.cancelAllOperations()
-    }
-
-    private func cancelPendingConnect() async {
-        let snapshot = await state.close(shouldNotifyDisconnect: false)
-        snapshot.continuation?.resume(throwing: CancellationError())
-        snapshot.task?.cancel(with: .goingAway, reason: nil)
-        snapshot.session?.invalidateAndCancel()
-        delegateQueue.cancelAllOperations()
-    }
-
-    private func terminateConnection(error: Error?, shouldNotifyDisconnect: Bool) async {
-        let snapshot = await state.close(shouldNotifyDisconnect: shouldNotifyDisconnect)
-        let disconnectError = error ?? LightweightBridgeTransportError.connectionClosed
-
-        snapshot.task?.cancel(with: .goingAway, reason: nil)
-        snapshot.session?.invalidateAndCancel()
-        delegateQueue.cancelAllOperations()
-
-        snapshot.continuation?.resume(throwing: disconnectError)
-
-        guard snapshot.shouldNotifyDisconnect else {
-            return
-        }
-        await delegate?.clientDidDisconnect(self, error: error)
+        await completion.finishTimeout()
     }
 
     private func receiveNextMessage() {
-        Task {
-            guard let task = await state.activeTask() else {
-                return
+        guard !callbacks.isClosed, let task = state.activeTask() else { return }
+        task.receive { [self] result in
+            let cost: Int
+            switch result {
+            case .failure: cost = 0
+            case .success(.string(let text)): cost = text.utf8.count
+            case .success(.data(let data)): cost = data.count
+            @unknown default: cost = Int.max
             }
-
-            task.receive { [weak self] result in
-                guard let self else {
-                    return
-                }
-                Task {
-                    switch result {
-                    case .failure(let error):
-                        await self.terminateConnection(error: error, shouldNotifyDisconnect: true)
-                    case .success(let message):
-                        switch message {
-                        case .string(let text):
-                            await self.delegate?.client(self, didReceive: text)
-                        case .data(let data):
-                            await self.delegate?.client(self, didReceive: data)
-                        @unknown default:
-                            await self.delegate?.client(self, didReceive: LightweightBridgeTransportError.connectionClosed)
-                        }
-                        self.receiveNextMessage()
+            guard cost <= 1024 * 1024,
+                  self.callbacks.submit(bytes: cost, { [self] in
+                guard !callbacks.isClosed, state.activeTask() === task else { return }
+                switch result {
+                case .failure(let error): _ = requestDisconnect(error: error, notify: true)
+                case .success(let message):
+                    switch message {
+                    case .string(let text): await delegate?.client(self, didReceive: text)
+                    case .data(let data): await delegate?.client(self, didReceive: data)
+                    @unknown default: _ = requestDisconnect(error: LightweightBridgeTransportError.connectionClosed, notify: true)
                     }
+                    receiveNextMessage()
                 }
-            }
+            }) != nil else { _ = self.requestDisconnect(error: LightweightBridgeTransportError.connectionClosed, notify: true); return }
         }
     }
 }
 
-private struct LightweightBridgeReconnectContext: Sendable {
+struct LightweightBridgeReconnectContext: Sendable {
     let endpointURL: URL
     let generation: UUID
 }
 
-private struct LightweightBridgeReconnectPlan: Sendable {
+struct LightweightBridgeReconnectPlan: Sendable {
     let context: LightweightBridgeReconnectContext
     let attempt: Int
     let delayNanoseconds: UInt64
 }
 
-private actor LightweightBridgeReconnectCoordinator {
+actor LightweightBridgeReconnectCoordinator {
     private var context: LightweightBridgeReconnectContext?
     private var autoReconnectEnabled = false
     private var reconnecting = false
@@ -602,11 +562,7 @@ private actor LightweightBridgeReconnectCoordinator {
     }
 
     func finishReconnectAttempt(for generation: UUID, success: Bool) -> Bool {
-        guard let context, context.generation == generation else {
-            reconnecting = false
-            reconnectAttempt = 0
-            return false
-        }
+        guard let context, context.generation == generation else { return false }
 
         if success {
             reconnecting = false
@@ -707,21 +663,77 @@ private final class LightweightBridgeLifecycleObserver {
 }
 
 public final class LightweightBridgeTransport: BridgeTransportProtocol, LightweightWebSocketClientDelegate, @unchecked Sendable {
-    private var delegate: BridgeDelegateProtocol?
-    private var connection: (any LightweightWebSocketClient)?
-    private var activeConnectionIdentifier: ObjectIdentifier?
-    private var localIdentityUUID: String?
-    private var localIdentityVault: IdentityVaultProtocol?
+    private let lifecycleLock = NSLock()
+    private let work = BridgeOwnedTasks()
+    private var closed = false
+    private var setupInProgress = false
+    private var contextGeneration: UUID?
+    private struct OwnedConnection {
+        let client: any LightweightWebSocketClient
+        var retirement: Task<Void, Never>?
+    }
+    private var ownedConnections: [ObjectIdentifier: OwnedConnection] = [:]
+    private var lossEpoch = UUID()
+    // Every created physical connection stays charged until disconnect returns.
+    private func retireConnection(_ client: any LightweightWebSocketClient) -> Task<Void, Never>? {
+        lifecycleLock.withLock {
+            let id = ObjectIdentifier(client)
+            guard ownedConnections[id] != nil else { return nil }
+            if let task = ownedConnections[id]?.retirement { return task }
+            let task = Task { [self] in
+                try? await client.disconnect()
+                lifecycleLock.withLock { ownedConnections[id] = nil }
+            }
+            if ownedConnections[id] != nil { ownedConnections[id]?.retirement = task }
+            return task
+        }
+    }
+    private var closeTask: Task<Void, Never>?
+    private var isClosed: Bool { lifecycleLock.withLock { closed } }
+    private var _delegate: BridgeDelegateProtocol?
+    private var delegate: BridgeDelegateProtocol? {
+        get { lifecycleLock.withLock { _delegate } }
+        set { lifecycleLock.withLock { _delegate = newValue } }
+    }
+    private var _connection: (any LightweightWebSocketClient)?
+    private var connection: (any LightweightWebSocketClient)? {
+        get { lifecycleLock.withLock { _connection } }
+        set { lifecycleLock.withLock { _connection = newValue } }
+    }
+    private var _activeConnectionIdentifier: ObjectIdentifier?
+    private var activeConnectionIdentifier: ObjectIdentifier? {
+        get { lifecycleLock.withLock { _activeConnectionIdentifier } }
+        set { lifecycleLock.withLock { _activeConnectionIdentifier = newValue } }
+    }
+    private var _localIdentityUUID: String?
+    private var localIdentityUUID: String? {
+        get { lifecycleLock.withLock { _localIdentityUUID } }
+        set { lifecycleLock.withLock { _localIdentityUUID = newValue } }
+    }
+    private var _localIdentityVault: IdentityVaultProtocol?
+    private var localIdentityVault: IdentityVaultProtocol? {
+        get { lifecycleLock.withLock { _localIdentityVault } }
+        set { lifecycleLock.withLock { _localIdentityVault = newValue } }
+    }
     private let connectionFactory: @Sendable (URL) -> any LightweightWebSocketClient
     private let keepAliveIntervalNanoseconds: UInt64
     private let reconnectBaseDelayNanoseconds: UInt64
     private let reconnectMaximumDelayNanoseconds: UInt64
     private let reconnectCoordinator = LightweightBridgeReconnectCoordinator()
-    private var keepAliveTask: Task<Void, Never>?
-    private var reconnectTask: Task<Void, Never>?
+    private var _keepAliveTask: Task<Void, Error>?
+    private var keepAliveTask: Task<Void, Error>? {
+        get { lifecycleLock.withLock { _keepAliveTask } }
+        set { lifecycleLock.withLock { _keepAliveTask = newValue } }
+    }
+    private var _reconnectTask: Task<Void, Error>?
+    private var reconnectTask: Task<Void, Error>? {
+        get { lifecycleLock.withLock { _reconnectTask } }
+        set { lifecycleLock.withLock { _reconnectTask = newValue } }
+    }
     private lazy var lifecycleObserver = LightweightBridgeLifecycleObserver { [weak self] trigger in
-        Task { [weak self] in
-            await self?.handleLifecycleReactivation(trigger: trigger)
+        guard let self else { return }
+        if self.work.submit({ await self.handleLifecycleReactivation(trigger: trigger) }) == nil {
+            _ = self.requestClose()
         }
     }
 
@@ -759,10 +771,50 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     public func setDelegate(_ delegate: BridgeDelegateProtocol) {
-        self.delegate = delegate
+        lifecycleLock.withLock { if !closed { _delegate = delegate } }
     }
 
+    @discardableResult
+    private func requestClose() -> Task<Void, Never> {
+        lifecycleLock.withLock {
+            if let closeTask { return closeTask }
+            closed = true
+            contextGeneration = nil
+            let connections = ownedConnections.values.map(\.client)
+            _connection = nil; _activeConnectionIdentifier = nil
+            _delegate = nil
+            _keepAliveTask?.cancel(); _reconnectTask?.cancel()
+            work.requestStop()
+            let task = Task { [self] in
+                lifecycleObserver.invalidate()
+                await reconnectCoordinator.clear()
+                let retirements = connections.compactMap { retireConnection($0) }
+                for retirement in retirements { await retirement.value }
+                await work.finishStop()
+                lifecycleLock.withLock { _keepAliveTask = nil; _reconnectTask = nil }
+            }
+            closeTask = task
+            return task
+        }
+    }
+
+    public func close() async { await requestClose().value }
+
     public func setup(_ endpointURL: URL, identity: Identity) async throws {
+        guard let task = work.submit({ try await self.setupOwned(endpointURL, identity: identity) }) else {
+            throw LightweightBridgeTransportError.connectionCancelled
+        }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    private func setupOwned(_ endpointURL: URL, identity: Identity) async throws {
+        try lifecycleLock.withLock {
+            guard !closed, !setupInProgress else { throw LightweightBridgeTransportError.connectionCancelled }
+            setupInProgress = true
+            contextGeneration = nil
+            lossEpoch = UUID()
+        }
+        defer { lifecycleLock.withLock { setupInProgress = false } }
         cancelReconnectLoop()
         keepAliveTask?.cancel()
         keepAliveTask = nil
@@ -771,10 +823,14 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
 
         if let existingConnection = connection {
             clearActiveConnection()
-            try? await existingConnection.disconnect()
+            await retireConnection(existingConnection)?.value
         }
 
         let reconnectContext = await reconnectCoordinator.configure(endpointURL: endpointURL)
+        try lifecycleLock.withLock {
+            guard !closed else { throw LightweightBridgeTransportError.connectionCancelled }
+            contextGeneration = reconnectContext.generation
+        }
         postConnectionStatus(.connecting, endpoint: endpointURL)
 
         do {
@@ -793,7 +849,21 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     public func sendData(_ data: Data) async throws {
-        guard let connection else {
+        let task = lifecycleLock.withLock { () -> Task<Void, Error>? in
+            guard !closed, data.count <= 1024 * 1024, let client = _connection, let generation = contextGeneration else { return nil }
+            return work.submit(bytes: data.count, { try await self.sendOwned(data, client: client, generation: generation) })
+        }
+        guard let task else {
+            _ = requestClose()
+            throw LightweightBridgeTransportError.connectionCancelled
+        }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    var beforeOwnedSend: (@Sendable () async -> Void)?
+    private func sendOwned(_ data: Data, client connection: any LightweightWebSocketClient, generation: UUID) async throws {
+        await beforeOwnedSend?()
+        guard isActiveConnection(connection), lifecycleLock.withLock({ contextGeneration == generation }) else {
             throw LightweightBridgeTransportError.notConnected
         }
 
@@ -806,6 +876,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
             } else {
                 try await connection.send(data: data)
             }
+            guard isActiveConnection(connection) else { throw LightweightBridgeTransportError.connectionCancelled }
         } catch {
             await handleConnectionLoss(
                 from: connection,
@@ -849,38 +920,50 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     func clientDidDisconnect(_ client: any LightweightWebSocketClient, error: Error?) async {
-        await handleConnectionLoss(
-            from: client,
-            error: error,
-            message: reconnectMessage(for: error, base: "Lightweight bridge disconnected"),
-            disconnectUnderlying: false,
-            attemptReconnect: shouldReconnect(after: error)
-        )
+        guard isActiveConnection(client) else { return }
+        guard let task = work.submit({ await self.handleConnectionLoss(from: client, error: error,
+                message: self.reconnectMessage(for: error, base: "Lightweight bridge disconnected"),
+                disconnectUnderlying: false, attemptReconnect: self.shouldReconnect(after: error)) }) else { _ = requestClose(); return }
+        _ = try? await task.value
     }
 
     func client(_ client: any LightweightWebSocketClient, didReceive text: String) async {
-        guard let data = text.data(using: .utf8) else {
-            await delegate?.pushError(
-                errorMessage: "Failed to decode text frame as UTF-8",
-                error: LightweightBridgeTransportError.invalidTextPayload
-            )
-            return
-        }
-        await handleIncomingData(data)
+        guard let data = text.data(using: .utf8) else { _ = requestClose(); return }
+        await receiveOwned(data, client: client)
     }
 
     func client(_ client: any LightweightWebSocketClient, didReceive data: Data) async {
-        await handleIncomingData(data)
+        await receiveOwned(data, client: client)
+    }
+
+    private func receiveOwned(_ data: Data, client: any LightweightWebSocketClient) async {
+        guard isActiveConnection(client) else { return }
+        let command: BridgeCommand
+        do {
+            try BridgeInboundPayloadValidator().validate(data)
+            command = try JSONDecoder().decode(BridgeCommand.self, from: data)
+        } catch {
+            // Close admission before auditing; an owned callback must not join itself.
+            let rejectedDelegate = delegate
+            let audit = work.submit(bytes: data.count) {
+                if let payloadError = error as? BridgeInboundPayloadError {
+                    await CellBase.recordSecurityEvent(.bridgePayloadRejected(transportIdentifier: "lightweight-websocket", error: payloadError))
+                }
+                await rejectedDelegate?.pushError(errorMessage: "Rejected invalid bridge payload", error: nil)
+            }
+            _ = requestClose()
+            _ = try? await audit?.value
+            return
+        }
+        guard data.count <= 1024 * 1024,
+              let task = work.submit(bytes: data.count, { await self.handleIncomingCommand(command, client: client) }) else {
+            _ = requestClose(); return
+        }
+        _ = try? await task.value
     }
 
     func client(_ client: any LightweightWebSocketClient, didReceive error: Error) async {
-        await handleConnectionLoss(
-            from: client,
-            error: error,
-            message: reconnectMessage(for: error, base: "Lightweight bridge transport error"),
-            disconnectUnderlying: false,
-            attemptReconnect: shouldReconnect(after: error)
-        )
+        await clientDidDisconnect(client, error: error)
     }
 
     private func establishConnection(
@@ -890,31 +973,32 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     ) async throws {
         let connection = connectionFactory(reconnectContext.endpointURL)
         connection.delegate = self
-        installActiveConnection(connection)
+        try installActiveConnection(connection, generation: reconnectContext.generation)
 
         do {
             try await connection.connect()
+            guard isActiveConnection(connection) else { throw LightweightBridgeTransportError.connectionCancelled }
             try await connection.ping()
-            _ = await reconnectCoordinator.markConnected(
+            guard isActiveConnection(connection) else { throw LightweightBridgeTransportError.connectionCancelled }
+            let marked = await reconnectCoordinator.markConnected(
                 for: reconnectContext.generation,
                 enableAutoReconnect: enableAutoReconnectOnSuccess
             )
+            guard marked, isActiveConnection(connection) else { throw LightweightBridgeTransportError.connectionCancelled }
             postConnectionStatus(.connected, endpoint: reconnectContext.endpointURL, detail: connectedDetail)
             startKeepAliveLoop(connection: connection)
         } catch {
-            if isActiveConnection(connection) {
-                clearActiveConnection()
-            }
-            keepAliveTask?.cancel()
-            keepAliveTask = nil
-            try? await connection.disconnect()
+            clearActiveConnection(ifMatching: connection)
+            await retireConnection(connection)?.value
             throw error
         }
     }
 
     private func startKeepAliveLoop(connection: any LightweightWebSocketClient) {
-        keepAliveTask?.cancel()
-        keepAliveTask = Task { [weak self] in
+        lifecycleLock.lock()
+        guard !closed, _activeConnectionIdentifier == ObjectIdentifier(connection) else { lifecycleLock.unlock(); return }
+        _keepAliveTask?.cancel()
+        _keepAliveTask = work.submit { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
                 do {
@@ -939,28 +1023,15 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
                 }
             }
         }
+        let admitted = _keepAliveTask != nil
+        lifecycleLock.unlock()
+        if !admitted { _ = requestClose() }
     }
 
-    private func handleIncomingData(_ data: Data) async {
-        do {
-            try BridgeInboundPayloadValidator().validate(data)
-        } catch let error as BridgeInboundPayloadError {
-            await CellBase.recordSecurityEvent(.bridgePayloadRejected(
-                transportIdentifier: "lightweight-websocket",
-                error: error
-            ))
-            await delegate?.pushError(errorMessage: "Rejected invalid bridge payload", error: nil)
-            return
-        } catch {
-            return
-        }
-        guard let command = try? JSONDecoder().decode(BridgeCommand.self, from: data),
-              let delegate else {
-            await self.delegate?.pushError(errorMessage: "Failed to decode bridge command", error: nil)
-            return
-        }
-
+    private func handleIncomingCommand(_ command: BridgeCommand, client: any LightweightWebSocketClient) async {
+        guard isActiveConnection(client), let delegate else { return }
         let vault = await identityVault(for: command.identity)
+        guard isActiveConnection(client) else { return }
         command.identity?.identityVault = vault
 
         do {
@@ -971,58 +1042,54 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
                 try await delegate.consumeCommand(command: command)
             }
         } catch {
+            guard isActiveConnection(client) else { return }
             await delegate.pushError(errorMessage: "Lightweight bridge delegate handling failed", error: error)
         }
     }
 
     private func handleConnectionLoss(
         from client: any LightweightWebSocketClient,
-        error: Error?,
-        message: String?,
-        disconnectUnderlying: Bool,
-        attemptReconnect: Bool
+        error: Error?, message: String?, disconnectUnderlying: Bool, attemptReconnect: Bool
     ) async {
-        guard isActiveConnection(client) else {
-            return
+        let token = lifecycleLock.withLock { () -> (UUID, UUID?)? in
+            guard !closed, _activeConnectionIdentifier == ObjectIdentifier(client) else { return nil }
+            _connection = nil; _activeConnectionIdentifier = nil
+            _keepAliveTask?.cancel(); _keepAliveTask = nil
+            lossEpoch = UUID()
+            return (lossEpoch, contextGeneration)
         }
-
-        keepAliveTask?.cancel()
-        keepAliveTask = nil
-        clearActiveConnection()
-
-        if disconnectUnderlying {
-            try? await client.disconnect()
-        }
-
-        if let message {
-            await delegate?.pushError(errorMessage: message, error: error)
-        }
-
-        if let endpointURL = await reconnectCoordinator.currentEndpointURL() {
-            postConnectionStatus(
-                attemptReconnect ? .reconnecting : .disconnected,
-                endpoint: endpointURL,
-                detail: message ?? error?.localizedDescription
-            )
-        }
-
-        guard attemptReconnect else {
-            cancelReconnectLoop()
-            await reconnectCoordinator.cancelReconnect()
-            return
-        }
-
-        await scheduleReconnectIfNeeded()
+        guard let token else { return }
+        let retirement = retireConnection(client)
+        // A URLSession disconnect notification can originate in its own finalizer.
+        // Return that callback first; separate owned work waits physical retirement.
+        guard work.submit({ [self] in
+            await retirement?.value
+            func current() -> Bool { lifecycleLock.withLock { !closed && lossEpoch == token.0 && contextGeneration == token.1 } }
+            guard current() else { return }
+            if let message { await delegate?.pushError(errorMessage: message, error: error) }
+            guard current() else { return }
+            let endpoint = await reconnectCoordinator.currentEndpointURL()
+            guard current() else { return }
+            if let endpoint { postConnectionStatus(attemptReconnect ? .reconnecting : .disconnected, endpoint: endpoint, detail: message ?? error?.localizedDescription) }
+            guard current() else { return }
+            if attemptReconnect { await scheduleReconnectIfNeeded() }
+            else if let generation = token.1 { await reconnectCoordinator.cancelReconnect(for: generation) }
+        }) != nil else { _ = requestClose(); return }
     }
 
+    var reconnectTaskDidReturn: (@Sendable () -> Void)?
     private func scheduleReconnectIfNeeded() async {
         guard let reconnectContext = await reconnectCoordinator.reserveReconnect() else {
             return
         }
 
-        cancelReconnectLoop()
-        reconnectTask = Task { [weak self] in
+        lifecycleLock.lock()
+        guard !closed, contextGeneration == reconnectContext.generation else { lifecycleLock.unlock(); return }
+        _reconnectTask?.cancel()
+        _reconnectTask = work.submit { [weak self] in
             guard let self else { return }
+            let returned = self.reconnectTaskDidReturn
+            defer { returned?() }
 
             while !Task.isCancelled {
                 guard let plan = await self.reconnectCoordinator.nextReconnectPlan(
@@ -1063,16 +1130,19 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
                     _ = await self.reconnectCoordinator.finishReconnectAttempt(for: reconnectContext.generation, success: true)
                     return
                 } catch {
+                    guard self.lifecycleLock.withLock({ !self.closed && self.contextGeneration == reconnectContext.generation }) else { return }
                     let shouldContinue = await self.reconnectCoordinator.finishReconnectAttempt(
                         for: reconnectContext.generation,
                         success: false
                     )
+                    guard self.lifecycleLock.withLock({ !self.closed && self.contextGeneration == reconnectContext.generation }) else { return }
                     if plan.attempt == 1 {
                         await self.delegate?.pushError(
                             errorMessage: "Lightweight bridge reconnect failed; retrying with backoff",
                             error: error
                         )
                     }
+                    guard self.lifecycleLock.withLock({ !self.closed && self.contextGeneration == reconnectContext.generation }) else { return }
                     guard shouldContinue else {
                         self.postConnectionStatus(
                             .failed,
@@ -1085,6 +1155,9 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
                 }
             }
         }
+        let admitted = _reconnectTask != nil
+        lifecycleLock.unlock()
+        if !admitted { _ = requestClose() }
     }
 
     private func shouldReconnect(after error: Error?) -> Bool {
@@ -1129,6 +1202,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
         detail: String? = nil,
         attempt: Int? = nil
     ) {
+        guard !isClosed else { return }
         let status = LightweightBridgeConnectionStatus(
             phase: phase,
             endpoint: endpoint.absoluteString,
@@ -1143,6 +1217,7 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
     }
 
     func handleLifecycleReactivation(trigger: String = "reactivation") async {
+        guard !isClosed else { return }
         if let connection {
             do {
                 try await connection.ping()
@@ -1164,22 +1239,35 @@ public final class LightweightBridgeTransport: BridgeTransportProtocol, Lightwei
         await scheduleReconnectIfNeeded()
     }
 
-    private func installActiveConnection(_ connection: any LightweightWebSocketClient) {
-        self.connection = connection
-        activeConnectionIdentifier = ObjectIdentifier(connection as AnyObject)
+    private func installActiveConnection(_ connection: any LightweightWebSocketClient, generation: UUID) throws {
+        try lifecycleLock.withLock {
+            guard !closed, ownedConnections.count < 64, contextGeneration == generation else { throw LightweightBridgeTransportError.connectionCancelled }
+            ownedConnections[ObjectIdentifier(connection)] = OwnedConnection(client: connection, retirement: nil)
+            lossEpoch = UUID()
+            _connection = connection
+            _activeConnectionIdentifier = ObjectIdentifier(connection)
+        }
     }
 
     private func clearActiveConnection() {
-        connection = nil
-        activeConnectionIdentifier = nil
+        lifecycleLock.withLock { _connection = nil; _activeConnectionIdentifier = nil }
+    }
+
+    @discardableResult
+    private func clearActiveConnection(ifMatching client: any LightweightWebSocketClient) -> Bool {
+        lifecycleLock.withLock {
+            guard !closed, _activeConnectionIdentifier == ObjectIdentifier(client) else { return false }
+            _connection = nil; _activeConnectionIdentifier = nil
+            _keepAliveTask?.cancel(); _keepAliveTask = nil
+            return true
+        }
     }
 
     private func isActiveConnection(_ connection: any LightweightWebSocketClient) -> Bool {
-        activeConnectionIdentifier == ObjectIdentifier(connection as AnyObject)
+        lifecycleLock.withLock { !closed && _activeConnectionIdentifier == ObjectIdentifier(connection) }
     }
 
     private func cancelReconnectLoop() {
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        lifecycleLock.withLock { _reconnectTask?.cancel(); _reconnectTask = nil }
     }
 }

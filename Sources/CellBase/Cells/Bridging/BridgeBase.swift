@@ -78,6 +78,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var connectCancellable: AnyCancellable?
     private var feedCancellable: AnyCancellable?
     private var outboundFeedStartTask: Task<Void, Error>?
+    private var outboundFeedStartID: UUID?
     private var outboundFeedCommandID: Int?
     private var outboundFeedRequester: Identity?
     private var inboundFeedCommandID: Int?
@@ -142,8 +143,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     private var loadPublisherCancellable: AnyCancellable?
     
-    private var readyPublisher = PassthroughSubject<Bool, Error>()
-    private var ready = false
+    private var readyPublisher = CurrentValueSubject<Bool, Error>(false)
+    private var ready: Bool { withCallbackStateLock { readyPublisher.value } }
+    private var valueCommandIDs: [String: Int] = [:]
+    private var setCommandIDs: [String: Int] = [:]
+    private var descriptionPromises: [Int: (Result<Bool, Error>) -> Void] = [:]
     var signRequestTimeoutNanoseconds: UInt64 = 30_000_000_000
 //    private var readyPublisher = Just<Bool>(<#Bool#>)
     var feedActive = false
@@ -179,6 +183,22 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private let callbackStateLock = NSLock()
     private let retirementWork = BridgeRetirementWork()
     private var retired = false
+    private var transportConfigured = false
+    private var installingTransport = false
+    private var pendingTransport: BridgeTransportProtocol?
+    private let installationWork = BridgeOwnedTasks(maximumTasks: 1)
+    public var isRetired: Bool { withCallbackStateLock { retired } }
+    private var retirementTask: Task<Void, Never>?
+    private var physicalCloseTask: Task<Void, Never>?
+    private func closePhysicalTransport() -> Task<Void, Never> {
+        withCallbackStateLock {
+            if let physicalCloseTask { return physicalCloseTask }
+            let owned = transport
+            let task = Task<Void, Never> { await owned?.close() }
+            physicalCloseTask = task
+            return task
+        }
+    }
     private var retiringFeedStartTask: Task<Void, Error>?
     private var feedInstallation: UUID?
 
@@ -247,7 +267,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var callbackRegistryUsage: (count: Int, bytes: Int) {
         let count = valueForKeyCallbackDataPublishers.count + setValueForKeypathCallbackDataPublishers.count
             + connectCallbackDataPublishers.count + connectCallbackPromises.count
-            + contractCallbackDataPublishers.count + contractCallbackPromises.count + signCallbackRequests.count
+            + contractCallbackDataPublishers.count + contractCallbackPromises.count + signCallbackRequests.count + descriptionPromises.count
         let bytes = valueForKeyCallbackDataPublishers.keys.reduce(0) { $0 + $1.utf8.count }
             + setValueForKeypathCallbackDataPublishers.keys.reduce(0) { $0 + $1.utf8.count }
             + signCallbackRequests.values.reduce(0) { $0 + $1.messageData.count }
@@ -255,7 +275,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     private func canStoreCallback(bytes: Int) -> Bool {
         let usage = callbackRegistryUsage
-        return !retired && usage.count < 128 && bytes >= 0 && bytes <= 64 * 1024 - usage.bytes
+        return !retired && usage.count < 128 && !installingTransport && bytes >= 0 && bytes <= 64 * 1024 - usage.bytes
     }
     var callbackRegistrySnapshot: (count: Int, bytes: Int) {
         withCallbackStateLock { callbackRegistryUsage }
@@ -270,11 +290,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     @discardableResult
     func storeValuePublisher(
         _ publisher: PassthroughSubject<ValueType, Error>,
-        for requestedKey: String
+        for requestedKey: String, commandID: Int? = nil
     ) -> Bool {
         withCallbackStateLock {
             guard valueForKeyCallbackDataPublishers[requestedKey] == nil, canStoreCallback(bytes: requestedKey.utf8.count) else { return false }
             valueForKeyCallbackDataPublishers[requestedKey] = publisher
+            valueCommandIDs[requestedKey] = commandID
             return true
         }
     }
@@ -285,6 +306,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             let publisher = valueForKeyCallbackDataPublishers[requestedKey]
             valueForKeyCallbackDataPublishers[requestedKey] = nil
+            valueCommandIDs[requestedKey] = nil
             valueForKeyCallbackCancellables[requestedKey] = nil
             return publisher
         }
@@ -294,6 +316,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             guard valueForKeyCallbackDataPublishers[requestedKey] === expected else { return }
             valueForKeyCallbackDataPublishers[requestedKey] = nil
+            valueCommandIDs[requestedKey] = nil
             valueForKeyCallbackCancellables[requestedKey] = nil
         }
     }
@@ -301,11 +324,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     @discardableResult
     func storeSetValueResponsePublisher(
         _ publisher: PassthroughSubject<SetValueResponse, Error>,
-        for requestedKey: String
+        for requestedKey: String, commandID: Int? = nil
     ) -> Bool {
         withCallbackStateLock {
             guard setValueForKeypathCallbackDataPublishers[requestedKey] == nil, canStoreCallback(bytes: requestedKey.utf8.count) else { return false }
             setValueForKeypathCallbackDataPublishers[requestedKey] = publisher
+            setCommandIDs[requestedKey] = commandID
             return true
         }
     }
@@ -316,6 +340,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             let publisher = setValueForKeypathCallbackDataPublishers[requestedKey]
             setValueForKeypathCallbackDataPublishers[requestedKey] = nil
+            setCommandIDs[requestedKey] = nil
             setValueForKeypathCallbackCancellables[requestedKey] = nil
             return publisher
         }
@@ -325,6 +350,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             guard setValueForKeypathCallbackDataPublishers[requestedKey] === expected else { return }
             setValueForKeypathCallbackDataPublishers[requestedKey] = nil
+            setCommandIDs[requestedKey] = nil
             setValueForKeypathCallbackCancellables[requestedKey] = nil
         }
     }
@@ -492,42 +518,61 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         try await ready(timeout: 5)
     }
 
+    var beforeReadySubscription: (() async -> Void)?
     public func ready(timeout: Int) async throws {
-        guard !withCallbackStateLock({ retired }) else { throw BridgeError.transportUnavailable }
-        if ready {
-            return
+        let publisher = try withCallbackStateLock { () throws -> CurrentValueSubject<Bool, Error> in
+            guard !retired else { throw BridgeError.transportUnavailable }
+            return readyPublisher
         }
-
-        _ = try await readyPublisher.getOneWithTimeout(timeout)
-        ready = true
+        await beforeReadySubscription?()
+        _ = try await publisher.filter { $0 }.getOneWithTimeout(timeout)
     }
-    public func setTransport(_ transport: BridgeTransportProtocol, connection: Connection) async throws {
-        guard !withCallbackStateLock({ retired }) else { throw BridgeError.transportUnavailable }
-        identityProofAuthorization.reset()
-        let previousFeedStartTask = withCallbackStateLock { () -> Task<Void, Error>? in
-            let task = outboundFeedStartTask
-            outboundFeedStartTask = nil
-            outboundFeedCommandID = nil
-            outboundFeedRequester = nil
-            inboundFeedCommandID = nil
-            inboundFeedRequester = nil
-            feedInstallation = nil
-            localFeedSubscriberCount = 0
-            feedActive = false
+    var beforeTransportInstallation: (@Sendable () async -> Void)?
+    public func setTransport(_ proposed: BridgeTransportProtocol, connection: Connection) async throws {
+        var closeRejected = false
+        let task = withCallbackStateLock { () -> Task<Void, Error>? in
+            let alreadyOwned = (transport as AnyObject?) === (proposed as AnyObject)
+                || (pendingTransport as AnyObject?) === (proposed as AnyObject)
+            guard !retired, !transportConfigured, !installingTransport,
+                  callbackRegistryUsage.count == 0,
+                  transport == nil || (transport as AnyObject?) === (proposed as AnyObject) else {
+                closeRejected = !alreadyOwned
+                return nil
+            }
+            // Publish ownership before the task can suspend or a duplicate arrive.
+            installingTransport = true
+            pendingTransport = proposed
+            guard let task = installationWork.submit({ try await self.installTransport(proposed, connection: connection) }) else {
+                installingTransport = false; pendingTransport = nil
+                closeRejected = !alreadyOwned
+                return nil
+            }
             return task
         }
-        previousFeedStartTask?.cancel()
-        flowElementCallbackCancellable?.cancel()
-        flowElementCallbackCancellable = nil
-        feedCancellable?.cancel()
-        feedCancellable = nil
-        self.transport = transport
-        transport.setDelegate(self)
-        ready = false
-        readyPublisher = PassthroughSubject<Bool, Error>()
-        descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
-        descriptionFetchedDate = nil
-        
+        guard let task else {
+            if closeRejected { await proposed.close() }
+            throw BridgeError.transportUnavailable
+        }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+    private func installTransport(_ proposed: BridgeTransportProtocol, connection: Connection) async throws {
+        defer { withCallbackStateLock { installingTransport = false; pendingTransport = nil } }
+        await beforeTransportInstallation?()
+        let installed = withCallbackStateLock { () -> Bool in
+            guard !retired, !Task.isCancelled else { return false }
+            transport = proposed
+            transportConfigured = true
+            readyPublisher = CurrentValueSubject<Bool, Error>(false)
+            return true
+        }
+        guard installed else {
+            let ownedByFinalizer = withCallbackStateLock { (transport as AnyObject?) === (proposed as AnyObject) }
+            if !ownedByFinalizer { await proposed.close() }
+            throw BridgeError.transportUnavailable
+        }
+        proposed.setDelegate(self)
+        identityProofAuthorization.reset()
+        withDescriptionStateLock { descriptionFetchedDate = nil }
         try withInboundCacheState {
             guard !inboundCacheClosed else { throw BridgeError.transportUnavailable }
             inboundCacheGeneration &+= 1
@@ -539,8 +584,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
             emitCellAtEndpoint = nil
         }
-        
-        
     }
     
     func validateFeedPermission(identity: Identity) -> Bool {
@@ -553,8 +596,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         guard validateFeedPermission(identity: requester) else {
             throw StreamState.denied
         }
-        try await ensureOutboundFeed(requester: requester)
-        return feedPublisher2
+        guard !isRetired else { throw BridgeError.transportUnavailable }
+        let source = feedPublisher2
             .handleEvents(
                 receiveSubscription: { [weak self] _ in
                     self?.retainLocalFeedSubscriber()
@@ -567,68 +610,64 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 }
             )
             .eraseToAnyPublisher()
+        return BridgeFeedSubscriptionPublisher(source: source) { [weak self] in
+            guard let self else { return }
+            if self.retirementWork.submit({ [weak self] in
+                guard let self else { return }
+                do { try await self.ensureOutboundFeed(requester: requester) }
+                catch {
+                    if !self.isRetired { self.feedPublisher2.send(completion: .failure(error)) }
+                }
+            }) == nil { self.requestRetirement() }
+        }.eraseToAnyPublisher()
     }
 
     private func ensureOutboundFeed(requester: Identity) async throws {
-        let task = try withCallbackStateLock { () throws -> Task<Void, Error> in
-            guard !retired else { throw BridgeError.transportUnavailable }
-            if let outboundFeedStartTask {
-                return outboundFeedStartTask
+        let pending = try withCallbackStateLock { () throws -> (UUID, Task<Void, Error>) in
+            guard !retired, localFeedSubscriberCount > 0 else { throw BridgeError.transportUnavailable }
+            if let task = outboundFeedStartTask, let id = outboundFeedStartID { return (id, task) }
+            let id = UUID()
+            outboundFeedStartID = id
+            let task = Task { [weak self] in
+                guard let self else { throw BridgeError.transportUnavailable }
+                try await self.startOutboundFeed(requester: requester, startID: id)
             }
-            let newTask = Task { [weak self] in
-                guard let self else {
-                    throw BridgeError.transportUnavailable
-                }
-                try await self.startOutboundFeed(requester: requester)
-            }
-            outboundFeedStartTask = newTask
-            return newTask
+            outboundFeedStartTask = task
+            return (id, task)
         }
-
-        do {
-            try await task.value
-        } catch {
+        do { try await pending.1.value }
+        catch {
             withCallbackStateLock {
-                outboundFeedStartTask = nil
-                outboundFeedCommandID = nil
-                outboundFeedRequester = nil
-                feedActive = false
+                guard outboundFeedStartID == pending.0 else { return }
+                outboundFeedStartID = nil; outboundFeedStartTask = nil
+                outboundFeedCommandID = nil; outboundFeedRequester = nil; feedActive = false
             }
             throw error
         }
     }
 
-    private func startOutboundFeed(requester: Identity) async throws {
+    private func startOutboundFeed(requester: Identity, startID: UUID) async throws {
         let commandID = await auditor.getNewCommandId()
-        flowElementCallbackCancellable = flowElementCallbackDataPublisher
-            .handleEvents(receiveCancel: {
-                bridgeLog("Cancelled remote feed forwarding")
-            })
-            .sink(receiveCompletion: { [weak self] completion in
-                bridgeLog("Bridge remote feed completed: \(completion)")
-                self?.markOutboundFeedInactive(commandID: commandID)
-            }, receiveValue: { [weak self] flowElement in
-                bridgeLog("Bridge received flow element")
-                self?.feedPublisher2.send(flowElement)
-            })
-
+        let subscription = flowElementCallbackDataPublisher.sink(receiveCompletion: { [weak self] _ in
+            self?.markOutboundFeedInactive(commandID: commandID)
+        }, receiveValue: { [weak self] element in self?.feedPublisher2.send(element) })
         do {
-            try await sendCommandChecked(
-                command: .feed,
-                identity: requester,
-                payload: nil,
-                commandId: commandID
-            )
             try withCallbackStateLock {
-                guard !retired else { throw BridgeError.transportUnavailable }
-                outboundFeedCommandID = commandID
-                outboundFeedRequester = requester
+                guard !retired, outboundFeedStartID == startID, localFeedSubscriberCount > 0 else { throw BridgeError.transportUnavailable }
+                flowElementCallbackCancellable = subscription
+                outboundFeedCommandID = commandID; outboundFeedRequester = requester
+            }
+            try await sendCommandChecked(command: .feed, identity: requester, payload: nil, commandId: commandID)
+            try withCallbackStateLock {
+                guard !retired, outboundFeedStartID == startID else { throw BridgeError.transportUnavailable }
                 feedActive = true
             }
         } catch {
-            flowElementCallbackCancellable?.cancel()
-            flowElementCallbackCancellable = nil
-            await auditor.removeBridgeCommand(for: commandID)
+            subscription.cancel()
+            withCallbackStateLock {
+                if outboundFeedCommandID == commandID { flowElementCallbackCancellable = nil }
+            }
+            await finishOperation(commandID)
             throw error
         }
     }
@@ -637,6 +676,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         identityProofAuthorization.complete(commandID)
         withCallbackStateLock {
             guard outboundFeedCommandID == commandID else { return }
+            outboundFeedStartID = nil
             outboundFeedStartTask = nil
             outboundFeedCommandID = nil
             outboundFeedRequester = nil
@@ -657,8 +697,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         let feedToStop = withCallbackStateLock { () -> (Int, Identity)? in
             guard localFeedSubscriberCount > 0 else { return nil }
             localFeedSubscriberCount -= 1
-            guard localFeedSubscriberCount == 0,
-                  let commandID = outboundFeedCommandID,
+            guard localFeedSubscriberCount == 0 else { return nil }
+            outboundFeedStartTask?.cancel()
+            outboundFeedStartTask = nil; outboundFeedStartID = nil
+            guard let commandID = outboundFeedCommandID,
                   let requester = outboundFeedRequester else {
                 return nil
             }
@@ -727,15 +769,18 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 bridgeLog("Cloud Bridge connect setup failed with error: \(error)")
                 _ = transport
                 clearConnectPromise(for: commandID)
+                await finishOperation(commandID)
                 return .notConnected
             }
             do {
                 let connectState = try await connectFuture.getOneWithTimeout(5)
                 clearConnectPromise(for: commandID)
+                await finishOperation(commandID)
                 return connectState
             } catch {
                 bridgeLog("Cloud Bridge connect failed with error: \(error)")
                 clearConnectPromise(for: commandID)
+                await finishOperation(commandID)
             }
         }
         return .notConnected
@@ -766,6 +811,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             inboundEmitCellCache.removeAll()
             inboundCacheBytes = 0
         }
+        installationWork.requestStop()
         retirementWork.requestStop()
         let cleanup = withCallbackStateLock { () -> (AnyCancellable?, AnyCancellable?, [SignRequest], [ConnectPromise], [ContractPromise]) in
             retired = true
@@ -788,7 +834,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             let connects = Array(connectCallbackDataPublishers.values)
             let contracts = Array(contractCallbackDataPublishers.values)
             valueForKeyCallbackDataPublishers.removeAll()
+            valueCommandIDs.removeAll()
             setValueForKeypathCallbackDataPublishers.removeAll()
+            setCommandIDs.removeAll()
             connectCallbackDataPublishers.removeAll()
             contractCallbackDataPublishers.removeAll()
             return (values, sets, connects, contracts)
@@ -797,38 +845,42 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         publishers.1.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
         publishers.2.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
         publishers.3.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
+        let descriptions = withCallbackStateLock {
+            let all = Array(descriptionPromises.values); descriptionPromises.removeAll(); return all
+        }
+        descriptions.forEach { $0(.failure(BridgeError.transportUnavailable)) }
         cleanup.0?.cancel(); cleanup.1?.cancel()
         withCallbackStateLock { retiringFeedStartTask }?.cancel()
         cleanup.2.forEach { $0.cleanupTask?.cancel(); $0.promise(.failure(BridgeError.transportUnavailable)) }
         cleanup.3.forEach { $0(.failure(BridgeError.transportUnavailable)) }
         cleanup.4.forEach { $0(.failure(BridgeError.transportUnavailable)) }
+        feedPublisher2.send(completion: .failure(BridgeError.transportUnavailable))
         readyPublisher.send(completion: .failure(BridgeError.transportUnavailable))
         identityProofAuthorization.reset()
     }
 
-    /// Call after incoming frames have joined, never from an owned send itself.
-    public func finishRetirement() async {
+    private func retirementFinalizer() -> Task<Void, Never> {
         requestRetirement()
-        await retirementWork.finishStop()
-        let feedTask = withCallbackStateLock { retiringFeedStartTask }
-        _ = try? await feedTask?.value
-        await auditor.retire()
-        withCallbackStateLock {
-            retiringFeedStartTask = nil
-            transport = nil
-        }
-        withInboundCacheState {
-            emitCellAtEndpoint = nil
-            inboundPublisherLookupIdentity = nil
+        return withCallbackStateLock {
+            if let retirementTask { return retirementTask }
+            let task = Task { [self] in
+                await closePhysicalTransport().value
+                await installationWork.finishStop()
+                await retirementWork.finishStop()
+                let feedTask = withCallbackStateLock { retiringFeedStartTask }
+                _ = try? await feedTask?.value
+                await auditor.retire()
+                withCallbackStateLock { retiringFeedStartTask = nil; transport = nil }
+                withInboundCacheState { emitCellAtEndpoint = nil; inboundPublisherLookupIdentity = nil }
+            }
+            retirementTask = task
+            return task
         }
     }
+    /// External join only. An owned frame/send must request close and return.
+    public func finishRetirement() async { await retirementFinalizer().value }
+    public func close(requester: Identity) { _ = retirementFinalizer() }
 
-    public func close(requester: Identity) {
-        identityProofAuthorization.reset()
-        bridgeLog("Closing bridge base")
-        transport = nil
-    }
-    
     public func addAgreement(_ contract: Agreement, for identity: Identity) async throws -> AgreementState {
         var contractState = AgreementState.template
         let commandID = await auditor.getNewCommandId()
@@ -846,8 +898,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             )
             contractState = try await contractFuture.getOneWithTimeout(5)
             clearContractPromise(for: commandID)
+            await finishOperation(commandID)
         } catch {
             clearContractPromise(for: commandID)
+            await finishOperation(commandID)
             throw error
         }
         return contractState
@@ -889,73 +943,87 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
          */
     }
     
-    public func retrieveProxyRepresentation(for identity: Identity) async throws {
-        try await ready()
-        try await sendCommandChecked(command: .description, identity: identity, payload: nil)
-        // wait until the command response is returned or timeout
-        
-        
-        if try await descriptionFetchedPublisher.getOneWithTimeout() {
-            //TODO: Set date for fetch? or other way to allow refetch?
-            self.descriptionFetchedDate = Date()
-        } else {
-            throw BridgeError.noDescription
+    // Subscribe synchronously before send can suspend; Future retains the one
+    // result even if a transport responds before send returns.
+    private func retainedResult<T>(_ source: PassthroughSubject<T, Error>) -> (Future<T, Error>, AnyCancellable) {
+        var subscription: AnyCancellable!
+        let future = Future<T, Error> { promise in
+            subscription = source.first().sink(receiveCompletion: { completion in
+                if case .failure(let error) = completion { promise(.failure(error)) }
+                else { promise(.failure(BridgeError.transportUnavailable)) }
+            }, receiveValue: { promise(.success($0)) })
         }
+        return (future, subscription)
     }
-    
-    
-    public func get(keypath: String, requester: Identity) async throws -> ValueType {
-        let valuePublisher = PassthroughSubject<ValueType, Error>()
-        guard storeValuePublisher(valuePublisher, for: keypath) else { throw BridgeError.transportUnavailable }
+
+    private func finishOperation(_ commandID: Int) async {
+        identityProofAuthorization.complete(commandID)
+        await auditor.removeBridgeCommand(for: commandID)
+    }
+
+    public func retrieveProxyRepresentation(for identity: Identity) async throws {
+        let commandID = await auditor.getNewCommandId()
+        var admitted = false
+        let result = Future<Bool, Error> { promise in
+            admitted = self.withCallbackStateLock {
+                guard self.canStoreCallback(bytes: 0), self.descriptionPromises.isEmpty else { return false }
+                self.descriptionPromises[commandID] = promise
+                return true
+            }
+        }
+        guard admitted else { throw BridgeError.transportUnavailable }
         do {
-            try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath))
+            try await sendCommandChecked(command: .description, identity: identity, payload: nil, commandId: commandID)
+            _ = try await result.getOneWithTimeout()
+            withDescriptionStateLock { descriptionFetchedDate = Date() }
+            withCallbackStateLock { descriptionPromises[commandID] = nil }
+            await finishOperation(commandID)
         } catch {
-            clearValuePublisher(for: keypath, expected: valuePublisher)
+            withCallbackStateLock { descriptionPromises[commandID] = nil }
+            await finishOperation(commandID)
             throw error
         }
+    }
+
+    public func get(keypath: String, requester: Identity) async throws -> ValueType {
+        let commandID = await auditor.getNewCommandId()
+        let valuePublisher = PassthroughSubject<ValueType, Error>()
+        let (result, subscription) = retainedResult(valuePublisher)
+        defer { subscription.cancel() }
+        guard storeValuePublisher(valuePublisher, for: keypath, commandID: commandID) else { throw BridgeError.transportUnavailable }
         do {
-            let value = try await valuePublisher.getOneWithTimeout()
+            try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath), commandId: commandID)
+            let value = try await result.getOneWithTimeout()
             clearValuePublisher(for: keypath, expected: valuePublisher)
+            await finishOperation(commandID)
             return value
         } catch {
             clearValuePublisher(for: keypath, expected: valuePublisher)
+            await finishOperation(commandID)
             throw error
         }
     }
-    
+
     public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        let commandID = await auditor.getNewCommandId()
         let setValueStatePublisher = PassthroughSubject<SetValueResponse, Error>()
-        guard storeSetValueResponsePublisher(setValueStatePublisher, for: keypath) else { throw BridgeError.transportUnavailable }
-        
-        let keyValue = KeyValue(key: keypath, value: value)
-        
-        
+        let (result, subscription) = retainedResult(setValueStatePublisher)
+        defer { subscription.cancel() }
+        guard storeSetValueResponsePublisher(setValueStatePublisher, for: keypath, commandID: commandID) else { throw BridgeError.transportUnavailable }
         do {
-            try await sendCommandChecked(command: .set, identity: requester, payload: .keyValue(keyValue))
+            try await sendCommandChecked(command: .set, identity: requester, payload: .keyValue(KeyValue(key: keypath, value: value)), commandId: commandID)
+            let response = try await result.getOneWithTimeout()
+            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
+            await finishOperation(commandID)
+            guard response.state == .ok else { throw SetValueError.error }
+            return response.value
         } catch {
             clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
+            await finishOperation(commandID)
             throw error
         }
-        let result: SetValueResponse
-        do {
-            result = try await setValueStatePublisher.getOneWithTimeout()
-            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
-        } catch {
-            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
-            throw error
-        }
-    
-        let response = result.value
-        
-        if result.state != .ok {
-            throw  SetValueError.error
-        }
-        
- 
-        // need to wait for response here
-        return response
     }
-    
+
     public func keys(requester: Identity) async throws -> [String] {
         _ = requester
         throw BridgeOperationError.unsupportedOperation("keys")
@@ -1133,6 +1201,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         let payload: Object = ["label": .string(label), "publisher": .description(advertisedEmitter)]
         let commandID = await auditor.getNewCommandId()
         let callbackPublisher = PassthroughSubject<ConnectState, Error>()
+        let (result, subscription) = retainedResult(callbackPublisher)
+        defer { subscription.cancel() }
         guard storeConnectPublisher(callbackPublisher, for: commandID) else { throw BridgeError.transportUnavailable }
 
         do {
@@ -1142,11 +1212,13 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 payload: .object(payload),
                 commandId: commandID
             )
-            let connectState = try await callbackPublisher.getOneWithTimeout()
+            let connectState = try await result.getOneWithTimeout()
             clearConnectPublisher(for: commandID)
+            await finishOperation(commandID)
             return connectState
         } catch {
             clearConnectPublisher(for: commandID)
+            await finishOperation(commandID)
             throw error
         }
     }
@@ -1408,8 +1480,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         bridgeLog("Consume command cmd: \(command.cmd)")
             switch command.command {
             case .ready:
-                ready = true
-                self.readyPublisher.send(true)
+                let publisher = withCallbackStateLock { readyPublisher }
+                publisher.send(true)
                 
             case .admit:
                 if let identity = command.identity {
@@ -1813,20 +1885,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             if !retainCommandForStream { identityProofAuthorization.complete(command.cid) }
             switch commandRequest.command {
             case .description:
-                if let sentPayload = command.payload {
-                    
-                    switch sentPayload {
-                    case let .description(value):
-                        bridgeLog("Got description")
-                        self.configure(from: value)
-                        
-                        
-                    default:
-                        bridgeLog("Did not get expected description payload: \(String(describing: command.payload))")
-                    }
+                let promise = withCallbackStateLock { () -> ((Result<Bool, Error>) -> Void)? in
+                    guard !retired else { return nil }
+                    return descriptionPromises.removeValue(forKey: command.cid)
                 }
-                
-                
+                if let promise {
+                    if case .description(let value) = command.payload {
+                        configure(from: value)
+                        promise(.success(true))
+                    } else { promise(.failure(BridgeError.noDescription)) }
+                }
+
             case .admit, .connectEmitter:
                 let promise = takeConnectPromise(for: command.cid)
                 let publisher = takeConnectPublisher(for: command.cid)
@@ -1868,6 +1937,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 }
                 
             case .feed:
+                guard withCallbackStateLock({ !retired && outboundFeedCommandID == command.cid }) else { return }
                 if let sentPayload = command.payload {
                     
                     switch sentPayload {
@@ -1888,13 +1958,21 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     case let .setValueResponse(setValueResponse) = command.payload,
                     case let .keyValue(keyValue) = commandRequest.payload
                 {
-                    self.sendSetValueResponse(for: keyValue.key, setValueResponse: setValueResponse)
+                    let publisher = withCallbackStateLock { () -> PassthroughSubject<SetValueResponse, Error>? in
+                        guard !retired, setCommandIDs[keyValue.key] == command.cid else { return nil }
+                        return setValueForKeypathCallbackDataPublishers[keyValue.key]
+                    }
+                    publisher?.send(setValueResponse)
+                    publisher?.send(completion: .finished)
                 }
                 
             case .get:
                 if let sentPayload = command.payload, let requestedKeyValue = commandRequest.payload {
                     if case let .string(requestedKey) = requestedKeyValue {
-                        let publisher = takeValuePublisher(for: requestedKey)
+                        let publisher = withCallbackStateLock { () -> PassthroughSubject<ValueType, Error>? in
+                            guard !retired, valueCommandIDs[requestedKey] == command.cid else { return nil }
+                            return valueForKeyCallbackDataPublishers[requestedKey]
+                        }
                         publisher?.send(sentPayload)
                         publisher?.send(completion: .finished)
 //                        print("Got valueForKeypath payload. \(String(describing: try? sentPayload.jsonString())) Key: \(requestedKey)") //Do we need registery?
@@ -2019,4 +2097,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         return [ConnectionStatus]()
     }
     
+}
+
+// Starting only after receive(subscriber:) returned closes the initial-frame
+// gap without buffering or relying on Task scheduling relative to sink setup.
+struct BridgeFeedSubscriptionPublisher: Publisher {
+    typealias Output = FlowElement
+    typealias Failure = Error
+    let source: AnyPublisher<FlowElement, Error>
+    let start: () -> Void
+    func receive<S: Subscriber>(subscriber: S) where S.Input == FlowElement, S.Failure == Error {
+        source.receive(subscriber: subscriber)
+        start()
+    }
 }

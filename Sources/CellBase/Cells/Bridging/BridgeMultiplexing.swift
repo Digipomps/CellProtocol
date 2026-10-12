@@ -113,12 +113,10 @@ public final class BridgeFlowContinuityTracker: @unchecked Sendable {
     }
 
     private func compactInsertionOrderIfNeeded() {
-        guard insertionHead > maximumStreams, insertionHead * 2 > insertionOrder.count else {
-            return
-        }
-        insertionOrder.removeFirst(insertionHead)
+        insertionOrder = insertionOrder.filter { watermarks[$0.streamID]?.insertionID == $0.insertionID }
         insertionHead = 0
     }
+
 }
 
 /// Security-sensitive key for sharing one physical connection. Sessions are never
@@ -148,6 +146,7 @@ public struct BridgeConnectionPoolKey: Hashable, Sendable {
         Self.isValidComponent(identityUUID, maximumBytes: 512)
             && Self.isValidComponent(signingKeyFingerprint, maximumBytes: 256)
             && Self.isValidComponent(homeVaultReference, maximumBytes: 2_048)
+            && Self.isValidComponent(sessionEndpoint, maximumBytes: 2_048)
             && URL(string: sessionEndpoint)?.scheme != nil
     }
 
@@ -174,6 +173,7 @@ public final class BridgeConnectionPool: @unchecked Sendable {
     private let maximumSessions: Int
     private var sessions: [BridgeConnectionPoolKey: SessionEntry] = [:]
     private var accessCounter: UInt64 = 0
+    private var retiredSessions: [String: BridgeMultiplexSession] = [:]
 
     public init(maximumSessions: Int = 32) {
         self.maximumSessions = max(1, maximumSessions)
@@ -184,27 +184,27 @@ public final class BridgeConnectionPool: @unchecked Sendable {
         targetEndpoint: String,
         physicalTransportFactory: () -> BridgeTransportProtocol
     ) throws -> BridgeTransportProtocol {
+        guard BridgeMultiplexSession.isValidTargetEndpoint(targetEndpoint) else { throw BridgeMultiplexError.invalidChannel }
         guard key.isSecurityBound else {
             throw BridgeMultiplexError.invalidSecurityContext
         }
-        let result = stateLock.withLock { () -> (BridgeMultiplexSession, BridgeMultiplexSession?) in
+        return try stateLock.withLock {
+            // Retired-but-owned sessions remain charged across reset and new keys.
+            retiredSessions = retiredSessions.filter { !$0.value.isFullyClosed }
+            sessions = sessions.filter { !$0.value.session.isFullyClosed }
             accessCounter &+= 1
-            if var existing = sessions[key] {
+            if var existing = sessions[key], !existing.session.isClosed {
                 existing.lastAccess = accessCounter
                 sessions[key] = existing
-                return (existing.session, nil)
+                return try existing.session.channelTransport(targetEndpoint: targetEndpoint)
             }
-            var retiredSession: BridgeMultiplexSession?
-            if sessions.count >= maximumSessions,
-               let oldestKey = sessions.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
-                retiredSession = sessions.removeValue(forKey: oldestKey)?.session
-            }
+            if let old = sessions.removeValue(forKey: key) { retiredSessions[old.session.uuid] = old.session }
+            guard sessions.count + retiredSessions.count < maximumSessions else { throw BridgeMultiplexError.resourceLimitExceeded }
             let created = BridgeMultiplexSession(physicalTransport: physicalTransportFactory())
+            let channel = try created.channelTransport(targetEndpoint: targetEndpoint)
             sessions[key] = SessionEntry(session: created, lastAccess: accessCounter)
-            return (created, retiredSession)
+            return channel
         }
-        result.1?.retireFromPool()
-        return try result.0.channelTransport(targetEndpoint: targetEndpoint)
     }
 
     public func sessionCount() -> Int {
@@ -214,6 +214,7 @@ public final class BridgeConnectionPool: @unchecked Sendable {
     public func reset() {
         let retiredSessions = stateLock.withLock { () -> [BridgeMultiplexSession] in
             let retiredSessions = sessions.values.map(\.session)
+            for session in retiredSessions { self.retiredSessions[session.uuid] = session }
             sessions.removeAll(keepingCapacity: false)
             return retiredSessions
         }
@@ -228,7 +229,9 @@ public final class BridgeConnectionPool: @unchecked Sendable {
                 URL(string: key.sessionEndpoint)?.host?.lowercased() == normalizedHost
                     && key.routeGeneration == routeGeneration
             }
-            return matchingKeys.compactMap { sessions.removeValue(forKey: $0)?.session }
+            let retiring = matchingKeys.compactMap { sessions.removeValue(forKey: $0)?.session }
+            for session in retiring { self.retiredSessions[session.uuid] = session }
+            return retiring
         }
         retiredSessions.forEach { $0.retireFromPool() }
     }
@@ -251,6 +254,12 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     private let physicalTransport: BridgeTransportProtocol
     private let stateLock = NSLock()
     private var delegates: [String: WeakDelegate] = [:]
+    private var openTasks: [String: Task<Void, Error>] = [:]
+    private let openWork: BridgeOwnedTasks
+    private var physicalCloseTask: Task<Void, Never>?
+    private var physicallyClosed = false
+    var isClosed: Bool { stateLock.withLock { physicalTransportClosed } }
+    var isFullyClosed: Bool { stateLock.withLock { physicallyClosed } }
     private var openContinuations: [String: CheckedContinuation<Void, Error>] = [:]
     private var issuedChannelIDs: Set<String> = []
     private var activeChannelIDs: Set<String> = []
@@ -274,6 +283,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         maximumPendingChannelOpens: Int = 32
     ) {
         self.physicalTransport = physicalTransport
+        self.openWork = BridgeOwnedTasks(maximumTasks: max(1, min(maximumPendingChannelOpens, maximumChannels)), maximumBytes: 4 * 1024 * 1024)
         self.channelOpenTimeoutNanoseconds = channelOpenTimeoutNanoseconds
         self.maximumChannels = max(1, maximumChannels)
         self.maximumPendingChannelOpens = max(1, min(maximumPendingChannelOpens, maximumChannels))
@@ -298,9 +308,9 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             throw BridgeMultiplexError.invalidChannel
         }
         let channelID = UUID().uuidString
-        let reserved = stateLock.withLock { () -> Bool in
-            guard physicalTransportClosed == false,
-                  issuedChannelIDs.count < maximumChannels else {
+        let reserved = try stateLock.withLock { () throws -> Bool in
+            guard !physicalTransportClosed else { throw BridgeMultiplexError.sessionClosed }
+            guard issuedChannelIDs.count < maximumChannels else {
                 return false
             }
             issuedChannelIDs.insert(channelID)
@@ -316,20 +326,29 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         )
     }
 
-    fileprivate func retireFromPool() {
-        let shouldClose = stateLock.withLock { () -> Bool in
-            retiredFromPool = true
-            guard issuedChannelIDs.isEmpty, physicalTransportClosed == false else {
-                return false
-            }
+    private func closePhysical() -> Task<Void, Never> {
+        stateLock.withLock {
+            if let physicalCloseTask { return physicalCloseTask }
             physicalTransportClosed = true
-            return true
+            setupTask?.cancel()
+            openWork.requestStop()
+            let setup = setupTask
+            let pending = Array(openContinuations.values)
+            openContinuations.removeAll()
+            let task = Task { [self] in
+                pending.forEach { $0.resume(throwing: BridgeMultiplexError.sessionClosed) }
+                await physicalTransport.close()
+                _ = try? await setup?.value
+                await openWork.finishStop()
+                stateLock.withLock { physicallyClosed = true; openTasks.removeAll() }
+            }
+            physicalCloseTask = task
+            return task
         }
-        guard shouldClose else { return }
-        let physicalTransport = physicalTransport
-        Task {
-            await physicalTransport.close()
-        }
+    }
+    fileprivate func retireFromPool() {
+        let empty = stateLock.withLock { retiredFromPool = true; return issuedChannelIDs.isEmpty }
+        if empty { _ = closePhysical() }
     }
 
     fileprivate func register(_ delegate: BridgeDelegateProtocol?, channelID: String) {
@@ -394,87 +413,69 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             targetEndpoint: targetEndpoint
         )
 
-        try await withCheckedThrowingContinuation { continuation in
-            let inserted = stateLock.withLock { () -> Bool in
-                guard physicalTransportClosed == false,
-                      issuedChannelIDs.contains(channelID),
-                      activeChannelIDs.contains(channelID) == false,
-                      openContinuations[channelID] == nil,
-                      openContinuations.count < maximumPendingChannelOpens else {
-                    return false
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    let inserted = stateLock.withLock { () -> Bool in
+                        guard !Task.isCancelled, !physicalTransportClosed,
+                              issuedChannelIDs.contains(channelID), !activeChannelIDs.contains(channelID),
+                              openContinuations[channelID] == nil,
+                              openContinuations.count < maximumPendingChannelOpens else { return false }
+                        guard let data = try? JSONEncoder().encode(open),
+                              let task = openWork.submit(bytes: data.count, { [self] in
+                            do {
+                                try await physicalTransport.sendData(data)
+                                try await Task.sleep(nanoseconds: channelOpenTimeoutNanoseconds)
+                                finishOpening(channelID: channelID, result: .failure(BridgeMultiplexError.channelOpenTimedOut))
+                            } catch {
+                                finishOpening(channelID: channelID, result: .failure(error))
+                            }
+                        }) else { return false }
+                        openContinuations[channelID] = continuation
+                        openTasks[channelID] = task
+                        return true
+                    }
+                    if !inserted { continuation.resume(throwing: BridgeMultiplexError.resourceLimitExceeded) }
                 }
-                openContinuations[channelID] = continuation
-                return true
-            }
-            guard inserted else {
-                continuation.resume(throwing: BridgeMultiplexError.resourceLimitExceeded)
-                return
-            }
-
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await self.physicalTransport.sendData(JSONEncoder().encode(open))
-                } catch {
-                    self.finishOpening(channelID: channelID, result: .failure(error))
-                    return
-                }
-                do {
-                    try await Task.sleep(nanoseconds: self.channelOpenTimeoutNanoseconds)
-                    self.finishOpening(
-                        channelID: channelID,
-                        result: .failure(BridgeMultiplexError.channelOpenTimedOut)
-                    )
-                } catch {
-                    return
-                }
-            }
+            } onCancel: { self.finishOpening(channelID: channelID, result: .failure(CancellationError())) }
+        } catch {
+            await joinOpen(channelID)
+            throw error
         }
+        await joinOpen(channelID)
+    }
+    private func joinOpen(_ channelID: String) async {
+        let task = stateLock.withLock { openTasks[channelID] }
+        task?.cancel()
+        _ = try? await task?.value
+        stateLock.withLock { openTasks[channelID] = nil }
     }
 
     fileprivate func releaseChannelTransport(channelID: String, identity: Identity?) async {
-        let releaseState = stateLock.withLock { () -> (
-            continuation: CheckedContinuation<Void, Error>?,
-            sendClose: Bool,
-            closePhysical: Bool
-        ) in
+        let released = stateLock.withLock { () -> (CheckedContinuation<Void, Error>?, Bool) in
             delegates[channelID] = nil
             activeChannelIDs.remove(channelID)
-            issuedChannelIDs.remove(channelID)
             let continuation = openContinuations.removeValue(forKey: channelID)
-            let sendClose = configuredEndpoint != nil && physicalTransportClosed == false
-            let closePhysical = retiredFromPool && issuedChannelIDs.isEmpty && physicalTransportClosed == false
-            if closePhysical {
-                physicalTransportClosed = true
-            }
-            return (continuation, sendClose, closePhysical)
+            openTasks[channelID]?.cancel()
+            return (continuation, configuredEndpoint != nil && !physicalTransportClosed)
         }
         continuityTracker.removeStreams(withPrefix: "\(channelID)|")
-        releaseState.continuation?.resume(throwing: BridgeMultiplexError.channelNotFound)
-        guard releaseState.sendClose else {
-            if releaseState.closePhysical {
-                await physicalTransport.close()
-            }
-            return
+        released.0?.resume(throwing: BridgeMultiplexError.channelNotFound)
+        if released.1 {
+            let cid = stateLock.withLock { commandID += 1; return commandID }
+            let close = BridgeCommand(cmd: Command.closeChannel.rawValue, identity: identity, payload: nil,
+                                      cid: cid, protocolVersion: protocolVersion, channelID: channelID)
+            if let data = try? JSONEncoder().encode(close) { try? await physicalTransport.sendData(data) }
         }
-        let cid = stateLock.withLock { () -> Int in
-            commandID += 1
-            return commandID
+        // Keep the channel charge through its complete close-send tail.
+        let last = stateLock.withLock { () -> Bool in
+            issuedChannelIDs.remove(channelID)
+            guard issuedChannelIDs.isEmpty else { return false }
+            physicalTransportClosed = true
+            return true
         }
-        let close = BridgeCommand(
-            cmd: Command.closeChannel.rawValue,
-            identity: identity,
-            payload: nil,
-            cid: cid,
-            protocolVersion: protocolVersion,
-            channelID: channelID
-        )
-        if let data = try? JSONEncoder().encode(close) {
-            try? await physicalTransport.sendData(data)
-        }
-        if releaseState.closePhysical {
-            await physicalTransport.close()
-        }
+        if last { await closePhysical().value }
+        await joinOpen(channelID)
     }
 
     fileprivate func send(_ data: Data, channelID: String) async throws {
@@ -503,6 +504,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             guard let continuation = openContinuations.removeValue(forKey: channelID) else {
                 return nil
             }
+            openTasks[channelID]?.cancel()
             if case .success = result {
                 activeChannelIDs.insert(channelID)
             }
@@ -651,6 +653,7 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
     public let targetEndpoint: String
     private var identity: Identity?
     private var closed = false
+    private var closeTask: Task<Void, Never>?
 
     fileprivate init(
         session: BridgeMultiplexSession,
@@ -691,6 +694,7 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
                 targetEndpoint: targetEndpoint,
                 identity: identity
             )
+            guard stateLock.withLock({ !closed }) else { throw BridgeMultiplexError.sessionClosed }
             try await delegate?.consumeCommand(command: BridgeCommand(
                 cmd: Command.ready.rawValue,
                 identity: identity,
@@ -714,11 +718,16 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
     }
 
     public func close() async {
-        guard let closeState = takeCloseState() else { return }
-        await closeState.session.releaseChannelTransport(
-            channelID: channelID,
-            identity: closeState.identity
-        )
+        let task = stateLock.withLock { () -> Task<Void, Never>? in
+            if let closeTask { return closeTask }
+            guard let session else { return nil }
+            closed = true; delegate = nil
+            let identity = self.identity, channelID = self.channelID
+            let task = Task { await session.releaseChannelTransport(channelID: channelID, identity: identity) }
+            closeTask = task
+            return task
+        }
+        await task?.value
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
@@ -1120,11 +1129,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     private func compactOutboundStreamInsertionOrderIfNeeded() {
-        guard outboundStreamInsertionHead > maximumTrackedOutboundStreams,
-              outboundStreamInsertionHead * 2 > outboundStreamInsertionOrder.count else {
-            return
-        }
-        outboundStreamInsertionOrder.removeFirst(outboundStreamInsertionHead)
+        outboundStreamInsertionOrder = outboundStreamInsertionOrder.filter { outboundStreamSequences[$0.streamID]?.insertionID == $0.insertionID }
         outboundStreamInsertionHead = 0
     }
 

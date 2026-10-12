@@ -161,6 +161,16 @@ public class CellResolver: CellResolverProtocol {
 #endif
     private var remoteBridgeCache = [String : Emit]()
     private var pendingRemoteBridgeTasks = [String : Task<Emit, Error>]()
+    private var pendingRemoteBridgeTokens = [String: UUID]()
+    // Caller holds stateLock. Closed proxies are not cacheable; pending work
+    // and retained keys share one bound, including legacy and remote-cell routes.
+    private func canAdmitBridgeKey(_ key: String) -> Bool {
+        remoteBridgeCache = remoteBridgeCache.filter { (($0.value as? BridgeBase)?.isRetired != true) }
+        remoteCellBridgeCache = remoteCellBridgeCache.filter { (($0.value.emit as? BridgeBase)?.isRetired != true) }
+        let keys = Array(remoteBridgeCache.keys) + Array(remoteCellBridgeCache.keys)
+            + Array(pendingRemoteBridgeTasks.keys) + Array(pendingRemoteCellBridgeTasks.keys)
+        return keys.count < 128 && key.utf8.count <= 64 * 1024 - keys.reduce(0) { $0 + $1.utf8.count }
+    }
     private let remoteBridgeConnectionPool = BridgeConnectionPool()
     var auditor = ResolverAuditor()
     
@@ -1432,7 +1442,8 @@ public class CellResolver: CellResolverProtocol {
                 routeSnapshot: routeSnapshot
             )
 
-            if let cachedBridge = withStateLock({ remoteCellBridgeCache[cacheKey]?.emit }) {
+            if let cachedBridge = withStateLock({ remoteCellBridgeCache[cacheKey]?.emit }),
+               (cachedBridge as? BridgeBase)?.isRetired != true {
                 try Task.checkCancellation()
                 guard isCurrentRemoteCellHostRoute(routeSnapshot) else {
                     if requiredRemoteRoute != nil {
@@ -1444,7 +1455,7 @@ public class CellResolver: CellResolverProtocol {
                 return cachedBridge
             }
 
-            guard let pending = withStateLock({ () -> PendingRemoteCellBridgeTask? in
+            guard let pending = try withStateLock({ () throws -> PendingRemoteCellBridgeTask? in
                 guard remoteCellHostRoutes[routeSnapshot.host] == routeSnapshot.route,
                       remoteCellHostRouteGenerations[routeSnapshot.host] == routeSnapshot.generation else {
                     return nil
@@ -1453,6 +1464,7 @@ public class CellResolver: CellResolverProtocol {
                     return existingTask
                 }
 
+                guard canAdmitBridgeKey(cacheKey) else { throw CellResolverError.bridgeSetupError }
                 let id = UUID()
                 let task = Task<Emit, Error> { [weak self] in
                     guard let self else {
@@ -1494,6 +1506,7 @@ public class CellResolver: CellResolverProtocol {
                           remoteCellHostRouteGenerations[routeSnapshot.host] == routeSnapshot.generation else {
                         return false
                     }
+                    guard (bridge as? BridgeBase)?.isRetired != true else { return false }
                     remoteCellBridgeCache[cacheKey] = entry
                     return true
                 }
@@ -2190,44 +2203,44 @@ public class CellResolver: CellResolverProtocol {
         return transport
     }
     
-    private func cellBridgeEmit(
-        for endpoint: String,
-        principal: ProvenRemoteBridgePrincipal
-    ) async throws -> Emit {
+    private func cellBridgeEmit(for endpoint: String, principal: ProvenRemoteBridgePrincipal) async throws -> Emit {
         let cacheKey = legacyBridgeCacheKey(endpoint: endpoint, principal: principal)
-
-        if let cachedBridge = withStateLock({ remoteBridgeCache[cacheKey] }) {
-            return cachedBridge
+        if let cached = withStateLock({ remoteBridgeCache[cacheKey] }), (cached as? BridgeBase)?.isRetired != true {
+            return cached
         }
-
-        let task = withStateLock { () -> Task<Emit, Error> in
-            if let existingTask = pendingRemoteBridgeTasks[cacheKey] {
-                return existingTask
+        let pending = try withStateLock { () throws -> (UUID, Task<Emit, Error>) in
+            if let task = pendingRemoteBridgeTasks[cacheKey], let token = pendingRemoteBridgeTokens[cacheKey] {
+                return (token, task)
             }
-
+            guard canAdmitBridgeKey(cacheKey) else { throw CellResolverError.bridgeSetupError }
+            let token = UUID()
             let task = Task<Emit, Error> { [weak self] in
-                guard let self else {
-                    throw CellResolverError.bridgeSetupError
-                }
-                return try await self.makeCellBridgeEmit(
-                    for: endpoint,
-                    and: principal.requester
-                )
+                guard let self else { throw CellResolverError.bridgeSetupError }
+                return try await self.makeCellBridgeEmit(for: endpoint, and: principal.requester)
             }
+            pendingRemoteBridgeTokens[cacheKey] = token
             pendingRemoteBridgeTasks[cacheKey] = task
-            return task
+            return (token, task)
         }
-
         do {
-            let bridge = try await task.value
-            withStateLock {
-                pendingRemoteBridgeTasks[cacheKey] = nil
-                remoteBridgeCache[cacheKey] = bridge
+            let bridge = try await pending.1.value
+            try withStateLock {
+                // A late waiter on A cannot erase a newer singleflight B.
+                if pendingRemoteBridgeTokens[cacheKey] == pending.0 {
+                    pendingRemoteBridgeTasks[cacheKey] = nil
+                    pendingRemoteBridgeTokens[cacheKey] = nil
+                    guard (bridge as? BridgeBase)?.isRetired != true else { throw CellResolverError.bridgeSetupError }
+                    remoteBridgeCache[cacheKey] = bridge
+                }
             }
+            guard (bridge as? BridgeBase)?.isRetired != true else { throw CellResolverError.bridgeSetupError }
             return bridge
         } catch {
             withStateLock {
-                pendingRemoteBridgeTasks[cacheKey] = nil
+                if pendingRemoteBridgeTokens[cacheKey] == pending.0 {
+                    pendingRemoteBridgeTasks[cacheKey] = nil
+                    pendingRemoteBridgeTokens[cacheKey] = nil
+                }
             }
             throw error
         }
@@ -2575,6 +2588,7 @@ public class CellResolver: CellResolverProtocol {
             pendingRemoteCellBridgeTasks.removeAll(keepingCapacity: false)
             remoteBridgeCache.removeAll(keepingCapacity: false)
             pendingRemoteBridgeTasks.removeAll(keepingCapacity: false)
+            pendingRemoteBridgeTokens.removeAll(keepingCapacity: false)
             connectCellCancellables.removeAll(keepingCapacity: false)
             return tasks
         }

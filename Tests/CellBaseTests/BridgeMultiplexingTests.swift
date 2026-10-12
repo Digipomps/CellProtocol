@@ -418,7 +418,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(pool.sessionCount(), 0)
     }
 
-    func testConnectionPoolEvictsLeastRecentlyUsedSessionAndClosesItAfterChannelRelease() async throws {
+    func testConnectionPoolRetainsLiveSessionChargeUntilPhysicalClose() async throws {
         let vault = EphemeralIdentityVault()
         let pool = BridgeConnectionPool(maximumSessions: 2)
         let sessionURL = try XCTUnwrap(URL(string: "wss://bridge.example/session"))
@@ -436,6 +436,14 @@ final class BridgeMultiplexingTests: XCTestCase {
                 signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint),
                 homeVaultReference: try XCTUnwrap(identity.homeVaultReference)
             )
+            if index == 2 {
+                XCTAssertThrowsError(try pool.channelTransport(for: key, targetEndpoint: "ThirdCell", physicalTransportFactory: { physical })) {
+                    XCTAssertEqual($0 as? BridgeMultiplexError, .resourceLimitExceeded)
+                }
+                XCTAssertEqual(transports[0].snapshot().closeInvocations, 0)
+                await channels[0].close()
+                XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
+            }
             channels.append(try pool.channelTransport(
                 for: key,
                 targetEndpoint: "Cell-\(index)",
@@ -444,7 +452,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         }
 
         XCTAssertEqual(pool.sessionCount(), 2)
-        XCTAssertEqual(transports[0].snapshot().closeInvocations, 0)
+        XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
         await channels[0].close()
         XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
 
@@ -469,7 +477,11 @@ final class BridgeMultiplexingTests: XCTestCase {
         }
 
         await first.close()
-        let replacement = try session.channelTransport(targetEndpoint: "SecondCell")
+        XCTAssertThrowsError(try session.channelTransport(targetEndpoint: "SecondCell")) {
+            XCTAssertEqual($0 as? BridgeMultiplexError, .sessionClosed)
+        }
+        let next = BridgeMultiplexSession(physicalTransport: ServerRecordingTransport())
+        let replacement = try next.channelTransport(targetEndpoint: "SecondCell")
         await replacement.close()
     }
 
@@ -870,7 +882,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(physicalFactoryInvocations, 3)
         await secondChannel.close()
         await secondChannelAgain.close()
-        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 1)
 
         pool.reset()
         await firstChannelAgain.close()

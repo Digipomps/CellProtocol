@@ -179,9 +179,7 @@ private enum ValueTypeCodec {
 
         var object = Object(propertyValues: [String: ValueType]())
         for key in keyedContainer.allKeys {
-            guard let decodedObject = try? keyedContainer.decode(ValueType.self, forKey: key) else {
-                continue
-            }
+            let decodedObject = try keyedContainer.decode(ValueType.self, forKey: key)
             object[key.stringValue] = decodedObject
         }
         return .object(object)
@@ -194,9 +192,7 @@ private enum ValueTypeCodec {
 
         var list = ValueTypeList()
         while !unkeyedContainer.isAtEnd {
-            guard let decodedObject = try? unkeyedContainer.decode(ValueType.self) else {
-                continue
-            }
+            let decodedObject = try unkeyedContainer.decode(ValueType.self)
             list.append(decodedObject)
         }
         return .list(list)

@@ -151,14 +151,14 @@ public struct BridgeCommand: Codable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         cmd = try values.decode(String.self, forKey: .cmd)
         cid = try values.decode(Int.self, forKey: .cid)
-        identity = try? values.decodeIfPresent(Identity.self, forKey: .identity)
-        protocolVersion = try? values.decodeIfPresent(Int.self, forKey: .protocolVersion)
-        channelID = try? values.decodeIfPresent(String.self, forKey: .channelID)
-        targetEndpoint = try? values.decodeIfPresent(String.self, forKey: .targetEndpoint)
-        streamID = try? values.decodeIfPresent(String.self, forKey: .streamID)
-        sequence = try? values.decodeIfPresent(UInt64.self, forKey: .sequence)
-        resumeFromSequence = try? values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
-        payload = Self.decodePayload(from: values)
+        identity = try values.decodeIfPresent(Identity.self, forKey: .identity)
+        protocolVersion = try values.decodeIfPresent(Int.self, forKey: .protocolVersion)
+        channelID = try values.decodeIfPresent(String.self, forKey: .channelID)
+        targetEndpoint = try values.decodeIfPresent(String.self, forKey: .targetEndpoint)
+        streamID = try values.decodeIfPresent(String.self, forKey: .streamID)
+        sequence = try values.decodeIfPresent(UInt64.self, forKey: .sequence)
+        resumeFromSequence = try values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
+        payload = try Self.decodePayload(from: values)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -283,12 +283,15 @@ public struct BridgeCommand: Codable {
 
     private static func decodePayload(
         from values: KeyedDecodingContainer<CodingKeys>
-    ) -> ValueType? {
+    ) throws -> ValueType? {
+        var selected: ValueType?
+        // Keep the legacy key priority, but validate every present known payload.
+        // An invalid field cannot become absent because another field decodes.
         for key in payloadDecodingKeys {
-            if let typedValue = try? values.decodeIfPresent(ValueType.self, forKey: key) {
-                return typedValue
+            if let value = try values.decodeIfPresent(ValueType.self, forKey: key), selected == nil {
+                selected = value
             }
         }
-        return nil
+        return selected
     }
 }
