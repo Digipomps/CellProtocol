@@ -33,6 +33,9 @@ final class AppleWebSocketAdmissionTests: XCTestCase {
         await physical.waitForPendingReceivesForTesting()
         await gate.close()
         XCTAssertEqual(budget.snapshot.count, 0)
+        // A competing gate close may already own teardown. Joining receive work
+        // or calling the idempotent gate close does not join physical retirement.
+        await fulfillment(of: [socket.disconnected], timeout: 2)
         XCTAssertEqual(socket.closeCount, 1)
     }
 
@@ -156,11 +159,15 @@ private final class AppleQuotaConnection: WebSocketConnection2, @unchecked Senda
     weak var delegate: WebSocketConnectionDelegate2?
     private let lock = NSLock()
     private var closes = 0
+    let disconnected = XCTestExpectation(description: "Physical socket disconnected")
     var closeCount: Int { lock.withLock { closes } }
     func send(text: String) async throws {}
     func send(data: Data) async throws {}
     func connect() async throws {}
-    func disconnect() async throws { lock.withLock { closes += 1 } }
+    func disconnect() async throws {
+        lock.withLock { closes += 1 }
+        disconnected.fulfill()
+    }
     func ping() async throws {}
 }
 
