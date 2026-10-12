@@ -43,10 +43,10 @@ public extension GeneralCell {
     func registerSet(
         key: String,
         owner: Identity,
-        handler: @escaping (_ requester: Identity, _ payload: ValueType) async -> ValueType?
+        handler: @escaping (_ requester: Identity, _ payload: ValueType) async throws -> ValueType?
     ) async {
         await addInterceptForSet(requester: owner, key: key) { _, value, requester in
-            await handler(requester, value)
+            try await handler(requester, value)
         }
     }
 
@@ -87,7 +87,7 @@ public extension GeneralCell {
         required: Bool = false,
         flowEffects: [ValueType] = [],
         description: ValueType = .string("*"),
-        handler: @escaping (_ requester: Identity, _ payload: ValueType) async -> ValueType?
+        handler: @escaping (_ requester: Identity, _ payload: ValueType) async throws -> ValueType?
     ) async {
         await registerExploreContract(
             requester: owner,
@@ -101,7 +101,7 @@ public extension GeneralCell {
             description: description
         )
         await addInterceptForSet(requester: owner, key: key) { _, value, requester in
-            await handler(requester, value)
+            try await handler(requester, value)
         }
     }
 }

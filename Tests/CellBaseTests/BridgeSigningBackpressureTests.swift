@@ -41,15 +41,8 @@ final class BridgeSigningBackpressureTests: XCTestCase {
             let response = try XCTUnwrap(wire.commands.last { $0.cid == 700 })
             guard case .setValueResponse(let result)? = response.payload else { return XCTFail("Missing SET reply") }
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
-            if consumed == 12 {
-                XCTAssertEqual(object["state"] as? String, "error")
-                XCTAssertTrue((object["retryAfterSeconds"] as? Int ?? 0) > 0)
-            } else {
-                let inner = try XCTUnwrap(object["value"] as? [String: Any])
-                XCTAssertEqual(inner["status"] as? String, "error")
-                XCTAssertEqual(inner["reasonCode"] as? String, "signing_rate_limited")
-                XCTAssertTrue((inner["retryAfterSeconds"] as? Int ?? 0) > 0)
-            }
+            XCTAssertEqual(object["state"] as? String, "error")
+            XCTAssertTrue((object["retryAfterSeconds"] as? Int ?? 0) > 0)
             do {
                 _ = try await proxy.signMessageForIdentity(messageData: signingData(owner, nonce: 99), identity: owner)
                 XCTFail("Returning a retry hint must not reset or bypass the quota")
@@ -201,6 +194,42 @@ final class BridgeSigningBackpressureTests: XCTestCase {
         await bridge.channelDidClose(try XCTUnwrap(wire.channelSession))
     }
 
+    func testInnerChildRejectionAfterParentEffectNeverBecomesRetryable() async throws {
+        let oldPolicy = CellBase.securityContainmentPolicy
+        let oldController = CellBase.securityContainmentController
+        defer {
+            CellBase.securityContainmentPolicy = oldPolicy
+            CellBase.securityContainmentController = oldController
+        }
+        CellBase.securityContainmentController = CellSecurityContainmentController()
+        CellBase.securityContainmentPolicy = .localProtection
+        let owner = await MockIdentityVault().identity(for: "storage-failure-fixture", makeNewIfNotFound: true)!
+        let cell = await BackpressureLateAuthorizationFailureCell(owner: owner)
+        cell.child = await CorrespondenceCell(owner: owner)
+        cell.innerChildRejection = true
+        let wire = BridgeLifecycleWire(), bridge = BridgeBase(owner: owner)
+        wire.channelSession = try await authenticatedSessionFixture(principal: owner)
+        try await bridge.setTransport(wire, connection: .outbound)
+        try bridge.activateAuthenticatedChannel()
+        bridge.emitCellAtEndpoint = cell
+        wire.beforeAccept = { command in
+            if command.command == .sign, case .signData(let data)? = command.payload {
+                let signed = try await owner.sign(data: data)
+                let signature = try XCTUnwrap(signed)
+                try await bridge.consumeResponse(command: orderingReply(to: command, payload: .signature(signature)))
+            }
+        }
+        try await bridge.consumeCommand(command: .init(cmd: "set", identity: owner,
+            payload: .keyValue(.init(key: "write", value: .string("fixture"))), cid: 701))
+        let response = try XCTUnwrap(wire.commands.last { $0.cid == 701 })
+        guard case .setValueResponse(let result)? = response.payload else { return XCTFail("Missing SET reply") }
+        XCTAssertEqual(cell.writes, 1)
+        XCTAssertEqual(result.state, .error)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
+        XCTAssertNil(object["retryAfterSeconds"], "An error after an effect must not invite automatic replay")
+        await bridge.channelDidClose(try XCTUnwrap(wire.channelSession))
+    }
+
 
 }
 
@@ -216,9 +245,20 @@ private final class BackpressureStorageFailureCell: GeneralCell {
 private final class BackpressureLateAuthorizationFailureCell: GeneralCell {
     var writes = 0
     var child: CorrespondenceCell?
+    var innerChildRejection = false
     override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         writes += 1
         if let child {
+            if innerChildRejection {
+                for _ in 0..<11 {
+                    let decision = await authorizationDecision(requestedAccess: "-w--", at: keypath, for: requester)
+                    XCTAssertTrue(decision.allowed)
+                }
+                let request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+                    agreementID: child.uuid, senderIdentityUUID: requester.uuid, attachmentID: "fixture")
+                let input = try JSONDecoder().decode(ValueType.self, from: JSONEncoder().encode(request))
+                return try await child.set(keypath: "attachments.upload", value: input, requester: requester)
+            }
             for _ in 0..<13 {
                 _ = try await child.set(keypath: "attachments.revoke", value: .null, requester: requester)
             }

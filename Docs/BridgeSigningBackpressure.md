@@ -30,7 +30,11 @@ qualify. Other cells retain their existing authorization error. Older SET
 replies decode without the field; older clients still treat it as an error.
 
 Correspondence also checks authority inside its attachment handler and before
-publication. At these known pre-storage rejection points it returns:
+publication. These known pre-storage rejection points throw the same internal,
+receiver-bound rejection. Only BridgeBase creates the SET retry field after
+validating the binding. Application SET return values never become retry hints.
+An initial GET rejection uses the reserved wire error object below, likewise
+created by BridgeBase only after validating the receiver binding:
 
 ```json
 {
@@ -44,8 +48,8 @@ publication. At these known pre-storage rejection points it returns:
 
 The `&bridgeRetry` marker is reserved protocol metadata. Ordinary application
 objects with `status`, `reasonCode` and `retryAfterSeconds` but without the
-marker are not interpreted as protocol backpressure. An outer GET authorization
-rejection uses the same marker. No identity, storage path, request value or
+marker are not interpreted as protocol backpressure. SET application payloads
+are never interpreted as that marker. No identity, storage path, request value or
 signing material is included.
 
 `BridgeBase.get/set` exposes the typed error to a new client. It does not retry

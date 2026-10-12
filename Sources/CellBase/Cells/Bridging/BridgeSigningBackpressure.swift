@@ -51,9 +51,9 @@ final class BridgeSigningAttemptState: @unchecked Sendable {
     }
 }
 
-/// Correspondence's initial gate rejected this exact receiver and operation.
+/// An audited Correspondence gate rejected this exact receiver and operation.
 /// A child rejection must not invite replay of a parent that already ran.
-struct BridgePreDispatchSigningRejection: Error, @unchecked Sendable {
+struct BridgePreEffectSigningRejection: Error, @unchecked Sendable {
     let sourceID: ObjectIdentifier
     let keypath: String
     let retry: BridgeSigningBackpressure

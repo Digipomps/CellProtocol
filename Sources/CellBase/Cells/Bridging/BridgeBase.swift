@@ -915,7 +915,6 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
             throw SetValueError.error
         }
-        if let retry = BridgeSigningBackpressure.rejection(response.value) { throw retry }
         return response.value
     }
 
@@ -1469,9 +1468,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             
                         } catch {
                             setValueResponse.state = .error
-                            // Only the exact top-level receiver's initial gate
-                            // can attest that this operation has not dispatched.
-                            if let rejection = error as? BridgePreDispatchSigningRejection,
+                            // Only the exact top-level receiver's audited gate
+                            // can attest that this operation has had no effect.
+                            if let rejection = error as? BridgePreEffectSigningRejection,
                                rejection.matches(keypathLookupPublisher, keypath: payload.key) {
                                 setValueResponse.retryAfterSeconds = rejection.retry.retryAfterSeconds
                             }
@@ -1522,7 +1521,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         try await transport.sendData(responseJSONData)
                     }
                 } catch {
-                    if let rejection = error as? BridgePreDispatchSigningRejection,
+                    if let rejection = error as? BridgePreEffectSigningRejection,
                        let getPublisher, rejection.matches(getPublisher, keypath: key) {
                         let response = BridgeCommand(cmd: "response", payload: rejection.retry.rejection, cid: command.cid)
                         if let bytes = try? JSONEncoder().encode(response), let transport {

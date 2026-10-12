@@ -432,7 +432,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     override func preDispatchAuthorizationFailure(_ decision: CellAuthorizationDecision,
         keypath: String, requester: Identity) -> any Error {
         if let retry = (requester.identityVault as? BridgeIdentityVault)?.signingBackpressure {
-            return BridgePreDispatchSigningRejection(source: self, keypath: keypath, retry: retry)
+            return BridgePreEffectSigningRejection(source: self, keypath: keypath, retry: retry)
         }
         return super.preDispatchAuthorizationFailure(decision, keypath: keypath, requester: requester)
     }
@@ -649,7 +649,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             description: .string("Stores a prepared ciphertext envelope for the current membership."),
             handler: { [weak self] requester, payload in
                 guard let self else { return .null }
-                return await self.sendMessage(payload: payload, requester: requester)
+                return try await self.sendMessage(payload: payload, requester: requester)
             }
         )
 
@@ -718,7 +718,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         return (try? CorrespondenceCellCodec.encode(stored)) ?? .null
     }
 
-    private func sendMessage(payload: ValueType, requester: Identity) async -> ValueType {
+    private func sendMessage(payload: ValueType, requester: Identity) async throws -> ValueType {
         await refreshAuthorizedMembership()
         purgeExpiredMessages(at: nowProvider())
         guard memberIdentityUUIDs.contains(requester.uuid) else {
@@ -774,7 +774,7 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                 try await sourceCell.storage.publish(attachment,
                     expiresAt: now.addingTimeInterval(TimeInterval(retentionSeconds)), now: now)
             } catch let retry as BridgeSigningBackpressure {
-                return retry.rejection
+                throw BridgePreEffectSigningRejection(source: self, keypath: "sendMessage", retry: retry)
             } catch { return denial(.attachmentUnavailable) }
         }
         await beforeSendCommitForTesting?()
@@ -1266,7 +1266,7 @@ extension CorrespondenceCell {
                         let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceAttachmentRequest.self)
                         return try await self.performAttachment(key, request: request, requester: requester)
                     } catch let retry as BridgeSigningBackpressure {
-                        return retry.rejection
+                        throw BridgePreEffectSigningRejection(source: self, keypath: key, retry: retry)
                     } catch {
                         return .object(["status": .string("error"), "message": .string("attachmentUnavailable")])
                     }
