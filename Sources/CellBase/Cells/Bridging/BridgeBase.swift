@@ -24,8 +24,8 @@ public enum BridgeOperationError: Error, Equatable {
 }
 
 public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
-    private typealias ConnectPromise = (Result<ConnectState, Error>) -> Void
-    private typealias ContractPromise = (Result<AgreementState, Error>) -> Void
+    typealias ConnectPromise = (Result<ConnectState, Error>) -> Void
+    typealias ContractPromise = (Result<AgreementState, Error>) -> Void
     private typealias SignPromise = (Result<Data, Error>) -> Void
     private struct SignRequest {
         var promise: SignPromise
@@ -157,6 +157,24 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     var transport: BridgeTransportProtocol?
     var emitCellAtEndpoint: Emit?
     private var inboundEmitCellCache = [String: Emit]()
+    private let inboundCacheLock = NSLock()
+    private var inboundCacheBytes = 0
+    private var inboundCacheGeneration: UInt64 = 0
+    private var inboundCacheClosed = false
+    private let inboundCacheMaximumCount = 128
+    private let inboundCacheMaximumBytes = 64 * 1024
+    // D237 observation seam: installed only by tests before concurrent use.
+    var inboundCacheAccessObserver: (() -> Void)?
+    var inboundResolutionObserver: (() async -> Void)?
+    private func withInboundCacheState<T>(_ body: () throws -> T) rethrows -> T {
+        inboundCacheLock.lock()
+        defer { inboundCacheLock.unlock() }
+        inboundCacheAccessObserver?()
+        return try body()
+    }
+    var inboundCacheSnapshot: (count: Int, bytes: Int) {
+        withInboundCacheState { (inboundEmitCellCache.count, inboundEmitCellCache.keys.reduce(0) { $0 + $1.utf8.count }) }
+    }
     private var inboundPublisherLookupIdentity: Identity?
     private let callbackStateLock = NSLock()
     private let retirementWork = BridgeRetirementWork()
@@ -225,18 +243,39 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         return try block()
     }
 
+    // Snapshot of retained callback records, computed under the same mutation lock.
+    private var callbackRegistryUsage: (count: Int, bytes: Int) {
+        let count = valueForKeyCallbackDataPublishers.count + setValueForKeypathCallbackDataPublishers.count
+            + connectCallbackDataPublishers.count + connectCallbackPromises.count
+            + contractCallbackDataPublishers.count + contractCallbackPromises.count + signCallbackRequests.count
+        let bytes = valueForKeyCallbackDataPublishers.keys.reduce(0) { $0 + $1.utf8.count }
+            + setValueForKeypathCallbackDataPublishers.keys.reduce(0) { $0 + $1.utf8.count }
+            + signCallbackRequests.values.reduce(0) { $0 + $1.messageData.count }
+        return (count, bytes)
+    }
+    private func canStoreCallback(bytes: Int) -> Bool {
+        let usage = callbackRegistryUsage
+        return !retired && usage.count < 128 && bytes >= 0 && bytes <= 64 * 1024 - usage.bytes
+    }
+    var callbackRegistrySnapshot: (count: Int, bytes: Int) {
+        withCallbackStateLock { callbackRegistryUsage }
+    }
+
     private func withDescriptionStateLock<T>(_ block: () throws -> T) rethrows -> T {
         descriptionStateLock.lock()
         defer { descriptionStateLock.unlock() }
         return try block()
     }
 
-    private func storeValuePublisher(
+    @discardableResult
+    func storeValuePublisher(
         _ publisher: PassthroughSubject<ValueType, Error>,
         for requestedKey: String
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard valueForKeyCallbackDataPublishers[requestedKey] == nil, canStoreCallback(bytes: requestedKey.utf8.count) else { return false }
             valueForKeyCallbackDataPublishers[requestedKey] = publisher
+            return true
         }
     }
 
@@ -251,19 +290,23 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func clearValuePublisher(for requestedKey: String) {
+    func clearValuePublisher(for requestedKey: String, expected: PassthroughSubject<ValueType, Error>) {
         withCallbackStateLock {
+            guard valueForKeyCallbackDataPublishers[requestedKey] === expected else { return }
             valueForKeyCallbackDataPublishers[requestedKey] = nil
             valueForKeyCallbackCancellables[requestedKey] = nil
         }
     }
 
-    private func storeSetValueResponsePublisher(
+    @discardableResult
+    func storeSetValueResponsePublisher(
         _ publisher: PassthroughSubject<SetValueResponse, Error>,
         for requestedKey: String
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard setValueForKeypathCallbackDataPublishers[requestedKey] == nil, canStoreCallback(bytes: requestedKey.utf8.count) else { return false }
             setValueForKeypathCallbackDataPublishers[requestedKey] = publisher
+            return true
         }
     }
 
@@ -278,8 +321,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func clearSetValueResponsePublisher(for requestedKey: String) {
+    func clearSetValueResponsePublisher(for requestedKey: String, expected: PassthroughSubject<SetValueResponse, Error>) {
         withCallbackStateLock {
+            guard setValueForKeypathCallbackDataPublishers[requestedKey] === expected else { return }
             setValueForKeypathCallbackDataPublishers[requestedKey] = nil
             setValueForKeypathCallbackCancellables[requestedKey] = nil
         }
@@ -306,7 +350,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             expiredRequest.promise(.failure(BridgeError.timeout))
         }
         let admitted = withCallbackStateLock { () -> Bool in
-            guard !retired, cleanupTask != nil else { return false }
+            guard !retired, cleanupTask != nil, canStoreCallback(bytes: messageData.count) else { return false }
             signCallbackRequests[commandID] = SignRequest(promise: promise, identity: identity,
                 messageData: messageData, cleanupTask: cleanupTask)
             return true
@@ -316,21 +360,27 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
 
     }
 
-    private func storeConnectPublisher(
+    @discardableResult
+    func storeConnectPublisher(
         _ publisher: PassthroughSubject<ConnectState, Error>,
         for commandID: Int
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard connectCallbackDataPublishers[commandID] == nil, canStoreCallback(bytes: 0) else { return false }
             connectCallbackDataPublishers[commandID] = publisher
+            return true
         }
     }
 
-    private func storeConnectPromise(
+    @discardableResult
+    func storeConnectPromise(
         _ promise: @escaping ConnectPromise,
         for commandID: Int
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard connectCallbackPromises[commandID] == nil, canStoreCallback(bytes: 0) else { return false }
             connectCallbackPromises[commandID] = promise
+            return true
         }
     }
 
@@ -364,21 +414,27 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
     }
 
-    private func storeContractPublisher(
+    @discardableResult
+    func storeContractPublisher(
         _ publisher: PassthroughSubject<AgreementState, Error>,
         for commandID: Int
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard contractCallbackDataPublishers[commandID] == nil, canStoreCallback(bytes: 0) else { return false }
             contractCallbackDataPublishers[commandID] = publisher
+            return true
         }
     }
 
-    private func storeContractPromise(
+    @discardableResult
+    func storeContractPromise(
         _ promise: @escaping ContractPromise,
         for commandID: Int
-    ) {
+    ) -> Bool {
         withCallbackStateLock {
+            guard contractCallbackPromises[commandID] == nil, canStoreCallback(bytes: 0) else { return false }
             contractCallbackPromises[commandID] = promise
+            return true
         }
     }
 
@@ -472,15 +528,16 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         descriptionFetchedPublisher = PassthroughSubject<Bool, Never>()
         descriptionFetchedDate = nil
         
-        switch connection {
-        case .inbound(publisherUuid: let publisherUuid):
-            self.publisherUuid = publisherUuid
+        try withInboundCacheState {
+            guard !inboundCacheClosed else { throw BridgeError.transportUnavailable }
+            inboundCacheGeneration &+= 1
+            inboundEmitCellCache.removeAll()
+            inboundCacheBytes = 0
+            switch connection {
+            case .inbound(publisherUuid: let publisherUuid): self.publisherUuid = publisherUuid
+            case .outbound: self.publisherUuid = nil
+            }
             emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
-        case .outbound:
-            self.publisherUuid = nil
-            emitCellAtEndpoint = nil
-            inboundEmitCellCache = [:]
         }
         
         
@@ -654,9 +711,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         if let identity = context.identity,
            let transport {
             let commandID = await auditor.getNewCommandId()
-            let connectFuture = Future<ConnectState, Error> { [weak self] promise in
-                self?.storeConnectPromise(promise, for: commandID)
+            var registered = false
+            let connectFuture = Future<ConnectState, Error> { promise in
+                registered = self.storeConnectPromise(promise, for: commandID)
             }
+            guard registered else { return .notConnected }
             do {
                 try await sendCommandChecked(
                     command: .admit,
@@ -701,6 +760,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     /// Terminal, owner-driven EOF cleanup. This does not change requester
     /// authorization or the wire protocol and cannot reopen this bridge object.
     public func requestRetirement() {
+        withInboundCacheState {
+            inboundCacheClosed = true
+            inboundCacheGeneration &+= 1
+            inboundEmitCellCache.removeAll()
+            inboundCacheBytes = 0
+        }
         retirementWork.requestStop()
         let cleanup = withCallbackStateLock { () -> (AnyCancellable?, AnyCancellable?, [SignRequest], [ConnectPromise], [ContractPromise]) in
             retired = true
@@ -717,6 +782,21 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             let contracts = Array(contractCallbackPromises.values); contractCallbackPromises.removeAll()
             return (feed, outbound, signs, connects, contracts)
         }
+        let publishers = withCallbackStateLock { () -> ([PassthroughSubject<ValueType, Error>], [PassthroughSubject<SetValueResponse, Error>], [PassthroughSubject<ConnectState, Error>], [PassthroughSubject<AgreementState, Error>]) in
+            let values = Array(valueForKeyCallbackDataPublishers.values)
+            let sets = Array(setValueForKeypathCallbackDataPublishers.values)
+            let connects = Array(connectCallbackDataPublishers.values)
+            let contracts = Array(contractCallbackDataPublishers.values)
+            valueForKeyCallbackDataPublishers.removeAll()
+            setValueForKeypathCallbackDataPublishers.removeAll()
+            connectCallbackDataPublishers.removeAll()
+            contractCallbackDataPublishers.removeAll()
+            return (values, sets, connects, contracts)
+        }
+        publishers.0.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
+        publishers.1.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
+        publishers.2.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
+        publishers.3.forEach { $0.send(completion: .failure(BridgeError.transportUnavailable)) }
         cleanup.0?.cancel(); cleanup.1?.cancel()
         withCallbackStateLock { retiringFeedStartTask }?.cancel()
         cleanup.2.forEach { $0.cleanupTask?.cancel(); $0.promise(.failure(BridgeError.transportUnavailable)) }
@@ -736,7 +816,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         withCallbackStateLock {
             retiringFeedStartTask = nil
             transport = nil
-            inboundEmitCellCache.removeAll(); emitCellAtEndpoint = nil
+        }
+        withInboundCacheState {
+            emitCellAtEndpoint = nil
             inboundPublisherLookupIdentity = nil
         }
     }
@@ -750,9 +832,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     public func addAgreement(_ contract: Agreement, for identity: Identity) async throws -> AgreementState {
         var contractState = AgreementState.template
         let commandID = await auditor.getNewCommandId()
-        let contractFuture = Future<AgreementState, Error> { [weak self] promise in
-            self?.storeContractPromise(promise, for: commandID)
+        var registered = false
+        let contractFuture = Future<AgreementState, Error> { promise in
+            registered = self.storeContractPromise(promise, for: commandID)
         }
+        guard registered else { throw BridgeError.transportUnavailable }
         do {
             try await sendCommandChecked(
                 command: .agreement,
@@ -822,26 +906,26 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     
     public func get(keypath: String, requester: Identity) async throws -> ValueType {
         let valuePublisher = PassthroughSubject<ValueType, Error>()
-        storeValuePublisher(valuePublisher, for: keypath)
+        guard storeValuePublisher(valuePublisher, for: keypath) else { throw BridgeError.transportUnavailable }
         do {
             try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath))
         } catch {
-            clearValuePublisher(for: keypath)
+            clearValuePublisher(for: keypath, expected: valuePublisher)
             throw error
         }
         do {
             let value = try await valuePublisher.getOneWithTimeout()
-            clearValuePublisher(for: keypath)
+            clearValuePublisher(for: keypath, expected: valuePublisher)
             return value
         } catch {
-            clearValuePublisher(for: keypath)
+            clearValuePublisher(for: keypath, expected: valuePublisher)
             throw error
         }
     }
     
     public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
         let setValueStatePublisher = PassthroughSubject<SetValueResponse, Error>()
-        storeSetValueResponsePublisher(setValueStatePublisher, for: keypath)
+        guard storeSetValueResponsePublisher(setValueStatePublisher, for: keypath) else { throw BridgeError.transportUnavailable }
         
         let keyValue = KeyValue(key: keypath, value: value)
         
@@ -849,15 +933,15 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         do {
             try await sendCommandChecked(command: .set, identity: requester, payload: .keyValue(keyValue))
         } catch {
-            clearSetValueResponsePublisher(for: keypath)
+            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
             throw error
         }
         let result: SetValueResponse
         do {
             result = try await setValueStatePublisher.getOneWithTimeout()
-            clearSetValueResponsePublisher(for: keypath)
+            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
         } catch {
-            clearSetValueResponsePublisher(for: keypath)
+            clearSetValueResponsePublisher(for: keypath, expected: setValueStatePublisher)
             throw error
         }
     
@@ -926,30 +1010,41 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         case someError
     }
 
-    private func resolvedEmitCell(for requester: Identity?) async throws -> Emit {
-        if let publisherUuid {
-            guard let resolver = CellBase.defaultCellResolver else {
-                throw BridgeError.resolverIsMissing
-            }
-
-            let resolvingIdentity = try inboundPublisherResolvingIdentity(for: requester)
+    func resolvedEmitCell(for requester: Identity?) async throws -> Emit {
+        // Snapshot routing and generation while protected, then resolve without a
+        // blocking lock. Signing responses must remain free to enter the bridge.
+        let context = try withInboundCacheState { () -> (String?, Emit?, Identity, UInt64) in
+            guard !inboundCacheClosed else { throw BridgeError.transportUnavailable }
+            return (publisherUuid, emitCellAtEndpoint,
+                    try inboundPublisherResolvingIdentity(for: requester), inboundCacheGeneration)
+        }
+        if let publisherUuid = context.0 {
+            guard let resolver = CellBase.defaultCellResolver else { throw BridgeError.resolverIsMissing }
+            let resolvingIdentity = context.2
             let cacheKey = resolvingIdentity.uuid.lowercased()
-            if let cached = inboundEmitCellCache[cacheKey] {
-                return cached
-            }
-
+            if let cached = try withInboundCacheState({ () throws -> Emit? in
+                guard !inboundCacheClosed, inboundCacheGeneration == context.3 else { throw BridgeError.transportUnavailable }
+                return inboundEmitCellCache[cacheKey]
+            }) { return cached }
             let resolved = try await resolver.cellAtEndpoint(
-                endpoint: "cell:///\(publisherUuid)",
-                requester: resolvingIdentity
+                endpoint: "cell:///\(publisherUuid)", requester: resolvingIdentity
             )
-            inboundEmitCellCache[cacheKey] = resolved
-            return resolved
+            await inboundResolutionObserver?()
+            return try withInboundCacheState {
+                guard !inboundCacheClosed, inboundCacheGeneration == context.3 else { throw BridgeError.transportUnavailable }
+                if let cached = inboundEmitCellCache[cacheKey] { return cached }
+                // Saturation only skips memoization; every miss still uses the
+                // authoritative resolver and the original requester identity.
+                let cost = cacheKey.utf8.count
+                if inboundEmitCellCache.count < inboundCacheMaximumCount,
+                   cost <= inboundCacheMaximumBytes - inboundCacheBytes {
+                    inboundEmitCellCache[cacheKey] = resolved
+                    inboundCacheBytes += cost
+                }
+                return resolved
+            }
         }
-
-        if let emitCellAtEndpoint {
-            return emitCellAtEndpoint
-        }
-
+        if let emitter = context.1 { return emitter }
         throw BridgeError.emitterUnavailable
     }
 
@@ -1038,7 +1133,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         let payload: Object = ["label": .string(label), "publisher": .description(advertisedEmitter)]
         let commandID = await auditor.getNewCommandId()
         let callbackPublisher = PassthroughSubject<ConnectState, Error>()
-        storeConnectPublisher(callbackPublisher, for: commandID)
+        guard storeConnectPublisher(callbackPublisher, for: commandID) else { throw BridgeError.transportUnavailable }
 
         do {
             try await sendCommandChecked(
