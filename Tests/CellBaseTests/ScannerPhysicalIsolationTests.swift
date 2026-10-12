@@ -273,7 +273,7 @@ private final class IsolationObserver: ConnectServiceDelegate {
         }
         if autoInvite && remoteUUID == prefix + "a" && lock.withLock({ if invited { return false }; invited = true; return true }) { manager.invitePeer(remoteUUID) }
     }
-    func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) { print("CP53 invitation \(remoteUUID)"); _ = manager.respondToInvitation(remoteUUID: remoteUUID, accept: host && remoteUUID.hasPrefix(prefix)) }
+    func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) { print("CP53 invitation \(remoteUUID)"); _ = manager.respondToCurrentInvitationForTesting(remoteUUID: remoteUUID, accept: host && remoteUUID.hasPrefix(prefix)) }
     func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?) {
         print("CP53 status \(status) remote=\(remoteUUID ?? "nil")")
         if status == "connected" {

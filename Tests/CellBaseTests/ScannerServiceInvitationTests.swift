@@ -17,7 +17,7 @@ final class ScannerServiceInvitationTests: XCTestCase {
         b.receiveInvitation(from: ap, endpoint: outgoingA) { accepted, _ in toB.append(accepted) }
         XCTAssertEqual(toA, [false]); XCTAssertTrue(toB.isEmpty)
         XCTAssertEqual(a.pendingInvitationCount, 0); XCTAssertEqual(b.pendingInvitationCount, 1)
-        XCTAssertTrue(b.respondToInvitation(remoteUUID: "a", accept: true))
+        XCTAssertTrue(b.respondToCurrentInvitationForTesting(remoteUUID: "a", accept: true))
         XCTAssertEqual(toB, [true]); XCTAssertEqual(b.pendingInvitationCount, 0)
         XCTAssertEqual(a.bridgeDelegateCount, 0); XCTAssertEqual(b.bridgeDelegateCount, 0)
     }
@@ -45,7 +45,7 @@ final class ScannerServiceInvitationTests: XCTestCase {
 
         XCTAssertNil(response)
         XCTAssertEqual(service.pendingInvitationCount, 1)
-        XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true))
+        XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true))
         XCTAssertEqual(response, true)
         XCTAssertEqual(service.pendingInvitationCount, 0)
         service.stop()
@@ -130,7 +130,7 @@ extension ScannerServiceInvitationTests {
                     if accepted { XCTAssertTrue(captured === session) }
                 }
                 session = try service.sessionForPeer(b)
-                if state == "accepted" { XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)) }
+                if state == "accepted" { XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true)) }
             }
             session = try service.sessionForPeer(b)
             service.browser(browser, lostPeer: b)
@@ -139,7 +139,7 @@ extension ScannerServiceInvitationTests {
             XCTAssertNil(service.foundPeersDict["remote"])
             XCTAssertNil(service.foundPeersDict["retargeted"])
             XCTAssertThrowsError(try service.capturePeerTransport(session: try XCTUnwrap(session), peerID: c, prepare: true))
-            if state == "pending" { XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)) }
+            if state == "pending" { XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true)) }
             let physical = try service.capturePeerTransport(session: try XCTUnwrap(session), peerID: b, prepare: true)
             XCTAssertEqual(physical.peerID, b); XCTAssertTrue(physical.mcSession === session)
             XCTAssertEqual(physical.channelSession?.peerEndpoint, endpoint)
@@ -169,7 +169,7 @@ extension ScannerServiceInvitationTests {
             let release = DispatchSemaphore(value: 0)
             service.duringInvitationAcceptance = { entered.fulfill(); _ = release.wait(timeout: .now() + 3) }
             DispatchQueue.global().async {
-                XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)); accepted.fulfill()
+                XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true)); accepted.fulfill()
             }
             await fulfillment(of: [entered], timeout: 2)
             DispatchQueue.global().async {
@@ -209,7 +209,7 @@ extension ScannerServiceInvitationTests {
             XCTAssertNil(service.foundPeersDict["remote"])
             XCTAssertEqual(service.retainedInvitationCount, 1)
         }
-        XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true))
+        XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true))
         service.duringInvitationAcceptance = nil
         XCTAssertEqual(replies, [true]); XCTAssertEqual(service.retainedInvitationCount, 1)
         XCTAssertThrowsError(try service.prepareBridge(remoteUUID: "remote", peerID: c))
@@ -230,7 +230,7 @@ extension ScannerServiceInvitationTests {
         service.receiveInvitation(from: b, endpoint: fresh) { accepted, _ in replies.append(accepted) }
         service.session(oldSession, peer: b, didChange: .notConnected)
         XCTAssertEqual(service.pendingInvitationCount, 1); XCTAssertEqual(replies, [])
-        XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true))
+        XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true))
         XCTAssertEqual(replies, [true])
     }
 
@@ -248,7 +248,7 @@ extension ScannerServiceInvitationTests {
             else {
                 let endpoint = try BridgePeerChannelAuthentication.Endpoint(initiator: "remote", responder: "local", setupID: UUID().uuidString, domain: "nearby")
                 service.receiveInvitation(from: b, endpoint: endpoint) { accepted, _ in replies.append(accepted) }
-                if state == "accepted" { XCTAssertTrue(service.respondToInvitation(remoteUUID: "remote", accept: true)) }
+                if state == "accepted" { XCTAssertTrue(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true)) }
             }
             service.browser(browser, lostPeer: b)
             now = 110; service.expireInvitations()
@@ -263,7 +263,74 @@ extension ScannerServiceInvitationTests {
             XCTAssertEqual(service.retainedInvitationCount, 1)
             service.stop()
             XCTAssertEqual(service.retainedInvitationCount, 0)
-            XCTAssertFalse(service.respondToInvitation(remoteUUID: "remote", accept: true))
+            XCTAssertFalse(service.respondToCurrentInvitationForTesting(remoteUUID: "remote", accept: true))
+        }
+    }
+}
+
+// Transport fixtures answer immediately; UI tests below retain the published ID.
+extension ScannerService {
+    @discardableResult
+    func respondToCurrentInvitationForTesting(remoteUUID: String, accept: Bool) -> Bool {
+        guard let id = invitationDecisionID(remoteUUID: remoteUUID) else { return false }
+        return respondToInvitation(remoteUUID: remoteUUID, invitationID: id, accept: accept)
+    }
+}
+
+
+extension ScannerServiceInvitationTests {
+    @MainActor func testPublishedInvitationActionsCannotAnswerReplacementInvitation() async throws {
+        for replacement in ["same-peer", "new-peer", "service"] {
+            let owner = await ScannerPair.owner()
+            let cell = await EntityScannerCell(owner: owner)
+            var service = ScannerService(admission: ScannerAdmission(), owner: owner, sessionUUID: "local")
+            defer { cell.connectService = nil; service.stop() }
+            var now = ProcessInfo.processInfo.systemUptime
+            service.invitationClock = { now }
+            service.deferEventDrainForTesting = true
+            cell.connectService = service; cell.requester = owner; service.radarDelegate = cell
+            var events: [FlowElement] = []
+            cell.consumerFlowForTesting = { events.append($0) }
+            let peer = MCPeerID(displayName: "old physical peer")
+            service.foundPeersDict["remote"] = peer; service.reversedFoundPeersDict[peer] = "remote"
+            var oldReplies: [Bool] = []
+            service.receiveInvitation(from: peer) { accepted, _ in oldReplies.append(accepted) }
+            service.drainEventsForTesting()
+            let oldAccept = try scannerPublishedAction(events, name: "accept")
+            let oldReject = try scannerPublishedAction(events, name: "reject")
+            if replacement == "service" {
+                let oldService = service
+                oldService.stop()
+                service = ScannerService(admission: ScannerAdmission(), owner: owner, sessionUUID: "local")
+                service.deferEventDrainForTesting = true
+                cell.connectService = service; service.radarDelegate = cell
+                // A queued callback from the retired service cannot publish a new action.
+                let count = events.count
+                cell.invitationReceived(manager: oldService, peerID: peer, remoteUUID: "remote")
+                XCTAssertEqual(events.count, count)
+            } else {
+                now += 61
+                service.expireInvitations()
+            }
+            XCTAssertEqual(oldReplies, [false])
+            let freshPeer = replacement == "same-peer" ? peer : MCPeerID(displayName: "replacement physical peer")
+            service.foundPeersDict["remote"] = freshPeer; service.reversedFoundPeersDict[freshPeer] = "remote"
+            var freshReplies: [Bool] = []
+            service.receiveInvitation(from: freshPeer) { accepted, _ in freshReplies.append(accepted) }
+            service.drainEventsForTesting()
+            let freshAction = try scannerPublishedAction(events, name: "accept")
+            XCTAssertNotEqual(try scannerDecisionID(oldAccept, key: "invitationID"), try scannerDecisionID(freshAction, key: "invitationID"))
+            for action in [oldAccept, oldReject] {
+                let value = try await cell.set(keypath: "respondToInvitation", value: action, requester: owner)
+                guard case let .object(reply)? = value else { return XCTFail("Missing invitation response") }
+                XCTAssertEqual(reply["status"], .string("notFound"))
+                XCTAssertTrue(freshReplies.isEmpty); XCTAssertEqual(service.pendingInvitationCount, 1)
+            }
+            let result = try await cell.set(keypath: "respondToInvitation", value: freshAction, requester: owner)
+            guard case let .object(reply)? = result else { return XCTFail("Missing acceptance") }
+            XCTAssertEqual(reply["status"], .string("accepted")); XCTAssertEqual(freshReplies, [true])
+            _ = try await cell.set(keypath: "respondToInvitation", value: freshAction, requester: owner)
+            XCTAssertEqual(freshReplies, [true])
         }
     }
 }

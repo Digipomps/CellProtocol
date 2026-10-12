@@ -50,6 +50,8 @@ final class ScannerConsumerContext: @unchecked Sendable {
     enum Kind: Hashable { case incoming, outgoing, detail, outgoingAggregate, outgoingDetail }
     struct Key: Hashable { let kind: Kind; let generation: String; let id: String }
     struct Record {
+        /// Local one-shot UI selector. A reused wire ID must never reuse consent.
+        let decisionID = UUID().uuidString
         let context: ScannerConsumerContext
         let payload: Object
         let bytes: Int
@@ -73,12 +75,17 @@ final class ScannerConsumerContext: @unchecked Sendable {
         records = records.filter { now < $0.value.deadline && $0.value.context.isLive }
         for (key, record) in removed where !record.consumed { expired?(key.kind, record) }
     }
-    func retire(_ generation: String) { records = records.filter { $0.key.generation != generation } }
+    func retire(_ generation: String) {
+        let removed = records.filter { $0.key.generation == generation }
+        records = records.filter { $0.key.generation != generation }
+        for (key, record) in removed where !record.consumed { expired?(key.kind, record) }
+    }
     func reset() { records.removeAll(); expiryTask?.cancel(); expiryTask = nil }
     var retainedCountForTesting: Int { records.count }
     var snapshot: (count: Int, bytes: Int) { prune(); return (records.count, records.values.reduce(0) { $0 + $1.bytes }) }
 
-    func insert(_ kind: Kind, id: String, payload: Object, context: ScannerConsumerContext, lifetime: TimeInterval? = nil) throws {
+    @discardableResult
+    func insert(_ kind: Kind, id: String, payload: Object, context: ScannerConsumerContext, lifetime: TimeInterval? = nil) throws -> Record {
         prune()
         let key = Key(kind: kind, generation: context.generation, id: id)
         let payload = try JSONDecoder().decode(Object.self, from: JSONEncoder().encode(payload))
@@ -91,7 +98,8 @@ final class ScannerConsumerContext: @unchecked Sendable {
               bytes <= Self.maximumBytesPerPeer - peer.reduce(0, { $0 + $1.bytes }) else {
             throw BridgeChannelAuthentication.Failure.capacity
         }
-        try context.perform { records[key] = Record(context: context, payload: payload, bytes: bytes, deadline: clock() + min(Self.ttl, max(0, lifetime ?? Self.ttl))) }
+        let record = Record(context: context, payload: payload, bytes: bytes, deadline: clock() + min(Self.ttl, max(0, lifetime ?? Self.ttl)))
+        try context.perform { records[key] = record }
         if expiryTask == nil {
             expiryTask = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -102,6 +110,7 @@ final class ScannerConsumerContext: @unchecked Sendable {
                 }
             }
         }
+        return record
     }
     func remove(_ kind: Kind, id: String, context: ScannerConsumerContext) {
         records[Key(kind: kind, generation: context.generation, id: id)] = nil
@@ -111,6 +120,12 @@ final class ScannerConsumerContext: @unchecked Sendable {
         guard let record = records[Key(kind: kind, generation: context.generation, id: id)],
               !record.consumed, record.context.matches(context) else { return nil }
         return record
+    }
+    func consumeDecision(_ kind: Kind, id: String, decisionID: String, context: ScannerConsumerContext) throws -> Record {
+        guard find(kind, id: id, context: context)?.decisionID == decisionID else {
+            throw BridgeChannelAuthentication.Failure.invalidProof
+        }
+        return try consume(kind, id: id, context: context)
     }
     func consume(_ kind: Kind, id: String, context: ScannerConsumerContext) throws -> Record {
         guard let record = find(kind, id: id, context: context) else { throw BridgeChannelAuthentication.Failure.invalidProof }

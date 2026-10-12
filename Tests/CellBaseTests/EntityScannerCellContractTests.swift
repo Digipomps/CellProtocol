@@ -25,11 +25,12 @@ final class EntityScannerCellContractTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPeerBridgeFailureReachesScannerStatusFlow() async throws {
+    @MainActor func testPeerBridgeFailureReachesScannerStatusFlow() async throws {
         let vault = MockIdentityVault(), owner = await vault.identity(for: "scanner", makeNewIfNotFound: true)!
         CellBase.defaultIdentityVault = vault
         let cell = await EntityScannerCell(owner: owner), service = ScannerService(admission: ScannerAdmission(), owner: owner)
-        defer { service.stop() }
+        cell.connectService = service; service.radarDelegate = cell
+        defer { service.stop(); cell.connectService = nil }
         let reported = expectation(description: "consumer received peer auth failure")
         let subscription = cell.getFeedPublisher().sink(receiveCompletion: { _ in }, receiveValue: { flow in
             guard flow.topic == "scanner.status", case let .object(value) = flow.content,

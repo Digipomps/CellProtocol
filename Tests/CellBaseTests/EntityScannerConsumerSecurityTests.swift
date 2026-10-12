@@ -75,6 +75,8 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
         let remoteCell = await EntityScannerCell(owner: f.pair.b.owner)
         remoteCell.connectService = f.pair.b; remoteCell.requester = f.pair.b.owner; f.pair.b.radarDelegate = remoteCell
         defer { remoteCell.pendingRequests.reset(); remoteCell.connectService = nil; f.pair.b.radarDelegate = nil }
+        var remoteEvents: [FlowElement] = []
+        remoteCell.consumerFlowForTesting = { remoteEvents.append($0) }
         let remoteAnchor = await EntityAnchorCell(owner: f.pair.b.owner)
         try await f.resolver.registerNamedEmitCell(name: "EntityAnchor", emitCell: remoteAnchor, scope: .identityUnique, identity: f.pair.b.owner)
         let request = try await f.request()
@@ -88,7 +90,7 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
         wrong = try await f.signAcceptance(wrong, signer: alias)
         try await f.deliver(wrong)
         XCTAssertEqual(f.established, 0)
-        let result = try await remoteCell.set(keypath: "acceptContact", value: .object(request), requester: f.pair.b.owner)
+        let result = try await remoteCell.set(keypath: "acceptContact", value: try scannerPublishedAction(remoteEvents, name: "acceptContact"), requester: f.pair.b.owner)
         guard case let .object(reply)? = result else { return XCTFail("Missing acceptance result") }
         XCTAssertEqual(reply["status"], .string("accepted"))
         try await f.pair.deliverNext()
@@ -98,7 +100,7 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
             guard case let .object(encounter) = value else { return XCTFail("Missing stored encounter") }
             XCTAssertEqual(encounter["requestId"], .string(f.id(request)))
         }
-        let duplicate = try await remoteCell.set(keypath: "acceptContact", value: .object(request), requester: f.pair.b.owner)
+        let duplicate = try await remoteCell.set(keypath: "acceptContact", value: try scannerPublishedAction(remoteEvents, name: "acceptContact"), requester: f.pair.b.owner)
         guard case let .object(denied)? = duplicate else { return XCTFail("Missing replay rejection") }
         XCTAssertEqual(denied["status"], .string("rejected"))
     }
@@ -112,7 +114,7 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
         var flow = f.flow(request); flow.topic = "scanner.transport.contact.request"
         try await f.pair.b.sendScannerFlowElement(flow, remoteUUID: f.pair.a.mySessionUUID)
         try await f.pair.deliverNext()
-        let result = try await f.cell.set(keypath: "acceptContact", value: .object(request), requester: owner)
+        let result = try await f.cell.set(keypath: "acceptContact", value: try scannerPublishedAction(f.published, name: "acceptContact"), requester: owner)
         guard case let .object(reply)? = result else { return XCTFail("Missing acceptance") }
         XCTAssertEqual(reply["status"], .string("accepted"))
         let stored = try await f.anchor.get(keypath: "proofs.encounters.\(f.id(request))", requester: owner)
@@ -256,6 +258,7 @@ final class EntityScannerConsumerSecurityTests: XCTestCase {
 
     @MainActor func testPendingRequestFloodInvalidProofsTTLAndRetirementStayBoundedWithHealthyPeer() async throws {
         let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
         for i in 0..<1000 {
             var detailFlow = FlowElement(title: "detail", content: .object(["requestId": .string("detail-\(i)")]), properties: .init(type: .event, contentType: .object))
             detailFlow.topic = "scanner.probe.detail.request"
@@ -309,6 +312,7 @@ private actor ConsumerBarrier {
     let resolver: MockCellResolver
     let context: ScannerConsumerContext
     var established = 0
+    var published: [FlowElement] = []
     init(limits: BridgeChannelLimits = BridgeChannelLimits(), sharedOwner: Identity? = nil) async throws {
         pair = try await ScannerPair(limits: limits, ownerA: sharedOwner, ownerB: sharedOwner)
         try await pair.finish(pair.start())
@@ -323,6 +327,7 @@ private actor ConsumerBarrier {
         await perspective.addInterceptForGet(requester: pair.a.owner, key: "advertisedPurpose") { _, _ in .null }
         await perspective.addInterceptForSet(requester: pair.a.owner, key: "perspective.query.match") { _, _, _ in .object(["count": .integer(0)]) }
         try await resolver.registerNamedEmitCell(name: "Perspective", emitCell: perspective, scope: .identityUnique, identity: pair.a.owner)
+        cell.consumerFlowForTesting = { [weak self] in self?.published.append($0) }
         cell.consumerEventForTesting = { [weak self] topic in if topic == "scanner.contact.established" { self?.established += 1 } }
     }
     func stop() { cell.pendingRequests.reset(); cell.connectService = nil; pair.a.radarDelegate = nil; pair.stop() }
@@ -380,8 +385,7 @@ private actor ConsumerBarrier {
             try await cell.scannerFlowReceived(manager: pair.a, flowElement: flow(acceptance), context: context)
         }
     }
-    func incomingRequest(signer: Identity, context: ScannerConsumerContext, padding: Int = 0) async throws -> Object {
-        let id = UUID().uuidString
+    func incomingRequest(signer: Identity, context: ScannerConsumerContext, padding: Int = 0, id: String = UUID().uuidString) async throws -> Object {
         var request: Object = ["protocolVersion": .string("entity-contact-v1"), "messageType": .string("request"),
             "requestId": .string(id), "encounterId": .string(id), "createdAt": .float(Date().timeIntervalSince1970),
             "requesterSessionUUID": .string(context.remoteUUID), "remoteUUID": .string(context.localUUID),
@@ -487,12 +491,12 @@ extension EntityScannerConsumerSecurityTests {
 }
 
 private extension ConsumerFixture {
-    func prepareProbes() async throws {
-        cell.configureProbeForTesting(.approved(entityKind: .person, purposeRefs: ["purpose://test"], interestRefs: []))
+    func prepareProbes(references: [String] = ["purpose://test"]) async throws {
+        cell.configureProbeForTesting(.approved(entityKind: .person, purposeRefs: references, interestRefs: [], probeDisclosureRefs: references))
         pair.a.deferEventDrainForTesting = true
         let browser = MCNearbyServiceBrowser(peer: pair.aPeer, serviceType: "haven-radar")
         pair.a.browser(browser, foundPeer: pair.bPeer, withDiscoveryInfo: NearbyBeacon(sessionUUID: pair.b.mySessionUUID,
-            entityKind: .person, purposeTokens: [NearbyBeacon.token(forCanonicalReference: "purpose://test")]).encodeToDiscoveryInfo())
+            entityKind: .person, purposeTokens: references.map(NearbyBeacon.token(forCanonicalReference:))).encodeToDiscoveryInfo())
         pair.a.drainEventsForTesting()
     }
     func aggregateRequest() async throws -> (String, String) {
@@ -539,4 +543,136 @@ private extension ConsumerFixture {
     func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
     func scannerFlowReceived(manager: ScannerService, flowElement: FlowElement, context: ScannerConsumerContext) async throws { flow = flowElement }
+}
+
+
+extension EntityScannerConsumerSecurityTests {
+    @MainActor func testContactActionCannotAuthorizeReusedRequestAfterExpiryOrReconnect() async throws {
+        for reconnect in [false, true] {
+            let f = try await ConsumerFixture(); defer { f.stop() }
+            var now = ProcessInfo.processInfo.systemUptime
+            f.cell.pendingRequests.clock = { now }
+            let id = UUID().uuidString
+            let original = try await f.incomingRequest(signer: f.pair.b.owner, context: f.context, id: id)
+            try await f.receiveProbe(original, topic: "scanner.transport.contact.request")
+            let oldAction = try scannerPublishedAction(f.published, name: "acceptContact")
+            if reconnect {
+                await f.pair.pa.gate.close(); await f.pair.pb.gate.close()
+                let vault = MockIdentityVault()
+                var other = Identity(f.pair.b.owner.uuid, displayName: "new key", identityVault: vault)
+                await vault.addIdentity(identity: &other, for: "replacement")
+                f.pair.b.owner = other
+                let fresh = try f.pair.prepareReconnect()
+                try await f.pair.authenticateTransports(fresh.0, fresh.1)
+            } else {
+                now += ScannerPendingRequests.ttl + 1
+                f.cell.pendingRequests.prune()
+            }
+            let current = try f.pair.a.consumerContext(remoteUUID: f.context.remoteUUID)
+            let replacement = try await f.incomingRequest(signer: f.pair.b.owner, context: current, padding: 1, id: id)
+            try await f.receiveProbe(replacement, topic: "scanner.transport.contact.request", context: current)
+            let newAction = try scannerPublishedAction(f.published, name: "acceptContact")
+            XCTAssertNotEqual(try scannerDecisionID(oldAction), try scannerDecisionID(newAction))
+            let baseline = try f.disk()
+            let stale = try await f.cell.set(keypath: "acceptContact", value: oldAction, requester: f.pair.a.owner)
+            guard case let .object(rejection)? = stale else { return XCTFail("Missing stale rejection") }
+            XCTAssertEqual(rejection["status"], .string("rejected"))
+            XCTAssertEqual(f.established, 0); XCTAssertEqual(try f.disk(), baseline)
+            XCTAssertNotNil(f.cell.pendingRequests.find(.incoming, id: id, context: current))
+            let accepted = try await f.cell.set(keypath: "acceptContact", value: newAction, requester: f.pair.a.owner)
+            guard case let .object(result)? = accepted else { return XCTFail("Missing acceptance") }
+            XCTAssertEqual(result["status"], .string("accepted")); XCTAssertEqual(f.established, 1)
+            let stored = try await f.anchor.get(keypath: "proofs.encounters.\(id)", requester: f.pair.a.owner)
+            guard case let .object(encounter) = stored, case let .object(proof)? = encounter["requestProof"] else { return XCTFail("Missing proof") }
+            XCTAssertEqual(try f.canonical(proof), try f.canonical(replacement))
+        }
+    }
+
+    @MainActor func testDetailActionCannotRevealForReusedRequestAfterExpiryOrReconnect() async throws {
+        for reconnect in [false, true] {
+            let f = try await ConsumerFixture(); defer { f.stop() }
+            try await f.prepareProbes()
+            var now = ProcessInfo.processInfo.systemUptime
+            f.cell.pendingRequests.clock = { now }
+            let payload: Object = ["requestId": .string("reused-detail")]
+            try await f.receiveProbe(payload, topic: "scanner.probe.detail.request")
+            let oldAction = try scannerPublishedAction(f.published, name: "approve")
+            if reconnect {
+                await f.pair.pa.gate.close(); await f.pair.pb.gate.close()
+                let vault = MockIdentityVault()
+                var other = Identity(f.pair.b.owner.uuid, displayName: "new detail key", identityVault: vault)
+                await vault.addIdentity(identity: &other, for: "replacement-detail")
+                f.pair.b.owner = other
+                let fresh = try f.pair.prepareReconnect()
+                try await f.pair.authenticateTransports(fresh.0, fresh.1)
+                try await f.prepareProbes()
+            } else {
+                now += ScannerPendingRequests.ttl + 1
+                f.cell.pendingRequests.prune()
+            }
+            let current = try f.pair.a.consumerContext(remoteUUID: f.context.remoteUUID)
+            try await f.receiveProbe(payload, topic: "scanner.probe.detail.request", context: current)
+            let newAction = try scannerPublishedAction(f.published, name: "approve")
+            XCTAssertNotEqual(try scannerDecisionID(oldAction), try scannerDecisionID(newAction))
+            let observer = ProbeRequestObserver(); f.pair.b.radarDelegate = observer
+            let stale = try await f.cell.set(keypath: "probeDetail", value: oldAction, requester: f.pair.a.owner)
+            guard case let .object(rejected)? = stale else { return XCTFail("Missing rejection") }
+            XCTAssertNotEqual(rejected["status"], .string("sent"))
+            XCTAssertNotNil(f.cell.pendingRequests.find(.detail, id: "reused-detail", context: current))
+            let fresh = try await f.cell.set(keypath: "probeDetail", value: newAction, requester: f.pair.a.owner)
+            guard case let .object(accepted)? = fresh else { return XCTFail("Missing detail result") }
+            XCTAssertEqual(accepted["status"], .string("sent"))
+            try await f.pair.deliverNext()
+            let reply = try XCTUnwrap(observer.flow)
+            XCTAssertEqual(reply.topic, "scanner.probe.detail")
+            let detail = try JSONDecoder().decode(NearbyProbeDetail.self, from: JSONEncoder().encode(reply.content))
+            XCTAssertEqual(detail.requestId, "reused-detail")
+            XCTAssertEqual(detail.references, ["purpose://test"])
+            let duplicate = try await f.cell.set(keypath: "probeDetail", value: newAction, requester: f.pair.a.owner)
+            guard case let .object(replay)? = duplicate else { return XCTFail("Missing replay rejection") }
+            XCTAssertNotEqual(replay["status"], .string("sent"))
+        }
+    }
+}
+
+
+extension EntityScannerConsumerSecurityTests {
+    @MainActor func testFirstProbeAfterReconnectWorksAndLateOldCleanupCannotResetIt() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        let original = try await f.aggregateRequest()
+        let record = try XCTUnwrap(f.cell.pendingRequests.find(.outgoingAggregate, id: original.0, context: f.context))
+        await f.pair.pa.gate.close(); await f.pair.pb.gate.close()
+        let fresh = try f.pair.prepareReconnect()
+        try await f.pair.authenticateTransports(fresh.0, fresh.1)
+        let current = try f.pair.a.consumerContext(remoteUUID: f.context.remoteUUID)
+        // Do not rediscover/reset state here: the first legitimate attempt must work.
+        let next = try await f.aggregateRequest()
+        f.cell.pendingRequests.expired?(.outgoingAggregate, record)
+        f.cell.scannerChannelRetired(manager: f.pair.a, generation: f.context.generation)
+        XCTAssertNotNil(f.cell.pendingRequests.find(.outgoingAggregate, id: next.0, context: current))
+        try await f.receiveProbe(NearbyProbeAggregate(requestId: next.0, nonce: next.1,
+            entityKind: .person, purposeMatches: .one, interestMatches: nil), topic: "scanner.probe.aggregate", context: current)
+        XCTAssertEqual(f.published.filter { $0.topic == "scanner.probe.aggregate" }.count, 1)
+        XCTAssertNil(f.cell.pendingRequests.find(.outgoingAggregate, id: next.0, context: current))
+    }
+}
+
+
+extension EntityScannerConsumerSecurityTests {
+    @MainActor func testDetailConsentCannotExpandWhenPolicyAndOverlapChange() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        try await f.receiveProbe(["requestId": ValueType.string("frozen-details")], topic: "scanner.probe.detail.request")
+        let action = try scannerPublishedAction(f.published, name: "approve")
+        try await f.prepareProbes(references: ["purpose://test", "purpose://new"])
+        let observer = ProbeRequestObserver(); f.pair.b.radarDelegate = observer
+        let result = try await f.cell.set(keypath: "probeDetail", value: action, requester: f.pair.a.owner)
+        guard case let .object(reply)? = result else { return XCTFail("Missing detail response") }
+        XCTAssertEqual(reply["status"], .string("sent"))
+        try await f.pair.deliverNext()
+        let flow = try XCTUnwrap(observer.flow)
+        let detail = try JSONDecoder().decode(NearbyProbeDetail.self, from: JSONEncoder().encode(flow.content))
+        XCTAssertEqual(detail.references, ["purpose://test"])
+    }
 }

@@ -127,7 +127,7 @@ private final class MultipeerProcessObserver: ConnectServiceDelegate {
         if shouldInvite { manager.invitePeer(remoteUUID) }
     }
     func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) {
-        _ = manager.respondToInvitation(remoteUUID: remoteUUID, accept: remoteUUID == expectedPeer && !inviter)
+        _ = manager.respondToCurrentInvitationForTesting(remoteUUID: remoteUUID, accept: remoteUUID == expectedPeer && !inviter)
     }
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {}
     func proximityChanged(manager: ScannerService, remoteUUID: String, distanceMeters: Float?, directionX: Float?, directionY: Float?, directionZ: Float?) {}
