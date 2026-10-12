@@ -771,10 +771,12 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             defer { _ = membershipLock.withLock { attachmentReservations.remove(messageID) } }
             do {
                 try await authorizeAttachment(attachment, action: "attachments.prepare", requester: requester)
-                try await sourceCell.storage.publish(attachment,
-                    expiresAt: now.addingTimeInterval(TimeInterval(retentionSeconds)), now: now)
             } catch let retry as BridgeSigningBackpressure {
                 throw BridgePreEffectSigningRejection(source: self, keypath: "sendMessage", retry: retry)
+            } catch { return denial(.attachmentUnavailable) }
+            do {
+                try await sourceCell.storage.publish(attachment,
+                    expiresAt: now.addingTimeInterval(TimeInterval(retentionSeconds)), now: now)
             } catch { return denial(.attachmentUnavailable) }
         }
         await beforeSendCommitForTesting?()
@@ -1265,8 +1267,8 @@ extension CorrespondenceCell {
                     do {
                         let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceAttachmentRequest.self)
                         return try await self.performAttachment(key, request: request, requester: requester)
-                    } catch let retry as BridgeSigningBackpressure {
-                        throw BridgePreEffectSigningRejection(source: self, keypath: key, retry: retry)
+                    } catch let rejection as BridgePreEffectSigningRejection {
+                        throw rejection
                     } catch {
                         return .object(["status": .string("error"), "message": .string("attachmentUnavailable")])
                     }
@@ -1277,7 +1279,11 @@ extension CorrespondenceCell {
     private func performAttachment(_ action: String, request: CorrespondenceAttachmentRequest,
                                    requester: Identity) async throws -> ValueType {
         guard !attachmentProvisioningRequired else { throw CorrespondenceAttachmentError.unavailable }
-        try await authorizeAttachment(request, action: action, requester: requester)
+        do {
+            try await authorizeAttachment(request, action: action, requester: requester)
+        } catch let retry as BridgeSigningBackpressure {
+            throw BridgePreEffectSigningRejection(source: self, keypath: action, retry: retry)
+        }
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
         if senderActions.contains(action), requester.uuid != request.senderIdentityUUID {
             throw CorrespondenceAttachmentError.wrongSender

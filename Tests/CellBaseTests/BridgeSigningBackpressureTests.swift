@@ -57,6 +57,56 @@ final class BridgeSigningBackpressureTests: XCTestCase {
             nonce: Data(repeating: nonce, count: 64))
     }
 
+    func testInboundSigningFloodDoesNotExhaustAnotherConnectionQuota() async throws {
+        let oldPolicy = CellBase.securityContainmentPolicy
+        let oldController = CellBase.securityContainmentController
+        defer {
+            CellBase.securityContainmentPolicy = oldPolicy
+            CellBase.securityContainmentController = oldController
+        }
+        CellBase.securityContainmentController = CellSecurityContainmentController()
+        CellBase.securityContainmentPolicy = .localProtection
+        let vault = MockIdentityVault()
+        let owner = await vault.identity(for: "inbound-quota-victim-fixture", makeNewIfNotFound: true)!
+        let attackerWire = BridgeLifecycleWire(), attacker = BridgeBase(owner: owner)
+        attackerWire.channelSession = try await authenticatedSessionFixture(principal: owner)
+        try await attacker.setTransport(attackerWire, connection: .inbound(publisherUuid: "quota-fixture"))
+        try attacker.activateAuthenticatedChannel()
+        let siblingWire = BridgeLifecycleWire(), sibling = BridgeBase(owner: owner)
+        siblingWire.channelSession = try await authenticatedSessionFixture(principal: owner)
+        try await sibling.setTransport(siblingWire, connection: .inbound(publisherUuid: "quota-fixture"))
+        try sibling.activateAuthenticatedChannel()
+        XCTAssertEqual(attackerWire.channelSession?.endpoint, siblingWire.channelSession?.endpoint)
+        siblingWire.beforeAccept = { command in
+            if command.command == .sign, case .signData(let data)? = command.payload {
+                let signed = try await owner.sign(data: data)
+                let signature = try XCTUnwrap(signed)
+                try await sibling.consumeResponse(command: orderingReply(to: command, payload: .signature(signature)))
+            }
+        }
+        for index in 0..<24 {
+            // The authenticated peer has no active local operation authorizing these proofs.
+            try await attacker.consumeCommand(command: .init(cmd: "sign", identity: owner.publicIdentitySnapshot(),
+                payload: .signData(signingData(owner, nonce: UInt8(index))), cid: 800 + index))
+        }
+        XCTAssertEqual(attackerWire.commands.count, 24)
+        XCTAssertTrue(attackerWire.commands.allSatisfy {
+            guard case .string(let message)? = $0.payload else { return false }
+            return message.hasPrefix("signing denied:")
+        })
+        let proxy = BridgeIdentityVault(cloudBridge: sibling)
+        do {
+            let data = try signingData(owner, nonce: 100)
+            let signature = try await proxy.signMessageForIdentity(messageData: data, identity: owner)
+            let verified = try await vault.verifySignature(signature: signature, messageData: data, for: owner)
+            XCTAssertTrue(verified)
+        } catch {
+            XCTFail("Inbound requests on another bridge must not exhaust outgoing proof quota: \(error)")
+        }
+        await attacker.channelDidClose(try XCTUnwrap(attackerWire.channelSession))
+        await sibling.channelDidClose(try XCTUnwrap(siblingWire.channelSession))
+    }
+
     func testNewAuthenticatedConnectionDoesNotResetSigningQuota() async throws {
         let oldPolicy = CellBase.securityContainmentPolicy
         let oldController = CellBase.securityContainmentController
@@ -107,6 +157,14 @@ final class BridgeSigningBackpressureTests: XCTestCase {
     }
 
     func testUnknownStorageOutcomeNeverBecomesRetryable() async throws {
+        let oldPolicy = CellBase.securityContainmentPolicy
+        let oldController = CellBase.securityContainmentController
+        defer {
+            CellBase.securityContainmentPolicy = oldPolicy
+            CellBase.securityContainmentController = oldController
+        }
+        CellBase.securityContainmentController = CellSecurityContainmentController()
+        CellBase.securityContainmentPolicy = .localProtection
         let owner = await MockIdentityVault().identity(for: "storage-failure-fixture", makeNewIfNotFound: true)!
         let cell = await BackpressureStorageFailureCell(owner: owner)
         let wire = BridgeLifecycleWire(), bridge = BridgeBase(owner: owner)

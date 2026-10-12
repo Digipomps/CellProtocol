@@ -13,7 +13,7 @@ public struct BridgeSigningBackpressure: Error, Equatable, Sendable {
     // An application rejection remains an error for older clients. This marker
     // is emitted only at a known pre-effect authorization rejection boundary.
     var rejection: ValueType {
-        .object(["status": .string("error"), "message": .string("attachmentUnavailable"),
+        .object(["status": .string("error"), "message": .string("signingTemporarilyUnavailable"),
                  "&bridgeRetry": .string("signing_before_effect.v1"),
                  "reasonCode": .string("signing_rate_limited"),
                  "retryAfterSeconds": .integer(retryAfterSeconds)])

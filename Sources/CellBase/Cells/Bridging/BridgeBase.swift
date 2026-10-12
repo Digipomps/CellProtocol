@@ -1144,7 +1144,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 }
 
                 Task {
-                    if let denial = await self.signingContainmentDenial(for: identity) {
+                    if let denial = await self.signingContainmentDenial(for: identity, direction: .outgoing) {
                         await self.recordSigningDeniedEvent(
                             denial.message,
                             identity: identity,
@@ -1251,8 +1251,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         )
     }
 
+    private enum SigningDirection { case incoming, outgoing }
+
     private func signingContainmentDenial(
-        for identity: Identity
+        for identity: Identity, direction: SigningDirection
     ) async -> (message: String, reasonCode: String, requiredAction: String, retryAfterSeconds: Int?)? {
         guard let controller = CellBase.securityContainmentController else {
             return nil
@@ -1267,12 +1269,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
 
         let fingerprint = identity.signingPublicKeyFingerprint ?? "missing-signing-key"
-        // Native channel renewal creates a new server BridgeBase. Bind its
-        // budget to the authenticated endpoint, logical publisher/consumer and
-        // proven principal instead of a disposable bridge instance UUID.
-        // Peer/legacy transports keep their existing scope.
+        // Outgoing proof requests share their budget across native channel renewal.
+        // Incoming requests have not passed local operation/permit authorization;
+        // charging a shared scope here lets rejected attempts starve other bridges.
         let scopeResource: String
-        if let endpoint = channelSession?.endpoint {
+        if direction == .outgoing, let endpoint = channelSession?.endpoint {
             scopeResource = ["native", endpoint.audience, publisherUuid ?? "consumer"].joined(separator: ":")
         } else { scopeResource = uuid }
         let scope = [
@@ -1570,7 +1571,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         )
                         return
                     }
-                    if let denial = await signingContainmentDenial(for: identity) {
+                    if let denial = await signingContainmentDenial(for: identity, direction: .incoming) {
                         await sendSigningDenied(
                             denial.message,
                             cid: command.cid,
