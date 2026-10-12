@@ -68,6 +68,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     // Deterministic barriers retain all real verification/resolver/storage work.
     var consumerSuspension: ((String) async -> Void)?
     var consumerEventForTesting: ((String) -> Void)?
+    var consumerFlowForTesting: ((FlowElement) -> Void)?
     private var emitScannerEvent: ((FlowElement) -> Void)?
     private var deferredConsumerEvents: [FlowElement]?
     private var disclosurePolicy = NearbyDisclosurePolicy.strict
@@ -84,11 +85,16 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         (peerStates.count, peerBeacons.count, peerOverlaps.count, peerStateLeases.values.reduce(0) { $0 + $1.retention.retainedBytes })
     }
     private var probeSession = NearbyProbeSession()
-    private var automaticProbeRemoteUUIDs = Set<String>()
+    private var automaticProbeRemoteUUIDs = [String: UUID]()
+    /// Decision IDs bind mutable probe state to the exact pending operation.
+    private var activeProbeDecisions = [String: String]()
     private var policyExpiryTask: Task<Void, Never>?
     /// The current picture, kept by the cell itself so a skeleton can draw a
     /// radar from `radar` without a view model subscribing to the flow.
     private var radarLedger = RadarEntityLedger()
+    var retainedAuxiliaryStateForTesting: (radarCount: Int, radarBytes: Int, history: Int, results: Int) {
+        (radarLedger.entitiesById.count, radarLedger.retainedBytes, probeSession.retainedSnapshot.history, probeSession.resultsByRemoteUUID.count)
+    }
     @MainActor private lazy var advertisementExchange = NearbyAdvertisementExchange()
     private var selectedAdvertisement: NearbyAdvertisement?
     private var selectedAccessChallenge: NearbyAccessChallenge?
@@ -412,11 +418,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             guard await self.validateAccess("-w--", at: "respondToInvitation", for: requester),
                   case let .object(object) = value,
                   let remoteUUID = self.string(from: object["remoteUUID"]),
+                  let decision = self.string(from: object["invitationID"]),
+                  let invitationID = UUID(uuidString: decision),
                   let accept = self.bool(from: object["accept"]),
                   let service = self.connectService else {
                 throw SetValueError.paramErr
             }
-            let handled = service.respondToInvitation(remoteUUID: remoteUUID, accept: accept)
+            let handled = service.respondToInvitation(remoteUUID: remoteUUID, invitationID: invitationID, accept: accept)
             if !accept, handled, self.peerStates[remoteUUID] != nil {
                 do {
                     try self.transitionPeer(remoteUUID, to: .rejected)
@@ -450,8 +458,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func startConnectService(requester: Identity) async throws {
         let previousService = connectService
+        previousService?.stopAndPublishLifecycle()
         connectService = nil
-        previousService?.stop()
+        pendingRequests.reset()
+        activeProbeDecisions.removeAll()
+        automaticProbeRemoteUUIDs.removeAll()
         policyExpiryTask?.cancel()
         policyExpiryTask = nil
 
@@ -485,14 +496,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         }
 
         service.radarDelegate = self
-        await MainActor.run {
-            service.advertisementExchange = self.advertisementExchange
-            self.advertisementExchange.authorizeProof = { evidence, policy, reader in
-                await NearbyAgreementAuthorization.allows(evidence, policy: policy, reader: reader)
-            }
+        service.advertisementExchange = advertisementExchange
+        advertisementExchange.authorizeProof = { evidence, policy, reader in
+            await NearbyAgreementAuthorization.allows(evidence, policy: policy, reader: reader)
         }
-        service.start()
         connectService = service
+        service.start()
 
         var flowElement = FlowElement(title: "Starting", content: .string("start"), properties: FlowElement.Properties(type: .content, contentType: .string))
         flowElement.topic = "scanner"
@@ -529,10 +538,11 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func stopConnectService(requester: Identity) async {
-        await advertisementExchange.stop()
         let service = connectService
+        await advertisementExchange.stop()
+        guard service === connectService else { return }
+        service?.stopAndPublishLifecycle()
         connectService = nil
-        service?.stop()
         pendingRequests.reset()
         peerBeacons.removeAll()
         peerOverlaps.removeAll()
@@ -544,6 +554,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         advertisementSelectionID = UUID()
         advertisementStatus = "Velg et treff for å lese det som er annonsert."
         probeSession.reset()
+        activeProbeDecisions.removeAll()
         automaticProbeRemoteUUIDs.removeAll()
         localBeacon = nil
         policyExpiryTask?.cancel()
@@ -648,7 +659,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             let id = try requiredString(supplied, "requestId")
             // The UI payload is only a selector. The verified, channel-bound record
             // is the source of truth; it is reserved exactly once before any await.
-            let record = try pendingRequests.consume(.incoming, id: id, context: context)
+            let record = try pendingRequests.consumeDecision(.incoming, id: id, decisionID: requiredString(supplied, "decisionID"), context: context)
             var result: ValueType?
             try await context.physical.gate.withAuthenticatedWork { @MainActor [self] in
                 let request = record.payload
@@ -973,7 +984,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         requestObject: Object,
         remoteUUID: String,
         verification: Object,
-        includeAcceptAction: Bool
+        decisionID: String
     ) -> Object {
         var payload = makeScannerEventObject(
             event: "contactReceived",
@@ -988,11 +999,13 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         payload["requesterPerspective"] = requestObject["requesterPerspective"] ?? .null
         payload["verification"] = .object(verification)
 
-        if includeAcceptAction {
-            payload["actions"] = .object([
-                "acceptContact": .object(makeActionObject(keypath: "acceptContact", label: "accept", payload: .object(requestObject)))
-            ])
-        }
+        payload["actions"] = .object([
+            "acceptContact": .object(makeActionObject(keypath: "acceptContact", label: "accept", payload: .object([
+                "requestId": requestObject["requestId"] ?? .null,
+                "requesterSessionUUID": .string(remoteUUID),
+                "decisionID": .string(decisionID)
+            ])))
+        ])
 
         return payload
     }
@@ -1105,6 +1118,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func publishScannerEvent(_ element: FlowElement) {
         consumerEventForTesting?(element.topic)
+        consumerFlowForTesting?(element)
         emitScannerEvent?(element)
     }
 
@@ -1139,6 +1153,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func connectedDevicesChanged(manager: ScannerService, connectedDevices: [String]) {
+        guard manager === connectService else { return }
         CellBase.diagnosticLog("EntityScannerCell connected devices changed count=\(connectedDevices.count)", domain: .flow)
         let requester = activeLocalIdentity(service: manager)
         let payload = makeScannerEventObject(
@@ -1152,14 +1167,19 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     func scannerPeerStateChanged(manager: ScannerService) {
         guard manager === connectService else { return }
+        probeSession.prune()
+        radarLedger.prune(visibleRemoteUUIDs: Set(manager.foundPeersDict.keys))
+        for remote in radarLedger.entitiesById.keys where manager.peerStateLease(remoteUUID: remote) == nil { radarLedger.remove(remote) }
         for (remote, lease) in peerStateLeases where !lease.source.isLive || !lease.retention.isLive || manager.peerStateLease(remoteUUID: remote) !== lease.source {
             retirePeerState(remote)
         }
     }
 
     private func retirePeerState(_ remoteUUID: String) {
+        radarLedger.remove(remoteUUID)
         peerStates[remoteUUID] = nil; peerBeacons[remoteUUID] = nil; peerOverlaps[remoteUUID] = nil
-        peerStateLeases[remoteUUID] = nil; automaticProbeRemoteUUIDs.remove(remoteUUID)
+        peerStateLeases[remoteUUID] = nil; automaticProbeRemoteUUIDs.removeValue(forKey: remoteUUID)
+        activeProbeDecisions[remoteUUID] = nil
         probeSession.removeResult(for: remoteUUID)
     }
 
@@ -1219,6 +1239,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func lostDeviceChanged(manager: ScannerService, lostDevice: MCPeerID, remoteUUID: String) {
+        guard manager === connectService else { return }
         let requester = activeLocalIdentity(service: manager)
         // Loss is a retirement, not a permanent dictionary entry in .lost.
         retirePeerState(remoteUUID)
@@ -1234,6 +1255,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func invitationReceived(manager: ScannerService, peerID: MCPeerID, remoteUUID: String) {
+        guard manager === connectService, let invitationID = manager.invitationDecisionID(remoteUUID: remoteUUID) else { return }
         let requester = activeLocalIdentity(service: manager)
         guard retainPeerState(remoteUUID, manager: manager) else { return }
         var payload = makeScannerEventObject(
@@ -1249,12 +1271,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             "accept": .object(makeActionObject(
                 keypath: "respondToInvitation",
                 label: "accept",
-                payload: .object(["remoteUUID": .string(remoteUUID), "accept": .bool(true)])
+                payload: .object(["remoteUUID": .string(remoteUUID), "invitationID": .string(invitationID.uuidString), "accept": .bool(true)])
             )),
             "reject": .object(makeActionObject(
                 keypath: "respondToInvitation",
                 label: "reject",
-                payload: .object(["remoteUUID": .string(remoteUUID), "accept": .bool(false)])
+                payload: .object(["remoteUUID": .string(remoteUUID), "invitationID": .string(invitationID.uuidString), "accept": .bool(false)])
             ))
         ])
         pushScannerEvent(
@@ -1266,6 +1288,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func scannerStatusChanged(manager: ScannerService, status: String, remoteUUID: String?) {
+        guard manager === connectService else { return }
         let requester = activeLocalIdentity(service: manager)
         var payload = makeScannerEventObject(
             event: "status",
@@ -1282,15 +1305,19 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
               disclosurePolicy.probeMode == .onOverlap,
               peerOverlaps[remoteUUID]?.count ?? 0 > 0,
               peerStates[remoteUUID]?.state == .beaconMatched,
-              automaticProbeRemoteUUIDs.insert(remoteUUID).inserted else {
+              automaticProbeRemoteUUIDs[remoteUUID] == nil else {
             return
         }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+        let automaticDecision = UUID()
+        automaticProbeRemoteUUIDs[remoteUUID] = automaticDecision
+        Task { @MainActor [weak self, weak manager] in
+            guard let self, let manager, manager === self.connectService,
+                  self.automaticProbeRemoteUUIDs[remoteUUID] == automaticDecision else { return }
             let result = await self.sendProbeRequest(payload: .string(remoteUUID))
             if case let .object(object) = result,
-               self.string(from: object["status"]) != "sent" {
-                self.automaticProbeRemoteUUIDs.remove(remoteUUID)
+               self.string(from: object["status"]) != "sent",
+               self.automaticProbeRemoteUUIDs[remoteUUID] == automaticDecision {
+                self.automaticProbeRemoteUUIDs.removeValue(forKey: remoteUUID)
             }
         }
     }
@@ -1303,6 +1330,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         directionY: Float?,
         directionZ: Float?
     ) {
+        guard manager === connectService else { return }
         let requester = activeLocalIdentity(service: manager)
         var payload = makeScannerEventObject(
             event: "proximity",
@@ -1318,6 +1346,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     }
 
     func scannerChannelRetired(manager: ScannerService, generation: String) {
+        guard manager === connectService else { return }
         pendingRequests.retire(generation)
         scannerPeerStateChanged(manager: manager)
     }
@@ -1365,17 +1394,16 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             }
             let context = try service.consumerContext(remoteUUID: remoteUUID)
             pendingRequests.expired = { [weak self] kind, record in
-                guard kind == .outgoingAggregate, let self else { return }
-                try? record.context.perform {
-                    if self.peerStates[record.context.remoteUUID]?.state == .probing {
-                        try? self.transitionPeer(record.context.remoteUUID, to: .beaconMatched)
-                    }
-                }
+                guard kind == .outgoingAggregate else { return }
+                self?.retireProbeOperation(record)
             }
-            try pendingRequests.insert(.outgoingAggregate, id: request.requestId,
+            let record = try pendingRequests.insert(.outgoingAggregate, id: request.requestId,
                 payload: ["nonce": .string(request.nonce)], context: context, lifetime: 15)
             do {
-                try context.perform { try transitionPeer(remoteUUID, to: .probing) }
+                try context.perform {
+                    try transitionPeer(remoteUUID, to: .probing)
+                    activeProbeDecisions[remoteUUID] = record.decisionID
+                }
                 var element = FlowElement(
                     title: "Nearby Aggregate Probe",
                     content: content,
@@ -1386,16 +1414,22 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 try await service.sendScannerFlowElement(element, context: context)
             } catch {
                 pendingRequests.remove(.outgoingAggregate, id: request.requestId, context: context)
-                try? context.perform {
-                    if peerStates[remoteUUID]?.state == .probing {
-                        try? transitionPeer(remoteUUID, to: .beaconMatched)
-                    }
-                }
+                retireProbeOperation(record)
                 throw error
             }
             return .object(["status": .string("sent"), "requestId": .string(request.requestId)])
         } catch {
             return .object(makeErrorPayload(error: error, payload: payload))
+        }
+    }
+
+    private func retireProbeOperation(_ record: ScannerPendingRequests.Record) {
+        let remote = record.context.remoteUUID
+        guard activeProbeDecisions[remote] == record.decisionID else { return }
+        activeProbeDecisions[remote] = nil
+        automaticProbeRemoteUUIDs.removeValue(forKey: remote)
+        if peerStates[remote]?.state == .probing {
+            try? transitionPeer(remote, to: .beaconMatched)
         }
     }
 
@@ -1449,6 +1483,7 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         _ = try pendingRequests.consume(.outgoingAggregate, id: aggregate.requestId, context: context)
         try consumerEffect(context) {
             probeSession = nextSession; peerStates[context.remoteUUID] = nextState
+            if activeProbeDecisions[context.remoteUUID] == outgoing.decisionID { activeProbeDecisions[context.remoteUUID] = nil }
             var payload = makeScannerEventObject(event: "probeAggregate", remoteUUID: context.remoteUUID, status: "received")
             payload["probeDisclosure"] = valueType(from: aggregate) ?? .null
             pushScannerEvent(topic: EntityScannerTopics.probeAggregate, title: "Nearby Aggregate Probe Result", payload: payload)
@@ -1463,9 +1498,17 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
               requestId.utf8.count <= 128,
               (try? JSONEncoder().encode(flowElement.content).count) ?? .max <= NearbyProbeSession.maximumPayloadBytes,
               context.isLive else { return }
-        do { try pendingRequests.insert(.detail, id: requestId, payload: object, context: context) } catch { return }
+        guard disclosurePolicy.isActive(), let overlap = peerOverlaps[remoteUUID] else { return }
+        let tokens = Set(overlap.matchedPurposeTokens + overlap.matchedInterestTokens)
+        let references = Set(disclosurePolicy.probeDisclosureRefs.filter {
+            tokens.contains(NearbyBeacon.token(forCanonicalReference: $0))
+        }).sorted()
+        let frozen: Object = ["request": .object(object), "disclosureReferences": .list(references.map(ValueType.string))]
+        let record: ScannerPendingRequests.Record
+        do { record = try pendingRequests.insert(.detail, id: requestId, payload: frozen, context: context) } catch { return }
         var payload = makeScannerEventObject(event: "probeDetailRequested", remoteUUID: remoteUUID, status: "pendingApproval")
         payload["requestId"] = .string(requestId)
+        payload["selectedReferences"] = .list(references.map(ValueType.string))
         payload["message"] = .string("The peer asks for exact overlapping references. Approving reveals the selected references in cleartext.")
         payload["actions"] = .object([
             "approve": .object(makeActionObject(
@@ -1474,7 +1517,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 payload: .object([
                     "remoteUUID": .string(remoteUUID),
                     "requestId": .string(requestId),
-                    "action": .string("approve")
+                    "action": .string("approve"),
+                    "decisionID": .string(record.decisionID)
                 ])
             ))
         ])
@@ -1519,13 +1563,14 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
                 content = .object(["requestId": .string(requestId)])
                 try pendingRequests.insert(.outgoingDetail, id: requestId, payload: ["requestId": .string(requestId)], context: context)
             case "approve":
-                _ = try pendingRequests.consume(.detail, id: requestId, context: context)
+                let record = try pendingRequests.consumeDecision(.detail, id: requestId, decisionID: requiredString(object, "decisionID"), context: context)
                 guard let overlap = peerOverlaps[remoteUUID] else {
                     throw NearbyProbeSession.ProbeError.invalidRequest
                 }
                 let overlapTokens = Set(overlap.matchedPurposeTokens + overlap.matchedInterestTokens)
-                let references = disclosurePolicy.probeDisclosureRefs.filter {
-                    overlapTokens.contains(NearbyBeacon.token(forCanonicalReference: $0))
+                let stillApproved = Set(disclosurePolicy.probeDisclosureRefs)
+                let references = stringList(from: record.payload["disclosureReferences"]).filter {
+                    stillApproved.contains($0) && overlapTokens.contains(NearbyBeacon.token(forCanonicalReference: $0))
                 }
                 let detail = NearbyProbeDetail(
                     requestId: requestId,
@@ -1571,10 +1616,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
             let verification = try await verifySignedPayload(request, identityKey: "requesterIdentity", signatureKey: "requestSignature", context: context)
             guard bool(from: verification["verified"]) == true else { return }
             try context.check()
-            try pendingRequests.insert(.incoming, id: requiredString(request, "requestId"), payload: request, context: context)
+            let record = try pendingRequests.insert(.incoming, id: requiredString(request, "requestId"), payload: request, context: context)
             try consumerEffect(context) {
                 try transitionPeerToContactRequested(context.remoteUUID)
-                let payload = makeIncomingContactEventPayload(requestObject: request, remoteUUID: context.remoteUUID, verification: verification, includeAcceptAction: true)
+                let payload = makeIncomingContactEventPayload(requestObject: request, remoteUUID: context.remoteUUID, verification: verification, decisionID: record.decisionID)
                 pushScannerEvent(topic: EntityScannerTopics.incomingContact, title: "Contact Request Received", payload: payload)
             }
         } catch { try context.check() } // invalid proof is not retained or published

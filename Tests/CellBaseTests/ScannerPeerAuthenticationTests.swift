@@ -230,7 +230,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         await pair.pa.gate.close(); await pair.pb.gate.close()
         let endpoint = try pair.a.makeInvitation(remoteUUID: pair.b.mySessionUUID)
         pair.b.receiveInvitation(from: pair.aPeer, endpoint: endpoint) { _, _ in }
-        XCTAssertTrue(pair.b.respondToInvitation(remoteUUID: pair.a.mySessionUUID, accept: true))
+        XCTAssertTrue(pair.b.respondToCurrentInvitationForTesting(remoteUUID: pair.a.mySessionUUID, accept: true))
         let fresh = try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer)
         XCTAssertNotEqual(fresh.channelSession?.generation, old.channelSession?.generation)
         do { try await old.sendData(Data([1])); XCTFail("Old generation sent") } catch {}
@@ -247,7 +247,7 @@ final class ScannerPeerAuthenticationTests: XCTestCase {
         await pair.pa.gate.close(); await pair.pb.gate.close()
         let endpoint = try pair.a.makeInvitation(remoteUUID: pair.b.mySessionUUID)
         pair.b.receiveInvitation(from: pair.aPeer, endpoint: endpoint) { _, _ in }
-        XCTAssertTrue(pair.b.respondToInvitation(remoteUUID: pair.a.mySessionUUID, accept: true))
+        XCTAssertTrue(pair.b.respondToCurrentInvitationForTesting(remoteUUID: pair.a.mySessionUUID, accept: true))
         let a = try pair.a.prepareBridge(remoteUUID: pair.b.mySessionUUID, peerID: pair.bPeer)
         let b = try pair.b.prepareBridge(remoteUUID: pair.a.mySessionUUID, peerID: pair.aPeer)
         let at = Task { try await a.gate.startPeer() }, bt = Task { try await b.gate.startPeer() }
@@ -957,7 +957,7 @@ final class ScannerPair {
         b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID
         let endpoint = try a.makeInvitation(remoteUUID: b.mySessionUUID)
         b.receiveInvitation(from: aPeer, endpoint: endpoint) { _, _ in }
-        _ = b.respondToInvitation(remoteUUID: a.mySessionUUID, accept: true)
+        _ = b.respondToCurrentInvitationForTesting(remoteUUID: a.mySessionUUID, accept: true)
         pa = try a.prepareBridge(remoteUUID: b.mySessionUUID, peerID: bPeer)
         pb = try b.prepareBridge(remoteUUID: a.mySessionUUID, peerID: aPeer)
         a.peerSend = { [wire, aPeer, weak a] data, peer, session in
@@ -982,7 +982,7 @@ final class ScannerPair {
         c.foundPeersDict[a.mySessionUUID] = aPeer; c.reversedFoundPeersDict[aPeer] = a.mySessionUUID
         let endpoint = try a.makeInvitation(remoteUUID: c.mySessionUUID)
         c.receiveInvitation(from: aPeer, endpoint: endpoint) { _, _ in }
-        XCTAssertTrue(c.respondToInvitation(remoteUUID: a.mySessionUUID, accept: true))
+        XCTAssertTrue(c.respondToCurrentInvitationForTesting(remoteUUID: a.mySessionUUID, accept: true))
         ac = try a.prepareBridge(remoteUUID: c.mySessionUUID, peerID: cPeer)
         pc = try c.prepareBridge(remoteUUID: a.mySessionUUID, peerID: aPeer)
         c.peerSend = { [wire, cPeer, weak c] data, peer, session in
@@ -1000,7 +1000,7 @@ final class ScannerPair {
         b.foundPeersDict[a.mySessionUUID] = aPeer; b.reversedFoundPeersDict[aPeer] = a.mySessionUUID
         let endpoint = try a.makeInvitation(remoteUUID: b.mySessionUUID)
         b.receiveInvitation(from: aPeer, endpoint: endpoint) { _, _ in }
-        XCTAssertTrue(b.respondToInvitation(remoteUUID: a.mySessionUUID, accept: true))
+        XCTAssertTrue(b.respondToCurrentInvitationForTesting(remoteUUID: a.mySessionUUID, accept: true))
         return (try a.prepareBridge(remoteUUID: b.mySessionUUID, peerID: bPeer),
                 try b.prepareBridge(remoteUUID: a.mySessionUUID, peerID: aPeer))
     }
