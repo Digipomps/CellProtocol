@@ -142,6 +142,7 @@ final class AppleBridgeTransportTests: XCTestCase {
         for name in ["get", "response"] {
             let command = BridgeCommand(cmd: name, identity: descriptor, payload: nil, cid: 1)
             await transport.onMessage(connection: socket, data: try JSONEncoder().encode(command))
+            await transport.waitForPendingReceivesForTesting()
         }
         let commands = await delegate.consumedCommands
         let responses = await delegate.consumedResponses
@@ -270,8 +271,11 @@ final class AppleBridgeTransportTests: XCTestCase {
         let unknown = BridgeCommand(cmd: "futureCommand", identity: identity, payload: .string("future"), cid: 2)
 
         await transport.onMessage(connection: socket, data: try JSONEncoder().encode(request))
+        await transport.waitForPendingReceivesForTesting()
         await transport.onMessage(connection: socket, data: try JSONEncoder().encode(response))
+        await transport.waitForPendingReceivesForTesting()
         await transport.onMessage(connection: socket, data: try JSONEncoder().encode(unknown))
+        await transport.waitForPendingReceivesForTesting()
 
         let consumedCommands = await delegate.consumedCommands
         let consumedResponses = await delegate.consumedResponses
@@ -293,6 +297,7 @@ final class AppleBridgeTransportTests: XCTestCase {
             count: BridgeInboundPayloadValidator.defaultMaximumBytes + 1
         )
         await transport.onMessage(connection: socket, data: oversized)
+        await transport.waitForPendingReceivesForTesting()
 
         let consumedCommands = await delegate.consumedCommands
         let consumedResponses = await delegate.consumedResponses
