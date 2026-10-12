@@ -429,6 +429,14 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         return try await super.set(keypath: keypath, value: value, requester: requester) ?? .null
     }
 
+    override func preDispatchAuthorizationFailure(_ decision: CellAuthorizationDecision,
+        keypath: String, requester: Identity) -> any Error {
+        if let retry = (requester.identityVault as? BridgeIdentityVault)?.signingBackpressure {
+            return BridgePreDispatchSigningRejection(source: self, keypath: keypath, retry: retry)
+        }
+        return super.preDispatchAuthorizationFailure(decision, keypath: keypath, requester: requester)
+    }
+
     public override func get(keypath: String, requester: Identity) async throws -> ValueType {
         if keypath == "join.pending" {
             guard await checkIdentityOrigin(requester, against: owner) else { throw KeyValueErrors.denied }
@@ -765,6 +773,8 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
                 try await authorizeAttachment(attachment, action: "attachments.prepare", requester: requester)
                 try await sourceCell.storage.publish(attachment,
                     expiresAt: now.addingTimeInterval(TimeInterval(retentionSeconds)), now: now)
+            } catch let retry as BridgeSigningBackpressure {
+                return retry.rejection
             } catch { return denial(.attachmentUnavailable) }
         }
         await beforeSendCommitForTesting?()
@@ -1222,11 +1232,15 @@ extension CorrespondenceCell {
             throw CorrespondenceAttachmentError.wrongRecipient
         }
         let decision = await authorizationDecision(requestedAccess: "-w--", at: action, for: requester)
-        guard decision.allowed else { throw CorrespondenceAttachmentError.wrongRecipient }
+        guard decision.allowed else {
+            if let retry = (requester.identityVault as? BridgeIdentityVault)?.signingBackpressure { throw retry }
+            throw CorrespondenceAttachmentError.wrongRecipient
+        }
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
         if senderActions.contains(action), requester.uuid != owner.uuid {
             let agreements = await contractsForIdentity(requester)
             guard agreements.contains(where: { $0.uuid == request.agreementID && $0.checkGrant(requestedGrant: Grant(keypath: action, permission: "-w--")) }) else {
+                if let retry = (requester.identityVault as? BridgeIdentityVault)?.signingBackpressure { throw retry }
                 throw CorrespondenceAttachmentError.contextMismatch
             }
         }
@@ -1251,6 +1265,8 @@ extension CorrespondenceCell {
                     do {
                         let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceAttachmentRequest.self)
                         return try await self.performAttachment(key, request: request, requester: requester)
+                    } catch let retry as BridgeSigningBackpressure {
+                        return retry.rejection
                     } catch {
                         return .object(["status": .string("error"), "message": .string("attachmentUnavailable")])
                     }

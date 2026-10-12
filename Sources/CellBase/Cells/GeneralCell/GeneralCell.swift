@@ -1824,7 +1824,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             requester: requester
         )
         if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
-            throw CellAuthorizationError.denied(operationAuthorizationDecision)
+            throw preDispatchAuthorizationFailure(operationAuthorizationDecision, keypath: resolvedKeyPath, requester: requester)
         }
         
         let keypathArray = resolvedKeyPath.split(separator: ".")
@@ -1966,7 +1966,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 requester: requester
             )
             if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
-                throw CellAuthorizationError.denied(operationAuthorizationDecision)
+                throw preDispatchAuthorizationFailure(operationAuthorizationDecision, keypath: resolvedKeyPath, requester: requester)
             }
             
             let keypathArray = resolvedKeyPath.split(separator: ".")
@@ -2042,6 +2042,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             }
         
         return response
+    }
+
+    // Called only at the initial explicit operation gate, before traversal or
+    // intercept dispatch. Ordinary cells preserve their existing error type.
+    func preDispatchAuthorizationFailure(_ decision: CellAuthorizationDecision,
+        keypath: String, requester: Identity) -> any Error {
+        CellAuthorizationError.denied(decision)
     }
 
     private func explicitMeddleAuthorizationDecision(
