@@ -99,3 +99,19 @@ its CI-filter detector misses the unfiltered full-suite command when it also
 finds a separate TSAN filter. The actual bounded capacity gate passed with its
 10 GiB reserve. The macOS workflow already runs the full package before TSAN;
 no CI filter or global preflight rule was weakened for this patch.
+
+## October 12 review correction: prune/close race
+
+The independent review found that two separate filters recomputed channel
+liveness. A close between those reads could discard a pending aggregate without
+its expiry callback, leaving the prior decision in `.probing` across reconnect.
+`ScannerPendingRequests.prune` now partitions records using one liveness sample
+and publishes the retained dictionary before callbacks. Exact decision-ID
+cleanup remains unchanged.
+
+The deterministic consumer regression samples the real context, closes its
+session immediately afterward, then retires the generation twice. The original
+two-pass implementation loses cleanup; the partitioned implementation delivers
+it once and permits the first actual probe SET and fresh aggregate after
+reconnect. The fixture uses no timing sleeps to induce the race. This local
+regression is separate from physical NI/UWB evidence, which remains deferred.

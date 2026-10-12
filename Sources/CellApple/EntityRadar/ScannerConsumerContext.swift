@@ -65,14 +65,25 @@ final class ScannerConsumerContext: @unchecked Sendable {
     static let maximumPayloadBytes = 64 * 1024
     static let ttl: TimeInterval = 60
     var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var isContextLive: (ScannerConsumerContext) -> Bool = { $0.isLive }
     private var records: [Key: Record] = [:]
     var expired: ((Kind, Record) -> Void)?
     private var expiryTask: Task<Void, Never>?
 
     func prune() {
         let now = clock()
-        let removed = records.filter { now >= $0.value.deadline || !$0.value.context.isLive }
-        records = records.filter { now < $0.value.deadline && $0.value.context.isLive }
+        var kept: [Key: Record] = [:]
+        var removed: [(Key, Record)] = []
+        for (key, record) in records {
+            // Channel close/revocation may race this MainActor operation.
+            // Sample once so every record remains owned until cleanup fires.
+            if now >= record.deadline || !isContextLive(record.context) {
+                removed.append((key, record))
+            } else {
+                kept[key] = record
+            }
+        }
+        records = kept
         for (key, record) in removed where !record.consumed { expired?(key.kind, record) }
     }
     func retire(_ generation: String) {

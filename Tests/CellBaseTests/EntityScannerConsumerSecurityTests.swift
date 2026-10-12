@@ -637,6 +637,48 @@ extension EntityScannerConsumerSecurityTests {
 
 
 extension EntityScannerConsumerSecurityTests {
+    @MainActor func testPruneRacingChannelCloseRetiresProbeExactlyOnceAndAllowsFirstReconnect() async throws {
+        let f = try await ConsumerFixture(); defer { f.stop() }
+        try await f.prepareProbes()
+        let original = try await f.aggregateRequest()
+        let record = try XCTUnwrap(f.cell.pendingRequests.find(.outgoingAggregate, id: original.0, context: f.context))
+        var expiredCount = 0
+        let expire = f.cell.pendingRequests.expired
+        f.cell.pendingRequests.expired = { kind, expired in
+            if expired.decisionID == record.decisionID { expiredCount += 1 }
+            expire?(kind, expired)
+        }
+        var closedAfterSampling = false
+        f.cell.pendingRequests.isContextLive = { context in
+            let live = context.isLive
+            if !closedAfterSampling && context.matches(f.context) {
+                closedAfterSampling = true
+                // Model a synchronous background close immediately after the
+                // live sample, without sleeps or dependence on scheduling.
+                context.session.close()
+            }
+            return live
+        }
+        f.cell.pendingRequests.prune()
+        f.cell.pendingRequests.isContextLive = { $0.isLive }
+        XCTAssertTrue(closedAfterSampling)
+        f.cell.scannerChannelRetired(manager: f.pair.a, generation: f.context.generation)
+        f.cell.scannerChannelRetired(manager: f.pair.a, generation: f.context.generation)
+        XCTAssertEqual(expiredCount, 1, "A live-state transition must never lose or duplicate cleanup")
+        XCTAssertEqual(f.cell.pendingRequests.retainedCountForTesting, 0)
+        await f.pair.pa.gate.close(); await f.pair.pb.gate.close()
+        let fresh = try f.pair.prepareReconnect()
+        try await f.pair.authenticateTransports(fresh.0, fresh.1)
+        let current = try f.pair.a.consumerContext(remoteUUID: f.context.remoteUUID)
+        // No rediscovery or forced state reset: exercise the first real SET.
+        let next = try await f.aggregateRequest()
+        try await f.receiveProbe(NearbyProbeAggregate(requestId: next.0, nonce: next.1,
+            entityKind: .person, purposeMatches: .one, interestMatches: nil), topic: "scanner.probe.aggregate", context: current)
+        XCTAssertEqual(f.published.filter { $0.topic == "scanner.probe.aggregate" }.count, 1)
+        XCTAssertNil(f.cell.pendingRequests.find(.outgoingAggregate, id: next.0, context: current))
+        XCTAssertEqual(expiredCount, 1)
+    }
+
     @MainActor func testFirstProbeAfterReconnectWorksAndLateOldCleanupCannotResetIt() async throws {
         let f = try await ConsumerFixture(); defer { f.stop() }
         try await f.prepareProbes()
