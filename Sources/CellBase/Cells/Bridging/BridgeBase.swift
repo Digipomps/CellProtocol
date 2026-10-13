@@ -882,7 +882,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             identityProofAuthorization.complete(commandID)
         }
         try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath), commandId: commandID)
-        return try await result.getOneWithTimeout()
+        let value = try await result.getOneWithTimeout()
+        if let retry = BridgeSigningBackpressure.rejection(value) { throw retry }
+        return value
     }
 
     public func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
@@ -907,7 +909,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                                      payload: .keyValue(KeyValue(key: keypath, value: value)),
                                      commandId: commandID, expectedSession: session)
         let response = try await result.getOneWithTimeout(timeout)
-        guard response.state == .ok else { throw SetValueError.error }
+        guard response.state == .ok else {
+            if let seconds = response.retryAfterSeconds, seconds > 0 {
+                throw BridgeSigningBackpressure(retryAfterSeconds: seconds)
+            }
+            throw SetValueError.error
+        }
         return response.value
     }
 
@@ -1137,7 +1144,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 }
 
                 Task {
-                    if let denial = await self.signingContainmentDenial(for: identity) {
+                    if let denial = await self.signingContainmentDenial(for: identity, direction: .outgoing) {
                         await self.recordSigningDeniedEvent(
                             denial.message,
                             identity: identity,
@@ -1145,7 +1152,9 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             kind: .transportRejected,
                             requiredAction: denial.requiredAction
                         )
-                        promise(.failure(BridgeError.denied))
+                        if let seconds = denial.retryAfterSeconds {
+                            promise(.failure(BridgeSigningBackpressure(retryAfterSeconds: seconds)))
+                        } else { promise(.failure(BridgeError.denied)) }
                         return
                     }
 
@@ -1242,9 +1251,11 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         )
     }
 
+    private enum SigningDirection { case incoming, outgoing }
+
     private func signingContainmentDenial(
-        for identity: Identity
-    ) async -> (message: String, reasonCode: String, requiredAction: String)? {
+        for identity: Identity, direction: SigningDirection
+    ) async -> (message: String, reasonCode: String, requiredAction: String, retryAfterSeconds: Int?)? {
         guard let controller = CellBase.securityContainmentController else {
             return nil
         }
@@ -1253,14 +1264,21 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return (
                 "bridge is temporarily quarantined",
                 CellSecurityReasonCode.bridgeQuarantined,
-                "wait_for_quarantine_or_reauthenticate"
+                "wait_for_quarantine_or_reauthenticate", nil
             )
         }
 
         let fingerprint = identity.signingPublicKeyFingerprint ?? "missing-signing-key"
+        // Outgoing proof requests share their budget across native channel renewal.
+        // Incoming requests have not passed local operation/permit authorization;
+        // charging a shared scope here lets rejected attempts starve other bridges.
+        let scopeResource: String
+        if direction == .outgoing, let endpoint = channelSession?.endpoint {
+            scopeResource = ["native", endpoint.audience, publisherUuid ?? "consumer"].joined(separator: ":")
+        } else { scopeResource = uuid }
         let scope = [
             "bridge",
-            uuid,
+            scopeResource,
             "sign",
             identity.uuid,
             fingerprint,
@@ -1278,7 +1296,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return (
                 "signing is rate limited; retry after \(seconds)s",
                 CellSecurityReasonCode.signingRateLimited,
-                "wait_before_retrying_signing"
+                "wait_before_retrying_signing", seconds
             )
         }
     }
@@ -1451,6 +1469,12 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             
                         } catch {
                             setValueResponse.state = .error
+                            // Only the exact top-level receiver's audited gate
+                            // can attest that this operation has had no effect.
+                            if let rejection = error as? BridgePreEffectSigningRejection,
+                               rejection.matches(keypathLookupPublisher, keypath: payload.key) {
+                                setValueResponse.retryAfterSeconds = rejection.retry.retryAfterSeconds
+                            }
                         }
                         
                         let response = BridgeCommand(cmd: "response", payload: .setValueResponse(setValueResponse), cid: command.cid)
@@ -1481,6 +1505,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     break
                 }
 
+                var getPublisher: (any Meddle)?
                 do {
                     guard let keypathLookupPublisher = try await resolvedEmitCell(for: identity) as? Meddle else {
                         await sendGetErrorResponse(
@@ -1489,6 +1514,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         )
                         break
                     }
+                    getPublisher = keypathLookupPublisher
                     let valueType = try await keypathLookupPublisher.get(keypath: key, requester: identity)
                     let response = BridgeCommand(cmd: "response", payload: valueType, cid: command.cid)
                     if let responseJSONData = try? JSONEncoder().encode(response),
@@ -1496,6 +1522,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         try await transport.sendData(responseJSONData)
                     }
                 } catch {
+                    if let rejection = error as? BridgePreEffectSigningRejection,
+                       let getPublisher, rejection.matches(getPublisher, keypath: key) {
+                        let response = BridgeCommand(cmd: "response", payload: rejection.retry.rejection, cid: command.cid)
+                        if let bytes = try? JSONEncoder().encode(response), let transport {
+                            try await transport.sendData(bytes)
+                        }
+                        break
+                    }
                     await sendGetErrorResponse(
                         message: "Consume command \(command.cmd) failed for get(\(key)): \(error)",
                         cid: command.cid, using: transport
@@ -1537,7 +1571,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                         )
                         return
                     }
-                    if let denial = await signingContainmentDenial(for: identity) {
+                    if let denial = await signingContainmentDenial(for: identity, direction: .incoming) {
                         await sendSigningDenied(
                             denial.message,
                             cid: command.cid,

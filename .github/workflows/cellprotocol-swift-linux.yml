@@ -98,7 +98,7 @@ jobs:
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
             EphemeralIdentityVaultConcurrencyTests PublisherAsyncLifetimeTests BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
             BridgeResponseLifetimeTests BridgeFeedAndRPCOrderingTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
-            BridgeDiagnosticPrivacyTests IdentityLinkGenesisClassificationTests \
+            BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
