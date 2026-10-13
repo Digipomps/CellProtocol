@@ -195,7 +195,7 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
 }
 
 final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSessionWebSocketDelegate, @unchecked Sendable {
-    private let onConnectedPublisher = CurrentValueSubject<Bool, Never>(false)
+    private let onConnectedPublisher = CurrentValueSubject<Bool, Error>(false)
     private let delegateLock = NSLock()
     private weak var storedDelegate: WebSocketConnectionDelegate2?
     var delegate: WebSocketConnectionDelegate2? {
@@ -214,6 +214,12 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
     }
     typealias SendSubmission = (URLSessionWebSocketTask.Message, @escaping @Sendable (Error?) -> Void) -> Void
     var sendSubmissionForTesting: SendSubmission?
+    typealias ReceiveSubmission = (URLSessionWebSocketTask, @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) -> Void
+    var resumeSubmissionForTesting: ((URLSessionWebSocketTask) async -> Void)?
+    var receiveSubmissionForTesting: ReceiveSubmission?
+    var beforeConnectionWaitForTesting: (() async -> Void)?
+    var connectionWaitObservedForTesting: (() -> Void)?
+    private var nativeFailure: Error?
     private let connectionLock = NSLock()
     private var storedWebSocketTask: URLSessionWebSocketTask?
     var webSocketTask: URLSessionWebSocketTask? { connectionLock.withLock { storedWebSocketTask } }
@@ -235,7 +241,7 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         Task {
             let current = connectionLock.withLock {
-                guard storedWebSocketTask === webSocketTask else { return false }
+                guard storedWebSocketTask === webSocketTask, nativeFailure == nil else { return false }
                 onConnectedPublisher.send(true)
                 return true
             }
@@ -254,15 +260,24 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
     
     func connect() async throws {
         guard let webSocketTask else { throw WebSocketConnectionError.NoTask }
-        webSocketTask.resume()
-         
-        try await  listen()
+        do {
+            if let resume = resumeSubmissionForTesting { await resume(webSocketTask) }
+            else { webSocketTask.resume() }
+            try await listen()
 
-        // didOpen can arrive before we start awaiting, so keep a replayable state and wait for `true`.
-        _ = try await onConnectedPublisher
-            .filter { $0 }
-            .getOneWithTimeout(5)
-        guard isCurrentTask(webSocketTask) else { throw WebSocketConnectionError.NoTask }
+            // Completion can arrive during resume/listen, before subscription.
+            // Cover the whole startup with the same native-error preservation.
+            await beforeConnectionWaitForTesting?()
+            _ = try await onConnectedPublisher
+                .handleEvents(receiveOutput: { [weak self] _ in self?.connectionWaitObservedForTesting?() })
+                .filter { $0 }
+                .getOneWithTimeout(5)
+            guard isCurrentTask(webSocketTask) else { throw WebSocketConnectionError.NoTask }
+        } catch {
+            // The publisher helper wraps failures. Keep the original NSError,
+            // including peer trust and failing URL, at the connection boundary.
+            throw connectionLock.withLock { nativeFailure } ?? error
+        }
     }
     
     func disconnect() async throws {
@@ -285,13 +300,13 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask
         }
-        webSocketTask.receive { [weak self, weak webSocketTask] result in
+        let completion: @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void = { [weak self, weak webSocketTask] result in
             guard let self, let webSocketTask, self.isCurrentTask(webSocketTask) else { return }
             Task {
                 guard self.isCurrentTask(webSocketTask) else { return }
                 switch result {
                 case .failure(let error):
-                    await self.delegate?.onError(connection: self, error: error)
+                    await self.reportFailure(error, from: webSocketTask)
                 case .success(let message):
                     switch message {
                     case .string(let text):
@@ -308,6 +323,26 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
                 }
             }
         }
+        if let submit = receiveSubmissionForTesting { submit(webSocketTask, completion) }
+        else { webSocketTask.receive(completionHandler: completion) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error, let socket = task as? URLSessionWebSocketTask else { return }
+        Task { await reportFailure(error, from: socket) }
+    }
+
+    func reportFailure(_ error: Error, from task: URLSessionWebSocketTask) async {
+        let first = connectionLock.withLock {
+            guard storedWebSocketTask === task, nativeFailure == nil else { return false }
+            nativeFailure = error
+            // Gate error handling may immediately disconnect. Publish first so
+            // teardown cannot replace a real TLS failure with finishedWithoutValue.
+            onConnectedPublisher.send(completion: .failure(error))
+            return true
+        }
+        guard first else { return }
+        await delegate?.onError(connection: self, error: error)
     }
     
     func send(text: String) async throws { try await sendMessage(.string(text)) }
