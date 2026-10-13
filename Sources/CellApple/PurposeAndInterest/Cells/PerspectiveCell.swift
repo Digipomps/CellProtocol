@@ -9,6 +9,7 @@
 //
 @_spi(HAVENRuntime) import CellBase
 import Foundation
+import Combine
 
 
 /*
@@ -37,6 +38,13 @@ public class PerspectiveCell: GeneralCell {
 //    var running: Bool = false
     
     
+    let contextGate = ContextTransactionGate()
+    let contextConnectionGate = ContextTransactionGate()
+    var contextState = PerspectiveContextState()
+    var contextSources: [String: ContextRuntimeSource] = [:]
+    var contextEmitter: ((FlowElement) -> Void)?
+    var lastContextDecision: ContextDecision?
+    var contextExpiryTask: Task<Void, Never>?
     var context: Perspective
     var publicPurposeDict = ["Test": "Test"]
     let prespectiveFilename = "Perspective.json"
@@ -68,8 +76,15 @@ public class PerspectiveCell: GeneralCell {
         let bindingOwner = storedOwnerIdentity
         await setupPermissions(owner: bindingOwner)
         await setupKeys(owner: bindingOwner)
+        try await setupContextKeys(owner: bindingOwner)
     }
     
+    public override func flow(requester: Identity) async throws -> AnyPublisher<FlowElement, Error> {
+        let publisher = try await super.flow(requester: requester)
+        try await connectContextSources(requester: storedOwnerIdentity)
+        return publisher
+    }
+
     deinit {
         print("PespectiveCell Deinit!!!")
     }
@@ -115,7 +130,7 @@ public class PerspectiveCell: GeneralCell {
         await addInterceptForGet(requester: owner, key: "perspective", getValueIntercept:  { [weak self] keypath, requester in
             guard let self = self else { return .string("failure") }
             if await self.validateAccess("r---", at: "perspective", for: requester) {
-                return .object(["state": await self.perspectiveStatePayload()])
+                return .object(["state": await self.perspectiveStatePayload(), "context": await self.contextPayload()])
             }
             return .string("denied")
         })
@@ -476,7 +491,7 @@ public class PerspectiveCell: GeneralCell {
     }
 
     private func perspectiveStatePayload() async -> ValueType {
-        let activePurposeCount = (await context.getActivePurposes(minWeight: 0.0, limit: Int.max)).count
+        let activePurposeCount = (await effectiveActivePurposes(minWeight: 0.0, limit: Int.max)).count
         let activeInterestCount = (await context.getActiveInterests(minWeight: 0.0, limit: Int.max)).count
         let activeEntityCount = (await context.getActiveEntities(minWeight: 0.0, limit: Int.max)).count
         return .object([
@@ -507,7 +522,7 @@ public class PerspectiveCell: GeneralCell {
     }
 
     private func activePurposesPayload(minPurposeWeight: Double, limit: Int, includeInterests: Bool, referenceMode: ReferenceMode) async -> ValueType {
-        let activePurposes = await context.getActivePurposes(minWeight: minPurposeWeight, limit: limit)
+        let activePurposes = await effectiveActivePurposes(minWeight: minPurposeWeight, limit: limit)
         var purposesList = ValueTypeList()
         for weightedPurpose in activePurposes {
             let snapshot = await purposeSnapshot(from: weightedPurpose, includeInterests: includeInterests)
@@ -535,7 +550,7 @@ public class PerspectiveCell: GeneralCell {
         let limit = max(1, intValue(payload["limit"]) ?? 50)
         let mode = referenceMode(payload["referenceMode"])
 
-        let activePurposes = await context.getActivePurposes(minWeight: minPurposeWeight, limit: Int.max)
+        let activePurposes = await effectiveActivePurposes(minWeight: minPurposeWeight, limit: Int.max)
         var aggregated = [String: (interest: InterestSnapshot, weight: Double, supportingPurposes: [Object])]()
 
         for weightedPurpose in activePurposes {
@@ -657,7 +672,7 @@ public class PerspectiveCell: GeneralCell {
         let allowViaInterests = boolValue(payload["allowViaInterests"]) ?? true
         let mode = referenceMode(payload["referenceMode"])
 
-        let sourceActive = await context.getActivePurposes(minWeight: minPurposeWeight, limit: Int.max)
+        let sourceActive = await effectiveActivePurposes(minWeight: minPurposeWeight, limit: Int.max)
         var sourcePurposes = [PurposeSnapshot]()
         for weighted in sourceActive {
             sourcePurposes.append(await purposeSnapshot(from: weighted, includeInterests: true))
@@ -917,7 +932,7 @@ public class PerspectiveCell: GeneralCell {
             input: .null,
             returns: ExploreContract.oneOfSchema(
                 options: [
-                    ExploreContract.schema(type: "object", description: "Object with a `state` field holding the perspective state snapshot."),
+                    ExploreContract.objectSchema(properties: ["state": Self.perspectiveStateSchema(), "context": ExploreContract.oneOfSchema(options: [ContextSchemas.perspective(), ContextSchemas.acknowledgement()])], requiredKeys: ["state", "context"]),
                     ExploreContract.schema(type: "string")
                 ],
                 description: "Returns an object whose `state` field holds the perspective state snapshot, or a denial/failure string."
