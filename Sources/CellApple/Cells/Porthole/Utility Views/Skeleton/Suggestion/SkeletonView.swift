@@ -3205,11 +3205,18 @@ private struct CellNavigationBarView: View {
                 await activate(item)
             }
         } label: {
-            Text(resolvedLabel(for: item))
-                .font(.subheadline)
-                .fontWeight(active ? .semibold : .regular)
-                .foregroundStyle(active ? Color.accentColor : Color.primary)
-                .frame(maxWidth: .infinity)
+            VStack(spacing: 2) {
+                if let iconName = item.icon, iconName.isEmpty == false {
+                    Image(systemName: iconName)
+                        .font(.body)
+                        .accessibilityHidden(true)
+                }
+                Text(resolvedLabel(for: item))
+                    .font(item.icon?.isEmpty == false ? .caption : .subheadline)
+                    .fontWeight(active ? .semibold : .regular)
+            }
+            .foregroundStyle(active ? Color.accentColor : Color.primary)
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("skeleton.navigationBar.item.\(item.id.uuidString)")
