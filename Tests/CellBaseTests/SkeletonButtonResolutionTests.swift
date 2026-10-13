@@ -64,4 +64,46 @@ final class SkeletonButtonResolutionTests: XCTestCase {
             try ValueType.object(["hostToken": .string("scene-a")]).jsonString()
         )
     }
+    func testURLKeypathReadsTheNamedRowFieldInsteadOfURL() {
+        var template = SkeletonButton(keypath: "", label: "Åpne", url: "https://example.org/fallback")
+        template.urlKeypath = "whereURL"
+        let row: ValueType = .object([
+            "url": .string("https://example.org/ignored"),
+            "whereURL": .string("https://developer.apple.com/account")
+        ])
+
+        let resolved = SkeletonButtonResolutionSupport.resolve(template: template, userInfoValue: row)
+
+        XCTAssertEqual(resolved.url, "https://developer.apple.com/account")
+        XCTAssertTrue(SkeletonButtonNavigation.isNavigationButton(resolved))
+    }
+
+    func testURLKeypathKeepsTemplateURLWhenRowLacksTheField() {
+        let template = SkeletonButton(keypath: "", label: "Åpne", url: "https://example.org/fallback", urlKeypath: "whereURL")
+        let row: ValueType = .object(["url": .string("https://example.org/ignored")])
+
+        let resolved = SkeletonButtonResolutionSupport.resolve(template: template, userInfoValue: row)
+
+        XCTAssertEqual(resolved.url, "https://example.org/fallback")
+    }
+
+    func testURLKeypathSurvivesJSONRoundTrip() throws {
+        let element = SkeletonElement.Button(SkeletonButton(keypath: "", label: "Åpne", urlKeypath: "whereURL"))
+        let data = try JSONEncoder().encode(element)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let button = try XCTUnwrap(json["Button"] as? [String: Any])
+        XCTAssertEqual(button["urlKeypath"] as? String, "whereURL")
+
+        let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
+        guard case let .Button(value) = decoded else { return XCTFail("expected Button, got \(decoded)") }
+        XCTAssertEqual(value.urlKeypath, "whereURL")
+        XCTAssertNil(value.url)
+    }
+
+    func testButtonWithoutURLKeypathEncodesNoURLKeypath() throws {
+        let data = try JSONEncoder().encode(SkeletonElement.Button(SkeletonButton(keypath: "a", label: "b")))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let button = try XCTUnwrap(json["Button"] as? [String: Any])
+        XCTAssertNil(button["urlKeypath"])
+    }
 }

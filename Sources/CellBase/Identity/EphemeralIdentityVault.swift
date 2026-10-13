@@ -37,8 +37,9 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProvi
 
     public func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
         if let existing = identitiesByContext[identityContext] {
-            existing.identityVault = self
-            existing.homeVaultReference = vaultReference
+            // Identity is a shared reference after publication. Even assigning
+            // the same vault/reference here races with resolver readers outside
+            // this actor. Bind once on creation/insertion; lookups are read-only.
             return existing
         }
         guard makeNewIfNotFound else { return nil }
@@ -56,8 +57,6 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProvi
         guard let identity = identitiesByContext.values.first(where: { $0.uuid == uuid }) else {
             return nil
         }
-        identity.identityVault = self
-        identity.homeVaultReference = vaultReference
         return identity
     }
 
@@ -83,6 +82,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProvi
     }
 
     public func saveIdentity(_ identity: Identity) async {
+        identity.identityVault = self
         identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)
         identitiesByContext[identity.displayName] = identity

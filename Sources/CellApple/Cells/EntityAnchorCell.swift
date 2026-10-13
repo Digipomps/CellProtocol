@@ -878,6 +878,64 @@ public class EntityAnchorCell: GeneralCell {
         
     }
 
+    /// Scanner's two proofs and relation commit together after owner authorization.
+    /// Context is process-local and only narrows authority. Never accepts a
+    /// channel/payload identity in place of the local owner's proof.
+    func persistScannerEncounter(_ encounter: Object, requester: Identity,
+                                 context: ScannerConsumerContext,
+                                 beforeCommit: ((String) async -> Void)? = nil) async throws {
+        try await ensureRuntimeReady()
+        try context.check()
+        guard await requesterProvesOwnership(requester) else { throw KeypathStorageErrors.denied }
+        try context.check()
+        guard await validateAccess("-w--", at: "proofs", for: requester) else { throw KeypathStorageErrors.denied }
+        try context.check()
+        guard await validateAccess("-w--", at: "relations", for: requester) else { throw KeypathStorageErrors.denied }
+        try context.check()
+        await authorityCommitGate.acquire()
+        do {
+            try context.check()
+            try ensurePersistenceAvailable()
+            guard case let .string(id)? = encounter["encounterId"], UUID(uuidString: id)?.uuidString == id,
+                  case let .identity(remote)? = encounter["remoteIdentity"],
+                  !remote.uuid.isEmpty, remote.uuid.utf8.count <= 128,
+                  remote.uuid.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { throw SetValueError.paramErr }
+            let encounterPath = "proofs.encounters.\(id)"
+            let relationPath = "relations.identities.\(remote.uuid)"
+            for path in [encounterPath, relationPath] {
+                guard await validateAccess("-w--", at: path, for: requester) else { throw KeypathStorageErrors.denied }
+                try context.check()
+            }
+            var updated = storage
+            guard (try? updated.get(keypath: encounterPath)) == nil else { throw SetValueError.paramErr }
+            try updated.set(keypath: encounterPath, setValue: .object(encounter))
+            try updated.set(keypath: relationPath, setValue: .identity(remote))
+            try EntityChangeTrace.append(EntityChangeTrace.entry(keypath: encounterPath, signedBy: requester), to: &updated)
+            let recovered = try authorityJournal.replay(on: updated)
+            guard try Self.canonicalEntityData(recovered) == Self.canonicalEntityData(updated) else {
+                throw EntityAuthorityCommitError.journalCorrupt("scanner_write_conflicts_with_committed_keypath")
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let bytes = try EntityAnchorPersistence.encode(encoder.encode(updated), cellUUID: uuid,
+                filename: Self.storageFilename, owner: storedOwnerIdentity, agreement: agreementTemplate)
+            await beforeCommit?("storage")
+            try Task.checkCancellation()
+            // No await from final session check through atomic file replacement
+            // and in-memory installation. Close/revoke and this effect have one
+            // linearization point. A commit which won before close is durable.
+            try context.perform {
+                let file = try CellStoragePathPolicy.filename(Self.storageFilename, under: getCellDirectory())
+                try bytes.write(to: file, options: [.atomic])
+                storage = updated
+                legacySideFiles.remove(Self.storageFilename)
+            }
+            await authorityCommitGate.release()
+        } catch {
+            await authorityCommitGate.release()
+            throw error
+        }
+    }
+
     private func persistBatchEnvelope(
         _ envelope: EntityBatchPersistEnvelope,
         requester: Identity

@@ -164,6 +164,8 @@ public extension CellSecurityReplayDecision {
             return CellSecurityReasonCode.challengeExpired
         case .issuedInFuture:
             return CellSecurityReasonCode.challengeIssuedInFuture
+        case .capacity:
+            return "challenge_capacity"
         case .missingScope:
             return CellSecurityReasonCode.challengeMissingScope
         }
@@ -179,6 +181,8 @@ public extension CellSecurityReplayDecision {
             return "retry_with_current_challenge"
         case .issuedInFuture:
             return "check_clock_and_retry"
+        case .capacity:
+            return "wait_for_challenge_capacity"
         case .missingScope:
             return "include_complete_challenge_scope"
         }

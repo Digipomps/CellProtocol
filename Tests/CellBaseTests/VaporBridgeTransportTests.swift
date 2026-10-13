@@ -34,6 +34,22 @@ final class VaporBridgeTransportTests: XCTestCase {
         super.tearDown()
     }
 
+    func testCloseFailureDiagnosticNeverLogsErrorDescription() {
+        let marker = "SYNTHETIC_PRIVATE_VAPOR_N19"
+        let domains = CellBase.enabledDiagnosticLogDomains, handler = CellBase.diagnosticLogHandler
+        var messages: [String] = []
+        CellBase.enabledDiagnosticLogDomains = [.bridge]
+        CellBase.diagnosticLogHandler = { _, text in messages.append(text) }
+        defer {
+            CellBase.enabledDiagnosticLogDomains = domains
+            CellBase.diagnosticLogHandler = handler
+        }
+        let transport = VaporBridgeTransport()
+        transport.handleWebSocketClose(.failure(NSError(domain: marker, code: 19, userInfo: [NSLocalizedDescriptionKey: marker])))
+        XCTAssertTrue(messages.contains { $0.contains("code=transport_failed") })
+        XCTAssertFalse(messages.joined().contains(marker))
+    }
+
     func testCloseCleanupUnregistersDelegateOnlyOnce() async {
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
@@ -53,8 +69,14 @@ final class VaporBridgeTransportTests: XCTestCase {
         let transport = VaporBridgeTransport()
         transport.setDelegate(RecordingBridgeDelegate(uuid: "text-mode-delegate"))
 
-        await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
-        await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
+        do {
+            try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
+            XCTFail("A missing socket must report a send failure")
+        } catch { XCTAssertTrue(error is TransportError) }
+        do {
+            try await transport.sendData(Data("{\"cmd\":\"noop\"}".utf8))
+            XCTFail("A missing socket must report a send failure")
+        } catch { XCTAssertTrue(error is TransportError) }
 
         XCTAssertEqual(resolver.unregisteredUUIDsSnapshot(), ["text-mode-delegate"])
     }

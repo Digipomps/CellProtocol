@@ -11,6 +11,20 @@ public enum CorrespondenceAgreementTemplates {
         ("ackMessage", "-w--")
     ]
 
+    public static let attachmentGrantSpecifications: [(keypath: String, permission: String)] = [
+        ("attachments.probe", "-w--"), ("attachments.prepare", "-w--"),
+        ("attachments.upload", "-w--"), ("attachments.metadata", "-w--"),
+        ("attachments.fetch", "-w--"), ("attachments.receipt", "-w--"),
+        ("attachments.revoke", "-w--"), ("attachments.transfer", "-w--"),
+        ("attachments.acceptTransfer", "-w--"), ("attachments.status", "-w--")
+    ]
+
+    /// Explicitly opt in by signing this Agreement; existing v0 contracts gain no rights.
+    public static func withAttachments(owner: Identity) -> Agreement {
+        make(name: "Correspondence with attachments v1", owner: owner,
+             grants: externalGrantSpecifications + [("feed", "r---"), ("state", "r---")] + attachmentGrantSpecifications)
+    }
+
     public static let ownerGrantSpecifications: [(keypath: String, permission: String)] = [
         ("audience.inviteIdentities", "-w--"),
         ("audience.generateInvitationArtifacts", "-w--"),

@@ -31,6 +31,92 @@ final class CorrespondenceCellTests: XCTestCase {
         super.tearDown()
     }
 
+    func testS54SeparateOwnerAgreementAllowsIdempotentInviteThroughResolver() async throws {
+        let (vault, owner) = await makeVaultAndOwner()
+        let member = await vault.identity(for: "s54-member", makeNewIfNotFound: true)!
+        let delegate = await vault.identity(for: "s54-delegate", makeNewIfNotFound: true)!
+        let outsider = await vault.identity(for: "s54-outsider", makeNewIfNotFound: true)!
+        let cell = await CorrespondenceCell(owner: owner)
+        _ = try await invite([member.uuid], into: cell, owner: owner)
+        let resolver = CellResolver.makeIsolatedForTesting()
+        let name = "S54-\(UUID().uuidString)"
+        try await resolver.registerNamedEmitCell(name: name, emitCell: cell, scope: .scaffoldUnique, identity: owner)
+        defer { Task { await resolver.unregisterEmitCell(uuid: cell.uuid) } }
+        let endpoint = try XCTUnwrap(URL(string: "cell:///\(name)/audience.inviteIdentities"))
+        let payload = ValueType.object(["identityUUID": .string(member.uuid)])
+        for requester in [member, outsider] {
+            do {
+                _ = try await resolver.set(value: payload, into: endpoint, requester: requester)
+                XCTFail("Membership or an external identity must not grant owner actions")
+            } catch let CellAuthorizationError.denied(decision) {
+                XCTAssertEqual(decision.reasonCode, "grantNotHeld")
+            }
+        }
+        let template = CorrespondenceAgreementTemplates.owner(owner: owner)
+        cell.agreementTemplate = template
+        let admission = await cell.addAgreement(template, for: delegate, authorizedBy: owner)
+        XCTAssertEqual(admission, .signed)
+        let before = await cell.currentAuthorizationSnapshot()
+        let fingerprint = cell.membershipFingerprintSnapshot
+        for _ in 0..<2 {
+            let response = try await resolver.set(value: payload, into: endpoint, requester: delegate)
+            XCTAssertEqual(stringField("status", in: response), "unchanged")
+        }
+        XCTAssertEqual(cell.membershipFingerprintSnapshot, fingerprint)
+        let after = await cell.currentAuthorizationSnapshot()
+        XCTAssertEqual(after.contracts.count, before.contracts.count)
+        XCTAssertEqual(after.members.count, before.members.count)
+        let external = CorrespondenceAgreementTemplates.external(owner: owner)
+        XCTAssertEqual(external.grants.count, 4)
+        XCTAssertFalse(external.grants.contains { $0.keypath == "audience.inviteIdentities" })
+        let newAdmission = try await resolver.set(value: .object(["identityUUID": .string(outsider.uuid)]), into: endpoint, requester: delegate)
+        XCTAssertEqual(denialReason(newAdmission), "grantNotHeld", "New admission still requires the owner's signature")
+        XCTAssertEqual(cell.membershipFingerprintSnapshot, fingerprint)
+    }
+
+    func testS54RejectsExpiredAlteredPartialAndWrongCellOwnerAgreements() async throws {
+        let (vault, owner) = await makeVaultAndOwner()
+        let delegate = await vault.identity(for: "s54-invalid", makeNewIfNotFound: true)!
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        for scenario in ["valid", "expired", "altered", "partial", "wrongCell"] {
+            var cell = await CorrespondenceCell(owner: owner)
+            cell.authorizationClock = { now }
+            let template = CorrespondenceAgreementTemplates.owner(owner: owner)
+            cell.agreementTemplate = template
+            let agreement = CorrespondenceAgreementTemplates.owner(owner: owner)
+            agreement.state = .signed
+            agreement.signatories = [owner, delegate]
+            if scenario == "partial" { agreement.grants = agreement.grants.filter { $0.keypath == "audience.inviteIdentities" } }
+            var contract = try await Contract.signed(agreement: agreement, issuer: owner, subject: delegate,
+                domain: cell.identityDomain, issuedAt: scenario == "expired" ? now.addingTimeInterval(-Double(agreement.duration) - 1) : now,
+                targetCellUUID: scenario == "wrongCell" ? UUID().uuidString : cell.uuid)
+            if scenario == "altered" { contract.agreement.name += " altered" }
+            // Restore hostile persisted state; normal resolver verification must reject it.
+            var stored = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(cell)) as? [String: Any])
+            stored["contracts"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([contract]))
+            stored["members"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode([delegate.publicIdentitySnapshot()]))
+            cell = try JSONDecoder().decode(CorrespondenceCell.self, from: JSONSerialization.data(withJSONObject: stored))
+            cell.authorizationClock = { now }
+            try await cell.ensureRuntimeReady()
+            cell.agreementTemplate = template
+            let resolver = CellResolver.makeIsolatedForTesting()
+            let name = "S54-\(UUID().uuidString)"
+            try await resolver.registerNamedEmitCell(name: name, emitCell: cell, scope: .scaffoldUnique, identity: owner)
+            let endpoint = try XCTUnwrap(URL(string: "cell:///\(name)/audience.inviteIdentities"))
+            let fingerprint = cell.membershipFingerprintSnapshot
+            do {
+                let response = try await resolver.set(value: .object(["identityUUID": .string(owner.uuid)]), into: endpoint, requester: delegate)
+                XCTAssertEqual(stringField("status", in: response), scenario == "valid" ? "unchanged" : "denied", scenario)
+                if scenario != "valid" { XCTAssertEqual(denialReason(response), "grantNotHeld", scenario) }
+            } catch let CellAuthorizationError.denied(decision) {
+                XCTAssertNotEqual(scenario, "valid")
+                XCTAssertEqual(decision.reasonCode, "grantNotHeld", scenario)
+            }
+            XCTAssertEqual(cell.membershipFingerprintSnapshot, fingerprint, scenario)
+            await resolver.unregisterEmitCell(uuid: cell.uuid)
+        }
+    }
+
     func testS1RejectsPlaintextSendPayload() async throws {
         let (_, owner) = await makeVaultAndOwner()
         let cell = await CorrespondenceCell(owner: owner)

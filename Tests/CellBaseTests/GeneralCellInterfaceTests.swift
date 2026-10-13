@@ -772,9 +772,11 @@ final class GeneralCellInterfaceTests: XCTestCase {
         XCTAssertEqual(forgedOwnerDecision.reasonCode, "identity_public_key_mismatch")
         XCTAssertEqual(forgedOwnerDecision.requiredAction, "restore_owner_identity_or_link_scaffold")
         let forgedOwnerAdmission = await restoredCell.admit(context: ConnectContext(source: nil, target: restoredCell, identity: forgedOwner))
+        // Identity mismatch is a denial, not a missing agreement requiring signing.
+        // Kjetil approved the .denied expectation on 2026-10-07.
         XCTAssertEqual(
             forgedOwnerAdmission,
-            .signContract
+            .denied
         )
     }
 

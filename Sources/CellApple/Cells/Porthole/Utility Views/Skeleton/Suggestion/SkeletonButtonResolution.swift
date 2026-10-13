@@ -46,7 +46,9 @@ public enum SkeletonButtonResolutionSupport {
     ) -> SkeletonButton {
         var resolved = template
         if case let .object(object)? = userInfoValue {
-            if let urlValue = object["url"], case let .string(urlString) = urlValue {
+            // Without urlKeypath the row's "url" field is read, as before.
+            let urlField = template.urlKeypath ?? "url"
+            if let urlValue = object[urlField], case let .string(urlString) = urlValue {
                 resolved.url = urlString
             }
             let keypathField = template.keypathKeypath ?? "keypath"

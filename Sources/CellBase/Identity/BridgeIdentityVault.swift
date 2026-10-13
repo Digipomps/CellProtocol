@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import CombineHelpers
 #if canImport(Combine)
 import Combine
 #else
@@ -16,9 +17,11 @@ import OpenCombine
 #endif
 import Crypto
 
-// BridgeIdentityVault is a stateless adapter over an existing bridge reference.
-// The bridge itself owns command correlation and synchronization.
+// The bridge owns command correlation and synchronization. Each proxy retains
+// only its command's signing-backpressure diagnostic, never reusable authority.
 public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol, @unchecked Sendable {
+    private let signingAttemptState = BridgeSigningAttemptState()
+    var signingBackpressure: BridgeSigningBackpressure? { signingAttemptState.backpressure }
     
     public init(cloudBridge: BridgeProtocol? = nil) {
         self.cloudBridge = cloudBridge
@@ -72,7 +75,15 @@ public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderPr
         guard let signaturePublisher = cloudBridge?.signMessageForIdentity(messageData: messageData, identity: identity) else {
             throw IdentityVaultError.publisherGone
         }
-        return try await signaturePublisher.getOneWithTimeout(5)
+        do { return try await signaturePublisher.getOneWithTimeout(5) }
+        catch {
+            let underlying = (error as? AsyncError)?.flatError ?? error
+            if let retry = underlying as? BridgeSigningBackpressure {
+                signingAttemptState.record(retry)
+                throw retry
+            }
+            throw error
+        }
     }
     
     let dispatchQueue = DispatchQueue.init(label: "Cloud Bridge Signing dispatch queue")

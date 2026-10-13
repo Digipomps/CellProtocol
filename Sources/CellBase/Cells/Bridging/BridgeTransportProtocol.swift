@@ -11,6 +11,7 @@
 import Foundation
 
 public protocol BridgeDelegateProtocol: AnyObject {
+    func validateInboundPayload(_ data: Data) throws
     func consumeCommand(command: BridgeCommand) async throws
     func consumeResponse(command: BridgeCommand) async throws
     func sendCommand(command: Command, identity: Identity, payload: ValueType?) async
@@ -33,6 +34,7 @@ public enum TransportError: Error {
 }
 
 public protocol BridgeTransportProtocol {
+    var channelSession: BridgeChannelSession? { get }
 //    func setDelegateSource(_ source: (() async throws -> BridgeDelegateProtocol?)?)
     func setDelegate(_ delegate: BridgeDelegateProtocol)
     func setup(_ endpointURL: URL, identity: Identity) async throws // Set up transportation
@@ -43,5 +45,10 @@ public protocol BridgeTransportProtocol {
 }
 
 public extension BridgeTransportProtocol {
+    var channelSession: BridgeChannelSession? { nil }
     func close() async {}
+}
+
+public extension BridgeDelegateProtocol {
+    func validateInboundPayload(_ data: Data) throws { try BridgeInboundPayloadValidator().validate(data) }
 }

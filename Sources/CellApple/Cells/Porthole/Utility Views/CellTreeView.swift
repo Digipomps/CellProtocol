@@ -129,7 +129,7 @@ struct CellTreeView: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .focusable(false)
+            .modifier(SkeletonTreeDisclosureFocus())
             .disabled(!node.hasChildren)
             .opacity(node.hasChildren ? 1 : 0)
             .accessibilityHidden(!node.hasChildren)
@@ -216,6 +216,16 @@ func skeletonNativeSend(keypath: String, payload: ValueType?, scope: SkeletonNat
         throw CellBaseError.noIdentity
     }
     return response
+}
+
+private struct SkeletonTreeDisclosureFocus: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.focusable(false)
+        #else
+        if #available(iOS 17, *) { content.focusable(false) } else { content }
+        #endif
+    }
 }
 
 private struct SkeletonTreeFocus: ViewModifier {
