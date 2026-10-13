@@ -46,3 +46,18 @@ prove automatic bootstrap of arbitrary server-generated UUIDs.
 This candidate is local WP8b work. Its full-suite and Palazzo integration
 results are recorded separately in the WP8b handoff; these tests are not a claim
 that the Palazzo app flow works.
+
+## HTTP upgrade credentials (WP8c)
+
+`VaporBridgeTransport(upgradeHeaders:)` accepts host-selected HTTP headers for
+WebSocket upgrade, e.g. an Authorization bearer header. The default is empty.
+These headers do not become part of `BridgeChannelAuthentication.Endpoint`,
+identity proof scopes, or Cell authority. Query-bearing canonical endpoints
+remain rejected. The local host must bind credentials to its intended destination.
+
+The resolver's type-based transport registration can use a host adapter whose
+`new()` supplies that policy. Forward `setDelegate` directly to the physical
+Vapor transport: wrapping its gate delegate hides type-dependent lifecycle and
+origin-signing dispatch checks. Channel renewal calls the registered type's
+`new()`; a bare `VaporBridgeTransport.new()` intentionally has no credentials.
+This addition does not establish a name-to-UUID bootstrap authorization contract.
