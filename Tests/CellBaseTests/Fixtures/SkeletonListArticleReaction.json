@@ -1,0 +1,120 @@
+{
+  "skeleton": {
+    "List": {
+      "keypath": "reaction",
+      "childrenKeypath": "children",
+      "expandedStateKeypath": "expanded",
+      "selectionValueKeypath": "id",
+      "flowElementSkeleton": {
+        "VStack": {
+          "elements": [
+            {
+              "Text": {
+                "keypath": "label",
+                "modifiers": {
+                  "fontStyle": "caption",
+                  "visibility": {
+                    "when": {
+                      "scope": "item",
+                      "keypath": "label",
+                      "exists": true
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "List": {
+                "keypath": "tags",
+                "modifiers": {
+                  "wrap": true,
+                  "rowInsets": {
+                    "top": 0,
+                    "leading": 0,
+                    "bottom": 0,
+                    "trailing": 0
+                  },
+                  "rowDecoration": "none",
+                  "itemSpacing": 4,
+                  "visibility": {
+                    "when": {
+                      "scope": "item",
+                      "keypath": "tags",
+                      "exists": true
+                    }
+                  }
+                },
+                "flowElementSkeleton": {
+                  "VStack": {
+                    "elements": [
+                      {
+                        "Text": {
+                          "keypath": "label",
+                          "modifiers": {
+                            "fontStyle": "caption",
+                            "background": "#eef1f5",
+                            "cornerRadius": 10,
+                            "padding": 4
+                          }
+                        }
+                      }
+                    ],
+                    "spacing": 0
+                  }
+                }
+              }
+            }
+          ],
+          "spacing": 0
+        }
+      },
+      "modifiers": {
+        "rowInsets": {
+          "top": 0,
+          "leading": 0,
+          "bottom": 0,
+          "trailing": 0
+        },
+        "rowDecoration": "none",
+        "itemSpacing": 4
+      }
+    }
+  },
+  "data": {
+    "reaction": [
+      {
+        "id": "art-arancini",
+        "label": "Registrert: Interessant · tolket som 7 emner",
+        "children": [
+          {
+            "id": "art-arancini-tags",
+            "tags": [
+              {
+                "label": "arancini"
+              },
+              {
+                "label": "ris"
+              },
+              {
+                "label": "safran"
+              },
+              {
+                "label": "palermo"
+              },
+              {
+                "label": "catania"
+              },
+              {
+                "label": "gatemat"
+              },
+              {
+                "label": "fritert"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expanded": []
+  }
+}

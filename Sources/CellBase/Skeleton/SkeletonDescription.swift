@@ -2812,12 +2812,17 @@ public struct SkeletonList: Codable, Identifiable {
     public var allowsEmptySelection: Bool?
     
     /// U2 (admin workbench 2026-09-05): keypath *inside a row* that holds the row's children
-    /// (a list). When set, the renderer shows the list as a tree with a toggle per row that
-    /// has children. Expansion is local to the renderer — no round trip to the cell.
+    /// (a list). Porthole and the native CellApple renderer show a tree with a toggle
+    /// per row that has children. A missing/non-list value means no children.
+    /// Expansion is local to each renderer — no round trip to the cell.
     public var childrenKeypath: String?
     /// U2: optional root-state keypath holding the initially expanded row identities
     /// (a list of `selectionValueKeypath` values, or the single string "*" for all).
-    /// Absent → every row with children starts expanded.
+    /// Supported by Porthole and the native CellApple renderer. Absent keypath →
+    /// every row with children starts expanded. A present keypath resolving to a
+    /// list opens only those identities; "*" opens all. Any other value, including
+    /// an unresolved keypath or null, starts closed. An unchanged seed preserves
+    /// local toggles across reloads; a changed seed replaces the local expansion.
     public var expandedStateKeypath: String?
     /// U3: when true the list keeps the newest row in view as rows arrive, unless the
     /// reader has scrolled away from the bottom. Meant for logs and streams.
