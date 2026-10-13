@@ -403,6 +403,21 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     private var intercepts = Intercepts()
     private var auditor = GeneralAuditor()
+    private let pendingFlowObserverLock = NSLock()
+    private var pendingFlowObserver: (() -> Void)?
+    // Internal, instance-local observation seam: no wire or runtime policy change.
+    var pendingFlowSubscriptionObservedForTesting: (() -> Void)? {
+        get {
+            pendingFlowObserverLock.lock()
+            defer { pendingFlowObserverLock.unlock() }
+            return pendingFlowObserver
+        }
+        set {
+            pendingFlowObserverLock.lock()
+            pendingFlowObserver = newValue
+            pendingFlowObserverLock.unlock()
+        }
+    }
     private var persistedContracts = [Contract]()
     private var persistedMembers = [Identity]()
     private var persistedAuthorizationRevision = 0
@@ -1249,6 +1264,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 throw error
             }
         case .pending(let subscriptionFlight):
+            pendingFlowSubscriptionObservedForTesting?()
             try await subscriptionFlight.wait()
         case .active:
             CellBase.diagnosticLog("feed already active for label=\(label)", domain: .flow)
