@@ -20,13 +20,21 @@ import Crypto
 // The bridge owns command correlation and synchronization. Each proxy retains
 // only its command's signing-backpressure diagnostic, never reusable authority.
 public struct BridgeIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol, @unchecked Sendable {
+    // Frozen physical authentication generation; never inferred from a later bridge replacement.
+    let attachmentTransferSession: BridgeChannelSession?
     private let signingAttemptState = BridgeSigningAttemptState()
     var signingBackpressure: BridgeSigningBackpressure? { signingAttemptState.backpressure }
     
     public init(cloudBridge: BridgeProtocol? = nil) {
         self.cloudBridge = cloudBridge
+        self.attachmentTransferSession = nil
     }
     
+    init(cloudBridge: BridgeProtocol, attachmentTransferSession: BridgeChannelSession) {
+        self.cloudBridge = cloudBridge
+        self.attachmentTransferSession = attachmentTransferSession
+    }
+
     public func initialize() async -> IdentityVaultProtocol {
         return self
     }

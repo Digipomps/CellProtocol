@@ -1380,7 +1380,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             // Preserve the intrinsic public-metadata grant installed by Identity's
             // constructor/decoder. Do not import caller-supplied runtime grants.
             requester.grants = [Grant(keypath: "displayName", permission: "r---")]
-            requester.identityVault = BridgeIdentityVault(cloudBridge: self)
+            requester.identityVault = BridgeIdentityVault(cloudBridge: self, attachmentTransferSession: channelSession)
             command.identity = requester
         }
         bridgeLog("Consume command \(command.diagnosticMetadata)")
