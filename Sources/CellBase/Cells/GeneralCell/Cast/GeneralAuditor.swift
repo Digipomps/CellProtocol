@@ -161,7 +161,7 @@ private final class FlowSubscriptionResources: @unchecked Sendable {
 }
 
 actor GeneralAuditor {
-    typealias AuthorizationSnapshot = (revision: Int, contracts: [Contract], members: [Identity])
+    typealias AuthorizationSnapshot = (revision: Int, contracts: [Contract], members: [Identity], revokedBefore: [String: TimeInterval])
     private var subscribedFeeds: [String: AnyPublisher<FlowElement, Error>] = [:]
     private var pendingFlowSubscriptionIDs: [String: String] = [:]
     private var pendingFlowSubscriptionFlights: [String: FlowSubscriptionFlight] = [:]
@@ -425,6 +425,7 @@ actor GeneralAuditor {
 
     private var contracts = [Contract]()
     private var authorizationRevision = 0
+    private var revokedBefore: [String: TimeInterval] = [:]
     func loadContracts() -> [Contract] {
         return contracts
     }
@@ -456,6 +457,16 @@ actor GeneralAuditor {
         restoring persisted: AuthorizationSnapshot
     ) -> AuthorizationSnapshot {
         hydrateAuthorizationIfEmpty(from: persisted)
+        guard contract.issuedAt > (revokedBefore[contract.subject.uuid] ?? -.infinity) else {
+            return authorizationSnapshot()
+        }
+        if contract.targetCellUUID != nil {
+            let previous = contracts.filter { $0.subject.uuid == contract.subject.uuid && $0.targetCellUUID == contract.targetCellUUID }
+            guard previous.allSatisfy({ $0.uuid == contract.uuid || $0.expiresAt < contract.expiresAt }) else {
+                return authorizationSnapshot()
+            }
+            contracts.removeAll { $0.subject.uuid == contract.subject.uuid && $0.targetCellUUID == contract.targetCellUUID }
+        }
         addContract(contract)
         addMember(member)
         authorizationRevision += 1
@@ -464,24 +475,43 @@ actor GeneralAuditor {
 
     func removeAuthorization(
         subjectUUID: String,
+        revokedAt: TimeInterval,
         restoring persisted: AuthorizationSnapshot
     ) -> AuthorizationSnapshot {
         hydrateAuthorizationIfEmpty(from: persisted)
+        // Advance on every removal, including a frozen clock. Also cover any
+        // currently installed contract timestamp, so removal cannot be undone
+        // by replaying a locally reissued contract just beyond the prior cutoff.
+        let previous = revokedBefore[subjectUUID]?.nextUp ?? -.infinity
+        let installed = contracts.filter { $0.subject.uuid == subjectUUID }.map(\.issuedAt).max() ?? -.infinity
+        revokedBefore[subjectUUID] = max(revokedAt, max(previous, installed))
         contracts.removeAll { $0.subject.uuid == subjectUUID }
         members.removeAll { $0.uuid == subjectUUID }
         authorizationRevision += 1
         return authorizationSnapshot()
     }
 
+    func applyRevocation(_ command: ContractRevocation, cutoff: TimeInterval, restoring persisted: AuthorizationSnapshot) -> AuthorizationSnapshot? {
+        hydrateAuthorizationIfEmpty(from: persisted)
+        guard command.issuedAt > (revokedBefore[command.subjectUUID] ?? -.infinity),
+              contracts.contains(where: {
+                  $0.uuid == command.contractUUID && $0.agreement.uuid == command.agreementUUID &&
+                  $0.subject.uuid == command.subjectUUID && $0.issuedAt <= command.issuedAt
+              }) else { return nil }
+        return removeAuthorization(subjectUUID: command.subjectUUID, revokedAt: max(command.issuedAt, cutoff), restoring: persisted)
+    }
+
     func replaceAuthorization(
         contracts: [Contract],
         members: [Identity],
-        revision: Int
+        revision: Int,
+        revokedBefore: [String: TimeInterval]
     ) -> AuthorizationSnapshot {
         guard revision >= authorizationRevision else {
             return authorizationSnapshot()
         }
         self.contracts = contracts
+        self.revokedBefore = revokedBefore
         self.members = members
         authorizationRevision = max(authorizationRevision, revision)
         return authorizationSnapshot()
@@ -492,16 +522,22 @@ actor GeneralAuditor {
               members.isEmpty,
               authorizationRevision == 0,
               persisted.revision >= authorizationRevision,
-              persisted.contracts.isEmpty == false || persisted.members.isEmpty == false else {
+              persisted.contracts.isEmpty == false || persisted.members.isEmpty == false || !persisted.revokedBefore.isEmpty else {
             return
         }
         contracts = persisted.contracts
+        revokedBefore = persisted.revokedBefore
         members = persisted.members
         authorizationRevision = max(authorizationRevision, persisted.revision)
     }
 
+    // A synchronous effect here cannot interleave with actor revocation.
+    func withAuthorizationSnapshot<T>(_ effect: (AuthorizationSnapshot) -> T) -> T {
+        effect(authorizationSnapshot())
+    }
+
     func authorizationSnapshot() -> AuthorizationSnapshot {
-        (authorizationRevision, contracts, members)
+        (authorizationRevision, contracts, members, revokedBefore)
     }
     
     func loadMembers() -> [Identity] {

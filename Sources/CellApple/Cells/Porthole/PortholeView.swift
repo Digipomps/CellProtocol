@@ -31,8 +31,13 @@ public struct PortholeView : View {
             }
             VStack {
                 if let element = viewModel.skeleton {
-                    SkeletonView(element: element)
-                        .background(Color.white)
+                    // One host boundary measurement. Descendants inherit or
+                    // narrow this declared budget; no per-element geometry.
+                    GeometryReader { geometry in
+                        SkeletonView(element: element, renderData: .init(root: viewModel.skeletonRootData))
+                            .environment(\.skeletonLayoutContext, declaredLayout(geometry.size))
+                            .background(Color.white)
+                    }
                     //                    .scaledToFit()
                 }
                 
@@ -62,6 +67,16 @@ public struct PortholeView : View {
 //        .edgesIgnoringSafeArea(.all)
     }
     
+    private func declaredLayout(_ size: CGSize) -> SkeletonLayoutContext {
+        #if os(macOS)
+        let capabilities: Set<SkeletonCapability> = [.pointer, .hover, .keyboard]
+        #else
+        let capabilities: Set<SkeletonCapability> = [.touch]
+        #endif
+        return try! SkeletonLayoutContext(availableWidth: max(0, Double(size.width)),
+            availableHeight: max(0, Double(size.height)), capabilities: capabilities)
+    }
+
     func buildOutwardButtonStack(cellConfigurations: [CellConfiguration]) -> [ButtonState] {
         var buttonStack = [ButtonState]()
         for cellConf in cellConfigurations  {

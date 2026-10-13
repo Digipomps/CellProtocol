@@ -113,12 +113,16 @@ Støtter:
 - `sourceKeypath`
 - `targetKeypath`
 - `placeholder`
+- `placeholderKeypath`
+- `secure`
+- `secureKeypath`
 - `modifiers`
 
 Viktig:
 
 - brukes for enkel input/binding
 - ikke lov å anta avansert editoroppførsel
+- se «Plassholder fra data og skjult inndata» under
 
 ### `TextArea`
 
@@ -133,6 +137,9 @@ Støtter:
 - `submitOnEnter`
 - `submitActionKeypath`
 - `editorMode`
+- `placeholderKeypath`
+- `secure`
+- `secureKeypath`
 - `modifiers`
 
 `editorMode` støtter:
@@ -147,6 +154,22 @@ Viktig:
 - meta/ctrl-enter-distinksjon er dokumentert som gap
 - ikke lov å love full rich text-editor eller komplett markdown-editor utover
   dagens implementasjon
+
+### Plassholder fra data og skjult inndata (`TextField` og `TextArea`)
+
+- `placeholderKeypath`: ikke-tom tekst ved keypathen (trimmet) vinner over `placeholder`.
+  Tom, blank, manglende eller ikke-tekst gir `placeholder` (eventuelt lokalisert). Brukes når
+  samme felt skal vise ulike spørsmål per steg, for eksempel en onboarding i chatten.
+- `secure: true` skjuler inndata alltid (web `type=password`, native `SecureField`). Data kan
+  ikke slå det av.
+- `secureKeypath`: en sann verdi (`true`, `1`, `"true"`) skjuler inndata for den tilstanden.
+- Et skjult felt viser aldri verdien fra `sourceKeypath`, lagrer ikke utkast og strømmer ikke
+  tastetrykk til `targetKeypath`. Verdien forlater feltet bare ved innsending, og feltet tømmes da.
+- En skjult `TextArea` rendres som ett linjefelt.
+- `secure` er en visningsegenskap, ikke en lagringsgaranti: cellen som tar imot verdien må selv
+  holde den ute av transkript, `state`, `get`-svar og logg.
+- Reglene står i `SkeletonTextInputPresentation` (CellBase) og testes mot web-rendereren med
+  `fixtures/skeleton-textinput/parity.v1.json`.
 
 ### `Image`
 

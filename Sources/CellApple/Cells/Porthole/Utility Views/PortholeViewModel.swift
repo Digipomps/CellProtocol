@@ -23,6 +23,10 @@ public class PortholeViewModel: ObservableObject {
     @Published  var flowElements = [FlowElement]()
     @Published var cellReferences = [CellReference]()
     @Published public var localMutationVersion = 0
+    /// Host/cell-supplied snapshot for portable root/item binding, including
+    /// ComponentSurface mounts. R3 owns subscription and persistence.
+    @Published public var skeletonRootData: ValueType?
+    public let skeletonDragContext = SkeletonNativeDragContext()
     public let localization = SkeletonLocalizationRuntime()
     @Published public private(set) var localizationLocale = "nb-NO"
     @Published public private(set) var localizationDataVersion = 0

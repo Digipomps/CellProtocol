@@ -35,4 +35,5 @@ extension SetValueState {
 public struct SetValueResponse: Codable {
     var state: SetValueState
     var value: ValueType?
+    var retryAfterSeconds: Int? = nil
 }

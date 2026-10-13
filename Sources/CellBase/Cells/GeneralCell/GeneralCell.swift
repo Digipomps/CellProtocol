@@ -15,6 +15,21 @@ enum GeneralCellErrors: Error {
     case noSchemaForKey
 }
 
+public enum CellRuntimeBindingError: Error {
+    case setupRefused
+}
+
+private actor CellBindingRefusals {
+    private var rows: [ValueType] = []
+    func record(key: String, operation: String, condition: String, requester: String) {
+        rows.append(.object(["key": .string(key), "operation": .string(operation),
+                             "condition": .string(condition), "requesterUUID": .string(requester),
+                             "runtimeToken": .string("missingOrUnauthorized")]))
+    }
+    func snapshot() -> [ValueType] { rows }
+    func count() -> Int { rows.count }
+}
+
 public enum AgreementAdmissionPolicy: String, Codable, Sendable {
     case ownerApprovalRequired
     case automaticWhenConditionsMet
@@ -197,6 +212,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private static let missingIdentityVaultLogLock = NSLock()
     nonisolated(unsafe) private static var missingIdentityVaultLoggedUUIDs: Set<String> = []
     @TaskLocal private static var isEvaluatingAuthorizationConditions = false
+    private let bindingRefusals = CellBindingRefusals()
+
     @TaskLocal private static var runtimeBindingInstallationToken: CellRuntimeBindingInstallationToken?
     @TaskLocal private static var attachedStatusTraversalVisitedCells: Set<ObjectIdentifier> = []
 
@@ -218,6 +235,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func keys(requester: Identity) async throws -> [String] {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "keys", requestedAccess: "r---")
         try await ensureRuntimeReady()
         // validate permissions
         
@@ -225,6 +243,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func typeForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         // validate permissions
         guard let schema = schemaDict[key] else {
@@ -239,6 +258,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         method: ExploreContractMethod,
         requester: Identity
     ) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         guard let schema = operationSchemaDict[key]?[method] else {
             throw GeneralCellErrors.noSchemaForKey
@@ -247,6 +267,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
 
     public func operationContracts(requester: Identity) async throws -> [ValueType] {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "operationContracts", requestedAccess: "r---")
         try await ensureRuntimeReady()
         return operationSchemaDict.keys.sorted().flatMap { key in
             operationSchemaDict[key, default: [:]].keys
@@ -255,7 +276,70 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
     }
 
+    /// Measures one invariant: **the surface a cell answers on is the surface
+    /// Explore declares.**
+    ///
+    /// Missing/extra handlers and historical refused setup are reported:
+    ///
+    /// - `declaredOnly` — Explore promises a keypath that has no handler
+    ///   wired. A caller who trusts the contract gets `KeyValueErrors.notFound`
+    ///   at request time, which surfaces as a 500 far from the cause. A cell
+    ///   that promises a keypath and does not deliver it is disqualified.
+    /// - `interceptOnly` — a keypath answers but is undeclared. It works, but
+    ///   no agent reading Explore can discover it, so it is not part of the
+    ///   protocol in any useful sense.
+    ///
+    /// - `refused` — setup was denied; each row names its operation, key and
+    ///   failed authorization condition. Historical refusals keep `ok=false`.
+    ///
+    /// This measures; it does not enforce. Nothing here changes registration,
+    /// authorization or state, and no handler is invoked — the audit compares
+    /// handler sets plus refusal diagnostics. Handler scope is keypath dictionaries, matching
+    /// what `get` and `set` actually look up.
+    public func registeredKeypathAudit() async -> ValueType {
+        let refused = await bindingRefusals.snapshot()
+        let registered = await intercepts.registeredKeypaths()
+        var declared: Set<String> = []
+        var declaredGet: Set<String> = []
+        var declaredSet: Set<String> = []
+        for (key, methods) in operationSchemaDict {
+            for method in methods.keys {
+                declared.insert(key)
+                switch method {
+                case .get: declaredGet.insert(key)
+                case .set: declaredSet.insert(key)
+                }
+            }
+        }
+        let interceptGet = Set(registered.get)
+        let interceptSet = Set(registered.set)
+
+        func rows(_ keys: Set<String>, _ method: ExploreContractMethod) -> [ValueType] {
+            keys.sorted().map { key in
+                .object(["key": .string(key), "method": .string(method.rawValue)])
+            }
+        }
+
+        let declaredOnly = rows(declaredGet.subtracting(interceptGet), .get)
+            + rows(declaredSet.subtracting(interceptSet), .set)
+        let interceptOnly = rows(interceptGet.subtracting(declaredGet), .get)
+            + rows(interceptSet.subtracting(declaredSet), .set)
+        let consistent = declaredGet.intersection(interceptGet).count
+            + declaredSet.intersection(interceptSet).count
+
+        var value: Object = [:]
+        value["cell"] = .string(String(String(describing: type(of: self)).split(separator: ".").last ?? "GeneralCell"))
+        value["uuid"] = .string(uuid)
+        value["ok"] = .bool(declaredOnly.isEmpty && interceptOnly.isEmpty && refused.isEmpty)
+        value["refused"] = .list(refused)
+        value["consistent"] = .integer(consistent)
+        value["declaredOnly"] = .list(declaredOnly)
+        value["interceptOnly"] = .list(interceptOnly)
+        return .object(value)
+    }
+
     public func schemaDescriptionForKey(key: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: key, requestedAccess: "r---")
         try await ensureRuntimeReady()
         guard let description = schemaDescriptionDict[key] else {
             throw GeneralCellErrors.noSchemaForKey
@@ -269,7 +353,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         schema: ValueType,
         description: ValueType = .string("*")
     ) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "registerExploreSchema") {
             self.register(key: key, schema: schema, description: description)
         }
     }
@@ -310,6 +394,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private let feedAuthorizations = FeedAuthorizationRegistry()
     // Instance-local clock permits deterministic contract-expiry verification.
     // It is not encoded or exposed through Meddle/Explore.
+    static let externalAdmissionClockTolerance: TimeInterval = 5
     var authorizationClock: () -> Date = Date.init
     public var identityDomain: String = "private"
     
@@ -321,6 +406,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private var persistedContracts = [Contract]()
     private var persistedMembers = [Identity]()
     private var persistedAuthorizationRevision = 0
+    private var persistedRevokedBefore: [String: TimeInterval] = [:]
     private let persistedAuthorizationLock = NSLock()
     private let runtimeReadinessCoordinator = CellRuntimeReadinessCoordinator()
     
@@ -434,6 +520,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         case name
         case contracts
         case members
+        case revokedBefore
     }
     
     public required init(from decoder: Decoder) throws {
@@ -462,6 +549,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         self.persistedContracts = (try? values.decodeIfPresent([Contract].self, forKey: .contracts)) ?? []
         self.persistedMembers = (try? values.decodeIfPresent([Identity].self, forKey: .members)) ?? []
         
+        persistedRevokedBefore = try values.decodeIfPresent([String: TimeInterval].self, forKey: .revokedBefore) ?? [:]
         if let tmpName = try values.decodeIfPresent(String.self, forKey: .name) {
             name = tmpName
         } else {
@@ -484,6 +572,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         let authorization = persistedAuthorizationSnapshot()
         try container.encode(authorization.contracts, forKey: .contracts)
         try container.encode(authorization.members, forKey: .members)
+        try container.encode(authorization.revokedBefore, forKey: .revokedBefore)
         
             }
     
@@ -544,6 +633,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 // Cell Absorb functions
     
     public func attach(emitter: Emit, label: String, requester: Identity) async throws -> ConnectState {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: label, requestedAccess: "-w--")
         try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
         if let runtimeReadyEmitter = emitter as? CellRuntimeReady {
@@ -1010,6 +1100,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     // change to absorb flow
     public func absorbFlow(label: String, requester: Identity) async throws {  
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: label, requestedAccess: "-w--")
         try await requireFlowLifecycleWriteAccess(label: label, requester: requester)
         try await ensureRuntimeReady()
         switch await auditor.beginFlowSubscription(for: label) {
@@ -1214,6 +1305,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func flow(requester: Identity) async throws  -> AnyPublisher<FlowElement, Error> {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "feed", requestedAccess: "r---")
         try await ensureRuntimeReady()
         if await validateAccess("r---", at: "feed", for: requester) {
             CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "feed", param: "nil")
@@ -1231,7 +1323,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     open func admit(context: ConnectContext) async -> ConnectState {
         do {
+            if let requester = context.identity {
+                try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "admit", requestedAccess: "r---")
+            }
             try await ensureRuntimeReady()
+        } catch is CellAuthorizationError {
+            return .denied
         } catch {
             CellBase.diagnosticLog(
                 "Runtime binding preparation failed before admission: \(error)",
@@ -1270,6 +1367,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         
     }
     
+    /// Cell-specific descriptor policy for locally signed contracts. The live
+    /// identity still performs key proof and signing; the default preserves behavior.
+    open func localContractIdentityDescriptor(_ identity: Identity) -> Identity { identity }
+
     public func addAgreement(_ agreement: Agreement, for identity: Identity) async -> AgreementState {
         await addAgreement(agreement, for: identity, authorizedBy: identity)
     }
@@ -1279,6 +1380,12 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         for identity: Identity,
         authorizedBy authority: Identity
     ) async -> AgreementState {
+        do {
+            try await rejectForeignOwnerKeyBeforeReadiness(identity, keypath: "agreement", requestedAccess: "-w--")
+            try await rejectForeignOwnerKeyBeforeReadiness(authority, keypath: "agreement", requestedAccess: "-w--")
+        } catch {
+            return .rejected
+        }
         do {
             try await ensureRuntimeReady()
         } catch {
@@ -1335,22 +1442,48 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 guard let signingOwner = await contractSigningOwner(preferredOwner: preferredSigningOwner) else {
                     throw IdentityVaultError.wrongVault
                 }
-                contractAgreement.owner = signingOwner
-                contractAgreement.signatories = [signingOwner, identity]
-                let contract = try await Contract.signed(
+                contractAgreement.owner = localContractIdentityDescriptor(signingOwner)
+                let memberDescriptor = localContractIdentityDescriptor(identity)
+                contractAgreement.signatories = [contractAgreement.owner, memberDescriptor]
+                let beforeSigning = await currentAuthorizationSnapshot()
+                let clock = authorizationClock().timeIntervalSince1970
+                // A fresh local owner signature can re-admit after removal even
+                // when the injected clock has not advanced. Old signatures still
+                // fail the cutoff, including at the final actor transaction.
+                let issuedAt = max(clock, beforeSigning.revokedBefore[identity.uuid]?.nextUp ?? -.infinity)
+                // Moving issuedAt beyond a revocation cutoff must not move the
+                // requested expiration deadline as well. Agreement durations are
+                // whole seconds, so round the consumed window up conservatively.
+                if issuedAt > clock {
+                    let consumed = ceil(issuedAt - clock)
+                    guard consumed < Double(contractAgreement.duration) else {
+                        await recordContractRejected(identity: identity,
+                            reasonCode: "contract_duration_consumed_by_cutoff",
+                            message: "Requested duration does not extend beyond the revocation cutoff.")
+                        return .rejected
+                    }
+                    contractAgreement.duration -= Int(consumed)
+                }
+                var contract = try await Contract.signed(
                     agreement: contractAgreement,
                     issuer: signingOwner,
-                    subject: identity,
+                    subject: memberDescriptor,
                     domain: identityDomain,
-                    issuedAt: authorizationClock()
+                    issuedAt: Date(timeIntervalSince1970: issuedAt)
                 )
+                contract.issuer = localContractIdentityDescriptor(contract.issuer)
                 let persisted = persistedAuthorizationSnapshot()
                 let authorization = await self.auditor.installAuthorization(
                     contract: contract,
-                    member: identity,
+                    member: memberDescriptor,
                     restoring: persisted
                 )
                 applyPersistedAuthorizationSnapshot(authorization)
+                guard authorization.contracts.contains(where: { $0.uuid == contract.uuid }) else {
+                    await recordContractRejected(identity: identity,
+                        reasonCode: "contract_installation_revoked", message: "Admission was revoked while signing.")
+                    return .rejected
+                }
                 return .signed
             } catch {
                 CellBase.diagnosticLog("Signing contract failed: \(error)", domain: .contracts)
@@ -1369,6 +1502,99 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             )
             return .rejected
         }
+    }
+
+    /// Installs an owner-signed, cell-bound Contract presented by its proven subject.
+    /// The host needs only the owner's public identity. No owner signing proxy is used.
+    open func acceptExternallySignedAgreement(
+        _ presented: Contract,
+        for identity: Identity
+    ) async -> AgreementState {
+        // Freeze the contract references; retain the presenter only for live key proof.
+        let principal = identity.publicIdentitySnapshot()
+        guard !CellBase.debugValidateAccessForEverything,
+              let bytes = try? JSONEncoder().encode(presented),
+              let contract = try? JSONDecoder().decode(Contract.self, from: bytes) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_invalid_snapshot_or_debug", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        do {
+            try await ensureRuntimeReady()
+        } catch {
+            await recordContractRejected(identity: principal, reasonCode: "external_runtime_unavailable", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        guard contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
+              contract.signaturePurpose == "haven.contract.admission.v2",
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              contract.targetCellUUID == uuid,
+              await contract.verifyAuthorizationBinding(
+                expectedIssuer: owner,
+                expectedSubject: principal,
+                expectedDomain: identityDomain,
+                now: authorizationClock()
+              ),
+              await checkIdentityOrigin(identity, against: contract.subject) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_binding_or_proof_invalid", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        // Reuse the exact local-admission template check without rewriting signed bytes.
+        guard let request = try? contract.agreement.publicDescriptorSnapshot() else {
+            await recordContractRejected(identity: principal, reasonCode: "external_invalid_agreement_snapshot", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        request.state = .template
+        guard agreementDerivedFromTemplate(request: request, subject: principal) != nil else {
+            await recordContractRejected(identity: principal, reasonCode: "external_template_mismatch", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        let conditionsResolved = await Self.$isEvaluatingAuthorizationConditions.withValue(true) {
+            await allConditionsResolved(
+                contract.agreement.conditions,
+                context: ConnectContext(source: nil, target: self, identity: principal)
+            )
+        }
+        guard contract.targetCellUUID == uuid,
+              contract.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              contract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[contract.subject.uuid] ?? -.infinity),
+              conditionsResolved,
+              contract.temporalStatus(now: authorizationClock()) == .active else {
+            await recordContractRejected(identity: principal, reasonCode: "external_conditions_expiry_or_revocation", message: "External owner-signed admission was rejected.")
+            return .rejected
+        }
+        let authorization = await auditor.installAuthorization(
+            contract: contract,
+            member: contract.subject.publicIdentitySnapshot(),
+            restoring: persistedAuthorizationSnapshot()
+        )
+        applyPersistedAuthorizationSnapshot(authorization)
+        guard authorization.contracts.contains(where: { $0.uuid == contract.uuid }) else {
+            await recordContractRejected(identity: principal, reasonCode: "external_install_rejected", message: "External admission lost to revocation or a newer contract.")
+            return .rejected
+        }
+        return .signed
+    }
+
+    /// Applies a cell-bound owner signature without requiring an owner key on the host.
+    open func acceptExternallySignedRevocation(_ presented: ContractRevocation) async -> Bool {
+        guard !CellBase.debugValidateAccessForEverything,
+              let data = try? JSONEncoder().encode(presented),
+              let revocation = try? JSONDecoder().decode(ContractRevocation.self, from: data),
+              revocation.cellUUID == uuid, revocation.domain == identityDomain,
+              revocation.issuedAt <= authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+              revocation.verify(owner: owner) else { return false }
+        let current = await currentAuthorizationSnapshot()
+        guard revocation.issuedAt > (current.revokedBefore[revocation.subjectUUID] ?? -.infinity),
+              current.contracts.contains(where: {
+                  $0.uuid == revocation.contractUUID && $0.agreement.uuid == revocation.agreementUUID &&
+                  $0.subject.uuid == revocation.subjectUUID && $0.issuedAt <= revocation.issuedAt
+              }) else { return false }
+        guard let snapshot = await auditor.applyRevocation(revocation,
+            cutoff: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
+            restoring: persistedAuthorizationSnapshot()) else { return false }
+        applyPersistedAuthorizationSnapshot(snapshot)
+        await feedAuthorizations.revalidate(subjectUUID: revocation.subjectUUID)
+        return true
     }
 
     private func admissionPolicyAllows(
@@ -1553,6 +1779,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func advertise(for identity: Identity) async throws -> AnyCell {
+        try await rejectForeignOwnerKeyBeforeReadiness(identity, keypath: "advertise", requestedAccess: "r---")
         try await ensureRuntimeReady()
         let manifest = try await self.exploreManifest(requester: identity)
         let template = try publicAgreementTemplateSnapshot()
@@ -1574,6 +1801,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func state(requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: "state", requestedAccess: "r---")
         try await ensureRuntimeReady()
         return .string("not implemented")
     }
@@ -1586,6 +1814,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     open func get(keypath: String, requester: Identity) async throws -> ValueType {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "r---")
         try await ensureRuntimeReady()
         CellBase.defaultCellResolver?.logAction(context: ConnectContext(source: nil, target: self, identity: requester), action: "get", param: keypath)
         let resolvedKeyPath = keypath // will look for substitutions later?
@@ -1595,7 +1824,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             requester: requester
         )
         if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
-            throw CellAuthorizationError.denied(operationAuthorizationDecision)
+            throw preDispatchAuthorizationFailure(operationAuthorizationDecision, keypath: resolvedKeyPath, requester: requester)
         }
         
         let keypathArray = resolvedKeyPath.split(separator: ".")
@@ -1722,6 +1951,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     open func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        try await rejectForeignOwnerKeyBeforeReadiness(requester, keypath: keypath, requestedAccess: "-w--")
         try await ensureRuntimeReady()
         
         
@@ -1736,7 +1966,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 requester: requester
             )
             if let operationAuthorizationDecision, !operationAuthorizationDecision.allowed {
-                throw CellAuthorizationError.denied(operationAuthorizationDecision)
+                throw preDispatchAuthorizationFailure(operationAuthorizationDecision, keypath: resolvedKeyPath, requester: requester)
             }
             
             let keypathArray = resolvedKeyPath.split(separator: ".")
@@ -1814,6 +2044,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return response
     }
 
+    // Called only at the initial explicit operation gate, before traversal or
+    // intercept dispatch. Ordinary cells preserve their existing error type.
+    func preDispatchAuthorizationFailure(_ decision: CellAuthorizationDecision,
+        keypath: String, requester: Identity) -> any Error {
+        CellAuthorizationError.denied(decision)
+    }
+
     private func explicitMeddleAuthorizationDecision(
         keypath: String,
         method: ExploreContractMethod,
@@ -1834,13 +2071,57 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         )
     }
 
+    /// Rejects a foreign owner reference before binding hooks run. This never
+    /// grants access: verified links and other identities continue through the
+    /// ordinary readiness and authorization paths. Debug policy cannot bypass it.
+    private func rejectForeignOwnerKeyBeforeReadiness(
+        _ requester: Identity, keypath: String, requestedAccess: String
+    ) async throws {
+        guard owner.uuid == requester.uuid,
+              owner.signingPublicKeyFingerprint != requester.signingPublicKeyFingerprint else { return }
+        if await verifiedSameEntityLink(for: requester) != nil { return }
+        let decision = CellAuthorizationDecision(
+            allowed: false,
+            path: .deniedIdentityReferenceMismatch,
+            reason: "Requester UUID matched the owner UUID, but the signing key did not match and no linked-key proof was verified.",
+            request: CellAuthorizationRequest(
+                cellUUID: uuid, identityDomain: identityDomain, keypath: keypath,
+                requestedAccess: requestedAccess, requester: requester
+            ),
+            reasonCode: "identity_public_key_mismatch",
+            userMessage: "Restore the owner identity or present an owner-approved linked identity proof.",
+            requiredAction: "restore_owner_identity_or_link_scaffold",
+            canAutoResolve: false
+        )
+        await recordSecurityEvent(for: decision)
+        throw CellAuthorizationError.denied(decision)
+    }
+
+    /// Same registry constraints and cryptographic proof for preflight and
+    /// ordinary authorization. A registry record alone never proves key control.
+    private func verifiedSameEntityLink(for identity: Identity) async -> IdentityLinkRecord? {
+        guard let link = await IdentityLinkRegistry.shared.sameEntityLink(
+            ownerUUID: owner.uuid,
+            requesterUUID: identity.uuid,
+            requesterSigningKey: identity.publicSecureKey?.compressedKey,
+            domain: identityDomain
+        ) else { return nil }
+        let trustedIdentity = IdentityLinkProtocolService.identity(from: link.linkedIdentity)
+        guard await checkIdentityOrigin(identity, against: trustedIdentity) else { return nil }
+        return link
+    }
+
     public final func ensureRuntimeReady() async throws {
         try await runtimeReadinessCoordinator.ensure { [weak self] in
             guard let self else { return }
+            let refusalCount = await self.bindingRefusals.count()
             let token = CellRuntimeBindingInstallationToken(cell: self)
             defer { token.invalidate() }
             try await Self.$runtimeBindingInstallationToken.withValue(token) {
                 try await self.installCellRuntimeBindingsForAccess()
+                guard await self.bindingRefusals.count() == refusalCount else {
+                    throw CellRuntimeBindingError.setupRefused
+                }
             }
         }
     }
@@ -1875,14 +2156,18 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return isMember
     }
     
+    func didChangeAuthorizationMembership() async {}
+
     public func removeMember(member: Identity, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
             await self.auditor.removeMember(member)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: member.uuid,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await didChangeAuthorizationMembership()
             await feedAuthorizations.revalidate(subjectUUID: member.uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
@@ -1894,9 +2179,11 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await self.auditor.removeMember(uuid)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: uuid,
+                revokedAt: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
                 restoring: persistedAuthorizationSnapshot()
             )
             applyPersistedAuthorizationSnapshot(authorization)
+            await didChangeAuthorizationMembership()
             await feedAuthorizations.revalidate(subjectUUID: uuid)
         } else {
             pushFlowElement(FlowElement(title: "201", content: .string("insufficient access (w) for member"), properties: FlowElement.Properties( type: .alert, contentType: .string)), requester: requester)
@@ -1984,24 +2271,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             print("General \(String(reflecting: type(of: self))). Got owner identity but it failed to prove ownership!")
         }
         if !ownerReferenceMatches,
-           let link = await IdentityLinkRegistry.shared.sameEntityLink(
-               ownerUUID: owner.uuid,
-               requesterUUID: identity.uuid,
-               requesterSigningKey: identity.publicSecureKey?.compressedKey,
-               domain: identityDomain
-           ) {
-            // En identitet lenket som «samme entitet» må bevise kontroll over *sin egen* nøkkel —
-            // nøyaktig som eieren må for sin. Registeret er bare et oppslag; beviset skjer her.
-            let linkedTrustedIdentity = IdentityLinkProtocolService.identity(from: link.linkedIdentity)
-            if await checkIdentityOrigin(identity, against: linkedTrustedIdentity) {
-                return AuthorizationEvidence(
-                    ownerReferenceMatches: true,
-                    ownerProofValid: true,
-                    contracts: [],
-                    linkedIdentityLinkID: link.linkID
-                )
-            }
-            print("General \(String(reflecting: type(of: self))). Linked identity \(identity.uuid) matched link \(link.linkID) but failed to prove control of the linked key.")
+           let link = await verifiedSameEntityLink(for: identity) {
+            return AuthorizationEvidence(
+                ownerReferenceMatches: true,
+                ownerProofValid: true,
+                contracts: [],
+                linkedIdentityLinkID: link.linkID
+            )
         }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
@@ -2073,15 +2349,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         (await currentAuthorizationSnapshot()).contracts
     }
 
-    private func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
+    func currentAuthorizationSnapshot() async -> GeneralAuditor.AuthorizationSnapshot {
         let runtime = await auditor.authorizationSnapshot()
         if runtime.contracts.isEmpty && runtime.members.isEmpty {
             let persisted = persistedAuthorizationSnapshot()
-            if persisted.contracts.isEmpty == false || persisted.members.isEmpty == false {
+            if persisted.contracts.isEmpty == false || persisted.members.isEmpty == false || !persisted.revokedBefore.isEmpty {
                 let restored = await auditor.replaceAuthorization(
                     contracts: persisted.contracts,
                     members: persisted.members,
-                    revision: persisted.revision
+                    revision: persisted.revision,
+                    revokedBefore: persisted.revokedBefore
                 )
                 applyPersistedAuthorizationSnapshot(restored)
                 return restored
@@ -2093,7 +2370,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     private func persistedAuthorizationSnapshot() -> GeneralAuditor.AuthorizationSnapshot {
         persistedAuthorizationLock.lock()
         defer { persistedAuthorizationLock.unlock() }
-        return (persistedAuthorizationRevision, persistedContracts, persistedMembers)
+        return (persistedAuthorizationRevision, persistedContracts, persistedMembers, persistedRevokedBefore)
     }
 
     private func applyPersistedAuthorizationSnapshot(_ snapshot: GeneralAuditor.AuthorizationSnapshot) {
@@ -2105,9 +2382,15 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         persistedAuthorizationRevision = snapshot.revision
         persistedContracts = snapshot.contracts
         persistedMembers = snapshot.members
+        persistedRevokedBefore = snapshot.revokedBefore
     }
 
-    private func authorizationMembers() async -> [Identity] {
+    func withCurrentAuthorizationSnapshot<T>(_ effect: (GeneralAuditor.AuthorizationSnapshot) -> T) async -> T {
+        _ = await currentAuthorizationSnapshot()
+        return await auditor.withAuthorizationSnapshot(effect)
+    }
+
+    func authorizationMembers() async -> [Identity] {
         (await currentAuthorizationSnapshot()).members
     }
     
@@ -2117,6 +2400,10 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         }
         var relevantContracts = [Contract]()
         for currentContract in await authorizationContracts() {
+            guard currentContract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[currentContract.subject.uuid] ?? -.infinity) else { continue }
+            guard currentContract.targetCellUUID == nil || currentContract.targetCellUUID == uuid else {
+                continue
+            }
             guard await currentContract.verifyAuthorizationBinding(
                 expectedIssuer: owner,
                 expectedSubject: identity,
@@ -2143,6 +2430,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                   await checkIdentityOrigin(identity, against: currentContract.subject) else {
                 continue
             }
+            guard currentContract.issuedAt > (persistedAuthorizationSnapshot().revokedBefore[currentContract.subject.uuid] ?? -.infinity) else { continue }
             relevantContracts.append(currentContract)
         }
         return relevantContracts
@@ -2264,7 +2552,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     }
     
     public func addIntercept(requester: Identity, intercept: @escaping FlowElementIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: "*", operation: "addIntercept") {
             await self.intercepts.storeFeedIntercept(intercept)
         }
     }
@@ -2281,7 +2569,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         topic: String,
         intercept: @escaping LabelledFlowElementIntercept
     ) async -> Bool {
-        guard await isAllowedToSetupIntercepts(requester: requester) else { return false }
+        guard await isAllowedToSetupIntercepts(requester: requester, key: topic, operation: "addInterceptForTopic") else { return false }
         return await self.intercepts.storeFeedIntercept(topic: topic, intercept)
     }
 
@@ -2292,29 +2580,38 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     @available(*, deprecated)
     public func setInterceptSetValueForKey(requester: Identity, key: String, setValueForKeyIntercept: @escaping SetValueForKeyIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "setInterceptSetValueForKey") {
             await self.intercepts.storeInterceptSetValueForKey(key: key, intercept: setValueForKeyIntercept)
         }
     }
     
-    private func isAllowedToSetupIntercepts(requester: Identity) async -> Bool { // TODO: change permission chack to something more meaningful
-        // Runtime binding installation is authorized by an active, instance-bound
-        // token rather than by caller identity. This allows a freshly created Cell
-        // with a public/unsigned owner descriptor to install its own handlers while
-        // keeping every registration attempt outside that scope proof-gated.
+    private func isAllowedToSetupIntercepts(requester: Identity, key: String, operation: String) async -> Bool {
+        // Preserve the instance-bound token and the owner proof policy.
         if Self.runtimeBindingInstallationToken?.authorizes(self) == true {
             return true
         }
-        guard identitiesReferenceSame(owner, requester) else {
-            return false
+        let condition: String
+        if !identitiesReferenceSame(owner, requester) {
+            condition = "requesterNotOwner"
+        } else if await checkIdentityOrigin(requester, against: owner) {
+            return true
+        } else {
+            condition = requester.identityVault == nil ? "identityMissingVault" : "signatureProofFailed"
         }
-        return await checkIdentityOrigin(requester, against: owner)
+        await bindingRefusals.record(key: key, operation: operation, condition: condition, requester: requester.uuid)
+        let message = "Binding setup refused cell=\(String(describing: type(of: self))) uuid=\(uuid) key=\(key) operation=\(operation) requesterUUID=\(requester.uuid) runtimeToken=missingOrUnauthorized condition=\(condition)"
+        // A refusal is operational evidence, even with diagnostic domains disabled.
+        if let handler = CellBase.diagnosticLogHandler {
+            handler(.lifecycle, message)
+        } else {
+            print("[CellBase][lifecycle] \(message)")
+        }
+        return false
     }
-    
-    
+
     @available(*, deprecated)
     public func setInterceptValueForKey(requester: Identity, key: String, setValueForKeyIntercept: @escaping ValueForKeyIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "setInterceptValueForKey") {
             await self.intercepts.storeInterceptValueForKey(key: key, intercept: setValueForKeyIntercept)
         }
     }
@@ -2375,7 +2672,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     //Meddle
     public func addInterceptForGet(requester: Identity, key: String, getValueIntercept: @escaping GetValueIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "addInterceptForGet") {
             switch exploreContractRegistrationDecision(for: key, method: .get) {
             case .useExisting:
                 break
@@ -2394,7 +2691,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     
     
     public func addInterceptForSet(requester: Identity, key: String, setValueIntercept: @escaping SetValueIntercept) async {
-        if await isAllowedToSetupIntercepts(requester: requester) {
+        if await isAllowedToSetupIntercepts(requester: requester, key: key, operation: "addInterceptForSet") {
             switch exploreContractRegistrationDecision(for: key, method: .set) {
             case .useExisting:
                 break
@@ -2493,7 +2790,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     public func makeCellOwnedFlowEmitterForRuntimeBinding(
         requester: Identity
     ) async -> ((FlowElement) -> Void)? {
-        guard await isAllowedToSetupIntercepts(requester: requester) else {
+        guard await isAllowedToSetupIntercepts(requester: requester, key: "*", operation: "makeCellOwnedFlowEmitterForRuntimeBinding") else {
             return nil
         }
         return { [weak self] flowElement in

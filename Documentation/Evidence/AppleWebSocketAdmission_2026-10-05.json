@@ -1,0 +1,160 @@
+{
+  "date": "2026-10-05",
+  "base_commit": "14181968c8998c4543b42282c3559bc74ed6bddc",
+  "scope": "A1 native Apple receive independence; follows N35 and Scanner PR58",
+  "toolchain": {
+    "swift": "Apple Swift 6.4 (swiftlang-6.4.0.34.1)",
+    "xcode": "27.0 (27A266a)",
+    "platform": "arm64 macOS 27.0"
+  },
+  "capacity": {
+    "minimum_free_gib": 40,
+    "minimum_free_percent": 5,
+    "reserve_gib": 10,
+    "jobs": 2,
+    "automatic_cache_deletion": false
+  },
+  "full_suite": {
+    "targets": [
+      {
+        "target": "HavenCommonsTests",
+        "tests": 26,
+        "skipped": 0,
+        "failures": 0
+      },
+      {
+        "target": "CellNearbyTests",
+        "tests": 3,
+        "skipped": 0,
+        "failures": 0
+      },
+      {
+        "target": "CellBaseTests",
+        "tests": 1545,
+        "skipped": 5,
+        "failures": 0
+      }
+    ],
+    "total_tests": 1574,
+    "total_skipped": 5,
+    "total_failures": 0,
+    "exit": 0,
+    "log": "cp53-apple-full-20261005.log"
+  },
+  "tsan": {
+    "tests": 198,
+    "failures": 0,
+    "processes": 1,
+    "exit": 0,
+    "filter": "EphemeralIdentityVaultConcurrencyTests|PublisherAsyncLifetimeTests|BridgeDescriptionConcurrencyTests|EntityScannerConsumerSecurityTests|ScannerNearbyInteractionTests|ScannerPeerAuthenticationTests|ScannerServiceInvitationTests|ScannerAdmissionTests|ScannerRetainedStateTests|BridgePeerV3Tests|BridgePeerRecordLayerTests|BridgePeerFlowControlTests|BridgeMultiplexingTests|BridgeMuxSendLifetimeTests|BridgeResponseLifetimeTests|BridgeFeedAndRPCOrderingTests|BridgeFactoryLifetimeTests|BridgeSigningLifetimeTests|VaporWebSocketAdmissionTests|BridgeChannelWebSocketTests|AppleBridgeTransportTests|AppleWebSocketAdmissionTests|WebSocketSendCompletionTests",
+    "TSAN_OPTIONS": "halt_on_error=1",
+    "log": "cp53-apple-tsan-20261005.log"
+  },
+  "red_green": {
+    "red_log": "cp53-apple-native-red-4-20261005.log",
+    "red_runtime_commit": "14181968c8998c4543b42282c3559bc74ed6bddc",
+    "red_tests": 1,
+    "red_failures": 2,
+    "red_claim": "Held mux A prevents sibling/control progress with the corrected new native fixture against unchanged runtime.",
+    "early_non_reproductions": [
+      "cp53-apple-native-red-20261005.log: fixture compile ambiguity",
+      "cp53-apple-native-red-2-20261005.log: fixture compile qualification error",
+      "cp53-apple-native-red-3-20261005.log: fixture did not canonicalize outer auth JSON; failed before the held operation"
+    ],
+    "final_focused_log": "cp53-apple-native-retirement-20261005.log",
+    "final_focused_tests": 35,
+    "final_focused_failures": 0,
+    "historical_runtime_evidence": "Runtime revision for red-4 was recorded in the contemporaneous execution note, not independently attested by a source-hash manifest. The log establishes the progress failure; the controlled reversion below supplies a preserved source comparison."
+  },
+  "commands": {
+    "wrapper": "CellScaffold/scripts/run_swift_bounded.sh",
+    "full_arguments": [
+      "test",
+      "--disable-sandbox"
+    ],
+    "tsan_arguments": [
+      "test",
+      "--disable-sandbox",
+      "--sanitize",
+      "thread",
+      "--filter",
+      "EphemeralIdentityVaultConcurrencyTests|PublisherAsyncLifetimeTests|BridgeDescriptionConcurrencyTests|EntityScannerConsumerSecurityTests|ScannerNearbyInteractionTests|ScannerPeerAuthenticationTests|ScannerServiceInvitationTests|ScannerAdmissionTests|ScannerRetainedStateTests|BridgePeerV3Tests|BridgePeerRecordLayerTests|BridgePeerFlowControlTests|BridgeMultiplexingTests|BridgeMuxSendLifetimeTests|BridgeResponseLifetimeTests|BridgeFeedAndRPCOrderingTests|BridgeFactoryLifetimeTests|BridgeSigningLifetimeTests|VaporWebSocketAdmissionTests|BridgeChannelWebSocketTests|AppleBridgeTransportTests|AppleWebSocketAdmissionTests|WebSocketSendCompletionTests"
+    ],
+    "private_execution_record": "cp53-apple-final-validation-20261005.json"
+  },
+  "tested_source_sha256": {
+    ".github/workflows/security-regression-macos.yml": "36b3d9243a12103e3521c5645aaffaaa3f7bdf602b212a9af655a988f9cbcc6b",
+    "Sources/CellApple/AppleBridgeTransport.swift": "b3668e80c9ad8b992dfb6c4c3b03942e4665d234d8c5e24906d561cdfcb3f3ed",
+    "Sources/CellApple/WebSocketConnection.swift": "42122ad6524796f9a538ac6538f8fd42e1c932f2588cad2499c9eda58af7ea78",
+    "Sources/CellVapor/CloudBridge/VaporBridgeReceiveBudget.swift": "3d9f7498cd171fc90e49fa184dd694823b5cba27f529636608f3ec2a22ea278f",
+    "Tests/CellBaseTests/AppleBridgeTransportTests.swift": "677322c4f574773e732a85fe16e5357562235e740c5d937ebb31690fc3d1d554",
+    "Tests/CellBaseTests/BridgeChannelWebSocketTests.swift": "7514f8ffa008915857db64efdca533045d4c257d6c3e06b1e767e223e161dd6d",
+    "Sources/CellBase/Security/BridgeWebSocketReceiveBudget.swift": "80ae811c64fdae4c94f96d620ae1fbd85e9c96884c3185c03551134447521dfc",
+    "Tests/CellBaseTests/AppleWebSocketAdmissionTests.swift": "1e517c4d40cda6cbcfe4fd1a18ed81a0037a8cc0e0a77e880aa7419259b1251b"
+  },
+  "submitted_source_sha256": {
+    ".github/workflows/security-regression-macos.yml": "36b3d9243a12103e3521c5645aaffaaa3f7bdf602b212a9af655a988f9cbcc6b",
+    "Sources/CellApple/AppleBridgeTransport.swift": "b3668e80c9ad8b992dfb6c4c3b03942e4665d234d8c5e24906d561cdfcb3f3ed",
+    "Sources/CellApple/WebSocketConnection.swift": "42122ad6524796f9a538ac6538f8fd42e1c932f2588cad2499c9eda58af7ea78",
+    "Sources/CellVapor/CloudBridge/VaporBridgeReceiveBudget.swift": "3d9f7498cd171fc90e49fa184dd694823b5cba27f529636608f3ec2a22ea278f",
+    "Tests/CellBaseTests/AppleBridgeTransportTests.swift": "677322c4f574773e732a85fe16e5357562235e740c5d937ebb31690fc3d1d554",
+    "Tests/CellBaseTests/BridgeChannelWebSocketTests.swift": "7514f8ffa008915857db64efdca533045d4c257d6c3e06b1e767e223e161dd6d",
+    "Sources/CellBase/Security/BridgeWebSocketReceiveBudget.swift": "80ae811c64fdae4c94f96d620ae1fbd85e9c96884c3185c03551134447521dfc",
+    "Tests/CellBaseTests/AppleWebSocketAdmissionTests.swift": "1e517c4d40cda6cbcfe4fd1a18ed81a0037a8cc0e0a77e880aa7419259b1251b"
+  },
+  "post_test_nonbehavior_changes": {},
+  "package_resolved_sha256": "2384777e8aee837a02588d8d9540125155cbdee5bbc50056c65d4d60a598ae2d",
+  "log_sha256": {
+    "cp53-apple-full-20261005.log": "c240a8ebf9231b302f52566ae7480e39196ce3c1722d6902ded357451a868b58",
+    "cp53-apple-native-bounds-20261005.log": "eb03761ed4bb275dca870eb72a013d07eab7e4dcbeffe9da7fb957bfa82220d0",
+    "cp53-apple-native-endpoints-20261005.log": "2a2b706de83345ae97fa05fcc8734b6529dcea5b000454dc6b5bed3069d52e02",
+    "cp53-apple-native-green-20261005.log": "20f6849adfc6d6963f4dca0cc5309698984c57bbe9ffa03055fe938bc162d302",
+    "cp53-apple-native-red-2-20261005.log": "72e13e02bea69695d49ee7efb22fe8bc9746a0dc15719332513d23d85adbdc59",
+    "cp53-apple-native-red-20261005.log": "202e8e351cd027c58022ca480861f7a93a42d4b848817bf758ab498027d0b247",
+    "cp53-apple-native-red-3-20261005.log": "f7fec01183e92f8ba59bed0b6fc3250e43b498a132004277c0caac1c923ac271",
+    "cp53-apple-native-red-4-20261005.log": "2d3f491a19f5b7172c891b8e582a18f2fee24c40bdd28f73227143defade8076",
+    "cp53-apple-native-retirement-20261005.log": "f765b65ac06fa7c43b00059cab7b77f8392a131b25fbbfdc20aa61cf3dfcb6bf",
+    "cp53-apple-serial-reversion-red-20261005.log": "f7790459f55b91d8d8c917f05e0f272e6fa05cd7e64aed661b7525c98834315d",
+    "cp53-apple-tsan-20261005.log": "0e7f06178932d1357730a03839e8317876bf6cb06660a098977b681715ee4553"
+  },
+  "private_evidence_root": "CellProtocol/Docs/Bridge_PR53_Assessment_2026-10-03/scanner-20261005",
+  "not_verified": [
+    "CI for this Apple candidate at document creation",
+    "iOS device / physical NI/UWB",
+    "TLS/proxy deployed chain",
+    "30-minute feed continuity / automatic mux renewal",
+    "network latency percentiles",
+    "process RSS / all framework receive buffers",
+    "AP9 security review or release approval"
+  ],
+  "toolchain_raw_output": {
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0",
+    "xcodebuild": "Xcode 27.0\nBuild version 27A266a",
+    "sw_vers": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428"
+  },
+  "controlled_serial_reversion": {
+    "kind": "Controlled behavior reversion, NOT an untouched historical runtime",
+    "mutation": "Await the queued consumer work in both onMessage callbacks, recreating the serial receive dependency. All other candidate runtime code is retained.",
+    "base": "14181968c8998c4543b42282c3559bc74ed6bddc",
+    "original_runtime_sha256": "b3668e80c9ad8b992dfb6c4c3b03942e4665d234d8c5e24906d561cdfcb3f3ed",
+    "mutated_runtime_sha256": "1415f5b85346b0ff714aa1cd4efa1938ae23bfea3199f9c4f656186858a0fe52",
+    "fixture_sha256": "1e517c4d40cda6cbcfe4fd1a18ed81a0037a8cc0e0a77e880aa7419259b1251b",
+    "log": "cp53-apple-serial-reversion-red-20261005.log",
+    "exit": 1,
+    "log_sha256": "f7790459f55b91d8d8c917f05e0f272e6fa05cd7e64aed661b7525c98834315d",
+    "completedUTC": "2026-10-05T16:58:16.387512+00:00",
+    "restored_runtime_sha256": "b3668e80c9ad8b992dfb6c4c3b03942e4665d234d8c5e24906d561cdfcb3f3ed",
+    "tests": 1,
+    "failures": 2,
+    "restored_and_verified_in": "final full and TSAN runs",
+    "fixture_snapshot": "cp53-apple-red-fixture-20261005.swift",
+    "mutated_runtime_snapshot": "cp53-apple-mutated-runtime-20261005.swift",
+    "original_runtime_snapshot": "cp53-apple-original-runtime-20261005.swift"
+  },
+  "independent_document_check": {
+    "first_check": "8 source / 10 log hashes, earlier full1574/5skip/0, TSAN198/0, focused35/0 confirmed; runtime provenance and post-release A assertion limitations identified.",
+    "after_first_check": "Added post-hold drain and A assertion, recorded a controlled serial reversion with exact snapshots and reran full/TSAN. Historical runtime attribution qualified. Final evidence requires a second bounded check.",
+    "not_security_approval": true,
+    "second_check": "No new discrepancies: final eight source and eleven log hashes, exact reversion/restoration/fixture snapshots, final1574/5skip/0 and TSAN198/0, post-hold assertion and raw toolchain output independently confirmed. This status sentence was added after that read-only check."
+  }
+}

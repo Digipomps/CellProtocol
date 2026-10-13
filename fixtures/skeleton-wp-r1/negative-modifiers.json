@@ -1,0 +1,580 @@
+[
+  {
+    "name": "wrong-type-paddingInsets",
+    "field": "paddingInsets",
+    "modifiers": {
+      "paddingInsets": 42
+    }
+  },
+  {
+    "name": "wrong-type-fontFamilies",
+    "field": "fontFamilies",
+    "modifiers": {
+      "fontFamilies": 42
+    }
+  },
+  {
+    "name": "wrong-type-lineHeightMultiple",
+    "field": "lineHeightMultiple",
+    "modifiers": {
+      "lineHeightMultiple": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-letterSpacing",
+    "field": "letterSpacing",
+    "modifiers": {
+      "letterSpacing": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-numericVariant",
+    "field": "numericVariant",
+    "modifiers": {
+      "numericVariant": 42
+    }
+  },
+  {
+    "name": "wrong-type-itemSpacing",
+    "field": "itemSpacing",
+    "modifiers": {
+      "itemSpacing": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-rowInsets",
+    "field": "rowInsets",
+    "modifiers": {
+      "rowInsets": 42
+    }
+  },
+  {
+    "name": "wrong-type-rowDecoration",
+    "field": "rowDecoration",
+    "modifiers": {
+      "rowDecoration": 42
+    }
+  },
+  {
+    "name": "wrong-type-minHeight",
+    "field": "minHeight",
+    "modifiers": {
+      "minHeight": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-maxHeight",
+    "field": "maxHeight",
+    "modifiers": {
+      "maxHeight": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-minWidth",
+    "field": "minWidth",
+    "modifiers": {
+      "minWidth": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-flexGrow",
+    "field": "flexGrow",
+    "modifiers": {
+      "flexGrow": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-controlStyle",
+    "field": "controlStyle",
+    "modifiers": {
+      "controlStyle": 42
+    }
+  },
+  {
+    "name": "wrong-type-accessibilityLabel",
+    "field": "accessibilityLabel",
+    "modifiers": {
+      "accessibilityLabel": 42
+    }
+  },
+  {
+    "name": "wrong-type-borderStyle",
+    "field": "borderStyle",
+    "modifiers": {
+      "borderStyle": 42
+    }
+  },
+  {
+    "name": "wrong-type-shadowSpread",
+    "field": "shadowSpread",
+    "modifiers": {
+      "shadowSpread": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-borderEdges",
+    "field": "borderEdges",
+    "modifiers": {
+      "borderEdges": 42
+    }
+  },
+  {
+    "name": "wrong-type-contentClip",
+    "field": "contentClip",
+    "modifiers": {
+      "contentClip": 42
+    }
+  },
+  {
+    "name": "wrong-type-layoutVariants",
+    "field": "layoutVariants",
+    "modifiers": {
+      "layoutVariants": 42
+    }
+  },
+  {
+    "name": "wrong-type-interactionStyles",
+    "field": "interactionStyles",
+    "modifiers": {
+      "interactionStyles": 42
+    }
+  },
+  {
+    "name": "wrong-type-textDecoration",
+    "field": "textDecoration",
+    "modifiers": {
+      "textDecoration": 42
+    }
+  },
+  {
+    "name": "wrong-type-textRotationDegrees",
+    "field": "textRotationDegrees",
+    "modifiers": {
+      "textRotationDegrees": "wrong"
+    }
+  },
+  {
+    "name": "wrong-type-leadingMarker",
+    "field": "leadingMarker",
+    "modifiers": {
+      "leadingMarker": 42
+    }
+  },
+  {
+    "name": "negative-itemSpacing",
+    "field": "itemSpacing",
+    "modifiers": {
+      "itemSpacing": -1
+    }
+  },
+  {
+    "name": "negative-minHeight",
+    "field": "minHeight",
+    "modifiers": {
+      "minHeight": -1
+    }
+  },
+  {
+    "name": "negative-maxHeight",
+    "field": "maxHeight",
+    "modifiers": {
+      "maxHeight": -1
+    }
+  },
+  {
+    "name": "negative-minWidth",
+    "field": "minWidth",
+    "modifiers": {
+      "minWidth": -1
+    }
+  },
+  {
+    "name": "negative-flexGrow",
+    "field": "flexGrow",
+    "modifiers": {
+      "flexGrow": -1
+    }
+  },
+  {
+    "name": "nonpositive-line-height-0",
+    "field": "lineHeightMultiple",
+    "modifiers": {
+      "lineHeightMultiple": 0
+    }
+  },
+  {
+    "name": "nonpositive-line-height--1",
+    "field": "lineHeightMultiple",
+    "modifiers": {
+      "lineHeightMultiple": -1
+    }
+  },
+  {
+    "name": "invalid-enum-numericVariant",
+    "field": "numericVariant",
+    "modifiers": {
+      "numericVariant": "normal"
+    }
+  },
+  {
+    "name": "invalid-enum-borderStyle",
+    "field": "borderStyle",
+    "modifiers": {
+      "borderStyle": "double"
+    }
+  },
+  {
+    "name": "invalid-enum-rowDecoration",
+    "field": "rowDecoration",
+    "modifiers": {
+      "rowDecoration": "flat"
+    }
+  },
+  {
+    "name": "invalid-enum-controlStyle",
+    "field": "controlStyle",
+    "modifiers": {
+      "controlStyle": "unstyled"
+    }
+  },
+  {
+    "name": "invalid-enum-textDecoration",
+    "field": "textDecoration",
+    "modifiers": {
+      "textDecoration": "strike"
+    }
+  },
+  {
+    "name": "invalid-edge",
+    "field": "borderEdges",
+    "modifiers": {
+      "borderEdges": [
+        "left"
+      ]
+    }
+  },
+  {
+    "name": "negative-inset",
+    "field": "leading",
+    "modifiers": {
+      "paddingInsets": {
+        "leading": -1
+      }
+    }
+  },
+  {
+    "name": "inverted-height",
+    "field": "height",
+    "modifiers": {
+      "minHeight": 10,
+      "maxHeight": 2
+    }
+  },
+  {
+    "name": "blank-family",
+    "field": "fontFamilies",
+    "modifiers": {
+      "fontFamilies": [
+        " "
+      ]
+    }
+  },
+  {
+    "name": "obsolete-dragging",
+    "field": "dragging",
+    "modifiers": {
+      "interactionStyles": {
+        "dragging": {
+          "opacity": 0.4
+        }
+      }
+    }
+  },
+  {
+    "name": "obsolete-dragging-scope",
+    "field": "draggingScope",
+    "modifiers": {
+      "interactionStyles": {
+        "draggingScope": "global"
+      }
+    }
+  },
+  {
+    "name": "interaction-action",
+    "field": "actionKeypath",
+    "modifiers": {
+      "interactionStyles": {
+        "hover": {
+          "actionKeypath": "go"
+        }
+      }
+    }
+  },
+  {
+    "name": "opacity-over-one",
+    "field": "opacity",
+    "modifiers": {
+      "interactionStyles": {
+        "dragActive": {
+          "opacity": 1.1
+        }
+      }
+    }
+  },
+  {
+    "name": "negative-opacity",
+    "field": "opacity",
+    "modifiers": {
+      "interactionStyles": {
+        "dragSource": {
+          "opacity": -0.1
+        }
+      }
+    }
+  },
+  {
+    "name": "negative-marker-width",
+    "field": "width",
+    "modifiers": {
+      "leadingMarker": {
+        "width": -1,
+        "insetTop": 4,
+        "insetBottom": 4,
+        "offset": -6,
+        "cornerRadius": 1,
+        "color": "#123456"
+      }
+    }
+  },
+  {
+    "name": "variant-negative-width",
+    "field": "minAvailableWidth",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "minAvailableWidth": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-inverted-width",
+    "field": "availableWidth",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "minAvailableWidth": 10,
+          "maxAvailableWidth": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-inverted-height",
+    "field": "availableHeight",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "minAvailableHeight": 10,
+          "maxAvailableHeight": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-inverted-override-height",
+    "field": "height",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "minHeight": 10,
+          "maxHeight": 2
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-invalid-capability",
+    "field": "requiresCapability",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "requiresCapability": [
+            "mouse"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-invalid-axis",
+    "field": "axis",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "axis": "diagonal"
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-css",
+    "field": "css",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "css": "display:none"
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-action",
+    "field": "actionKeypath",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "actionKeypath": "go"
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-viewport",
+    "field": "viewportClass",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "viewportClass": "web"
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-negative-spacing",
+    "field": "spacing",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "spacing": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-zero-font",
+    "field": "fontSize",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "fontSize": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-empty-columns",
+    "field": "columns",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-fixed-column",
+    "field": "value",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": [
+            {
+              "type": "fixed"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-adaptive-column",
+    "field": "min",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": [
+            {
+              "type": "adaptive",
+              "min": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-invalid-column",
+    "field": "columns",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": [
+            {
+              "type": "unknown"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-column-range",
+    "field": "columns",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": [
+            {
+              "type": "flexible",
+              "min": 5,
+              "max": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-malformed-condition",
+    "field": "when",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "when": {
+            "scope": "unknown",
+            "equals": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "variant-column-action",
+    "field": "actionKeypath",
+    "modifiers": {
+      "layoutVariants": [
+        {
+          "columns": [
+            {
+              "type": "fixed",
+              "value": 74,
+              "actionKeypath": "go"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

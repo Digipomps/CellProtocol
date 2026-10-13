@@ -23,8 +23,9 @@
 //  - At **root** the renderer supplies no value (`SkeletonView(element:)`
 //    defaults `userInfoValue` to nil), so every keypath resolves to nil.
 //  - Inside a **row** — a `List`/`Grid` item or a `Reference` flow element —
-//    the row's value is passed down, so conditions there are answerable at
-//    runtime and the audit leaves them alone.
+//    the row's value is passed down, so data-dependent conditions may be true
+//    at runtime. Malformed and constant-false conditions are still reported.
+//  - ComponentSurface uses the resolved definition and its mounting context.
 //
 
 import Foundation
@@ -41,6 +42,11 @@ public struct SkeletonReachabilityFinding: Equatable, Sendable {
         case malformedCondition
         /// `modifiers.hidden == true` left in a shipped surface.
         case hiddenModifier
+        case missingRequiredAction
+        case unresolvedComponentDefinition
+        case recursiveComponentDefinition
+        case duplicateComponentInstanceID
+        case unsupportedElement
     }
 
     public var kind: Kind
@@ -62,72 +68,194 @@ public struct SkeletonReachabilityFinding: Equatable, Sendable {
     }
 }
 
-public enum SkeletonReachabilityAudit {
+/// Availability, not example values. An available scope may vary at runtime;
+/// an unavailable scope always resolves to nil. Existing List/Reference rows
+/// supply their row value for all three scopes, as the current renderers do.
+public struct SkeletonReachabilityContext: Equatable {
+    public var root: Bool
+    public var item: Bool
+    public var context: Bool
 
-    /// Every element that can never be seen, and every action lost with it.
-    /// An empty result means nothing is *structurally* dead; it does not
-    /// promise the surface is right, only that it is not invisible.
-    public static func audit(_ element: SkeletonElement) -> [SkeletonReachabilityFinding] {
+    public init(root: Bool = false, item: Bool = false, context: Bool = false) {
+        self.root = root
+        self.item = item
+        self.context = context
+    }
+
+    public static let row = SkeletonReachabilityContext(root: true, item: true, context: true)
+
+    fileprivate func available(_ scope: SkeletonVisibilityScope) -> Bool {
+        switch scope {
+        case .root: return root
+        case .item: return item
+        case .context: return context
+        }
+    }
+}
+
+/// An audit input, not a wire-format registry. The host resolves sourceKeypath
+/// against the surface's instance and supplies the exact definition/revision it
+/// will mount. No I/O is performed by the audit. Nil dataContext inherits the
+/// mounting position; explicit availability describes a new binding context.
+public struct SkeletonResolvedComponent {
+    public var componentID: String
+    public var revision: String
+    public var skeleton: SkeletonElement
+    public var dataContext: SkeletonReachabilityContext?
+
+    public init(componentID: String, revision: String, skeleton: SkeletonElement,
+                dataContext: SkeletonReachabilityContext? = nil) {
+        self.componentID = componentID
+        self.revision = revision
+        self.skeleton = skeleton
+        self.dataContext = dataContext
+    }
+
+    /// Adapts the wire mount without mistaking its item for the host root.
+    /// Host root/context availability is explicit; an enclosing row's item is
+    /// replaced even when this mount has no item. Endpoint routing and access
+    /// checks belong to the runtime, outside this structural reachability audit.
+    public init(mount: SkeletonComponentMount, hostContext: SkeletonReachabilityContext) {
+        let hasItem: Bool
+        if let item = mount.item, case .null = item { hasItem = false }
+        else { hasItem = mount.item != nil }
+        self.init(componentID: mount.componentID, revision: mount.revision, skeleton: mount.skeleton,
+                  dataContext: .init(root: hostContext.root, item: hasItem, context: hostContext.context))
+    }
+}
+
+public enum SkeletonReachabilityAudit {
+    public typealias ComponentResolver = (SkeletonComponentSurface) -> SkeletonResolvedComponent?
+
+    /// Structural reachability only; this does not prove data exists, an action
+    /// is authorized, or a separate conversational entry point works (T-P2).
+    public static func audit(_ element: SkeletonElement,
+                             context: SkeletonReachabilityContext = .init(),
+                             requiredActionKeypaths: Set<String> = [],
+                             resolveComponent: ComponentResolver? = nil) -> [SkeletonReachabilityFinding] {
+        var builder = Builder(resolveComponent: resolveComponent)
+        let root = builder.build(element, path: "", context: context, definitions: [])
         var findings: [SkeletonReachabilityFinding] = []
-        walk(element, path: "", hasRowData: false, findings: &findings)
+        walk(root, findings: &findings)
+        for action in requiredActionKeypaths.subtracting(reachable(root)).sorted() {
+            findings.append(SkeletonReachabilityFinding(kind: .missingRequiredAction, path: root.path,
+                elementKind: root.kind, detail: "Required action \(action) is not reachable.", lostActionKeypaths: [action]))
+        }
         return findings
     }
 
-    /// Action keypaths the surface offers where the person can actually reach
-    /// them. Use it to check a purpose: "the owner can import a file" means
-    /// this contains the import action.
-    public static func reachableActionKeypaths(_ element: SkeletonElement) -> Set<String> {
-        var reachable: Set<String> = []
-        collectReachableActions(element, hasRowData: false, into: &reachable)
-        return reachable
+    public static func reachableActionKeypaths(_ element: SkeletonElement,
+                                              context: SkeletonReachabilityContext = .init(),
+                                              resolveComponent: ComponentResolver? = nil) -> Set<String> {
+        var builder = Builder(resolveComponent: resolveComponent)
+        let root = builder.build(element, path: "", context: context, definitions: [])
+        return reachable(root)
     }
 
-    // MARK: - Walk
+    private struct DefinitionID: Hashable {
+        var componentID: String
+        var revision: String
+    }
 
-    private static func walk(
-        _ element: SkeletonElement,
-        path: String,
-        hasRowData: Bool,
-        findings: inout [SkeletonReachabilityFinding]
-    ) {
-        let kind = elementKind(element)
-        let here = path.isEmpty ? kind : "\(path).\(kind)"
-        let modifiers = modifiers(of: element)
+    private struct Node {
+        var path: String
+        var kind: String
+        var context: SkeletonReachabilityContext
+        var modifiers: SkeletonModifiers?
+        var actions: [String]
+        var children: [Node] = []
+        var findings: [SkeletonReachabilityFinding] = []
 
-        if modifiers?.hidden == true {
-            findings.append(SkeletonReachabilityFinding(
-                kind: .hiddenModifier,
-                path: here,
-                elementKind: kind,
-                detail: "hidden = true. Nothing below this point is drawn.",
-                lostActionKeypaths: actionKeypaths(in: element)
-            ))
+        var allActions: [String] { Array(Set(actions + modifierActions(modifiers) + children.flatMap(\.allActions))).sorted() }
+    }
+
+    private struct Builder {
+        let resolveComponent: ComponentResolver?
+        var instanceIDs: Set<String> = []
+
+        mutating func build(_ element: SkeletonElement, path: String,
+                            context: SkeletonReachabilityContext, definitions: Set<DefinitionID>) -> Node {
+            let kind = elementKind(element)
+            let here = path.isEmpty ? kind : "\(path).\(kind)"
+            var node = Node(path: here, kind: kind, context: context,
+                            modifiers: modifiers(of: element), actions: ownActions(element))
+            func finding(_ kind: SkeletonReachabilityFinding.Kind, _ detail: String) -> SkeletonReachabilityFinding {
+                SkeletonReachabilityFinding(kind: kind, path: here, elementKind: node.kind,
+                                            detail: detail, lostActionKeypaths: [])
+            }
+            switch element {
+            case .Unsupported(let unsupported):
+                node.findings.append(finding(.unsupportedElement, unsupported.reason ?? unsupported.elementType))
+            case .Button(let button) where !nonempty(button.keypath) && !nonempty(button.keypathKeypath):
+                node.findings.append(finding(.missingRequiredAction, "Button requires keypath or keypathKeypath."))
+            case .Tree(let tree):
+                for (name, value) in [("selectionActionKeypath", tree.selectionActionKeypath),
+                                      ("expansionActionKeypath", tree.expansionActionKeypath)] where !nonempty(value) {
+                    node.findings.append(finding(.missingRequiredAction, "Tree requires \(name)."))
+                }
+                // Row hit area owns selection. Disclosure owns expansion; hiding
+                // either must remove its action from reachableActionKeypaths.
+                var row = Node(path: here + ".row", kind: "TreeRow", context: .row,
+                               modifiers: tree.rowModifiers, actions: valid([tree.selectionActionKeypath]))
+                row.children.append(Node(path: here + ".row.disclosure", kind: "TreeDisclosure", context: .row,
+                    modifiers: tree.disclosureModifiers, actions: valid([tree.expansionActionKeypath])))
+                row.children.append(build(.VStack(tree.rowSkeleton), path: here + ".rowSkeleton",
+                                          context: .row, definitions: definitions))
+                node.children = [row]
+            case .ComponentSurface(let surface):
+                // An instanceIDKeypath is resolved per row when rendered; only fixed IDs can collide here.
+                let instanceLabel = surface.instanceID ?? "{\(surface.instanceIDKeypath ?? "")}"
+                if let fixedID = surface.instanceID, !instanceIDs.insert(fixedID).inserted {
+                    node.findings.append(finding(.duplicateComponentInstanceID, "Duplicate instanceID: \(fixedID)."))
+                    return node
+                }
+                guard let resolved = resolveComponent?(surface), nonempty(resolved.componentID), nonempty(resolved.revision) else {
+                    node.findings.append(finding(.unresolvedComponentDefinition,
+                        "No resolved definition/revision for instance \(instanceLabel), source \(surface.sourceKeypath)."))
+                    return node
+                }
+                let identity = DefinitionID(componentID: resolved.componentID, revision: resolved.revision)
+                guard !definitions.contains(identity) else {
+                    node.findings.append(finding(.recursiveComponentDefinition,
+                        "Recursive component definition \(resolved.componentID)@\(resolved.revision)."))
+                    return node
+                }
+                node.children = [build(resolved.skeleton,
+                    path: here + "[\(instanceLabel):\(resolved.componentID)@\(resolved.revision)]",
+                    context: resolved.dataContext ?? context, definitions: definitions.union([identity]))]
+            default:
+                for (index, child) in children(of: element).enumerated() {
+                    node.children.append(build(child.element, path: "\(here)[\(index)]",
+                        context: child.providesRowData ? .row : context, definitions: definitions))
+                }
+            }
+            return node
+        }
+    }
+
+    private static func walk(_ node: Node, findings: inout [SkeletonReachabilityFinding]) {
+        findings.append(contentsOf: node.findings)
+        if let dead = dead(node) {
+            findings.append(SkeletonReachabilityFinding(kind: dead.kind, path: node.path, elementKind: node.kind,
+                                                        detail: dead.detail, lostActionKeypaths: node.allActions))
+            // Structural resolution errors remain visible even under a hidden
+            // parent; visibility findings themselves stay one per dead subtree.
+            for child in node.children { appendStructuralFindings(child, into: &findings) }
             return
         }
+        for child in node.children { walk(child, findings: &findings) }
+    }
 
-        if let rule = modifiers?.visibility, let condition = rule.when {
-            if let dead = deadCondition(condition, hasRowData: hasRowData) {
-                findings.append(SkeletonReachabilityFinding(
-                    kind: dead.kind,
-                    path: here,
-                    elementKind: kind,
-                    detail: dead.detail,
-                    lostActionKeypaths: actionKeypaths(in: element)
-                ))
-                // Do not descend: everything below inherits the same fate, and
-                // one finding per dead subtree reads better than twenty.
-                return
-            }
-        }
+    private static func appendStructuralFindings(_ node: Node, into findings: inout [SkeletonReachabilityFinding]) {
+        findings.append(contentsOf: node.findings)
+        for child in node.children { appendStructuralFindings(child, into: &findings) }
+    }
 
-        for (index, child) in children(of: element).enumerated() {
-            walk(
-                child.element,
-                path: "\(here)[\(index)]",
-                hasRowData: hasRowData || child.providesRowData,
-                findings: &findings
-            )
-        }
+    private static func reachable(_ node: Node) -> Set<String> {
+        guard dead(node) == nil,
+              !node.findings.contains(where: { [.unresolvedComponentDefinition, .recursiveComponentDefinition,
+                  .duplicateComponentInstanceID, .unsupportedElement].contains($0.kind) }) else { return [] }
+        return node.children.reduce(Set(node.actions + modifierActions(node.modifiers))) { $0.union(reachable($1)) }
     }
 
     private struct DeadCondition {
@@ -135,90 +263,67 @@ public enum SkeletonReachabilityAudit {
         var detail: String
     }
 
-    /// A condition is dead here when the renderer's own evaluation, given the
-    /// values the renderer will actually have at this position, cannot return
-    /// true. Inside a row the values are the row's and are unknown until
-    /// runtime, so the audit says nothing.
-    private static func deadCondition(
-        _ condition: SkeletonCondition,
-        hasRowData: Bool
-    ) -> DeadCondition? {
-        guard !hasRowData else { return nil }
-
-        if case let .expression(expression) = condition {
-            if expression.isMalformed {
-                return DeadCondition(
-                    kind: .malformedCondition,
-                    detail: "The condition did not decode. It is false forever."
-                )
-            }
-            if hasNoPredicate(expression) {
-                return DeadCondition(
-                    kind: .conditionHasNoPredicate,
-                    detail: "The condition states no predicate, so it evaluates to false and hides the element everywhere."
-                )
-            }
+    private static func dead(_ node: Node) -> DeadCondition? {
+        if node.modifiers?.hidden == true {
+            return DeadCondition(kind: .hiddenModifier, detail: "hidden = true. Nothing below this point is drawn.")
         }
-
-        // The renderer's own call, with the renderer's own root inputs.
-        if condition.evaluate(root: nil, item: nil, context: nil) == false {
-            return DeadCondition(
-                kind: .unreachableAtRootScope,
-                detail: "At root the renderer passes no value, so \(describe(condition)) resolves to nothing and the condition is false. "
-                    + "Move the element inside a List/Grid/Reference row, where the row's value is passed down, "
-                    + "or let the cell decide and bind content instead of gating the section."
-            )
+        guard let condition = node.modifiers?.visibility?.when else { return nil }
+        guard case .expression(let expression) = condition else { return nil }
+        if expression.isMalformed { return DeadCondition(kind: .malformedCondition, detail: "The condition did not decode.") }
+        if hasNoPredicate(expression) {
+            return DeadCondition(kind: .conditionHasNoPredicate, detail: "The condition states no predicate.")
+        }
+        if !possibleValues(condition, context: node.context).contains(true) {
+            return DeadCondition(kind: .unreachableAtRootScope,
+                detail: "\(describe(condition)) cannot be true with the data scopes available here. Supply the binding context or move it into a data row.")
         }
         return nil
     }
 
+    /// Conservative truth possibilities. Unknown row values never count as dead,
+    /// but unavailable scopes and constant/malformed predicates can be proved so.
+    /// Uses the existing evaluator for the local predicates with no available data.
+    private static func possibleValues(_ condition: SkeletonCondition,
+                                       context: SkeletonReachabilityContext) -> Set<Bool> {
+        guard case .expression(var expression) = condition else { return [false] }
+        if expression.isMalformed { return [false] }
+        let all = expression.allOf, any = expression.anyOf, not = expression.not
+        expression.allOf = nil; expression.anyOf = nil; expression.not = nil
+        var result: Set<Bool> = [true]
+        func combine(_ lhs: Set<Bool>, _ rhs: Set<Bool>, and: Bool) -> Set<Bool> {
+            Set(lhs.flatMap { a in rhs.map { b in and ? (a && b) : (a || b) } })
+        }
+        let hasLocal = !hasNoPredicate(expression)
+        if hasLocal {
+            if context.available(expression.scope ?? .root), nonempty(expression.keypath) {
+                result = [true, false]
+            } else { result = [expression.evaluate()] }
+        }
+        if let all {
+            for child in all { result = combine(result, possibleValues(child, context: context), and: true) }
+        }
+        if let any {
+            var possibilities: Set<Bool> = [false]
+            for child in any { possibilities = combine(possibilities, possibleValues(child, context: context), and: false) }
+            result = combine(result, possibilities, and: true)
+        }
+        if let not { result = combine(result, Set(possibleValues(not, context: context).map { !$0 }), and: true) }
+        return (!hasLocal && all == nil && any == nil && not == nil) ? [false] : result
+    }
+
     private static func hasNoPredicate(_ expression: SkeletonConditionExpression) -> Bool {
-        expression.exists == nil
-            && expression.equals == nil
-            && expression.notEquals == nil
-            && expression.inValues == nil
-            && expression.contains == nil
-            && expression.allOf == nil
-            && expression.anyOf == nil
-            && expression.not == nil
+        !nonempty(expression.keypath) && expression.exists == nil && expression.equals == nil
+            && expression.notEquals == nil && expression.inValues == nil && expression.contains == nil
+            && expression.allOf == nil && expression.anyOf == nil && expression.not == nil
     }
 
     private static func describe(_ condition: SkeletonCondition) -> String {
-        guard case let .expression(expression) = condition else { return "the condition" }
-        let scope = (expression.scope ?? .root).rawValue
-        guard let keypath = expression.keypath, !keypath.isEmpty else {
-            return "the \(scope)-scoped condition"
-        }
-        return "`\(keypath)` (\(scope) scope)"
+        guard case .expression(let expression) = condition else { return "The condition" }
+        return "`\(expression.keypath ?? "condition")` (\((expression.scope ?? .root).rawValue) scope)"
     }
-
-    // MARK: - Reachable actions
-
-    private static func collectReachableActions(
-        _ element: SkeletonElement,
-        hasRowData: Bool,
-        into reachable: inout Set<String>
-    ) {
-        let modifiers = modifiers(of: element)
-        if modifiers?.hidden == true { return }
-        if let condition = modifiers?.visibility?.when,
-           deadCondition(condition, hasRowData: hasRowData) != nil {
-            return
-        }
-        for keypath in actionKeypaths(inOnly: element) {
-            reachable.insert(keypath)
-        }
-        for child in children(of: element) {
-            collectReachableActions(child.element, hasRowData: hasRowData || child.providesRowData, into: &reachable)
-        }
-    }
-
-    // MARK: - Tree shape
 
     private struct Child {
         var element: SkeletonElement
-        /// True when the renderer passes a per-row value into this subtree, so
-        /// conditions below it can resolve at runtime.
         var providesRowData: Bool
     }
 
@@ -231,14 +336,12 @@ public enum SkeletonReachabilityAudit {
         case .HStack(let value): return plain(value.elements)
         case .ZStack(let value): return plain(value.elements)
         case .ScrollView(let value): return plain(value.elements)
-        case .Section(let value): return plain(value.content)
-        case .Object(let value): return plain(Array(value.elements.values))
+        case .Section(let value): return plain([value.header].compactMap { $0 } + value.content + [value.footer].compactMap { $0 })
+        case .Object(let value): return plain(value.elements.keys.sorted().compactMap { value.elements[$0] })
         case .Tabs(let value): return value.panels.flatMap { plain($0.content) }
         case .Grid(let value):
             var result = plain(value.elements)
-            if let item = value.itemSkeleton {
-                result.append(Child(element: item, providesRowData: value.keypath != nil))
-            }
+            if let item = value.itemSkeleton { result.append(Child(element: item, providesRowData: nonempty(value.keypath))) }
             return result
         case .List(let value):
             guard let row = value.flowElementSkeleton else { return [] }
@@ -246,14 +349,42 @@ public enum SkeletonReachabilityAudit {
         case .Reference(let value):
             guard let row = value.flowElementSkeleton else { return [] }
             return [Child(element: .VStack(row), providesRowData: true)]
-        default:
-            return []
+        default: return []
         }
+    }
+
+    private static func nonempty(_ value: String?) -> Bool {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+    private static func valid(_ values: [String?]) -> [String] { values.compactMap { nonempty($0) ? $0 : nil } }
+
+    private static func modifierActions(_ value: SkeletonModifiers?) -> [String] {
+        valid([value?.dropActionKeypath, value?.presentation?.closeActionKeypath])
+    }
+
+    private static func ownActions(_ element: SkeletonElement) -> [String] {
+        var actions = modifierActions(modifiers(of: element))
+        switch element {
+        case .Button(let value): actions += valid([value.keypath])
+        case .TextField(let value): actions += valid([value.targetKeypath])
+        case .TextArea(let value): actions += valid([value.targetKeypath, value.submitActionKeypath])
+        case .Toggle(let value): actions += valid([value.keypath])
+        case .Picker(let value): actions += valid([value.selectionActionKeypath])
+        case .FileUpload(let value): actions += valid([value.actionKeypath])
+        case .Visualization(let value): actions += valid([value.actionKeypath])
+        case .List(let value): actions += valid([value.selectionActionKeypath, value.activationActionKeypath])
+        case .Tabs(let value): actions += valid([value.selectionActionKeypath])
+        case .NavigationBar(let value): actions += valid(value.items.map(\.keypath))
+        default: break
+        }
+        return actions
     }
 
     private static func elementKind(_ element: SkeletonElement) -> String {
         switch element {
         case .List: return "List"
+        case .Tree: return "Tree"
+        case .ComponentSurface: return "ComponentSurface"
         case .Object: return "Object"
         case .Spacer: return "Spacer"
         case .Image: return "Image"
@@ -284,6 +415,8 @@ public enum SkeletonReachabilityAudit {
     private static func modifiers(of element: SkeletonElement) -> SkeletonModifiers? {
         switch element {
         case .List(let value): return value.modifiers
+        case .Tree(let value): return value.modifiers
+        case .ComponentSurface(let value): return value.modifiers
         case .Object(let value): return value.modifiers
         case .Spacer(let value): return value.modifiers
         case .Image(let value): return value.modifiers
@@ -309,40 +442,5 @@ public enum SkeletonReachabilityAudit {
         case .Unsupported(let value): return value.modifiers
         @unknown default: return nil
         }
-    }
-
-    /// Actions on this element only.
-    private static func actionKeypaths(inOnly element: SkeletonElement) -> [String] {
-        var keypaths: [String] = []
-        func add(_ value: String?) {
-            guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            keypaths.append(value)
-        }
-        switch element {
-        case .Button(let value): add(value.keypath)
-        case .TextField(let value): add(value.targetKeypath)
-        case .TextArea(let value): add(value.targetKeypath)
-        case .Toggle(let value): add(value.keypath)
-        case .Picker(let value): add(value.selectionActionKeypath)
-        case .FileUpload(let value): add(value.actionKeypath)
-        case .Visualization(let value): add(value.actionKeypath)
-        case .List(let value):
-            add(value.selectionActionKeypath)
-            add(value.activationActionKeypath)
-        case .Tabs(let value): add(value.selectionActionKeypath)
-        case .NavigationBar(let value): value.items.forEach { add($0.keypath) }
-        default: break
-        }
-        return keypaths
-    }
-
-    /// Actions on this element and everything below it.
-    private static func actionKeypaths(in element: SkeletonElement) -> [String] {
-        var keypaths = actionKeypaths(inOnly: element)
-        for child in children(of: element) {
-            keypaths.append(contentsOf: actionKeypaths(in: child.element))
-        }
-        var seen = Set<String>()
-        return keypaths.filter { seen.insert($0).inserted }
     }
 }

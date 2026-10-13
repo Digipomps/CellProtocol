@@ -8,7 +8,6 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from jsonschema import Draft202012Validator, FormatChecker
 
 OUT = Path(__file__).resolve().parent
 BASE = OUT / 'EntityData.review.schema.json'
@@ -177,6 +176,7 @@ def decisions():
     return rows
 
 def main():
+    from jsonschema import Draft202012Validator, FormatChecker
     base=json.loads(BASE.read_text());s=target_schema(base)
     Draft202012Validator.check_schema(s)
     data=transform_data(json.loads((OUT/'EntityData.example.json').read_text()))

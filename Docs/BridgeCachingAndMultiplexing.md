@@ -16,10 +16,17 @@ bounded and exposed through the Cell's `Explore` contract.
 ## Bridge multiplexing
 
 Protocol v2 can carry multiple logical bridge channels over one physical transport.
+This is the mux envelope version, independent of the
+[peer v3 authentication and record profile](../Documentation/BridgePeerChannelV3.md)
+and the WS authentication profile.
 `BridgeConnectionPool` shares a physical session only when the session URL, identity
 UUID, signing-key fingerprint, and home-vault reference all match. Logical channels
 remain independently addressed by `channelID` and preserve their own command and
 response routing.
+
+Closing a logical channel retains its ID while an admitted physical send is
+outstanding. A late response/factory result cannot publish into a replacement
+channel or connection; see [bridge lifetimes](../Documentation/BridgeLifecycle.md).
 
 `RemoteCellHostRoute.connectionSharing` defaults to `.dedicated`, preserving the
 legacy one-connection-per-bridge behavior. Set it to `.multiplexedV2` only for hosts

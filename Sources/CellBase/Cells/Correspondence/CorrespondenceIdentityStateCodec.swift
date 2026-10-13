@@ -7,7 +7,8 @@ import Foundation
 /// a displayName on decode, but correspondence identities use their UUID as that
 /// runtime fallback. Store that rule instead of a person-mapping field. Restore
 /// the exact fallback before decoding signed Contracts, preserving their bytes.
-/// Never redact an actual label from a signed Contract: reject that snapshot.
+/// Admission canonicalizes unsigned issuer/subject metadata before installation.
+/// Never redact identifying metadata inside the signed Agreement: reject it.
 enum CorrespondenceIdentityStateCodec {
     static let markerKey = "correspondenceIdentityEncoding"
     static let markerValue = "uuid-display-fallback-v1"
@@ -57,6 +58,12 @@ enum CorrespondenceIdentityStateCodec {
                 object.removeValue(forKey: "displayName")
                 object[markerKey] = markerValue
             }
+            // A Contract's public subject is a role descriptor, not message
+            // plaintext. Give it an explicit storage name and restore losslessly.
+            if object["agreement"] != nil, object["issuedAt"] != nil,
+               let subject = object.removeValue(forKey: "subject") {
+                object["correspondenceContractSubject"] = subject
+            }
             for (key, nested) in object {
                 guard !["entityRef", "principalID", "principalLabel", "deviceID"].contains(key) else {
                     throw Failure.identifyingMetadataNotAllowed
@@ -71,6 +78,12 @@ enum CorrespondenceIdentityStateCodec {
 
     static func expand(_ value: Any) throws -> Any {
         if var object = value as? [String: Any] {
+            if let subject = object.removeValue(forKey: "correspondenceContractSubject") {
+                guard object["subject"] == nil, object["agreement"] != nil, object["issuedAt"] != nil else {
+                    throw Failure.invalidIdentityEncoding
+                }
+                object["subject"] = subject
+            }
             if let marker = object.removeValue(forKey: markerKey) {
                 guard marker as? String == markerValue,
                       let uuid = object["uuid"] as? String, UUID(uuidString: uuid) != nil,

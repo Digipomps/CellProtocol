@@ -61,6 +61,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class ServerRecordingTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         private weak var delegate: BridgeDelegateProtocol?
         private let stateLock = NSLock()
         private var frames: [BridgeCommand] = []
@@ -83,6 +84,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class FailFirstChannelOpenedTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         enum SendFailure: Error {
             case channelOpened
         }
@@ -142,13 +144,18 @@ final class BridgeMultiplexingTests: XCTestCase {
         private static let stateLock = NSLock()
         private static var instances = 0
         private static var setupURLs: [URL] = []
+        private static var live: [ResolverMultiplexTransport] = []
+        static var beforeProof: (@Sendable () async -> Void)?
+        private static var principals: [String] = []
 
         private weak var delegate: BridgeDelegateProtocol?
         private let instanceLock = NSLock()
+        private let handshake = ResolverHandshakeFixture()
         private var targets: [String: String] = [:]
+        private var closed = false
 
         init() {
-            Self.stateLock.withLock { Self.instances += 1 }
+            Self.stateLock.withLock { Self.instances += 1; Self.live.append(self) }
         }
 
         static func new() -> BridgeTransportProtocol {
@@ -158,12 +165,12 @@ final class BridgeMultiplexingTests: XCTestCase {
         static func reset() {
             stateLock.withLock {
                 instances = 0
-                setupURLs = []
+                setupURLs = []; live = []; beforeProof = nil; principals = []
             }
         }
 
-        static func snapshot() -> (instances: Int, setupURLs: [URL]) {
-            stateLock.withLock { (instances, setupURLs) }
+        static func snapshot() -> (instances: Int, setupURLs: [URL], principals: [String]) {
+            stateLock.withLock { (instances, setupURLs, principals) }
         }
 
         func setDelegate(_ delegate: BridgeDelegateProtocol) {
@@ -172,11 +179,15 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
             _ = identity
+            try handshake.configure(endpointURL)
             Self.stateLock.withLock { Self.setupURLs.append(endpointURL) }
         }
 
         func sendData(_ data: Data) async throws {
             let command = try JSONDecoder().decode(BridgeCommand.self, from: data)
+            if command.cmd == "channelAuthProof" { await Self.beforeProof?() }
+            guard !instanceLock.withLock({ closed }) else { throw BridgeChannelAuthentication.Failure.closed }
+            if try await handshake.consume(command, delegate: delegate) { return }
             guard let channelID = command.channelID else {
                 throw BridgeMultiplexError.invalidChannel
             }
@@ -186,6 +197,7 @@ final class BridgeMultiplexingTests: XCTestCase {
                     throw BridgeMultiplexError.invalidChannel
                 }
                 instanceLock.withLock { targets[channelID] = targetEndpoint }
+                Self.stateLock.withLock { Self.principals.append(command.identity?.signingPublicKeyFingerprint ?? "missing") }
                 try await delegate?.consumeCommand(command: BridgeCommand(
                     cmd: Command.channelOpened.rawValue,
                     identity: command.identity,
@@ -227,6 +239,15 @@ final class BridgeMultiplexingTests: XCTestCase {
             }
         }
 
+        func close() async { instanceLock.withLock { closed = true } }
+        static func abort() async {
+            let current = stateLock.withLock { live }
+            for wire in current {
+                await wire.close()
+                await wire.delegate?.pushError(errorMessage: "test abort", error: BridgeChannelAuthentication.Failure.closed)
+            }
+        }
+
         func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
             _ = identity
             return BridgeIdentityVault()
@@ -234,6 +255,7 @@ final class BridgeMultiplexingTests: XCTestCase {
     }
 
     private final class MultiplexPhysicalTransport: BridgeTransportProtocol {
+        var channelSession: BridgeChannelSession?
         private weak var delegate: BridgeDelegateProtocol?
         private let stateLock = NSLock()
         private let vault: IdentityVaultProtocol
@@ -256,7 +278,7 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         func setup(_ endpointURL: URL, identity: Identity) async throws {
             _ = endpointURL
-            _ = identity
+            channelSession = try await authenticatedSessionFixture(principal: identity)
             stateLock.withLock { setupInvocations += 1 }
         }
 
@@ -478,6 +500,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "server-sequence-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let delegate = PassiveBridgeDelegate()
         var logicalTransport: BridgeTransportProtocol?
         let server = BridgeMultiplexServerSession(physicalTransport: physical) { _, _, transport in
@@ -564,6 +587,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "rejected-route-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let sink = InMemoryCellSecurityEventSink()
         CellBase.securityEventSink = sink
         var factoryCalls = 0
@@ -599,6 +623,7 @@ final class BridgeMultiplexingTests: XCTestCase {
             return PassiveBridgeDelegate()
         }
 
+        do {
         try await server.consumeCommand(command: BridgeCommand(
             cmd: Command.openChannel.rawValue,
             identity: identity,
@@ -608,12 +633,14 @@ final class BridgeMultiplexingTests: XCTestCase {
             channelID: "uuid-only-channel",
             targetEndpoint: "PrivateCell"
         ))
+            XCTFail("A raw unauthenticated multiplex session must reject all dispatch")
+        } catch { XCTAssertEqual(error as? BridgeChannelAuthentication.Failure, .unavailable) }
+
 
         XCTAssertEqual(factoryCalls, 0)
-        XCTAssertEqual(physical.snapshot().last?.command, .channelRejected)
+        XCTAssertTrue(physical.snapshot().isEmpty)
         let events = await sink.snapshot()
-        XCTAssertEqual(events.last?.reasonCode, CellSecurityReasonCode.identityPublicKeyMismatch)
-        XCTAssertEqual(events.last?.requiredAction, "retry_with_key_bound_identity")
+        XCTAssertTrue(events.isEmpty, "Reject before dispatch or descriptor-based logging")
     }
 
     func testServerSessionEnforcesChannelCapacityWithStableEvent() async throws {
@@ -621,6 +648,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "capacity-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         let sink = InMemoryCellSecurityEventSink()
         CellBase.securityEventSink = sink
         var factoryCalls = 0
@@ -657,6 +685,7 @@ final class BridgeMultiplexingTests: XCTestCase {
         let identityValue = await vault.identity(for: "send-failure-owner", makeNewIfNotFound: true)
         let identity = try XCTUnwrap(identityValue)
         let physical = FailFirstChannelOpenedTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: identity)
         var factoryCalls = 0
         let server = BridgeMultiplexServerSession(physicalTransport: physical) { _, _, _ in
             factoryCalls += 1
@@ -877,6 +906,44 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(replacementPhysical.snapshot().closeInvocations, 1)
     }
 
+    func testParallelResolverLookupsShareSuspendedAuthenticatedHandshakeAndPrincipal() async throws {
+        for abort in [false, true] {
+            let resolver = CellResolver.sharedInstance, vault = EphemeralIdentityVault()
+            CellBase.defaultCellResolver = resolver; CellBase.defaultIdentityVault = vault
+            ResolverMultiplexTransport.reset()
+            try await resolver.registerTransport(ResolverMultiplexTransport.self, for: "wss")
+            let host = "pending-\(UUID().uuidString.lowercased()).example"
+            resolver.registerRemoteCellHost(host, route: .init(websocketEndpoint: "bridgehead", schemePreference: .wss, connectionSharing: .multiplexedV2))
+            defer { resolver.unregisterRemoteCellHost(host) }
+            let ownerValue = await vault.identity(for: "pending-owner", makeNewIfNotFound: true)
+            let owner = try XCTUnwrap(ownerValue)
+            let barrier = PoolHandshakeBarrier(), entered = expectation(description: "one suspended proof")
+            entered.assertForOverFulfill = true
+            ResolverMultiplexTransport.beforeProof = { entered.fulfill(); await barrier.wait() }
+            let first = Task { try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/First", requester: owner) }
+            await fulfillment(of: [entered], timeout: 2)
+            let others = (0..<7).map { index in Task { try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/Parallel\(index)", requester: owner) } }
+            // Keep the network handshake suspended while the independent resolver calls reach the pool.
+            try await Task.sleep(nanoseconds: 50_000_000)
+            XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 1)
+            if abort { await ResolverMultiplexTransport.abort() }
+            ResolverMultiplexTransport.beforeProof = nil
+            await barrier.resume()
+            for task in [first] + others {
+                do { _ = try await task.value; XCTAssertFalse(abort, "Aborted shared setup must fail every waiter") }
+                catch { XCTAssertTrue(abort, "Shared handshake failed: \(error)") }
+            }
+            if abort {
+                _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(host)/AfterAbort", requester: owner)
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 2)
+            } else {
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().instances, 1)
+                XCTAssertEqual(ResolverMultiplexTransport.snapshot().principals.count, 8)
+            }
+            XCTAssertEqual(Set(ResolverMultiplexTransport.snapshot().principals), Set([owner.signingPublicKeyFingerprint!]))
+        }
+    }
+
     func testResolverMultiplexRouteUsesOneSessionURLForTwoRemoteCells() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()
@@ -953,4 +1020,55 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(snapshot.instances, 2)
         XCTAssertEqual(snapshot.setupURLs.map(\.path), ["/bridge-a/session", "/bridge-b/session"])
     }
+    func testRepeatedStreamRemovalBoundsBackingHistoryAndPreservesSiblingWatermark() {
+        let tracker = BridgeFlowContinuityTracker(maximumStreams: 2)
+        XCTAssertEqual(tracker.observe(streamID: "sibling|stable", sequence: 10), .first(sequence: 10))
+        for index in 0..<1_000 {
+            _ = tracker.observe(streamID: "reused|\(index)", sequence: 1)
+            tracker.removeStreams(withPrefix: "reused|")
+            XCTAssertLessThanOrEqual(tracker.retainedStreamSlotCount, 5)
+            XCTAssertEqual(tracker.watermark(for: "sibling|stable"), 10)
+        }
+        tracker.removeStreams(withPrefix: "sibling|")
+        XCTAssertEqual(tracker.retainedStreamSlotCount, 0)
+    }
+
+    func testRepeatedChannelReuseBoundsOutboundStreamHistoryAndKeepsSiblingSequence() async throws {
+        let vault = EphemeralIdentityVault()
+        let ownerValue = await vault.identity(for: "history-owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerValue), physical = ServerRecordingTransport()
+        physical.channelSession = try await authenticatedSessionFixture(principal: owner)
+        var transports: [String: BridgeTransportProtocol] = [:]
+        let server = BridgeMultiplexServerSession(physicalTransport: physical, maximumTrackedOutboundStreams: 2) { target, _, transport in
+            transports[target] = transport
+            return PassiveBridgeDelegate()
+        }
+        func channel(_ name: String, _ id: String) -> BridgeCommand {
+            .init(cmd: name, identity: owner, payload: nil, cid: 1, protocolVersion: 2, channelID: id, targetEndpoint: name == "openChannel" ? id : nil)
+        }
+        let event = FlowElement(id: "event", title: "event", content: .string("value"), properties: nil)
+        let bytes = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(event), cid: 7))
+        try await server.consumeCommand(command: channel("openChannel", "sibling"))
+        try await XCTUnwrap(transports["sibling"]).sendData(bytes)
+        for _ in 0..<1_000 {
+            try await server.consumeCommand(command: channel("openChannel", "reused"))
+            try await XCTUnwrap(transports["reused"]).sendData(bytes)
+            try await server.consumeCommand(command: channel("closeChannel", "reused"))
+            XCTAssertLessThanOrEqual(server.retainedOutboundStreamSlotCount, 5)
+        }
+        try await XCTUnwrap(transports["sibling"]).sendData(bytes)
+        let sequences = physical.snapshot().filter { $0.channelID == "sibling" && $0.sequence != nil }.compactMap(\.sequence)
+        XCTAssertEqual(sequences, [1, 2])
+        try await server.consumeCommand(command: channel("closeChannel", "sibling"))
+        XCTAssertEqual(server.retainedOutboundStreamSlotCount, 0)
+        await server.close()
+    }
+
+}
+
+private actor PoolHandshakeBarrier {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var released = false
+    func wait() async { if !released { await withCheckedContinuation { waiters.append($0) } } }
+    func resume() { released = true; let current = waiters; waiters = []; current.forEach { $0.resume() } }
 }

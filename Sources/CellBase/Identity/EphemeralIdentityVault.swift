@@ -8,9 +8,13 @@ import CryptoKit
 import Crypto
 #endif
 
-public actor EphemeralIdentityVault: IdentityVaultProtocol {
+public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProviderProtocol {
     private var identitiesByContext: [String: Identity] = [:]
     private var privateKeysByUUID: [String: Curve25519.Signing.PrivateKey] = [:]
+    /// One X25519 key per identity, minted with the signing key, so an
+    /// ephemeral identity can be sealed to — not only signed for
+    /// (purpose://candidate.invite.acceptance-carries-the-key-to-seal-to).
+    private var keyAgreementKeysByUUID: [String: Curve25519.KeyAgreement.PrivateKey] = [:]
     private var idCounter = 1
     private let vaultReference = "ephemeral:\(UUID().uuidString)"
 
@@ -33,8 +37,9 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
 
     public func identity(for identityContext: String, makeNewIfNotFound: Bool) async -> Identity? {
         if let existing = identitiesByContext[identityContext] {
-            existing.identityVault = self
-            existing.homeVaultReference = vaultReference
+            // Identity is a shared reference after publication. Even assigning
+            // the same vault/reference here races with resolver readers outside
+            // this actor. Bind once on creation/insertion; lookups are read-only.
             return existing
         }
         guard makeNewIfNotFound else { return nil }
@@ -52,8 +57,6 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
         guard let identity = identitiesByContext.values.first(where: { $0.uuid == uuid }) else {
             return nil
         }
-        identity.identityVault = self
-        identity.homeVaultReference = vaultReference
         return identity
     }
 
@@ -79,6 +82,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
     }
 
     public func saveIdentity(_ identity: Identity) async {
+        identity.identityVault = self
         identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)
         identitiesByContext[identity.displayName] = identity
@@ -113,6 +117,24 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
         ("ephemeral-key-\(tag)", "ephemeral-iv-\(tag)")
     }
 
+    public func publicSecureKey(for identity: Identity, role: IdentityKeyRole) async throws -> SecureKey? {
+        switch role {
+        case .signing:
+            return identity.publicSecureKey
+        case .keyAgreement:
+            return identity.publicKeyAgreementSecureKey
+        }
+    }
+
+    public func privateKeyData(for identity: Identity, role: IdentityKeyRole) async throws -> Data? {
+        switch role {
+        case .signing:
+            return privateKeysByUUID[identity.uuid]?.rawRepresentation
+        case .keyAgreement:
+            return keyAgreementKeysByUUID[identity.uuid]?.rawRepresentation
+        }
+    }
+
     private func ensureSigningKey(for identity: Identity) {
         if privateKeysByUUID[identity.uuid] == nil, identity.publicSecureKey == nil {
             let privateKey = Curve25519.Signing.PrivateKey()
@@ -127,6 +149,22 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol {
                 x: nil,
                 y: nil,
                 compressedKey: privateKey.publicKey.rawRepresentation
+            )
+        }
+        if keyAgreementKeysByUUID[identity.uuid] == nil, identity.publicKeyAgreementSecureKey == nil,
+           privateKeysByUUID[identity.uuid] != nil {
+            let keyAgreementKey = Curve25519.KeyAgreement.PrivateKey()
+            keyAgreementKeysByUUID[identity.uuid] = keyAgreementKey
+            identity.publicKeyAgreementSecureKey = SecureKey(
+                date: Date(),
+                privateKey: false,
+                use: .keyAgreement,
+                algorithm: .X25519,
+                size: 32,
+                curveType: .Curve25519,
+                x: nil,
+                y: nil,
+                compressedKey: keyAgreementKey.publicKey.rawRepresentation
             )
         }
     }

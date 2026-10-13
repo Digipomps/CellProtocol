@@ -7,6 +7,7 @@
 
 
 import Foundation
+import CellBase
 #if canImport(FoundationNetworking)
     import FoundationNetworking
 #endif
@@ -177,7 +178,7 @@ final class WebSocketTaskConnection: NSObject, WebSocketConnection, URLSessionWe
           guard let self = self else { return }
           guard self.webSocketTask === webSocketTask else { return }
         if let error = error {
-          print("Error when sending PING \(error)")
+          CellBase.diagnosticLog("Websocket ping failed code=ping_failed", domain: .bridge)
         } else {
 //            print("Web Socket connection is alive")
             let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in
@@ -211,7 +212,14 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
             delegateLock.unlock()
         }
     }
-    var webSocketTask: URLSessionWebSocketTask!
+    typealias SendSubmission = (URLSessionWebSocketTask.Message, @escaping @Sendable (Error?) -> Void) -> Void
+    var sendSubmissionForTesting: SendSubmission?
+    private let connectionLock = NSLock()
+    private var storedWebSocketTask: URLSessionWebSocketTask?
+    var webSocketTask: URLSessionWebSocketTask? { connectionLock.withLock { storedWebSocketTask } }
+    private func isCurrentTask(_ task: URLSessionWebSocketTask) -> Bool {
+        connectionLock.withLock { storedWebSocketTask === task }
+    }
     var urlSession: URLSession!
     let delegateQueue = OperationQueue()
     private var pingWorkItem: DispatchWorkItem?
@@ -219,24 +227,33 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
     public init(url: URL) {
         super.init()
         urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: delegateQueue)
-        webSocketTask = urlSession.webSocketTask(with: url)
+        let task = urlSession.webSocketTask(with: url)
+        task.maximumMessageSize = BridgeInboundPayloadValidator.defaultMaximumBytes
+        storedWebSocketTask = task
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         Task {
-            onConnectedPublisher.send(true)
+            let current = connectionLock.withLock {
+                guard storedWebSocketTask === webSocketTask else { return false }
+                onConnectedPublisher.send(true)
+                return true
+            }
+            guard current else { return }
             await self.delegate?.onConnected(connection: self)
         }
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         Task {
+            guard isCurrentTask(webSocketTask) else { return }
             onConnectedPublisher.send(false)
             await self.delegate?.onDisconnected(connection: self, error: nil)
         }
     }
     
     func connect() async throws {
+        guard let webSocketTask else { throw WebSocketConnectionError.NoTask }
         webSocketTask.resume()
          
         try await  listen()
@@ -245,27 +262,33 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         _ = try await onConnectedPublisher
             .filter { $0 }
             .getOneWithTimeout(5)
+        guard isCurrentTask(webSocketTask) else { throw WebSocketConnectionError.NoTask }
     }
     
     func disconnect() async throws {
-        guard let webSocketTask = webSocketTask else {
-            throw WebSocketConnectionError.NoTask
+        let task = connectionLock.withLock { () -> URLSessionWebSocketTask? in
+            let task = storedWebSocketTask
+            storedWebSocketTask = nil
+            pingWorkItem?.cancel()
+            pingWorkItem = nil
+            return task
         }
-        pingWorkItem?.cancel()
-        pingWorkItem = nil
-        webSocketTask.cancel(with: .goingAway, reason: nil)
-        self.webSocketTask = nil
-        self.delegateQueue.cancelAllOperations()
-        self.urlSession.invalidateAndCancel()
+        guard let task else { return }
+        task.cancel(with: .goingAway, reason: nil)
+        onConnectedPublisher.send(false)
+        onConnectedPublisher.send(completion: .finished)
+        delegateQueue.cancelAllOperations()
+        urlSession.invalidateAndCancel()
     }
-    
+
     func listen() async throws {
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask
         }
-        webSocketTask.receive { [weak self] result in
-            guard let self = self else { return }
+        webSocketTask.receive { [weak self, weak webSocketTask] result in
+            guard let self, let webSocketTask, self.isCurrentTask(webSocketTask) else { return }
             Task {
+                guard self.isCurrentTask(webSocketTask) else { return }
                 switch result {
                 case .failure(let error):
                     await self.delegate?.onError(connection: self, error: error)
@@ -287,43 +310,30 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
         }
     }
     
-    func send(text: String) async throws {
-        guard let webSocketTask = webSocketTask else {
-            throw WebSocketConnectionError.NoTask
-        }
-        webSocketTask.send(URLSessionWebSocketTask.Message.string(text)) { [weak self] error in
-            guard let self = self else { return }
-            Task {
-                if let error = error {
-                    await self.delegate?.onError(connection: self, error: error)
-                }
+    func send(text: String) async throws { try await sendMessage(.string(text)) }
+    func send(data: Data) async throws { try await sendMessage(.data(data)) }
+
+    private func sendMessage(_ message: URLSessionWebSocketTask.Message) async throws {
+        guard let webSocketTask else { throw WebSocketConnectionError.NoTask }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completed: @Sendable (Error?) -> Void = { error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume() }
             }
+            if let submit = sendSubmissionForTesting { submit(message, completed) }
+            else { webSocketTask.send(message, completionHandler: completed) }
         }
     }
-    
-    func send(data: Data) async throws {
-        guard let webSocketTask = webSocketTask else {
-            throw WebSocketConnectionError.NoTask
-        }
-        webSocketTask.send(URLSessionWebSocketTask.Message.data(data)) { [weak self] error in
-            guard let self = self else { return }
-            Task {
-                if let error = error {
-                    await self.delegate?.onError(connection: self, error: error)
-                }
-            }
-        }
-    }
-    
+
     func ping() throws {
         guard let webSocketTask = webSocketTask else {
             throw WebSocketConnectionError.NoTask
         }
       webSocketTask.sendPing { [weak self] error in
           guard let self = self else { return }
-          guard self.webSocketTask === webSocketTask else { return }
+          guard self.isCurrentTask(webSocketTask) else { return }
         if let error = error {
-          print("Error when sending PING \(error)")
+          CellBase.diagnosticLog("Websocket ping failed code=ping_failed", domain: .bridge)
         } else {
 //            print("Web Socket connection is alive")
             let workItem = DispatchWorkItem { [weak self, weak webSocketTask] in
@@ -331,9 +341,13 @@ final class WebSocketTaskConnection2: NSObject, WebSocketConnection2, URLSession
                 guard let webSocketTask, self.webSocketTask === webSocketTask else { return }
                 try? self.ping()
             }
-            self.pingWorkItem?.cancel()
-            self.pingWorkItem = workItem
-            DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: workItem)
+            let scheduled = self.connectionLock.withLock {
+                guard self.storedWebSocketTask === webSocketTask else { return false }
+                self.pingWorkItem?.cancel()
+                self.pingWorkItem = workItem
+                return true
+            }
+            if scheduled { DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: workItem) }
         }
       }
     }

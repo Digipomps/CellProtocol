@@ -1,0 +1,116 @@
+{
+  "ComponentSurface": {
+    "sourceKeypath": "sources.program",
+    "instanceID": "mount-program-a",
+    "variant": "pinned",
+    "modifiers": {
+      "paddingInsets": {
+        "top": 1,
+        "leading": 8,
+        "bottom": 2,
+        "trailing": 13
+      },
+      "fontFamilies": [
+        "Avenir Next",
+        "Segoe UI"
+      ],
+      "lineHeightMultiple": 1.3636363636363635,
+      "letterSpacing": -2,
+      "numericVariant": "tabular",
+      "itemSpacing": 4,
+      "rowInsets": {
+        "top": 5,
+        "leading": 11,
+        "bottom": 5,
+        "trailing": 11
+      },
+      "rowDecoration": "none",
+      "minHeight": 0,
+      "maxHeight": 330,
+      "minWidth": 0,
+      "flexGrow": 1,
+      "controlStyle": "plain",
+      "accessibilityLabel": "Full flate",
+      "borderStyle": "dashed",
+      "shadowSpread": 2,
+      "borderEdges": [
+        "top",
+        "leading",
+        "bottom",
+        "trailing"
+      ],
+      "contentClip": true,
+      "layoutVariants": [
+        {
+          "when": {
+            "scope": "item",
+            "keypath": "mode",
+            "equals": "full"
+          },
+          "minAvailableWidth": 500,
+          "maxAvailableWidth": 1600,
+          "minAvailableHeight": 300,
+          "maxAvailableHeight": 1000,
+          "requiresCapability": [
+            "pointer",
+            "hover",
+            "keyboard",
+            "drag",
+            "touch"
+          ],
+          "axis": "horizontal",
+          "columns": [
+            {
+              "type": "fixed",
+              "value": 74
+            },
+            {
+              "type": "flexible",
+              "min": 0,
+              "max": 300
+            },
+            {
+              "type": "adaptive",
+              "min": 66,
+              "max": 200
+            }
+          ],
+          "spacing": 8,
+          "paddingInsets": {
+            "leading": 10
+          },
+          "minHeight": 50,
+          "maxHeight": 900,
+          "flexGrow": 2,
+          "fontSize": 14,
+          "borderColor": "#123456",
+          "foregroundColor": "#abcdef"
+        }
+      ],
+      "interactionStyles": {
+        "hover": {
+          "background": "#f8fbfe"
+        },
+        "focusVisible": {
+          "foregroundColor": "#123456"
+        },
+        "dragSource": {
+          "opacity": 0.42
+        },
+        "dragActive": {
+          "opacity": 0.82
+        }
+      },
+      "textDecoration": "underline",
+      "textRotationDegrees": -90,
+      "leadingMarker": {
+        "width": 2,
+        "insetTop": 4,
+        "insetBottom": 4,
+        "offset": -6,
+        "cornerRadius": 1,
+        "color": "#123456"
+      }
+    }
+  }
+}

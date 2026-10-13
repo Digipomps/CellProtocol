@@ -84,6 +84,7 @@ jobs:
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/CellBaseTests/DeviceIngressWireFixtureTests.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
+          cp -R Tests/CellBaseTests/Fixtures/PeerV3 "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/Fixtures/DeviceIngress*.b64 \
             "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/Fixtures/EntityRelation*.json \
@@ -95,13 +96,20 @@ jobs:
           for suite in AgreementSecurityTests FileCryptoSecurityTests \
             FeedAuthorizationRegistryTests ActiveFeedAuthorizationTests \
             BridgeIdentityProofAuthorizationTests BridgeIdentityBoundaryTests \
+            EphemeralIdentityVaultConcurrencyTests PublisherAsyncLifetimeTests BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
+            BridgeResponseLifetimeTests BridgeFeedAndRPCOrderingTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
+            BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
-            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests; do
+            EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
             Tests/CellBaseTests/TestSupport/TestFixtures.swift \
             Tests/CellBaseTests/TestSupport/MockIdentityVault.swift \
+            Tests/CellBaseTests/TestSupport/SimulatedEntity.swift \
+            Tests/CellBaseTests/TestSupport/MockBridgeTransport.swift \
+            Tests/CellBaseTests/TestSupport/AuthenticatedBridgeFixture.swift \
+            Tests/CellBaseTests/TestSupport/BridgeLifecycleTestSupport.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"

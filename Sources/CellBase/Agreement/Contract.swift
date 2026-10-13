@@ -19,6 +19,7 @@ public struct Contract: Codable {
     /// that signature to one subject and one domain. It is not a bilateral or
     /// multi-party signature format.
     public static let issuerOnlySubjectBoundSemantics = "issuer_only_subject_bound_v1"
+    public static let issuerOnlySubjectCellBoundSemantics = "issuer_only_subject_cell_bound_v2"
     public static let maximumDuration: TimeInterval = 60 * 60 * 24 * 365
     public static let allowedClockSkew: TimeInterval = 300
     public var uuid: String
@@ -29,11 +30,14 @@ public struct Contract: Codable {
     public var issuedAt: TimeInterval
     public var expiresAt: TimeInterval
     public var signature: Data?
+    /// Required by external admission. Nil retains the existing local-contract wire format.
+    public var targetCellUUID: String? = nil
+    public var signaturePurpose: String? = nil
 
     /// Human- and machine-readable semantics for the existing wire format.
     /// This is derived rather than encoded, preserving wire compatibility.
     public var signingSemantics: String {
-        Self.issuerOnlySubjectBoundSemantics
+        targetCellUUID == nil ? Self.issuerOnlySubjectBoundSemantics : Self.issuerOnlySubjectCellBoundSemantics
     }
 
     var authorizationDeduplicationKey: String {
@@ -69,6 +73,8 @@ public struct Contract: Codable {
         case issuedAt
         case expiresAt
         case signature
+        case targetCellUUID
+        case signaturePurpose
     }
 
     private struct SigningPayload: Codable {
@@ -81,6 +87,8 @@ public struct Contract: Codable {
         var domain: String
         var issuedAt: TimeInterval
         var expiresAt: TimeInterval
+        var targetCellUUID: String?
+        var signaturePurpose: String?
     }
 
     public static func signed(
@@ -88,18 +96,21 @@ public struct Contract: Codable {
         issuer: Identity,
         subject: Identity,
         domain: String,
-        issuedAt: Date = Date()
+        issuedAt: Date = Date(),
+        targetCellUUID: String? = nil
     ) async throws -> Contract {
         let agreementSnapshot = try snapshot(agreement)
         var contract = Contract(
             uuid: UUID().uuidString,
             agreement: agreementSnapshot,
-            issuer: issuer,
-            subject: subject,
+            issuer: try stablePublicSnapshot(issuer),
+            subject: try stablePublicSnapshot(subject),
             domain: domain,
             issuedAt: issuedAt.timeIntervalSince1970,
             expiresAt: issuedAt.addingTimeInterval(TimeInterval(agreementSnapshot.duration)).timeIntervalSince1970,
-            signature: nil
+            signature: nil,
+            targetCellUUID: targetCellUUID,
+            signaturePurpose: targetCellUUID == nil ? nil : "haven.contract.admission.v2"
         )
         guard let signature = try await issuer.sign(data: contract.signingData()) else {
             throw ContractError.signingFailed
@@ -221,9 +232,18 @@ public struct Contract: Codable {
             subjectSigningKeyFingerprint: subject.signingPublicKeyFingerprint,
             domain: domain,
             issuedAt: issuedAt,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            targetCellUUID: targetCellUUID,
+            signaturePurpose: signaturePurpose
         )
         return try Self.canonicalEncoder().encode(payload)
+    }
+
+    // Identity decoding supplies empty properties when they are omitted. Normalize
+    // before returning a signed document so its canonical wire bytes survive decode.
+    private static func stablePublicSnapshot(_ identity: Identity) throws -> Identity {
+        let data = try canonicalEncoder().encode(identity.publicIdentitySnapshot())
+        return try JSONDecoder().decode(Identity.self, from: data)
     }
 
     private static func snapshot(_ agreement: Agreement) throws -> Agreement {

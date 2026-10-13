@@ -18,7 +18,12 @@ public final class AppleKeychainSecureCredentialStore: SecureCredentialStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: handleID
         ]
-        SecItemDelete(query as CFDictionary)
+        // Preserve the old item if an update fails (including denied authentication).
+        let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: secret] as CFDictionary)
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(updated))
+        }
 
         var addQuery = query
         addQuery[kSecValueData as String] = secret

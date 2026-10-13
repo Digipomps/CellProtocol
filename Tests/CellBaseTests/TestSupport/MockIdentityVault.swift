@@ -13,6 +13,7 @@ actor MockIdentityVault: IdentityVaultProtocol {
     private var identitiesByContext: [String: Identity] = [:]
     private var privateKeysByUUID: [String: Curve25519.Signing.PrivateKey] = [:]
     private var idCounter = 1
+    private(set) var signedMessages: [Data] = []
 
     func initialize() async -> IdentityVaultProtocol {
         return self
@@ -64,6 +65,7 @@ actor MockIdentityVault: IdentityVaultProtocol {
         guard let privateKey = privateKeysByUUID[identity.uuid] else {
             throw MockIdentityVaultError.noPrivateKey
         }
+        signedMessages.append(messageData)
         return try privateKey.signature(for: messageData)
     }
 

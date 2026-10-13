@@ -1,0 +1,182 @@
+{
+  "contract": "SkeletonComponentMount/1",
+  "description": "Shared T-F3 oracle: item first, host root fallback, source action with separate mount metadata, then an in-place source update.",
+  "hostCellEndpoint": "cell:///HostFixture",
+  "skeleton": {
+    "VStack": [
+      {
+        "ComponentSurface": {
+          "sourceKeypath": "mounts.A",
+          "instanceID": "A",
+          "variant": "pinned"
+        }
+      },
+      {
+        "ComponentSurface": {
+          "sourceKeypath": "mounts.B",
+          "instanceID": "B",
+          "variant": "pinned"
+        }
+      }
+    ]
+  },
+  "initialRoot": {
+    "title": "Vertens tittel",
+    "subtitle": "Fra verten",
+    "mounts": {
+      "A": {
+        "componentID": "program-card",
+        "revision": "r1",
+        "sourceCellEndpoint": "cell:///ProgramFixture",
+        "skeleton": {
+          "VStack": [
+            {
+              "Text": {
+                "keypath": "title"
+              }
+            },
+            {
+              "Text": {
+                "keypath": "subtitle"
+              }
+            },
+            {
+              "Button": {
+                "label": "Oppdater",
+                "keypath": "actions.refresh",
+                "payload": {
+                  "reason": "manual",
+                  "instanceID": "user-payload"
+                }
+              }
+            }
+          ]
+        },
+        "item": {
+          "title": "Program"
+        }
+      },
+      "B": {
+        "componentID": "program-card",
+        "revision": "r1",
+        "sourceCellEndpoint": "cell:///ProgramFixture",
+        "skeleton": {
+          "VStack": [
+            {
+              "Text": {
+                "keypath": "title"
+              }
+            },
+            {
+              "Text": {
+                "keypath": "subtitle"
+              }
+            },
+            {
+              "Button": {
+                "label": "Oppdater",
+                "keypath": "actions.refresh",
+                "payload": {
+                  "reason": "manual",
+                  "instanceID": "user-payload"
+                }
+              }
+            }
+          ]
+        },
+        "item": {
+          "title": "Sesjoner"
+        }
+      }
+    }
+  },
+  "sourceUpdates": [
+    {
+      "sourceKeypath": "mounts.A",
+      "value": {
+        "componentID": "program-card",
+        "revision": "r1",
+        "sourceCellEndpoint": "cell:///ProgramFixture",
+        "skeleton": {
+          "VStack": [
+            {
+              "Text": {
+                "keypath": "title"
+              }
+            },
+            {
+              "Text": {
+                "keypath": "subtitle"
+              }
+            },
+            {
+              "Button": {
+                "label": "Oppdater",
+                "keypath": "actions.refresh",
+                "payload": {
+                  "reason": "manual",
+                  "instanceID": "user-payload"
+                }
+              }
+            }
+          ]
+        },
+        "item": {
+          "title": "Program oppdatert"
+        }
+      }
+    }
+  ],
+  "expected": {
+    "initial": {
+      "A": {
+        "title": "Program",
+        "subtitle": "Fra verten"
+      },
+      "B": {
+        "title": "Sesjoner",
+        "subtitle": "Fra verten"
+      }
+    },
+    "actions": [
+      {
+        "trigger": {
+          "instanceID": "A",
+          "keypath": "actions.refresh"
+        },
+        "dispatch": {
+          "sourceCellEndpoint": "cell:///ProgramFixture",
+          "keypath": "actions.refresh",
+          "payload": {
+            "reason": "manual",
+            "instanceID": "user-payload"
+          },
+          "mount": {
+            "instanceID": "A",
+            "componentID": "program-card",
+            "revision": "r1"
+          }
+        }
+      }
+    ],
+    "afterUpdates": {
+      "A": {
+        "title": "Program oppdatert",
+        "subtitle": "Fra verten"
+      },
+      "B": {
+        "title": "Sesjoner",
+        "subtitle": "Fra verten"
+      }
+    },
+    "unchangedInstanceIDs": [
+      "A",
+      "B"
+    ],
+    "remountedInstanceIDs": [],
+    "unchangedMounts": [
+      "B"
+    ],
+    "unchangedDefinition": true
+  }
+}
