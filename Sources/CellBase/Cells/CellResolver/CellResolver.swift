@@ -162,13 +162,27 @@ public class CellResolver: CellResolverProtocol {
     private var remoteBridgeCache = [String : Emit]()
     private var pendingRemoteBridgeTasks = [String : Task<Emit, Error>]()
     private var pendingRemoteBridgeTokens = [String: UUID]()
-    // Caller holds stateLock. Closed proxies are not cacheable; pending work
-    // and retained keys share one bound, including legacy and remote-cell routes.
+    // Cache eligibility and retained ownership are separate. A terminal bridge
+    // still consumes count/key bytes until its physical transport and work return.
+    private var retiringBridges = [ObjectIdentifier: (key: String, emit: Emit)]()
+    // Caller holds stateLock.
+    private func retainRetiringBridge(_ emit: Emit, key: String) {
+        guard (emit as? BridgeBase)?.isFullyRetired != true else { return }
+        retiringBridges[ObjectIdentifier(emit as AnyObject)] = (key, emit)
+    }
     private func canAdmitBridgeKey(_ key: String) -> Bool {
+        for (key, emit) in remoteBridgeCache where (emit as? BridgeBase)?.isRetired == true {
+            retainRetiringBridge(emit, key: key)
+        }
+        for (key, entry) in remoteCellBridgeCache where (entry.emit as? BridgeBase)?.isRetired == true {
+            retainRetiringBridge(entry.emit, key: key)
+        }
         remoteBridgeCache = remoteBridgeCache.filter { (($0.value as? BridgeBase)?.isRetired != true) }
         remoteCellBridgeCache = remoteCellBridgeCache.filter { (($0.value.emit as? BridgeBase)?.isRetired != true) }
+        retiringBridges = retiringBridges.filter { ($0.value.emit as? BridgeBase)?.isFullyRetired != true }
         let keys = Array(remoteBridgeCache.keys) + Array(remoteCellBridgeCache.keys)
             + Array(pendingRemoteBridgeTasks.keys) + Array(pendingRemoteCellBridgeTasks.keys)
+            + retiringBridges.values.map { $0.key }
         return keys.count < 128 && key.utf8.count <= 64 * 1024 - keys.reduce(0) { $0 + $1.utf8.count }
     }
     private let remoteBridgeConnectionPool = BridgeConnectionPool()
@@ -1503,15 +1517,17 @@ public class CellResolver: CellResolverProtocol {
                         pendingRemoteCellBridgeTasks[cacheKey] = nil
                     }
                     guard remoteCellHostRoutes[routeSnapshot.host] == routeSnapshot.route,
-                          remoteCellHostRouteGenerations[routeSnapshot.host] == routeSnapshot.generation else {
+                          remoteCellHostRouteGenerations[routeSnapshot.host] == routeSnapshot.generation,
+                          (bridge as? BridgeBase)?.isRetired != true else {
+                        retainRetiringBridge(bridge, key: cacheKey)
                         return false
                     }
-                    guard (bridge as? BridgeBase)?.isRetired != true else { return false }
                     remoteCellBridgeCache[cacheKey] = entry
                     return true
                 }
                 guard published else {
                     retireRemoteCellBridge(entry)
+                    await (bridge as? BridgeBase)?.finishRetirement()
                     try Task.checkCancellation()
                     if requiredRemoteRoute != nil {
                         throw RemoteCellBridgeRouteError.routeChanged
@@ -1581,6 +1597,7 @@ public class CellResolver: CellResolverProtocol {
                     host: routeSnapshot.host
                 )
             )
+            await (bridge as? BridgeBase)?.finishRetirement()
             throw error
         }
     }
@@ -2229,7 +2246,10 @@ public class CellResolver: CellResolverProtocol {
                 if pendingRemoteBridgeTokens[cacheKey] == pending.0 {
                     pendingRemoteBridgeTasks[cacheKey] = nil
                     pendingRemoteBridgeTokens[cacheKey] = nil
-                    guard (bridge as? BridgeBase)?.isRetired != true else { throw CellResolverError.bridgeSetupError }
+                    guard (bridge as? BridgeBase)?.isRetired != true else {
+                        retainRetiringBridge(bridge, key: cacheKey)
+                        throw CellResolverError.bridgeSetupError
+                    }
                     remoteBridgeCache[cacheKey] = bridge
                 }
             }
@@ -2259,22 +2279,30 @@ public class CellResolver: CellResolverProtocol {
         // TODO: Consider refactoring 
         let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), transport: transport, connection: .outbound)
         let cellBridge = try await BridgeBase(bridgeConfig)
-        try await cellBridge.setTransport(transport, connection: .outbound)
-        
         endpointUrl.appendPathComponent(cellBridge.uuid)
-        try await transport.setup(endpointUrl, identity: identity)
+        return try await setupResolverBridge(cellBridge, transport: transport, endpoint: endpointUrl, diagnosticEndpoint: endpoint, identity: identity)
+    }
+
+    private func setupResolverBridge(_ bridge: BridgeBase, transport: BridgeTransportProtocol,
+                                     endpoint: URL, diagnosticEndpoint: String, identity: Identity) async throws -> Emit {
         do {
-            try await cellBridge.retrieveProxyRepresentation(for: identity)
+            try await bridge.setTransport(transport, connection: .outbound)
+            try await transport.setup(endpoint, identity: identity)
+            try Task.checkCancellation()
+            do {
+                try await bridge.retrieveProxyRepresentation(for: identity)
+            } catch {
+                // Protected cells can require admission before description.
+                try Task.checkCancellation()
+                CellBase.diagnosticLog("bridge_description_deferred:\(diagnosticEndpoint):\(error)", domain: .flow)
+            }
+            try Task.checkCancellation()
+            return bridge
         } catch {
-            // Some protected remote cells require admission before they will answer
-            // `description`. Keep the bridge alive so the caller can authorize first
-            // and retry metadata fetch afterward.
-            CellBase.diagnosticLog(
-                "bridge_description_deferred:\(endpoint):\(error)",
-                domain: .flow
-            )
+            bridge.beginRetirement()
+            await bridge.finishRetirement()
+            throw error
         }
-        return cellBridge
     }
 
     private func makeRemoteCellBridgeEmit(
@@ -2334,17 +2362,7 @@ public class CellResolver: CellResolverProtocol {
             connection: .outbound
         )
         let cellBridge = try await BridgeBase(bridgeConfig)
-        try await cellBridge.setTransport(transport, connection: .outbound)
-        try await transport.setup(finalizedConnectionURL, identity: identity)
-        do {
-            try await cellBridge.retrieveProxyRepresentation(for: identity)
-        } catch {
-            CellBase.diagnosticLog(
-                "bridge_description_deferred:\(logicalEndpoint):\(error)",
-                domain: .flow
-            )
-        }
-        return cellBridge
+        return try await setupResolverBridge(cellBridge, transport: transport, endpoint: finalizedConnectionURL, diagnosticEndpoint: logicalEndpoint, identity: identity)
     }
 
     private func remoteMultiplexSessionURL(
@@ -2461,19 +2479,15 @@ public class CellResolver: CellResolverProtocol {
     private func evictRemoteBridges(for uuid: String) {
         let normalizedUUID = uuid.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedUUID.isEmpty else { return }
-        let retiredEntries = withStateLock { () -> [RemoteCellBridgeCacheEntry] in
-            remoteBridgeCache = remoteBridgeCache.filter { _, emit in
-                emit.uuid.lowercased() != normalizedUUID
-            }
-            let retiredEntries = remoteCellBridgeCache.values.filter {
-                $0.emit.uuid.lowercased() == normalizedUUID
-            }
-            remoteCellBridgeCache = remoteCellBridgeCache.filter {
-                $0.value.emit.uuid.lowercased() != normalizedUUID
-            }
-            return retiredEntries
+        let retired = withStateLock { () -> [Emit] in
+            let legacy = remoteBridgeCache.filter { $0.value.uuid.lowercased() == normalizedUUID }
+            let remote = remoteCellBridgeCache.filter { $0.value.emit.uuid.lowercased() == normalizedUUID }
+            for (key, emit) in legacy { retainRetiringBridge(emit, key: key); remoteBridgeCache[key] = nil }
+            for (key, entry) in remote { retainRetiringBridge(entry.emit, key: key); remoteCellBridgeCache[key] = nil }
+            return Array(legacy.values) + remote.values.map { $0.emit }
         }
-        retiredEntries.forEach(retireRemoteCellBridge)
+        // Never join here: unregister can itself be called from an owned send.
+        for emit in retired { (emit as? BridgeBase)?.beginRetirement() }
     }
     
     public func addCellResolve<T>(
@@ -2575,6 +2589,11 @@ public class CellResolver: CellResolverProtocol {
 #if DEBUG
     @_spi(Testing)
     public func resetRuntimeStateForTesting() async {
+        let retained = withStateLock {
+            Array(remoteBridgeCache.values) + remoteCellBridgeCache.values.map { $0.emit }
+                + retiringBridges.values.map { $0.emit }
+        }
+        retained.forEach { ($0 as? BridgeBase)?.beginRetirement() }
         let pendingTasks: [Task<Emit, Error>] = withStateLock {
             let tasks = Array(pendingRemoteBridgeTasks.values)
                 + pendingRemoteCellBridgeTasks.values.map(\.task)
@@ -2594,8 +2613,13 @@ public class CellResolver: CellResolverProtocol {
         }
         pendingTasks.forEach { $0.cancel() }
         for task in pendingTasks {
-            _ = try? await task.value
+            if let emit = try? await task.value {
+                (emit as? BridgeBase)?.beginRetirement()
+                await (emit as? BridgeBase)?.finishRetirement()
+            }
         }
+        for emit in retained { await (emit as? BridgeBase)?.finishRetirement() }
+        withStateLock { retiringBridges = retiringBridges.filter { ($0.value.emit as? BridgeBase)?.isFullyRetired != true } }
         remoteBridgeConnectionPool.reset()
         await auditor.resetRuntimeStateForTesting()
         await lifecycleTracker.resetRuntimeStateForTesting()
@@ -2951,11 +2975,13 @@ public class CellResolver: CellResolverProtocol {
             remoteCellHostRouteGenerations[normalizedHost, default: 0] &+= 1
             remoteCellHostRoutes[normalizedHost] = route
             let entries = remoteCellBridgeCache.values.filter { $0.host == normalizedHost }
-            remoteCellBridgeCache = remoteCellBridgeCache.filter { $0.value.host != normalizedHost }
-            let pending = pendingRemoteCellBridgeTasks.values.filter { $0.host == normalizedHost }
-            pendingRemoteCellBridgeTasks = pendingRemoteCellBridgeTasks.filter {
-                $0.value.host != normalizedHost
+            for (key, entry) in remoteCellBridgeCache where entry.host == normalizedHost {
+                retainRetiringBridge(entry.emit, key: key)
             }
+            remoteCellBridgeCache = remoteCellBridgeCache.filter { $0.value.host != normalizedHost }
+            // Cancellation does not release admission. The task's actual return
+            // removes its generation-specific pending entry.
+            let pending = pendingRemoteCellBridgeTasks.values.filter { $0.host == normalizedHost }
             return (
                 remoteCellHostRouteGenerations[normalizedHost] ?? 0,
                 entries,
@@ -2993,11 +3019,13 @@ public class CellResolver: CellResolverProtocol {
             remoteCellHostRouteGenerations[normalizedHost, default: 0] &+= 1
             remoteCellHostRoutes[normalizedHost] = nil
             let entries = remoteCellBridgeCache.values.filter { $0.host == normalizedHost }
-            remoteCellBridgeCache = remoteCellBridgeCache.filter { $0.value.host != normalizedHost }
-            let pending = pendingRemoteCellBridgeTasks.values.filter { $0.host == normalizedHost }
-            pendingRemoteCellBridgeTasks = pendingRemoteCellBridgeTasks.filter {
-                $0.value.host != normalizedHost
+            for (key, entry) in remoteCellBridgeCache where entry.host == normalizedHost {
+                retainRetiringBridge(entry.emit, key: key)
             }
+            remoteCellBridgeCache = remoteCellBridgeCache.filter { $0.value.host != normalizedHost }
+            // Cancellation does not release admission. The task's actual return
+            // removes its generation-specific pending entry.
+            let pending = pendingRemoteCellBridgeTasks.values.filter { $0.host == normalizedHost }
             return (entries, pending, previousGeneration)
         }
         invalidated.1.forEach { $0.task.cancel() }

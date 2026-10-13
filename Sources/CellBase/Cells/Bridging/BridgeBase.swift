@@ -183,6 +183,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private let callbackStateLock = NSLock()
     private let retirementWork = BridgeRetirementWork()
     private var retired = false
+    private var retirementFinished = false
+    public var isFullyRetired: Bool { withCallbackStateLock { retirementFinished } }
     private var transportConfigured = false
     private var installingTransport = false
     private var pendingTransport: BridgeTransportProtocol?
@@ -618,7 +620,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 catch {
                     if !self.isRetired { self.feedPublisher2.send(completion: .failure(error)) }
                 }
-            }) == nil { self.requestRetirement() }
+            }) == nil { self.beginRetirement() }
         }.eraseToAnyPublisher()
     }
 
@@ -872,6 +874,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 await auditor.retire()
                 withCallbackStateLock { retiringFeedStartTask = nil; transport = nil }
                 withInboundCacheState { emitCellAtEndpoint = nil; inboundPublisherLookupIdentity = nil }
+                withCallbackStateLock { retirementFinished = true }
             }
             retirementTask = task
             return task
@@ -879,6 +882,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     /// External join only. An owned frame/send must request close and return.
     public func finishRetirement() async { await retirementFinalizer().value }
+    /// Request complete cleanup from owned work without joining that work itself.
+    public func beginRetirement() { _ = retirementFinalizer() }
     public func close(requester: Identity) { _ = retirementFinalizer() }
 
     public func addAgreement(_ contract: Agreement, for identity: Identity) async throws -> AgreementState {
@@ -1863,7 +1868,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 do { try await transport.sendData(data) }
                 catch { bridgeLog("Feed transport send failed") }
             })
-            if !accepted { self.requestRetirement() }
+            if !accepted { self.beginRetirement() }
         })
         let installed = withCallbackStateLock { () -> Bool in
             guard !retired, feedInstallation == token else { return false }
