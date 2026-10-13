@@ -101,3 +101,33 @@ fairness under global saturation, independence of pending channel factories,
 30-minute subscription continuity or seamless five-minute auth renewal. Physical
 NI/UWB, actual iOS execution, staging TLS/proxy acceptance, AP9 review and release
 approval remain separate. This document records a local candidate, not deployment.
+
+## Native connection failures
+
+`WebSocketTaskConnection2.connect()` preserves the original native error when
+URLSession fails before the connection opens. Both receive failure and task
+completion use the same current-task, first-error decision. The error is retained
+and published before invoking a delegate that can close the gate; startup covers
+resume, receive admission and waiting for open under that same error-preserving
+boundary. Explicitly closed connections continue to reject reuse.
+
+The retained NSError includes Foundation's existing failing URL and peer-trust
+object, when Foundation supplies them. No trust challenge, anchor override, ATS
+exception or wire-format change is introduced. Consumers must not treat generic
+transport failure as proof of hostname rejection: a native certificate test can
+require the exact failing URL, peer leaf fingerprint and hostname-mismatch trust
+result. Missing native evidence must fail the test.
+
+`WebSocketConnectionFailureTests` exercises early completion, receive failure,
+immediate delegate closure, duplicate and stale callbacks, ordinary open, an
+observed active connection wait and explicit close. Local/CI evidence belongs
+with the release record; this description alone does not certify TLS acceptance.
+
+
+Local validation on 13 October 2026: seven focused failure tests passed; expanded
+Bridge selection passed91tests (one skip); the full package passed1696tests
+(five skips). Removing first-error retention/publication made the startup-close
+regression fail; the selected mutation run then aborted on duplicate expectation
+fulfillment, so it does not prove all seven tests completed red. The exact fixed
+source was restored before green expanded/full runs. This candidate is based on
+f5ce8021; no new hosted native acceptance or deployment is claimed here.
