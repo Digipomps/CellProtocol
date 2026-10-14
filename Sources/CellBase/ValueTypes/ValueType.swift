@@ -48,6 +48,14 @@ private enum ValueTypeCodec {
     private typealias WrappedDecoder = (SingleValueDecodingContainer) throws -> ValueType
 
     private static let wrappedDecoders: [String: WrappedDecoder] = [
+        "&string": { .string(try $0.decode(String.self)) },
+        "&number": { .number(try $0.decode(Int.self)) },
+        "&list": { .list(try $0.decode(ValueTypeList.self)) },
+        "&object": { .object(try $0.decode([String: ValueType].self)) },
+        "bool": { .bool(try $0.decode(Bool.self)) },
+        "integer": { .integer(try $0.decode(Int.self)) },
+        "float": { .float(try $0.decode(Double.self)) },
+        "data": { .data(try $0.decode(Data.self)) },
         "&flowElement": { .flowElement(try $0.decode(FlowElement.self)) },
         "&connectContext": { .connectContext(try $0.decode(ConnectContext.self)) },
         "&connectState": { .connectState(try $0.decode(ConnectState.self)) },
@@ -149,7 +157,9 @@ private enum ValueTypeCodec {
             return nil
         }
 
-        return try wrappedDecoder(try decoder.singleValueContainer())
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { return .null }
+        return try wrappedDecoder(container)
     }
 
     private static func decodePrimitiveValue(from decoder: Decoder) throws -> ValueType? {

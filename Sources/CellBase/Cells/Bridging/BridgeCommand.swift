@@ -263,6 +263,7 @@ public struct BridgeCommand: Codable {
         .data,
         .bool,
         .integer,
+        .connectContext,
         .cellReference,
         .cellConfiguration,
         .cell,
