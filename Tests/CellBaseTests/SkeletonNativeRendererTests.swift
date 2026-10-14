@@ -283,6 +283,35 @@ final class SkeletonNativeRendererTests: XCTestCase {
         XCTAssertEqual(SkeletonNativeTypography.family(m.fontFamilies, size: 11), "Helvetica")
     }
 
+    // WP8g: a portable light chip palette must stay readable in dark mode.
+    @MainActor
+    func testExplicitChipPaletteKeepsDarkTextInBothColorSchemes() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.foregroundColor = "#222222"
+        modifiers.background = "#eef1f5"
+        modifiers.padding = 4
+        modifiers.cornerRadius = 10
+        for scheme in [ColorScheme.light, .dark] {
+            let view = Text("arancini").font(.system(size: 18))
+                .applySkeletonModifiers(modifiers)
+                .frame(width: 120, height: 60).background(Color.white)
+                .environment(\.colorScheme, scheme)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(renderer.cgImage))
+            var darkPixels = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+                    if max(color.redComponent, color.greenComponent, color.blueComponent) < 0.3 {
+                        darkPixels += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(darkPixels, 20, "Explicit foreground was lost in \(scheme)")
+        }
+    }
+
     @MainActor
     func testNativePaddingStaysInsideDeclaredOuterBox() async throws {
         var m = SkeletonModifiers()
