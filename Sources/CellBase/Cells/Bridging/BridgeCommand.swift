@@ -209,7 +209,7 @@ public struct BridgeCommand: Codable {
                 try container.encode(value, forKey: .signature)
                 
             case let .object(value):
-                try container.encode(value, forKey: .object)
+                try container.encode(WireObject(value), forKey: .object)
                 
             case let .list(value):
                 try container.encode(value, forKey: .list)
@@ -289,8 +289,9 @@ public struct BridgeCommand: Codable {
         // Keep the legacy key priority, but validate every present known payload.
         // An invalid field cannot become absent because another field decodes.
         for key in payloadDecodingKeys {
-            if let value = try values.decodeIfPresent(ValueType.self, forKey: key), selected == nil {
-                selected = value
+            if values.contains(key), try !values.decodeNil(forKey: key) {
+                let value = try ValueTypeCodec.decodeWireValue(from: values.superDecoder(forKey: key), marker: key.rawValue)
+                if selected == nil { selected = value }
             }
         }
         return selected

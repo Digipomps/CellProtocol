@@ -33,6 +33,7 @@ public class Agreement: Codable, Grantable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         uuid = try values.decodeIfPresent(String.self, forKey: .uuid) ?? UUID().uuidString
         name = try values.decode(String.self, forKey: .name)
+        _ = try values.decodeIfPresent(String.self, forKey: .state)
         state = Self.decodeState(from: values)
         owner = try values.decode(Identity.self, forKey: .owner)
         
@@ -50,9 +51,7 @@ public class Agreement: Codable, Grantable {
             forKey: .authorizationPolicyBinding
         )
         duration = try values.decodeIfPresent(Int.self, forKey: .duration) ?? Self.defaultDuration
-        if values.contains(.timestamp) {
-            timestamp = try? values.decode(Int.self, forKey: .timestamp)
-        }
+        timestamp = try values.decodeIfPresent(Int.self, forKey: .timestamp)
     }
     
     public init() async {

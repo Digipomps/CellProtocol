@@ -44,14 +44,14 @@ public indirect enum ValueType: Codable {
     }
 }
 
-private enum ValueTypeCodec {
+enum ValueTypeCodec {
     private typealias WrappedDecoder = (SingleValueDecodingContainer) throws -> ValueType
 
     private static let wrappedDecoders: [String: WrappedDecoder] = [
         "&string": { .string(try $0.decode(String.self)) },
         "&number": { .number(try $0.decode(Int.self)) },
         "&list": { .list(try $0.decode(ValueTypeList.self)) },
-        "&object": { .object(try $0.decode([String: ValueType].self)) },
+        "&object": { .object(try $0.decode(WireObject.self).value) },
         "bool": { .bool(try $0.decode(Bool.self)) },
         "integer": { .integer(try $0.decode(Int.self)) },
         "float": { .float(try $0.decode(Double.self)) },
@@ -74,10 +74,6 @@ private enum ValueTypeCodec {
     ]
 
     static func decode(from decoder: Decoder) throws -> ValueType {
-        if let wrappedValue = try decodeWrappedValue(from: decoder) {
-            return wrappedValue
-        }
-
         if let primitiveValue = try decodePrimitiveValue(from: decoder) {
             return primitiveValue
         }
@@ -111,7 +107,7 @@ private enum ValueTypeCodec {
         case let .data(value):
             try container.encode(value)
         case let .object(value):
-            try container.encode(value)
+            try container.encode(WireObject(value))
         case let .list(value):
             try container.encode(value)
         case let .identity(value):
@@ -149,12 +145,11 @@ private enum ValueTypeCodec {
         }
     }
 
-    private static func decodeWrappedValue(from decoder: Decoder) throws -> ValueType? {
-        guard
-            let key = decoder.codingPath.last?.stringValue,
-            let wrappedDecoder = wrappedDecoders[key]
-        else {
-            return nil
+    // Only callers owning a wire-marker container may select a typed decoder.
+    // An ordinary property's codingPath is never a type declaration.
+    static func decodeWireValue(from decoder: Decoder, marker: String) throws -> ValueType {
+        guard let wrappedDecoder = wrappedDecoders[marker] else {
+            return try decode(from: decoder)
         }
 
         let container = try decoder.singleValueContainer()
@@ -187,9 +182,12 @@ private enum ValueTypeCodec {
             return nil
         }
 
+        if keyedContainer.contains(DynamicCodingKey(stringValue: "&objectEntries")) {
+            return .object(try WireObject(from: decoder).value)
+        }
         var object = Object(propertyValues: [String: ValueType]())
         for key in keyedContainer.allKeys {
-            let decodedObject = try keyedContainer.decode(ValueType.self, forKey: key)
+            let decodedObject = try decodeWireValue(from: keyedContainer.superDecoder(forKey: key), marker: key.stringValue)
             object[key.stringValue] = decodedObject
         }
         return .object(object)

@@ -76,17 +76,17 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
-        if let localLabel = try? values.decode(String.self, forKey: .topic) {
-        topic = localLabel
-        } else {
-            topic = "*"
-        }
+        topic = try values.decodeIfPresent(String.self, forKey: .topic) ?? "*"
         title = try values.decode(String.self, forKey: .title)
-        properties = try? values.decode(Properties.self, forKey: .properties)
-        origin = try? values.decodeIfPresent(String.self, forKey: .origin)
+        properties = try values.decodeIfPresent(Properties.self, forKey: .properties)
+        origin = try values.decodeIfPresent(String.self, forKey: .origin)
         // Persisterte elementer fra for denne endringen har ingen hops-nokkel.
-        hops = (try? values.decodeIfPresent(Int.self, forKey: .hops)) as? Int ?? 0
-        do {
+        hops = try values.decodeIfPresent(Int.self, forKey: .hops) ?? 0
+        // Preserve legacy absent/null content without hiding a malformed present value.
+        guard values.contains(.content), try !values.decodeNil(forKey: .content) else {
+            content = .string("Decoding error")
+            return
+        }
         switch properties?.contentType {
         case .string:
             let decoded = try values.decode(String.self, forKey: .content)
@@ -125,16 +125,23 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
             content = .object(decoded)
 
         case .none:
-            CellBase.diagnosticLog("Untyped FlowElement content", domain: .flow)
-            let decoded = try values.decode(Object.self, forKey: .content)
-            content = .object(decoded)
-        }
-        } catch {
-            CellBase.diagnosticLog("Decoding feed item content failed with error: \(error)", domain: .flow)
-            content = .string("Decoding error")
+            // Without a declared content type, preserve valid producer JSON.
+            // Nested errors must still reach the bridge's terminal boundary.
+            content = try Self.decodeUntypedContent(from: values.superDecoder(forKey: .content))
         }
     }
     
+    private static func decodeUntypedContent(from decoder: Decoder) throws -> FlowElementValueType {
+        let scalar = try decoder.singleValueContainer()
+        if let value = try? scalar.decode(Bool.self) { return .bool(value) }
+        if let value = try? scalar.decode(Int.self) { return .number(value) }
+        if let value = try? scalar.decode(String.self) { return .string(value) }
+        if (try? decoder.unkeyedContainer()) != nil {
+            return .list(try ValueTypeList(from: decoder))
+        }
+        return .object(try WireObject(from: decoder).value)
+    }
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)

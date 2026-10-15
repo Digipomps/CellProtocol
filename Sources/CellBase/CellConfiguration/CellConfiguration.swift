@@ -193,15 +193,7 @@ extension CellConfiguration: Codable {
     
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        if values.contains(.uuid) {
-            if let suppliedUuid = try? values.decode(String.self, forKey: .uuid) {
-                uuid = suppliedUuid
-            } else {
-                uuid = UUID.init().uuidString
-            }
-        } else {
-            uuid = UUID.init().uuidString
-        }
+        uuid = try values.decodeIfPresent(String.self, forKey: .uuid) ?? UUID().uuidString
         self.name = try values.decode(String.self, forKey: .name)
         self.description = try values.decodeIfPresent(String.self, forKey: .description)
         self.discovery = try values.decodeIfPresent(CellConfigurationDiscovery.self, forKey: .discovery)
