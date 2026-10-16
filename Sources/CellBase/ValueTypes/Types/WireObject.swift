@@ -16,7 +16,10 @@ struct WireObject: Codable {
         } else {
             var fields: Object = [:]
             for key in container.allKeys {
-                fields[key.stringValue] = try container.decode(ValueType.self, forKey: key)
+                // This is the legacy wire dictionary. Only explicit entries
+                // make marker-named properties literal application data.
+                fields[key.stringValue] = try ValueTypeCodec.decodeWireValue(
+                    from: container.superDecoder(forKey: key), marker: key.stringValue)
             }
             value = fields
         }

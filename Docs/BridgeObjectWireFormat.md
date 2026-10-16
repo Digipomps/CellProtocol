@@ -59,3 +59,35 @@ Boolean, list and Object content is decoded without inventing a type declaration
 Nested malformed values still throw. A declared contentType keeps its strict
 typed decoder; absent/null content retains the legacy default. Bare JSON cannot
 distinguish base64 text from Data; Data needs the existing base64 contentType.
+
+## D256 legacy Object correction (source change; execution pending)
+
+W30b exposed a missing context handoff: the legacy `WireObject` dictionary
+decoded each child as generic `ValueType`. Since D252 removed coding-path-based
+dispatch, a primitive child named `&keyValue` became an integer instead of being
+validated as KeyValue. The unchanged D239 rejection witness failed after a
+successful build. The earlier D252 focused selection omitted D239SchemaDecodeTests.
+
+The candidate now explicitly selects the child marker decoder in the legacy
+dictionary branch, as generic wire Object decoding already did. Only
+`&objectEntries` entries treat property names as literal data and select types
+from the entry's `type`. Thus legacy `&object:{"&keyValue":0}` must throw,
+while an explicitly encoded application property named `&keyValue` with integer
+value 0 remains legal. Valid typed legacy children, null and unknown properties
+retain their compatibility contract.
+
+The same branch is reached through KeyValue.object, nested Object/list entries
+and untyped FlowElement content. FlowElement's six declared Object content types
+now also decode through WireObject. Its Object encoder uses WireObject too, so
+valid marker-named application properties get explicit representation. Ordinary
+unambiguous Objects retain plain JSON. Producer and consumer changes are coupled:
+strict legacy validation without explicit producer encoding would reject valid
+FlowElement values such as an application property named data containing 1.
+
+New D256 tests cover those contexts, nonselected typed fields, exact variants,
+positive producers, and both AgentD transport entrypoints. The focused driver
+includes eight independent removals and the original D239 witness. These are
+source changes and planned checks, not executed green results: consult
+`HAVEN-Deploy/_handoff/ARBEIDSBENK/D256-D239-REGRESJON-RETTET.md` for the actual
+candidate, execution status and remaining W30c gate. W30b's red evidence is in
+`D255-W30B-STOPPED-EVIDENCE/result.json` in that handoff directory.

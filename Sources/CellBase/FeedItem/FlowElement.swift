@@ -92,10 +92,10 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
             let decoded = try values.decode(String.self, forKey: .content)
             content = .string(decoded)
         case .dslv17:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
         case .rdf:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
         case .base64:
             let decoded = try values.decode(String.self, forKey: .content)
@@ -109,19 +109,19 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
             }
             content = .data(decodedData)
         case .html:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
         case .httpRedirect:
             let decoded = try values.decode(String.self, forKey: .content)
             content = .string(decoded)
         case .login:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
         case .experienceTemplate:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
         case .object:
-            let decoded = try values.decode(Object.self, forKey: .content)
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
             content = .object(decoded)
 
         case .none:
@@ -158,7 +158,7 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         case let .string(value):
             try container.encode(value, forKey: .content)
         case let .object(value):
-            try container.encode(value, forKey: .content)
+            try container.encode(WireObject(value), forKey: .content)
         case let .list(value):
             try container.encode(value, forKey: .content)
         case let .data(value):
