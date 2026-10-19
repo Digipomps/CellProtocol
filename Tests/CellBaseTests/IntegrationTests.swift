@@ -64,6 +64,8 @@ final class IntegrationTests: XCTestCase {
 
     private actor SuspendedFlowGate {
         private var entered = false
+        private var permanentlyOpen = false
+        private var firstEntryObserver: (() -> Void)?
         private var entries = 0
         private var entryWaiters = [CheckedContinuation<Void, Never>]()
         private var releaseWaiters = [CheckedContinuation<Void, Never>]()
@@ -73,9 +75,26 @@ final class IntegrationTests: XCTestCase {
             entries += 1
             entryWaiters.forEach { $0.resume() }
             entryWaiters.removeAll()
+            firstEntryObserver?()
+            firstEntryObserver = nil
+            guard !permanentlyOpen else { return }
             await withCheckedContinuation { continuation in
                 releaseWaiters.append(continuation)
             }
+        }
+
+        func observeFirstEntry(_ observer: @escaping () -> Void) {
+            if entered {
+                observer()
+            } else {
+                firstEntryObserver = observer
+            }
+        }
+
+        // Used only by bounded tests: drain existing and any late setup on failure.
+        func releaseAllAndOpen() {
+            permanentlyOpen = true
+            release()
         }
 
         func waitUntilEntered() async {
@@ -894,7 +913,16 @@ final class IntegrationTests: XCTestCase {
         let state = try await cell.attach(emitter: emitter, label: "source", requester: owner)
         XCTAssertEqual(state, .connected)
 
+        let entered = expectation(description: "first upstream setup entered")
+        let joined = expectation(description: "second caller joined pending flight")
+        let firstDone = expectation(description: "first absorb completed")
+        let secondDone = expectation(description: "second absorb completed")
+        await emitter.flowGate.observeFirstEntry { entered.fulfill() }
+        cell.pendingFlowSubscriptionObservedForTesting = { joined.fulfill() }
+        defer { cell.pendingFlowSubscriptionObservedForTesting = nil }
+
         let firstAbsorb = Task { () -> Bool in
+            defer { firstDone.fulfill() }
             do {
                 try await cell.absorbFlow(label: "source", requester: owner)
                 return false
@@ -904,8 +932,15 @@ final class IntegrationTests: XCTestCase {
                 return false
             }
         }
-        await emitter.flowGate.waitUntilEntered()
+        let entryResult = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        guard entryResult == .completed else {
+            XCTFail("First upstream setup did not enter")
+            await emitter.flowGate.releaseAllAndOpen()
+            firstAbsorb.cancel()
+            return
+        }
         let secondAbsorb = Task { () -> Bool in
+            defer { secondDone.fulfill() }
             do {
                 try await cell.absorbFlow(label: "source", requester: owner)
                 return false
@@ -915,10 +950,16 @@ final class IntegrationTests: XCTestCase {
                 return false
             }
         }
-        for _ in 0..<20 {
-            await Task.yield()
+        // Observe admission to the shared flight, not a scheduler-yield count.
+        await fulfillment(of: [joined], timeout: 2)
+        await emitter.flowGate.releaseAllAndOpen()
+        let completion = await XCTWaiter.fulfillment(of: [firstDone, secondDone], timeout: 2)
+        guard completion == .completed else {
+            XCTFail("Both absorb callers must finish after the shared setup failure")
+            firstAbsorb.cancel()
+            secondAbsorb.cancel()
+            return
         }
-        await emitter.flowGate.release()
 
         let firstReceivedExpectedError = await firstAbsorb.value
         let secondReceivedExpectedError = await secondAbsorb.value
@@ -1556,7 +1597,16 @@ final class IntegrationTests: XCTestCase {
         let state = try await cell.attach(emitter: emitter, label: "source", requester: owner)
         XCTAssertEqual(state, .connected)
 
+        let entered = expectation(description: "first upstream setup entered")
+        let joined = expectation(description: "second caller joined pending flight")
+        let firstDone = expectation(description: "first absorb completed")
+        let secondDone = expectation(description: "second absorb completed")
+        await emitter.flowGate.observeFirstEntry { entered.fulfill() }
+        cell.pendingFlowSubscriptionObservedForTesting = { joined.fulfill() }
+        defer { cell.pendingFlowSubscriptionObservedForTesting = nil }
+
         let firstAbsorb = Task { () -> Bool in
+            defer { firstDone.fulfill() }
             do {
                 try await cell.absorbFlow(label: "source", requester: owner)
                 return false
@@ -1566,8 +1616,15 @@ final class IntegrationTests: XCTestCase {
                 return false
             }
         }
-        await emitter.flowGate.waitUntilEntered()
+        let entryResult = await XCTWaiter.fulfillment(of: [entered], timeout: 2)
+        guard entryResult == .completed else {
+            XCTFail("First upstream setup did not enter")
+            await emitter.flowGate.releaseAllAndOpen()
+            firstAbsorb.cancel()
+            return
+        }
         let secondAbsorb = Task { () -> Bool in
+            defer { secondDone.fulfill() }
             do {
                 try await cell.absorbFlow(label: "source", requester: owner)
                 return false
@@ -1577,10 +1634,16 @@ final class IntegrationTests: XCTestCase {
                 return false
             }
         }
-        for _ in 0..<20 {
-            await Task.yield()
+        // Observe admission to the shared flight, not a scheduler-yield count.
+        await fulfillment(of: [joined], timeout: 2)
+        await emitter.flowGate.releaseAllAndOpen()
+        let completion = await XCTWaiter.fulfillment(of: [firstDone, secondDone], timeout: 2)
+        guard completion == .completed else {
+            XCTFail("Both absorb callers must finish after the shared setup failure")
+            firstAbsorb.cancel()
+            secondAbsorb.cancel()
+            return
         }
-        await emitter.flowGate.release()
 
         let firstReceivedOverflow = await firstAbsorb.value
         let secondReceivedOverflow = await secondAbsorb.value
