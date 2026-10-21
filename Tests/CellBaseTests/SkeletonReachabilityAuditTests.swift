@@ -319,4 +319,17 @@ extension SkeletonReachabilityAuditTests {
         XCTAssertEqual(SkeletonReachabilityAudit.reachableActionKeypaths(section),
                        ["program.drop", "program.close", "contactImport.import.commit"])
     }
+    func testLinkButtonsAreNotMissingAnAction() {
+        let staticLink = SkeletonElement.Button(SkeletonButton(keypath: "", label: "Docs", url: "https://example.org/docs"))
+        XCTAssertTrue(SkeletonReachabilityAudit.audit(staticLink).isEmpty)
+
+        let rowLink = SkeletonElement.Button(SkeletonButton(keypath: "", label: "Åpne", urlKeypath: "whereURL"))
+        let list = SkeletonElement.List(SkeletonList(topic: nil, keypath: "rows",
+                                                     flowElementSkeleton: SkeletonVStack(elements: [rowLink])))
+        XCTAssertTrue(SkeletonReachabilityAudit.audit(list).isEmpty)
+        XCTAssertTrue(SkeletonReachabilityAudit.reachableActionKeypaths(list).isEmpty)
+
+        let nothing = SkeletonElement.Button(SkeletonButton(keypath: " ", label: "Broken", url: "  "))
+        XCTAssertEqual(SkeletonReachabilityAudit.audit(nothing).map(\.kind), [.missingRequiredAction])
+    }
 }
