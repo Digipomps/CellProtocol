@@ -186,8 +186,11 @@ public enum SkeletonReachabilityAudit {
             switch element {
             case .Unsupported(let unsupported):
                 node.findings.append(finding(.unsupportedElement, unsupported.reason ?? unsupported.elementType))
-            case .Button(let button) where !nonempty(button.keypath) && !nonempty(button.keypathKeypath):
-                node.findings.append(finding(.missingRequiredAction, "Button requires keypath or keypathKeypath."))
+            // A link button (url or urlKeypath, empty keypath) navigates instead of acting;
+            // SkeletonButtonNavigation decides whether the resolved link may be opened.
+            case .Button(let button) where !nonempty(button.keypath) && !nonempty(button.keypathKeypath)
+                && !nonempty(button.url) && !nonempty(button.urlKeypath):
+                node.findings.append(finding(.missingRequiredAction, "Button requires keypath, keypathKeypath, url or urlKeypath."))
             case .Tree(let tree):
                 for (name, value) in [("selectionActionKeypath", tree.selectionActionKeypath),
                                       ("expansionActionKeypath", tree.expansionActionKeypath)] where !nonempty(value) {
