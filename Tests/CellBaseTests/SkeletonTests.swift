@@ -1489,7 +1489,8 @@ final class SkeletonTests: XCTestCase {
                     keypath: "",
                     label: "CoPilot",
                     url: "/porthole?configurationName=Co-Pilot%20Chat",
-                    activeConfigurationName: "Co-Pilot Chat"
+                    activeConfigurationName: "Co-Pilot Chat",
+                    icon: "message"
                 ),
                 SkeletonNavigationBarItem(
                     keypath: "arendalsukaParticipant.participant.setActiveTab",
@@ -1515,6 +1516,8 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(itemsJSON?.first?["url"] as? String, "/porthole?configurationName=Co-Pilot%20Chat")
         XCTAssertEqual(itemsJSON?.first?["activeConfigurationName"] as? String, "Co-Pilot Chat")
         XCTAssertEqual(itemsJSON?[1]["activeValue"] as? String, "program")
+        XCTAssertEqual(itemsJSON?.first?["icon"] as? String, "message")
+        XCTAssertNil(itemsJSON?[1]["icon"], "Legacy text-only items omit the optional field.")
 
         let decoded = try JSONDecoder().decode(SkeletonElement.self, from: data)
         guard case let .NavigationBar(navigationBar) = decoded else {
@@ -1524,6 +1527,8 @@ final class SkeletonTests: XCTestCase {
         XCTAssertEqual(navigationBar.activeStateKeypath, "arendalsukaParticipant.participant.activeTab")
         XCTAssertEqual(navigationBar.items.map(\.label), ["CoPilot", "Program", "Møter"])
         XCTAssertEqual(navigationBar.items[0].activeConfigurationName, "Co-Pilot Chat")
+        XCTAssertEqual(navigationBar.items[0].icon, "message")
+        XCTAssertNil(navigationBar.items[1].icon)
         XCTAssertNil(navigationBar.items[0].activeValue)
         XCTAssertEqual(navigationBar.items[1].activeValue, "program")
         XCTAssertNil(navigationBar.items[1].activeConfigurationName)
@@ -1572,6 +1577,35 @@ final class SkeletonTests: XCTestCase {
         XCTAssertNil(item.activeValue)
         XCTAssertNil(item.activeConfigurationName)
         XCTAssertNil(item.url)
+        XCTAssertNil(item.icon)
+        XCTAssertNil(decodeJSONObject(try JSONEncoder().encode(item))["icon"])
+    }
+
+    func testNavigationBarIconPreservesButtonActionBindings() throws {
+        let json = """
+        {
+          "keypath": "state.select", "label": "Program", "icon": "calendar",
+          "url": "cell:///Program", "payload": "program",
+          "keypathKeypath": "state.actionPath", "labelKeypath": "state.actionLabel",
+          "payloadKeypath": "state.actionPayload", "activeValue": "program"
+        }
+        """
+        let item = try JSONDecoder().decode(SkeletonNavigationBarItem.self, from: Data(json.utf8))
+        let button = item.asSkeletonButton()
+        XCTAssertEqual(button.icon, "calendar")
+        XCTAssertEqual(button.keypath, "state.select")
+        XCTAssertEqual(button.label, "Program")
+        XCTAssertEqual(button.url, "cell:///Program")
+        XCTAssertEqual(button.keypathKeypath, "state.actionPath")
+        XCTAssertEqual(button.labelKeypath, "state.actionLabel")
+        XCTAssertEqual(button.payloadKeypath, "state.actionPayload")
+        guard case .string(let payload) = button.payload else {
+            return XCTFail("Navigation item lost its action payload")
+        }
+        XCTAssertEqual(payload, "program")
+        XCTAssertFalse(SkeletonButtonNavigation.isNavigationButton(button))
+        let invalid = json.replacingOccurrences(of: "\"icon\": \"calendar\"", with: "\"icon\": 42")
+        XCTAssertThrowsError(try JSONDecoder().decode(SkeletonNavigationBarItem.self, from: Data(invalid.utf8)))
     }
 }
 
