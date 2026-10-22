@@ -67,6 +67,61 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         }
     }
 
+    func testOwnerAttachPresenceOverBridgeUsesScopedFreshProofAndExplicitConsent() async throws {
+        let serverVault = EphemeralIdentityVault()
+        let humanVault = EphemeralIdentityVault()
+        var human = Identity(UUID().uuidString, displayName: "human-on-phone", identityVault: humanVault)
+        var house = Identity(UUID().uuidString, displayName: "runtime-receipt-signer", identityVault: serverVault)
+        await humanVault.addIdentity(identity: &human, for: "private")
+        await serverVault.addIdentity(identity: &house, for: "runtime-receipt-signer")
+        CellBase.defaultIdentityVault = serverVault
+        let publisher = await GeneralCell(owner: human.publicIdentitySnapshot())
+        let resolver = MockCellResolver()
+        CellBase.defaultCellResolver = resolver
+        try await resolver.registerNamedEmitCell(name: "Owned", emitCell: publisher, scope: .template, identity: house)
+        let store = OwnerAttachBridgeStore()
+        let host = OwnerAttachEntityExtensionHost(receiver: house, label: "Remote test runtime", store: store)
+        await OwnerAttachExtensionRuntime.shared.install(host)
+        let outgoing = PairedTransport(), incoming = PairedTransport()
+        let client = try await BridgeBase(.init(owner: human, transport: outgoing, connection: .outbound,
+            identityProofScopes: [.init(domain: publisher.identityDomain, resource: publisher.uuid)]))
+        let server = try await BridgeBase(.init(owner: house, transport: incoming,
+            connection: .inbound(publisherUuid: "Owned"), inboundPublisherLookupIdentity: house))
+        try await client.setTransport(outgoing, connection: .outbound)
+        try await server.setTransport(incoming, connection: .inbound(publisherUuid: "Owned"))
+        outgoing.peer = server; incoming.peer = client
+        for endpoint in [client, server] {
+            try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+        }
+        await client.sendCommand(command: .get, identity: human,
+            payload: .string(OwnerAttachEntityExtensionHost.offerKeypath))
+        let offerResponse = try XCTUnwrap(incoming.snapshot().last(where: { $0.command == .response })?.payload)
+        if case let .string(reason) = offerResponse { return XCTFail("Offer response: \(reason)") }
+        let offer = try OwnerAttachWire.decode(OwnerAttachExtensionOffer.self, from: offerResponse)
+        try offer.validate()
+        var writes = await store.writes; XCTAssertEqual(writes, 0, "Discovery must not retain presence")
+        let consent = try await OwnerAttachExtensionConsent.make(offer: offer, choice: .once, identity: human)
+        await client.sendCommand(command: .set, identity: human, payload: .keyValue(KeyValue(
+            key: OwnerAttachEntityExtensionHost.acceptKeypath,
+            value: try OwnerAttachWire.value(from: consent))))
+        writes = await store.writes; XCTAssertEqual(writes, 1)
+        let proofCommands = incoming.snapshot().filter { $0.command == .sign }
+        XCTAssertGreaterThanOrEqual(proofCommands.count, 2)
+        for command in proofCommands {
+            guard case let .signData(data) = command.payload else { return XCTFail("Expected scoped proof") }
+            let proof = try JSONDecoder().decode(IdentitySigningChallenge.self, from: data)
+            XCTAssertEqual(proof.action, "checkIdentityOrigin")
+            XCTAssertEqual(proof.resource, publisher.uuid)
+        }
+        let saved = await store.read(id: offer.binding.storageID)
+        let data = try XCTUnwrap(saved)
+        let receipt = try OwnerAttachWire.decode(OwnerAttachExtensionReceipt.self, data: data)
+        try receipt.validate(for: offer.binding)
+        let links = await IdentityLinkRegistry.shared.activeLinks(ownerUUID: human.uuid)
+        XCTAssertTrue(links.isEmpty)
+        await OwnerAttachExtensionRuntime.shared.install(nil)
+    }
+
     private var previousVault: IdentityVaultProtocol?
     private var previousResolver: CellResolverProtocol?
     private var previousDebug = false
@@ -445,4 +500,13 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         XCTAssertTrue(owner.identityVault is MockIdentityVault, "Sanitizing the wire identity must not mutate the local owner")
         return (response, commands.filter { $0.command == .sign }.count)
     }
+}
+
+// Keep this fixture self-contained: the Linux bridge gate copies a bounded
+// subset of test files and does not include the owner-attach test suite.
+private actor OwnerAttachBridgeStore: OwnerAttachExtensionStore {
+    private var values: [String: Data] = [:]
+    private(set) var writes = 0
+    func read(id: String) -> Data? { values[id] }
+    func write(_ data: Data, id: String) { values[id] = data; writes += 1 }
 }
