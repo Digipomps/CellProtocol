@@ -54,6 +54,7 @@ public enum SkeletonStyleParity {
     ///
     /// Generated 2026-09-17 against the integrated CellScaffold Public surface; 139 roles.
     /// 2026-09-19: + butler-chat-tabs, butler-workbench (Butler-temaet, Public/css/themes/Co-Pilot Chat.css); 141 roles.
+    /// 2026-10-22: + arendalsuka-day-pill-list, -filter-bar, -saved-toggle, -section-tab-list, -session-grid (Arendalsuka program page, CellScaffold #342).
     public static let webStylesheetRoles: Set<String> = [
         "admin-actions",
         "admin-banner-critical",
@@ -129,7 +130,12 @@ public enum SkeletonStyleParity {
         "admin-value",
         "admin-value-label",
         "admin-value-mono",
+        "arendalsuka-day-pill-list",
+        "arendalsuka-filter-bar",
         "arendalsuka-optional-list",
+        "arendalsuka-saved-toggle",
+        "arendalsuka-section-tab-list",
+        "arendalsuka-session-grid",
         "assistant-response-actions",
         "butler-chat-tabs",
         "butler-helper-tree-chat",
