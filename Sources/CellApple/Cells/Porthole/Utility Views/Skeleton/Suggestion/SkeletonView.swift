@@ -3872,18 +3872,20 @@ private struct CellTextAreaView: View {
     }
 
     private var plainEditorBody: some View {
-        ZStack(alignment: .topLeading) {
-            if text.isEmpty, !localizedPlaceholder.isEmpty {
-                Text(localizedPlaceholder)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 8)
+        paragraphEditor
+            .frame(minHeight: minHeight(), maxHeight: maxHeight())
+            // TextEditor paints its own background on macOS. The placeholder
+            // must be above it, and must not intercept focus/editing clicks.
+            .overlay(alignment: .topLeading) {
+                if text.isEmpty, !localizedPlaceholder.isEmpty {
+                    Text(localizedPlaceholder)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
-
-            paragraphEditor
-                .frame(minHeight: minHeight(), maxHeight: maxHeight())
-
-        }
     }
 
     @ViewBuilder private var paragraphEditor: some View {

@@ -10,6 +10,40 @@ import Vapor
 /// Real loopback WebSocket framing and callbacks. TLS/proxy deployment evidence
 /// remains a separate staging requirement; this test explicitly enables local WS.
 final class BridgeChannelWebSocketTests: XCTestCase {
+    func testExplicitUpgradeHeaderIsSeparateFromCanonicalEndpoint() async throws {
+        let app = try await Application.make(.testing)
+        let accepted = expectation(description: "header-authenticated upgrade")
+        app.webSocket("header", shouldUpgrade: { request in
+            XCTAssertNil(request.url.query)
+            return request.eventLoop.makeSucceededFuture(
+                request.headers.bearerAuthorization?.token == "local-test-token" ? [:] : nil)
+        }) { _, _ in
+            accepted.fulfill()
+        }
+        do {
+            try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+            let port = try XCTUnwrap(app.http.server.shared.localAddress?.port)
+            let url = URL(string: "ws://127.0.0.1:\(port)/header")!
+            let endpoint = try BridgeChannelAuthentication.Endpoint(url: url, domain: "bridge", allowInsecureLoopback: true)
+            XCTAssertEqual(endpoint.route, "/header")
+            XCTAssertThrowsError(try BridgeChannelAuthentication.Endpoint(
+                url: URL(string: url.absoluteString + "?token=local-test-token")!, domain: "bridge", allowInsecureLoopback: true))
+            for headers: HTTPHeaders in [[:], ["Authorization": "Bearer wrong"]] {
+                let transport = VaporBridgeTransport(upgradeHeaders: headers)
+                do { try await transport.setup(url, identity: Identity()); XCTFail("Upgrade must reject missing/wrong header") }
+                catch {}
+                await transport.close()
+            }
+            let transport = VaporBridgeTransport(upgradeHeaders: ["Authorization": "Bearer local-test-token"])
+            try await transport.setup(url, identity: Identity())
+            await fulfillment(of: [accepted], timeout: 3)
+            await transport.close()
+            await app.server.shutdown(); try await app.asyncShutdown()
+        } catch {
+            await app.server.shutdown(); try? await app.asyncShutdown(); throw error
+        }
+    }
+
     func testCloseCancelsARealSocketStalledBeforeWebSocketUpgrade() async throws {
         let app = try await Application.make(.testing)
         let entered = expectation(description: "server received upgrade request")
