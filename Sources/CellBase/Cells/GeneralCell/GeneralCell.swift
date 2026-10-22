@@ -1489,6 +1489,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 )
                 contract.issuer = localContractIdentityDescriptor(contract.issuer)
                 let persisted = persistedAuthorizationSnapshot()
+                let finishMembershipMutation = beginAuthorizationMembershipMutation()
+                defer { finishMembershipMutation?() }
                 let authorization = await self.auditor.installAuthorization(
                     contract: contract,
                     member: memberDescriptor,
@@ -1578,6 +1580,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             await recordContractRejected(identity: principal, reasonCode: "external_conditions_expiry_or_revocation", message: "External owner-signed admission was rejected.")
             return .rejected
         }
+        let finishMembershipMutation = beginAuthorizationMembershipMutation()
+        defer { finishMembershipMutation?() }
         let authorization = await auditor.installAuthorization(
             contract: contract,
             member: contract.subject.publicIdentitySnapshot(),
@@ -1605,6 +1609,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                   $0.uuid == revocation.contractUUID && $0.agreement.uuid == revocation.agreementUUID &&
                   $0.subject.uuid == revocation.subjectUUID && $0.issuedAt <= revocation.issuedAt
               }) else { return false }
+        let finishMembershipMutation = beginAuthorizationMembershipMutation()
+        defer { finishMembershipMutation?() }
         guard let snapshot = await auditor.applyRevocation(revocation,
             cutoff: authorizationClock().timeIntervalSince1970 + Self.externalAdmissionClockTolerance,
             restoring: persistedAuthorizationSnapshot()) else { return false }
@@ -2172,10 +2178,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         return isMember
     }
     
+    /// Synchronous revocation fence for narrow, cell-owned transfer capabilities.
+    /// Called only after ordinary authorization, before an authoritative mutation.
+    /// The returned completion runs on every exit, including rejected mutations.
+    func beginAuthorizationMembershipMutation() -> (() -> Void)? { nil }
     func didChangeAuthorizationMembership() async {}
 
     public func removeMember(member: Identity, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
+            let finishMembershipMutation = beginAuthorizationMembershipMutation()
+            defer { finishMembershipMutation?() }
             await self.auditor.removeMember(member)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: member.uuid,
@@ -2192,6 +2204,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
 
     public func removeMember(uuid: String, requester: Identity) async {
         if await validateAccess("-w--", at: "members", for: requester) {
+            let finishMembershipMutation = beginAuthorizationMembershipMutation()
+            defer { finishMembershipMutation?() }
             await self.auditor.removeMember(uuid)
             let authorization = await self.auditor.removeAuthorization(
                 subjectUUID: uuid,
