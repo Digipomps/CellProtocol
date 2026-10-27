@@ -22,6 +22,25 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      # The interop fixtures are generated on Linux. This step reports, as
+      # annotations, whether Darwin Foundation encodes them the same way,
+      # independently of the rest of the suite.
+      - name: Interop fixtures on Darwin
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          swift test --disable-automatic-resolution --jobs 4 --filter InteropFixturesV1Tests 2>&1 | tee interop-darwin.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            echo "::notice title=InteropFixturesV1 Darwin::passed"
+          else
+            grep -E "error:|failed|XCTAssert" interop-darwin.log | head -20 | while IFS= read -r line; do
+              echo "::error title=InteropFixturesV1 Darwin::${line//::/ }"
+            done
+          fi
+          rm -f interop-darwin.log
+          exit "$status"
       - name: Test exact sources and pinned dependencies
         shell: bash
         run: |
