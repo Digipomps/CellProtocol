@@ -545,6 +545,189 @@ final class InteropFixturesV1Tests: XCTestCase {
         // messages. Values that are random in production are fixed here.
         cases.append(contentsOf: try bridgeChannelCases())
 
+        // Entity extension completion: same-entity credential, holder-bound
+        // presentation and the envelope EntityAnchor's identityLinks.completeEnrollment takes.
+        cases.append(contentsOf: try await extendCompletionCases(request: request, approval: approval))
+
+        return cases
+    }
+
+    // MARK: - Entity extension completion (VC chain)
+
+    static let presentationChallenge = bytes("presentation-challenge")
+    static let presentationDomain = "staging.haven.digipomps.org"
+
+    static func rfc3339(_ text: String) -> Date { ISO8601DateFormatter().date(from: text)! }
+
+    /// VCClaim signs JSONEncoder(.withoutEscapingSlashes, .sortedKeys) of itself
+    /// with userInfo["skipProof"] = true (VCClaim.canonicalUnsignedClaimData).
+    static func unsignedClaimData(_ claim: VCClaim) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
+        encoder.userInfo[CodingUserInfoKey(rawValue: "skipProof")!] = true
+        return try encoder.encode(claim)
+    }
+
+    static func sameEntityCredential(request: IdentityEnrollmentRequest, approval: IdentityEnrollmentApproval, issuer: Party = alice) async throws -> VCClaim {
+        let subject = SameEntityIdentityLinkCredentialSubject(
+            id: try IdentityLinkProtocolService.did(for: request.newIdentity),
+            entityBinding: approval.entityBinding,
+            linkedIdentity: request.newIdentity,
+            approvedDomains: approval.approvedDomains,
+            approvedIdentityContexts: approval.approvedIdentityContexts,
+            approvedScopes: approval.approvedScopes,
+            enrollmentRequestHash: try IdentityLinkProtocolService.requestHash(for: request),
+            assuranceSource: "fresh_auth_and_possession",
+            assuranceLevel: "high",
+            validUntil: approval.expiresAt,
+            revocationReference: "cell:///EntityAnchor/identityLinks/revocations/apr-interop-0001")
+        var claim = try await VCClaim(
+            type: "SameEntityIdentityLinkCredential",
+            issuerIdentity: issuer.identity,
+            subjectIdentity: IdentityLinkProtocolService.identity(from: request.newIdentity),
+            credentialSubject: try IdentityLinkProtocolService.object(from: subject))
+        claim.id = "cell:///identity/\(request.newIdentity.uuid)/claims/C1A10000-0000-4000-8000-000000000001"
+        claim.issuanceDate = rfc3339("2026-10-27T11:59:30Z")
+        claim.proof.created = rfc3339("2026-10-27T11:59:30Z")
+        claim.proof.signatureData = try issuer.sign(try unsignedClaimData(claim))
+        return claim
+    }
+
+    static func presentation(of credential: VCClaim, holder: Party = bob, challenge: Data = presentationChallenge, domain: String = presentationDomain) async throws -> VCPresentation {
+        var presentation = try await VCPresentation(
+            type: "SameEntityIdentityLinkPresentation",
+            holderIdentity: holder.identity, subjectIdentity: holder.identity,
+            verifiableCredentials: [credential])
+        presentation.id = "cell:///identity/\(holder.uuid)/claims/9E5E0000-0000-4000-8000-000000000001"
+        presentation.holder = .reference(try holder.identity.did())
+        presentation.challenge = challenge
+        presentation.domain = domain
+        presentation.holderBinding = holder.descriptor
+        presentation.proof = VCProof(proofPurpose: .authentication, issuerIdentity: holder.identity)
+        presentation.proof.created = rfc3339("2026-10-27T11:59:40Z")
+        presentation.proof.signatureData = try holder.sign(try presentation.canonicalPayloadData())
+        return presentation
+    }
+
+    /// enrollmentApproval with changes, re-signed by `issuer`.
+    static func approvalVariant(for request: IdentityEnrollmentRequest, issuer: Party = alice, _ change: (inout IdentityEnrollmentApproval) -> Void) throws -> IdentityEnrollmentApproval {
+        var approval = try enrollmentApproval(for: request)
+        change(&approval)
+        approval.issuerIdentityUUID = issuer.uuid
+        approval.proof = IdentityEnrollmentApprovalProof(issuerIdentityUUID: issuer.uuid, issuerType: approval.issuerType, algorithm: .EdDSA, curveType: .Curve25519)
+        let payload = try approval.canonicalPayloadData()
+        approval.proof?.signature = try issuer.sign(payload)
+        return approval
+    }
+
+    static func completionEnvelope(request: IdentityEnrollmentRequest, approval: IdentityEnrollmentApproval, credential: VCClaim, presentation: VCPresentation, issuer: Party = alice, expectedChallenge: Data = presentationChallenge) -> IdentityLinkCompletionEnvelope {
+        IdentityLinkCompletionEnvelope(
+            request: request, approval: approval,
+            sameEntityCredential: credential, presentation: presentation,
+            issuerIdentity: issuer.descriptor,
+            expectedAudience: request.audience, expectedOrigin: request.origin,
+            expectedPresentationChallenge: expectedChallenge,
+            expectedPresentationDomain: presentationDomain)
+    }
+
+    /// IdentityLinkCompletionError case name without its associated values.
+    static func linkCode(_ error: Error) -> String {
+        String(String(describing: error).prefix { $0 != "(" })
+    }
+
+    static func completionVerdict(_ envelope: IdentityLinkCompletionEnvelope) async -> (String, IdentityLinkRecord?) {
+        do {
+            let result = try await IdentityLinkProtocolService.verifyCompletion(envelope, now: verifyAt)
+            return ("valid", result.record)
+        } catch {
+            return (linkCode(error), nil)
+        }
+    }
+
+    static func extendCompletionCases(request: IdentityEnrollmentRequest, approval: IdentityEnrollmentApproval) async throws -> [Case] {
+        var cases: [Case] = []
+        let credential = try await sameEntityCredential(request: request, approval: approval)
+        let presentation = try await presentation(of: credential)
+        let dids = [
+            "issuerDID": try IdentityLinkProtocolService.did(for: alice.descriptor),
+            "holderDID": try IdentityLinkProtocolService.did(for: bob.descriptor),
+        ]
+
+        cases.append(try record("extend.credential.valid", flow: "extend", type: "VCClaim",
+            description: "Alice utsteder et SameEntityIdentityLinkCredential til Bobs nye nøkkel. Signert over JSONEncoder(sortedKeys, withoutEscapingSlashes) uten proof; uuid kodes ikke.",
+            value: credential, excluded: ["proof"], canonical: try unsignedClaimData(credential),
+            signer: alice.descriptor, signature: credential.proof.signatureData,
+            verdict: await asyncVerdict { try await credential.verify(issuer: alice.identity) },
+            related: dids))
+
+        var tamperedCredential = try await sameEntityCredential(request: request, approval: approval)
+        tamperedCredential.credentialSubject["assuranceLevel"] = .string("highest")
+        cases.append(try record("extend.credential.tampered", flow: "extend", type: "VCClaim",
+            description: "credentialSubject er endret etter signering.",
+            value: tamperedCredential, excluded: ["proof"], canonical: try unsignedClaimData(tamperedCredential),
+            signer: alice.descriptor, signature: tamperedCredential.proof.signatureData,
+            verdict: await asyncVerdict { try await tamperedCredential.verify(issuer: alice.identity) }))
+
+        cases.append(try record("extend.presentation.valid", flow: "extend", type: "VCPresentation",
+            description: "Bob viser fram credentialet, bundet til tjenerens utfordring og domene. Signert over JSONEncoder(sortedKeys, withoutEscapingSlashes) uten proof; verifiableCredential har med sine proof.",
+            value: presentation, excluded: ["proof"], canonical: try presentation.canonicalPayloadData(),
+            signer: bob.descriptor, signature: presentation.proof.signatureData,
+            verdict: await asyncVerdict { try await presentation.verifyHolderProof(expectedChallenge: presentationChallenge, expectedDomain: presentationDomain) },
+            related: dids))
+
+        let otherDomain = try await self.presentation(of: credential, domain: "evil.example")
+        cases.append(try record("extend.presentation.wrong-domain", flow: "extend", type: "VCPresentation",
+            description: "Presentasjonen er laget for et annet domene enn tjeneren venter.",
+            value: otherDomain, excluded: ["proof"], canonical: try otherDomain.canonicalPayloadData(),
+            signer: bob.descriptor, signature: otherDomain.proof.signatureData,
+            verdict: await asyncVerdict { try await otherDomain.verifyHolderProof(expectedChallenge: presentationChallenge, expectedDomain: presentationDomain) }))
+
+        func completion(_ id: String, _ description: String, _ envelope: IdentityLinkCompletionEnvelope) async throws -> Case {
+            let (verdict, linkRecord) = await completionVerdict(envelope)
+            var related: [String: String] = ["linkID": envelope.approval.approvalID]
+            if let linkRecord {
+                related["recordBase64"] = try jsonEncoder().encode(linkRecord).base64EncodedString()
+            }
+            return try record("extend.completion.\(id)", flow: "extend", type: "IdentityLinkCompletionEnvelope",
+                description: description + " Verdikt fra IdentityLinkProtocolService.verifyCompletion uten brukte jti. Kanoniske bytes er presentasjonens.",
+                value: envelope, excluded: [], canonical: try envelope.presentation.canonicalPayloadData(),
+                signer: envelope.presentation.holderBinding, signature: envelope.presentation.proof.signatureData,
+                verdict: verdict, related: related)
+        }
+
+        cases.append(try await completion("valid", "Hele kjeden: forespørsel, godkjenning, credential og presentasjon.",
+            completionEnvelope(request: request, approval: approval, credential: credential, presentation: presentation)))
+
+        let escalated = try approvalVariant(for: request) { $0.approvedScopes = ["chat.read", "admin"] }
+        let escalatedCredential = try await sameEntityCredential(request: request, approval: escalated)
+        cases.append(try await completion("scope-escalation", "Godkjenningen gir et omfang som ikke ble bedt om.",
+            completionEnvelope(request: request, approval: escalated, credential: escalatedCredential,
+                presentation: try await self.presentation(of: escalatedCredential))))
+
+        let sameKey = try approvalVariant(for: request, issuer: bob) { _ in }
+        let sameKeyCredential = try await sameEntityCredential(request: request, approval: sameKey, issuer: bob)
+        cases.append(try await completion("same-key", "Den nye nøkkelen godkjenner seg selv.",
+            completionEnvelope(request: request, approval: sameKey, credential: sameKeyCredential,
+                presentation: try await self.presentation(of: sameKeyCredential), issuer: bob)))
+
+        let expired = try approvalVariant(for: request) { $0.expiresAt = "2026-10-27T11:59:59Z" }
+        let expiredCredential = try await sameEntityCredential(request: request, approval: expired)
+        cases.append(try await completion("expired-approval", "Godkjenningen gikk ut før tjeneren så den.",
+            completionEnvelope(request: request, approval: expired, credential: expiredCredential,
+                presentation: try await self.presentation(of: expiredCredential))))
+
+        cases.append(try await completion("tampered-credential", "Credentialet er endret etter signering.",
+            completionEnvelope(request: request, approval: approval, credential: tamperedCredential,
+                presentation: try await self.presentation(of: tamperedCredential))))
+
+        cases.append(try await completion("holder-mismatch", "Mallory viser fram Bobs credential.",
+            completionEnvelope(request: request, approval: approval, credential: credential,
+                presentation: try await self.presentation(of: credential, holder: mallory))))
+
+        cases.append(try await completion("wrong-challenge", "Presentasjonen er bundet til en annen utfordring enn tjeneren ga.",
+            completionEnvelope(request: request, approval: approval, credential: credential,
+                presentation: presentation, expectedChallenge: bytes("other-challenge"))))
+
         return cases
     }
 
@@ -698,7 +881,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         }
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
         let entries = try XCTUnwrap(manifest["cases"] as? [[String: Any]])
-        XCTAssertGreaterThanOrEqual(entries.count, 32)
+        XCTAssertGreaterThanOrEqual(entries.count, 43)
 
         // Freshly built cases must agree with the files on everything that is
         // deterministic on every platform: canonical bytes and verdicts.
@@ -739,6 +922,9 @@ final class InteropFixturesV1Tests: XCTestCase {
         case "ChatInvitationArtifact": return try decoder.decode(ChatInvitationArtifact.self, from: encoded).canonicalPayloadData()
         case "ChatInvitationAcceptance": return try decoder.decode(ChatInvitationAcceptance.self, from: encoded).canonicalPayloadData()
         case "IdentitySigningChallenge": return try jsonEncoder().encode(try decoder.decode(IdentitySigningChallenge.self, from: encoded))
+        case "VCClaim": return try unsignedClaimData(try decoder.decode(VCClaim.self, from: encoded))
+        case "VCPresentation": return try decoder.decode(VCPresentation.self, from: encoded).canonicalPayloadData()
+        case "IdentityLinkCompletionEnvelope": return try decoder.decode(IdentityLinkCompletionEnvelope.self, from: encoded).presentation.canonicalPayloadData()
         case "BridgeChannelAuthV1": return try BridgeChannelAuthentication.signingData(try BridgeChannelAuthentication.decode(BridgeChannelAuthentication.Transcript.self, from: encoded))
         default: throw NSError(domain: "InteropFixturesV1", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown type \(type)"])
         }
