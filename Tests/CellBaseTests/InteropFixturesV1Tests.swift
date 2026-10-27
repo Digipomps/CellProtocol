@@ -351,7 +351,13 @@ final class InteropFixturesV1Tests: XCTestCase {
             description: "Ny nøkkel (Bob) ber om å bli lenket til entiteten. Signert av den nye nøkkelen.",
             value: request, excluded: ["proof"], canonical: try request.canonicalPayloadData(),
             signer: request.newIdentity, signature: request.proof?.signature, verdict: "valid",
-            related: ["requestHashBase64": requestHash]))
+            related: [
+                "requestHashBase64": requestHash,
+                // Binding's EntityScaffoldExtensionCell binds its approval to this
+                // instead: the UTF-8 of the hex SHA-256 of the base64 canonical request.
+                "bindingRequestHashBase64": Data(HavenInviteLink.sha256Hex(try request.canonicalPayloadData().base64EncodedString()).utf8).base64EncodedString(),
+                "humanCode": HavenInviteLink.humanCode(from: request.requestID + request.audience)
+            ]))
 
         var tamperedRequest = request
         tamperedRequest.requestedScopes.append("admin")
