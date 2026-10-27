@@ -541,7 +541,82 @@ final class InteropFixturesV1Tests: XCTestCase {
                 verdict: verdict { _ = try IdentitySigningChallenge.validateSigningData(data, for: bob.identity, now: verifyAt) }))
         }
 
+        // Bridge channel admission (org.haven.bridge-channel.v1), the four WS auth
+        // messages. Values that are random in production are fixed here.
+        cases.append(contentsOf: try bridgeChannelCases())
+
         return cases
+    }
+
+    typealias ChannelAuth = BridgeChannelAuthentication
+
+    static func channelEnvelope<T: Encodable>(_ name: String, _ value: T) throws -> Data {
+        let command = BridgeCommand(cmd: name, payload: .string(String(decoding: try ChannelAuth.encode(value), as: UTF8.self)), cid: 0)
+        return try ChannelAuth.encode(command)
+    }
+
+    static func channelHello(_ party: Party) throws -> ChannelAuth.Hello {
+        let object: [String: Any] = [
+            "profile": ChannelAuth.profile,
+            "identity": ["uuid": party.uuid, "algorithm": "EdDSA", "curve": "Curve25519",
+                         "publicKey": party.key.publicKey.rawRepresentation.base64EncodedString()],
+            "clientNonce": bytes("channel-client-nonce").base64EncodedString(),
+        ]
+        return try JSONDecoder().decode(ChannelAuth.Hello.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    static func bridgeChannelCases() throws -> [Case] {
+        var cases: [Case] = []
+        let endpoint = try ChannelAuth.Endpoint(
+            url: URL(string: "wss://staging.haven.digipomps.org/bridgehead/6F1C2B0A-0000-4000-8000-00000000A11C/EntityScaffoldExtension")!,
+            domain: "bridge")
+        for (suffix, issuedMs, signer, description) in [
+            ("valid", Int64(1_793_102_399_123), bob, "Bob åpner en autentisert bro. issuedAt har millisekunder, så de signerte bytene har desimaltall."),
+            ("whole-second", Int64(1_793_102_399_000), bob, "Samme, med hele sekunder."),
+            ("wrong-key", Int64(1_793_102_399_123), mallory, "Beviset er signert av en annen nøkkel enn den i hello."),
+        ] {
+            let hello = try channelHello(bob)
+            let transcript = ChannelAuth.Transcript(
+                profile: ChannelAuth.profile, endpoint: endpoint, identity: hello.identity,
+                clientNonce: hello.clientNonce, serverNonce: bytes("channel-server-nonce"),
+                sessionID: "5E55A1D0-0000-4000-8000-000000000001", generation: "6E4E0000-0000-4000-8000-000000000002",
+                direction: "client-to-server", issuedAtMilliseconds: issuedMs,
+                channelExpiresAtMilliseconds: issuedMs + Int64(ChannelAuth.channelLifetime * 1000))
+            let signingData = try ChannelAuth.signingData(transcript)
+            let challenge = ChannelAuth.Challenge(transcript: transcript, signingData: signingData)
+            let signature = try signer.sign(signingData)
+            let proof = ChannelAuth.Proof(sessionID: transcript.sessionID, generation: transcript.generation, signature: signature)
+            let digest = ChannelAuth.digest(try ChannelAuth.encode(transcript))
+            let accepted = ChannelAuth.Authenticated(sessionID: transcript.sessionID, generation: transcript.generation, transcriptDigest: digest)
+            let signatureValid = verifies(signature, signingData, try decodeDescriptor(hello.identity))
+            let challengeVerdict = verdict {
+                _ = try IdentitySigningChallenge.validateSigningData(signingData, for: hello.identity.makeIdentity(),
+                    now: Date(timeIntervalSince1970: Double(issuedMs) / 1000 + 1))
+            }
+            var item = Case(
+                id: "bridge.channel-auth.\(suffix)", flow: "bridge", type: "BridgeChannelAuthV1",
+                description: description + " Meldingene er JSONEncoder med sortedKeys og withoutEscapingSlashes; de signerte bytene er IdentitySigningChallenge (med skråstrek-escaping).",
+                excludedTopLevelKeys: [],
+                encoded: try ChannelAuth.encode(transcript),
+                canonical: signingData,
+                signer: try decodeDescriptor(hello.identity), signature: signature,
+                signatureValid: signatureValid,
+                verdict: signatureValid ? challengeVerdict : "invalidProof")
+            item.related = [
+                "helloEnvelopeBase64": try channelEnvelope("channelAuthHello", hello).base64EncodedString(),
+                "challengeEnvelopeBase64": try channelEnvelope("channelAuthChallenge", challenge).base64EncodedString(),
+                "proofEnvelopeBase64": try channelEnvelope("channelAuthProof", proof).base64EncodedString(),
+                "acceptedEnvelopeBase64": try channelEnvelope("channelAuthAccepted", accepted).base64EncodedString(),
+                "transcriptDigestHex": digest,
+                "endpointAudience": endpoint.audience,
+            ]
+            cases.append(item)
+        }
+        return cases
+    }
+
+    static func decodeDescriptor(_ identity: ChannelAuth.PublicIdentity) throws -> IdentityPublicKeyDescriptor {
+        IdentityPublicKeyDescriptor(uuid: identity.uuid, publicKey: identity.publicKey, algorithm: identity.algorithm, curveType: identity.curve)
     }
 
     // MARK: - Files
@@ -623,7 +698,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         }
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
         let entries = try XCTUnwrap(manifest["cases"] as? [[String: Any]])
-        XCTAssertGreaterThanOrEqual(entries.count, 28)
+        XCTAssertGreaterThanOrEqual(entries.count, 32)
 
         // Freshly built cases must agree with the files on everything that is
         // deterministic on every platform: canonical bytes and verdicts.
@@ -664,6 +739,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         case "ChatInvitationArtifact": return try decoder.decode(ChatInvitationArtifact.self, from: encoded).canonicalPayloadData()
         case "ChatInvitationAcceptance": return try decoder.decode(ChatInvitationAcceptance.self, from: encoded).canonicalPayloadData()
         case "IdentitySigningChallenge": return try jsonEncoder().encode(try decoder.decode(IdentitySigningChallenge.self, from: encoded))
+        case "BridgeChannelAuthV1": return try BridgeChannelAuthentication.signingData(try BridgeChannelAuthentication.decode(BridgeChannelAuthentication.Transcript.self, from: encoded))
         default: throw NSError(domain: "InteropFixturesV1", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown type \(type)"])
         }
     }
