@@ -554,6 +554,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         // Entity extension completion: same-entity credential, holder-bound
         // presentation and the envelope EntityAnchor's identityLinks.completeEnrollment takes.
         cases.append(contentsOf: try await extendCompletionCases(request: request, approval: approval))
+        cases.append(contentsOf: try genesisCases())
 
         return cases
     }
@@ -648,6 +649,73 @@ final class InteropFixturesV1Tests: XCTestCase {
         } catch {
             return (linkCode(error), nil)
         }
+    }
+
+    // MARK: - Genesis seal
+
+    static let genesisAnchorID = "A0C40000-0000-4000-8000-0000000000A1"
+
+    static func genesisRecord(for initiator: Party, sealedAt: String) -> IdentityLinkRecord {
+        IdentityLinkRecord(
+            linkID: EntityGenesisService.genesisLinkID(anchorID: genesisAnchorID),
+            entityBinding: EntityBindingDescriptor(mode: .localEntityAnchor, entityAnchorReference: EntityGenesisService.anchorReference),
+            linkedIdentity: initiator.descriptor,
+            approvedDomains: ["private"],
+            approvedIdentityContexts: [],
+            approvedScopes: EntityGenesisService.initiatorScopes,
+            issuerIdentityUUID: initiator.uuid,
+            issuerType: .existingDevice,
+            status: .active,
+            linkedAt: sealedAt
+        )
+    }
+
+    static func genesisVerdict(_ seal: EntityGenesisSeal, _ record: IdentityLinkRecord) -> String {
+        do { try EntityGenesisService.verify(seal: seal, record: record); return "valid" } catch {
+            return String(String(describing: error).prefix { $0 != "(" })
+        }
+    }
+
+    /// The seal EntityAnchor writes at identityLinks.genesis, built the way
+    /// EntityGenesisService.seal builds it, with Alice as the initiator.
+    static func genesisCases() throws -> [Case] {
+        let sealedAt = IdentityLinkProtocolService.iso8601(Date(timeIntervalSince1970: 1_793_102_300))
+        let link = genesisRecord(for: alice, sealedAt: sealedAt)
+        var seal = EntityGenesisSeal(
+            anchorID: genesisAnchorID, sealedAt: sealedAt, trigger: .onboarding,
+            linkID: link.linkID, initiatorIdentityUUID: alice.uuid
+        )
+        let payload = try seal.canonicalPayloadData()
+        seal.proof = IdentityEnrollmentApprovalProof(
+            issuerIdentityUUID: alice.uuid, issuerType: .existingDevice,
+            algorithm: .EdDSA, curveType: .Curve25519, signature: try alice.sign(payload)
+        )
+        let recordBase64 = try jsonEncoder().encode(link).base64EncodedString()
+        var cases: [Case] = []
+        cases.append(try record("extend.genesis.valid", flow: "extend", type: "EntityGenesisSeal",
+            description: "Ankeret forsegles til Alice, som startet entiteten. Signert av Alice, og peker på genesis-lenken.",
+            value: seal, excluded: ["proof"], canonical: payload,
+            signer: alice.descriptor, signature: seal.proof?.signature,
+            verdict: genesisVerdict(seal, link),
+            related: ["recordBase64": recordBase64, "recordKeypath": EntityGenesisService.recordKeypath(linkID: link.linkID)]))
+
+        var tampered = seal
+        tampered.trigger = .firstPersist
+        cases.append(try record("extend.genesis.tampered", flow: "extend", type: "EntityGenesisSeal",
+            description: "Utløseren er endret etter signering. Forseglingen skal ikke holde.",
+            value: tampered, excluded: ["proof"], canonical: try tampered.canonicalPayloadData(),
+            signer: alice.descriptor, signature: tampered.proof?.signature,
+            verdict: genesisVerdict(tampered, link),
+            related: ["recordBase64": recordBase64]))
+
+        let bobRecord = genesisRecord(for: bob, sealedAt: sealedAt)
+        cases.append(try record("extend.genesis.wrong-record", flow: "extend", type: "EntityGenesisSeal",
+            description: "Riktig forsegling, men lenken den leses sammen med gjelder Bob. Den skal avvises.",
+            value: seal, excluded: ["proof"], canonical: payload,
+            signer: alice.descriptor, signature: seal.proof?.signature,
+            verdict: genesisVerdict(seal, bobRecord),
+            related: ["recordBase64": try jsonEncoder().encode(bobRecord).base64EncodedString()]))
+        return cases
     }
 
     static func extendCompletionCases(request: IdentityEnrollmentRequest, approval: IdentityEnrollmentApproval) async throws -> [Case] {
@@ -887,7 +955,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         }
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
         let entries = try XCTUnwrap(manifest["cases"] as? [[String: Any]])
-        XCTAssertGreaterThanOrEqual(entries.count, 43)
+        XCTAssertGreaterThanOrEqual(entries.count, 46)
 
         // Freshly built cases must agree with the files on everything that is
         // deterministic on every platform: canonical bytes and verdicts.
@@ -930,6 +998,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         case "IdentitySigningChallenge": return try jsonEncoder().encode(try decoder.decode(IdentitySigningChallenge.self, from: encoded))
         case "VCClaim": return try unsignedClaimData(try decoder.decode(VCClaim.self, from: encoded))
         case "VCPresentation": return try decoder.decode(VCPresentation.self, from: encoded).canonicalPayloadData()
+        case "EntityGenesisSeal": return try decoder.decode(EntityGenesisSeal.self, from: encoded).canonicalPayloadData()
         case "IdentityLinkCompletionEnvelope": return try decoder.decode(IdentityLinkCompletionEnvelope.self, from: encoded).presentation.canonicalPayloadData()
         case "BridgeChannelAuthV1": return try BridgeChannelAuthentication.signingData(try BridgeChannelAuthentication.decode(BridgeChannelAuthentication.Transcript.self, from: encoded))
         default: throw NSError(domain: "InteropFixturesV1", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown type \(type)"])
