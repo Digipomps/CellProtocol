@@ -35,8 +35,10 @@ jobs:
           if [ "$status" -eq 0 ]; then
             echo "::notice title=InteropFixturesV1 Darwin::passed"
           else
-            grep -E "error:|failed|XCTAssert" interop-darwin.log | head -20 | while IFS= read -r line; do
-              echo "::error title=InteropFixturesV1 Darwin::${line//::/ }"
+            # Job logs are not readable from every client, so the reason goes
+            # into annotations: matching lines first, then the tail of the log.
+            { grep -E "error:|failed|XCTAssert|Fatal|signal" interop-darwin.log | head -12; tail -n 12 interop-darwin.log; } | cut -c1-900 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::warning title=InteropFixturesV1 Darwin::${line//::/ }"
             done
           fi
           rm -f interop-darwin.log
