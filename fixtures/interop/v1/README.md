@@ -20,7 +20,7 @@ Every key here is a **public test key** derived from
 | `signer` | The public key descriptor the verifier must use |
 | `signatureBase64` | Ed25519 signature (RFC 8032) over the canonical bytes |
 | `expect.signatureValid` | Whether the signature verifies against `signer` |
-| `expect.verdict` | What the Swift verifier for this type answers at `verifyAt` in `manifest.json` |
+| `expect.verdict` | What the Swift verifier for this type answers at `verifyAt` in `manifest.json`. For `extend` it is the envelope signature only (`valid` or `bad_signature`); the full `IdentityLinkProtocolService` verdicts come with the extend cell |
 | `related` | Links to other cases, and derived values such as `requestHashBase64` |
 
 ## How another implementation passes
@@ -43,9 +43,13 @@ top-level keys, and writes the result with
 - Non-ASCII text (æøå, emoji) is written as raw UTF-8, not `\u` escapes.
 - `"` `\` newline and tab are escaped as `\"` `\\` `\n` `\t`.
 - No spaces between tokens.
-- Keys are sorted, and the order is **not** plain byte order: in
-  `extend.request.valid`, `requestID` comes after `requestedScopes`. Copy the
-  order from the fixtures, do not guess it.
+- Keys are sorted, and the order is **not** plain byte order:
+  `JSONSerialization` compares case-insensitively with numeric runs as
+  numbers, so in `extend.request.valid` `requestID` comes after
+  `requestedScopes`. `JSONEncoder` with `.sortedKeys` (the wire JSON in
+  `encodedBase64`, the ticket token, the signed bridge challenge) uses plain
+  code-point order and puts `requestID` first. The fixtures were made on
+  Linux; the macOS run of this test shows whether Darwin agrees.
 - Optional fields that are `nil` are left out, not written as `null`.
 - `HavenInviteTicket` uses short coded keys (`v`, `t`, `is`, ...) and leaves
   out `capabilities` when they equal the default, `basis` when empty and
