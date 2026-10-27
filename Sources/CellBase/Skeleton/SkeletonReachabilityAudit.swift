@@ -47,6 +47,10 @@ public struct SkeletonReachabilityFinding: Equatable, Sendable {
         case recursiveComponentDefinition
         case duplicateComponentInstanceID
         case unsupportedElement
+        /// A link (`modifiers.linkURL`/`linkURLKeypath`, or a link Button) inside
+        /// another element-wide link. Browsers cannot nest links, so the inner
+        /// one is either lost or breaks the outer card.
+        case nestedLink
     }
 
     public var kind: Kind
@@ -137,6 +141,7 @@ public enum SkeletonReachabilityAudit {
         let root = builder.build(element, path: "", context: context, definitions: [])
         var findings: [SkeletonReachabilityFinding] = []
         walk(root, findings: &findings)
+        findNestedLinks(element, path: "", insideLink: false, findings: &findings)
         for action in requiredActionKeypaths.subtracting(reachable(root)).sorted() {
             findings.append(SkeletonReachabilityFinding(kind: .missingRequiredAction, path: root.path,
                 elementKind: root.kind, detail: "Required action \(action) is not reachable.", lostActionKeypaths: [action]))
@@ -356,6 +361,33 @@ public enum SkeletonReachabilityAudit {
         }
     }
 
+    private static func hasElementLink(_ element: SkeletonElement) -> Bool {
+        let modifiers = modifiers(of: element)
+        return nonempty(modifiers?.linkURL) || nonempty(modifiers?.linkURLKeypath)
+    }
+
+    private static func isLinkButton(_ element: SkeletonElement) -> Bool {
+        guard case .Button(let button) = element else { return false }
+        return !nonempty(button.keypath) && !nonempty(button.keypathKeypath)
+            && (nonempty(button.url) || nonempty(button.urlKeypath))
+    }
+
+    /// Structural only: Tree rows and ComponentSurface definitions are not entered.
+    private static func findNestedLinks(_ element: SkeletonElement, path: String, insideLink: Bool,
+                                        findings: inout [SkeletonReachabilityFinding]) {
+        let kind = elementKind(element)
+        let here = path.isEmpty ? kind : "\(path).\(kind)"
+        let linked = hasElementLink(element)
+        if insideLink && (linked || isLinkButton(element)) {
+            findings.append(SkeletonReachabilityFinding(kind: .nestedLink, path: here, elementKind: kind,
+                detail: "A link inside an element-wide link (modifiers.linkURL/linkURLKeypath). Remove one of them.",
+                lostActionKeypaths: []))
+        }
+        for (index, child) in children(of: element).enumerated() {
+            findNestedLinks(child.element, path: "\(here)[\(index)]", insideLink: insideLink || linked, findings: &findings)
+        }
+    }
+
     private static func nonempty(_ value: String?) -> Bool {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
@@ -410,6 +442,7 @@ public enum SkeletonReachabilityAudit {
         case .Toggle: return "Toggle"
         case .Picker: return "Picker"
         case .Visualization: return "Visualization"
+        case .Audio: return "Audio"
         case .Unsupported: return "Unsupported"
         @unknown default: return "Unknown"
         }
@@ -442,6 +475,7 @@ public enum SkeletonReachabilityAudit {
         case .Toggle(let value): return value.modifiers
         case .Picker(let value): return value.modifiers
         case .Visualization(let value): return value.modifiers
+        case .Audio(let value): return value.modifiers
         case .Unsupported(let value): return value.modifiers
         @unknown default: return nil
         }
