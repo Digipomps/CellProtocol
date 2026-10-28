@@ -731,6 +731,35 @@ public final class ChatCell: GeneralCell {
             return await self.acceptInvitationArtifact(payload: payload, requester: requester)
         }
 
+        // Agreement conditions read these as the requester. Each answers only
+        // for the requester itself, so no grant is needed to read them.
+        for condition in ChatAdmissionCondition.allCases {
+            await registerGet(key: condition.keypath, owner: owner) { [weak self] requester in
+                guard let self else { return .bool(false) }
+                return .bool(self.admissionConditionHolds(condition, for: requester))
+            }
+        }
+
+        await registerGet(key: "audience.admissionConditions", owner: owner) { [weak self] requester in
+            guard let self else { return .string("failure") }
+            guard await self.canRead(requester, keypath: "audience") else { return .string("denied") }
+            return .list(self.currentAdmissionConditions().map { .string($0.rawValue) })
+        }
+
+        await registerSet(key: "audience.admissionConditions", owner: owner) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            // Owner only. Members' grants on "audience" do not cover the Agreement itself.
+            guard requester.referencesSameSigningIdentity(as: self.owner),
+                  await self.checkIdentityOrigin(requester, against: self.owner) else {
+                return .string("denied")
+            }
+            guard let conditions = self.admissionConditions(from: payload) else {
+                return .string("error: admission conditions must be a list of \(ChatAdmissionCondition.allCases.map(\.rawValue))")
+            }
+            self.applyAdmissionConditions(conditions)
+            return .list(conditions.map { .string($0.rawValue) })
+        }
+
         await registerSet(key: "audience.acceptInvites", owner: owner) { [weak self] requester, payload in
             guard let self else { return .string("failure") }
             guard await self.canWrite(requester, keypath: "audience.acceptInvites") else { return .string("denied") }
@@ -1881,6 +1910,89 @@ public final class ChatCell: GeneralCell {
         } catch {
             return .string("error: \(error)")
         }
+    }
+
+    /// Conditions a chat owner can put in the chat's Agreement. Each is a
+    /// LookupCondition on the chat itself, so the host signs the contract when
+    /// the requester meets it, and access ends as soon as it stops holding.
+    public enum ChatAdmissionCondition: String, CaseIterable, Sendable {
+        /// The requester presented a signed acceptance of a current, unrevoked invitation.
+        case invitationAccepted
+        /// The requester is on the chat's member list: an accepted invitation or
+        /// one the owner accepted directly.
+        case member
+
+        public var keypath: String { "audience.admission.\(rawValue)" }
+
+        public var lookupCondition: LookupCondition {
+            LookupCondition(keypath: "target.\(keypath)", expectedValue: .bool(true))
+        }
+    }
+
+    private func admissionConditionHolds(_ condition: ChatAdmissionCondition, for requester: Identity) -> Bool {
+        guard let record = invitationRecordsByIdentityUUID[requester.uuid],
+              record.status == .accepted,
+              requester.referencesSameSigningIdentity(as: record.identity) else {
+            return false
+        }
+        switch condition {
+        case .member:
+            return true
+        case .invitationAccepted:
+            guard let artifact = record.artifact,
+                  let acceptance = record.acceptance,
+                  let consumption = invitationConsumptionRecordsByInvitationID[artifact.invitationID],
+                  let artifactHash = try? ChatInvitationProofUtility.invitationHash(for: artifact) else {
+                return false
+            }
+            return consumption.matches(artifact: artifact, acceptance: acceptance, artifactHash: artifactHash)
+                && !ChatInvitationProofUtility.isExpired(artifact.expiresAt)
+        }
+    }
+
+    /// Keys anyone may use before holding a contract. The admission keys answer
+    /// only for the requester. An invitation artifact and its acceptance carry
+    /// the owner's and the invitee's signatures, so the proof is the authority,
+    /// whoever delivers it.
+    private static let keysOpenBeforeAdmission: [String: String] = Dictionary(
+        uniqueKeysWithValues: ChatAdmissionCondition.allCases.map { ($0.keypath, "r---") } + [
+            ("audience.acceptInvitationArtifact", "-w--"),
+            ("audience.inspectInvitationArtifact", "-w--")
+        ]
+    )
+
+    public override func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        Self.keysOpenBeforeAdmission[keypath] == requestedAccess
+    }
+
+    private func currentAdmissionConditions() -> [ChatAdmissionCondition] {
+        agreementTemplate.conditions.compactMap { condition in
+            guard let lookup = condition as? LookupCondition else { return nil }
+            return ChatAdmissionCondition.allCases.first { lookup.keypath == "target.\($0.keypath)" }
+        }
+    }
+
+    private func admissionConditions(from payload: ValueType) -> [ChatAdmissionCondition]? {
+        guard case let .list(values) = payload else { return nil }
+        var conditions = [ChatAdmissionCondition]()
+        for value in values {
+            guard case let .string(name) = value,
+                  let condition = ChatAdmissionCondition(rawValue: name) else {
+                return nil
+            }
+            if !conditions.contains(condition) {
+                conditions.append(condition)
+            }
+        }
+        return conditions
+    }
+
+    /// Replaces the Agreement's conditions. With conditions the host signs a
+    /// requester's contract when they hold; without, the owner approves each one.
+    /// Contracts signed under other conditions stop matching the template.
+    public func applyAdmissionConditions(_ conditions: [ChatAdmissionCondition]) {
+        agreementTemplate.conditions = conditions.map(\.lookupCondition)
+        agreementAdmissionPolicy = conditions.isEmpty ? .ownerApprovalRequired : .automaticWhenConditionsMet
     }
 
     private func acceptInvitationArtifact(payload: ValueType, requester: Identity) async -> ValueType? {
@@ -3291,6 +3403,47 @@ public final class ChatCell: GeneralCell {
             permissions: ["-w--"],
             required: false,
             description: .string("Lets the invited identity sign acceptance for a chat invitation artifact. This is intended for same-app or local proof generation before transport.")
+        )
+
+        for condition in ChatAdmissionCondition.allCases {
+            await registerExploreContract(
+                requester: requester,
+                key: condition.keypath,
+                method: .get,
+                input: .null,
+                returns: ExploreContract.schema(type: "bool", description: "Whether the requester meets this admission condition."),
+                permissions: [],
+                required: false,
+                description: .string("Read by the chat's Agreement condition as the requester. Answers only for the requester and needs no grant.")
+            )
+        }
+
+        await registerExploreContract(
+            requester: requester,
+            key: "audience.admissionConditions",
+            method: .get,
+            input: .null,
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: ExploreContract.schema(type: "string")), ExploreContract.schema(type: "string")],
+                description: "The conditions in the chat's Agreement, or a denial string."
+            ),
+            permissions: ["r---"],
+            required: false,
+            description: .string("Lists the admission conditions in the chat's Agreement: invitationAccepted, member.")
+        )
+
+        await registerExploreContract(
+            requester: requester,
+            key: "audience.admissionConditions",
+            method: .set,
+            input: ExploreContract.listSchema(item: ExploreContract.schema(type: "string")),
+            returns: ExploreContract.oneOfSchema(
+                options: [ExploreContract.listSchema(item: ExploreContract.schema(type: "string")), ExploreContract.schema(type: "string")],
+                description: "The applied conditions, or a denial/error string."
+            ),
+            permissions: ["-w--"],
+            required: false,
+            description: .string("Owner only. Sets the chat's Agreement conditions. With conditions, the host signs a requester's contract when they hold; with none, the owner approves each contract.")
         )
 
         await registerExploreContract(
