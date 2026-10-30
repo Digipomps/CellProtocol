@@ -149,6 +149,23 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         get { membershipLock.withLock { attachmentTestHook } }
         set { membershipLock.withLock { attachmentTestHook = newValue } }
     }
+    private struct TransferTicket {
+        let principal: Identity
+        let request: CorrespondenceAttachmentRequest
+        let action: String
+        let session: BridgeChannelSession?
+        let revision: Int
+        let maximum: Date
+        let maximumUptime: TimeInterval
+        var expires: Date
+        var expiresUptime: TimeInterval
+        var busy = false
+    }
+    private var transferTickets: [String: TransferTicket] = [:]
+    private var transferContracts: [Contract] = []
+    private var transferMembershipMutations = 0
+    private var transferGeneration = 0
+    private var revokingAttachments: [String: Int] = [:]
     private var attachmentRoot: URL?
     private var attachmentProvisioningRequired = false
     private var attachmentReservations: Set<String> = []
@@ -380,6 +397,18 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         return accepted
     }
 
+    override func beginAuthorizationMembershipMutation() -> (() -> Void)? {
+        membershipLock.withLock {
+            transferMembershipMutations += 1
+            transferGeneration += 1
+            transferTickets.removeAll()
+        }
+        return { [weak self] in
+            guard let self else { return }
+            self.membershipLock.withLock { self.transferMembershipMutations -= 1 }
+        }
+    }
+
     override func didChangeAuthorizationMembership() async { await refreshAuthorizedMembership() }
 
     private func refreshAuthorizedMembership() async {
@@ -400,8 +429,14 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
         membershipLock.withLock {
             guard snapshot.revision >= appliedAuthorizationRevision,
                   snapshot.revision > appliedAuthorizationRevision || ticket >= appliedRefreshTicket else { return }
+            if snapshot.revision != appliedAuthorizationRevision {
+                // Conservatively invalidate on any membership/contract change,
+                // including replacement keys under an unchanged UUID.
+                transferTickets.removeAll()
+            }
             appliedAuthorizationRevision = snapshot.revision
             appliedRefreshTicket = ticket
+            transferContracts = active
             if ids != membershipIDs {
                 membershipIDs = ids
                 version += 1
@@ -413,6 +448,21 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
     /// These transport commands carry their own owner signature and subject proof.
     /// They grant no authority merely by reaching a registered handler.
     public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType {
+        if case .object(let object) = value,
+           object["transferTicket"] != nil || object["requestTransferTicket"] == .bool(true) {
+            // Payload authority is evaluated only here, never as a generic grant.
+            guard ["attachments.prepare", "attachments.metadata", "attachments.upload", "attachments.fetch"].contains(keypath) else {
+                throw CorrespondenceAttachmentError.contextMismatch
+            }
+            // Preserve GeneralCell's cheap foreign-owner-key rejection before
+            // runtime initialization, including on the ticket-specific path.
+            guard requester.uuid != owner.uuid || owner.referencesSameSigningIdentity(as: requester) else {
+                throw CorrespondenceAttachmentError.wrongSender
+            }
+            try await ensureRuntimeReady()
+            let request = try CorrespondenceCellCodec.decode(value, as: CorrespondenceAttachmentRequest.self)
+            return try await performAttachment(keypath, request: request, requester: requester)
+        }
         if keypath == "join.request" || keypath == "join.decide" {
             return try await handleJoin(keypath: keypath, value: value, requester: requester)
         }
@@ -1228,7 +1278,7 @@ extension CorrespondenceCell {
     }
 
     private func authorizeAttachment(_ request: CorrespondenceAttachmentRequest,
-                                     action: String, requester: Identity) async throws {
+                                     action: String, requester: Identity, transferStart: Bool = false) async throws {
         await refreshAuthorizedMembership()
         guard memberIdentityUUIDs.contains(requester.uuid) else {
             throw CorrespondenceAttachmentError.wrongRecipient
@@ -1240,7 +1290,16 @@ extension CorrespondenceCell {
         }
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
         if senderActions.contains(action), requester.uuid != owner.uuid {
-            let agreements = await contractsForIdentity(requester)
+            // The successful decision already proved key control for this start.
+            let agreements: [Agreement]
+            if transferStart {
+                let snapshot = await currentAuthorizationSnapshot()
+                agreements = snapshot.contracts.filter {
+                    $0.subject.referencesSameSigningIdentity(as: requester) &&
+                    $0.temporalStatus(now: authorizationClock()) == .active &&
+                    $0.issuedAt > (snapshot.revokedBefore[$0.subject.uuid] ?? -.infinity)
+                }.map(\.agreement)
+            } else { agreements = await contractsForIdentity(requester) }
             guard agreements.contains(where: { $0.uuid == request.agreementID && $0.checkGrant(requestedGrant: Grant(keypath: action, permission: "-w--")) }) else {
                 if let retry = (requester.identityVault as? BridgeIdentityVault)?.signingBackpressure { throw retry }
                 throw CorrespondenceAttachmentError.contextMismatch
@@ -1279,10 +1338,25 @@ extension CorrespondenceCell {
     private func performAttachment(_ action: String, request: CorrespondenceAttachmentRequest,
                                    requester: Identity) async throws -> ValueType {
         guard !attachmentProvisioningRequired else { throw CorrespondenceAttachmentError.unavailable }
+        if let token = request.transferTicket {
+            return try await transferAttachmentChunk(action, request: request, requester: requester, token: token)
+        }
+        let transferStart = request.requestTransferTicket == true
+        guard !transferStart || action == "attachments.prepare" || action == "attachments.metadata" else {
+            throw CorrespondenceAttachmentError.contextMismatch
+        }
+        if transferStart { try checkTransferChannel(requester) }
         do {
-            try await authorizeAttachment(request, action: action, requester: requester)
+            try await authorizeAttachment(request,
+                action: transferStart && action == "attachments.metadata" ? "attachments.fetch" : action,
+                requester: requester, transferStart: transferStart)
         } catch let retry as BridgeSigningBackpressure {
             throw BridgePreEffectSigningRejection(source: self, keypath: action, retry: retry)
+        }
+        let startGeneration = try membershipLock.withLock { () throws -> Int in
+            guard !transferStart || (transferMembershipMutations == 0 &&
+                revokingAttachments[request.attachmentID ?? "", default: 0] == 0) else { throw CorrespondenceAttachmentError.unavailable }
+            return transferGeneration
         }
         let senderActions: Set<String> = ["attachments.prepare", "attachments.upload", "attachments.revoke", "attachments.transfer"]
         if senderActions.contains(action), requester.uuid != request.senderIdentityUUID {
@@ -1323,13 +1397,32 @@ extension CorrespondenceCell {
             await beforeAttachmentCommitForTesting?()
             await refreshAuthorizedMembership()
             guard capturedFingerprint == membershipFingerprint, memberIdentityUUIDs.contains(requester.uuid) else {
+                if transferStart {
+                    var cleanup = request; cleanup.attachmentID = plan.attachmentID
+                    try await source.storage.revoke(cleanup, now: nowProvider())
+                }
                 throw CorrespondenceAttachmentError.contextMismatch
             }
         case "attachments.upload": try await source.storage.upload(request, now: now)
         case "attachments.metadata": result = try CorrespondenceCellCodec.encode(await source.storage.metadata(request, now: now))
         case "attachments.fetch": result = try CorrespondenceCellCodec.encode(await source.storage.fetch(request, recipientKey: key, now: now))
         case "attachments.receipt": try await source.storage.receipt(request, recipientKey: key, now: now)
-        case "attachments.revoke": try await source.storage.revoke(request, now: now)
+        case "attachments.revoke":
+            let revokedID = request.attachmentID ?? ""
+            membershipLock.withLock {
+                transferGeneration += 1
+                revokingAttachments[revokedID, default: 0] += 1
+            }
+            defer {
+                membershipLock.withLock {
+                    revokingAttachments[revokedID, default: 0] -= 1
+                    if revokingAttachments[revokedID] == 0 { revokingAttachments.removeValue(forKey: revokedID) }
+                    transferGeneration += 1
+                }
+            }
+            membershipLock.withLock { transferTickets = transferTickets.filter { $0.value.request.attachmentID != request.attachmentID } }
+            try await source.storage.revoke(request, now: now)
+            membershipLock.withLock { transferTickets = transferTickets.filter { $0.value.request.attachmentID != request.attachmentID } }
         case "attachments.transfer": try await source.storage.transfer(request, now: now)
         case "attachments.acceptTransfer": try await source.storage.acceptTransfer(request, recipientKey: key, now: now)
         case "attachments.status":
@@ -1337,8 +1430,133 @@ extension CorrespondenceCell {
             result = .object(["transferOffered": .bool(status.0), "transferred": .bool(status.1)])
         default: throw CorrespondenceAttachmentError.unavailable
         }
+        if transferStart {
+            var plan = try CorrespondenceCellCodec.decode(result, as: CorrespondenceAttachmentPlan.self)
+            guard action != "attachments.metadata" || requester.uuid != request.senderIdentityUUID else {
+                throw CorrespondenceAttachmentError.wrongRecipient
+            }
+            var bound = request
+            bound.attachmentID = plan.attachmentID
+            do {
+                plan.transferTicket = try await issueTransferTicket(bound, requester: requester,
+                    action: action == "attachments.prepare" ? "attachments.upload" : "attachments.fetch", generation: startGeneration)
+            } catch {
+                if action == "attachments.prepare" { try await source.storage.revoke(bound, now: nowProvider()) }
+                throw error
+            }
+            result = try CorrespondenceCellCodec.encode(plan)
+        }
         emit(event: action, fields: ["messageID": .string(request.messageID),
             "senderIdentityUUID": .string(request.senderIdentityUUID)])
         return result
     }
+    private func checkTransferChannel(_ requester: Identity) throws {
+        if let vault = requester.identityVault as? BridgeIdentityVault {
+            guard let session = vault.attachmentTransferSession else { throw CorrespondenceAttachmentError.unavailable }
+            try session.check(identity: requester, requiresIdentity: true)
+        }
+    }
+
+    // Called under membershipLock. The snapshot is refreshed before each bit;
+    // its exact key, grant and temporal bounds are checked again inside I/O.
+    private func transferMembershipAllows(_ principal: Identity,
+        request: CorrespondenceAttachmentRequest, action: String) -> Bool {
+        if owner.referencesSameSigningIdentity(as: principal) { return true }
+        return transferContracts.contains {
+            $0.subject.referencesSameSigningIdentity(as: principal) &&
+            $0.temporalStatus(now: authorizationClock()) == .active &&
+            $0.expiresAt > authorizationClock().timeIntervalSince1970 &&
+            $0.agreement.checkGrant(requestedGrant: Grant(keypath: action, permission: "-w--")) &&
+            (action != "attachments.upload" || $0.agreement.uuid == request.agreementID)
+        }
+    }
+
+    private func pruneTransferTickets() {
+        let now = nowProvider(), uptime = ProcessInfo.processInfo.systemUptime
+        transferTickets = transferTickets.filter {
+            now < $0.value.expires && now < $0.value.maximum &&
+            uptime < $0.value.expiresUptime && uptime < $0.value.maximumUptime
+        }
+    }
+
+    private func issueTransferTicket(_ request: CorrespondenceAttachmentRequest, requester: Identity,
+                                     action: String, generation: Int) async throws -> String {
+        await refreshAuthorizedMembership()
+        try checkTransferChannel(requester)
+        let principal = requester.publicIdentitySnapshot()
+        let session = (requester.identityVault as? BridgeIdentityVault)?.attachmentTransferSession
+        let token = try SecureRandom.data(count: 32).base64EncodedString()
+        return try membershipLock.withLock {
+            pruneTransferTickets()
+            guard transferMembershipMutations == 0, generation == transferGeneration,
+                  revokingAttachments[request.attachmentID ?? "", default: 0] == 0,
+                  transferMembershipAllows(principal, request: request, action: action), request.attachmentID != nil,
+                  transferTickets.count < 1024,
+                  transferTickets.values.filter({ $0.principal.referencesSameSigningIdentity(as: principal) }).count < 8 else {
+                throw CorrespondenceAttachmentError.unavailable
+            }
+            let now = nowProvider(), uptime = ProcessInfo.processInfo.systemUptime
+            transferTickets[token] = TransferTicket(principal: principal, request: request, action: action,
+                session: session, revision: appliedAuthorizationRevision,
+                maximum: now.addingTimeInterval(600), maximumUptime: uptime + 600,
+                expires: now.addingTimeInterval(120), expiresUptime: uptime + 120)
+            return token
+        }
+    }
+
+    private func transferAttachmentChunk(_ action: String, request: CorrespondenceAttachmentRequest,
+                                         requester: Identity, token: String) async throws -> ValueType {
+        guard action == "attachments.upload" || action == "attachments.fetch",
+              request.requestTransferTicket != true else { throw CorrespondenceAttachmentError.contextMismatch }
+        // Refresh uses the authoritative contract snapshot, never a signature.
+        await refreshAuthorizedMembership()
+        let principal = requester.publicIdentitySnapshot()
+        let session = (requester.identityVault as? BridgeIdentityVault)?.attachmentTransferSession
+        let ticket = try membershipLock.withLock { () throws -> TransferTicket in
+            pruneTransferTickets()
+            guard let ticket = transferTickets[token], !ticket.busy,
+                  ticket.principal.referencesSameSigningIdentity(as: principal), ticket.action == action,
+                  ticket.session === session,
+                  ticket.request.attachmentID == request.attachmentID,
+                  ticket.request.messageID == request.messageID,
+                  ticket.request.agreementID == request.agreementID,
+                  ticket.request.senderIdentityUUID == request.senderIdentityUUID else {
+                throw CorrespondenceAttachmentError.contextMismatch
+            }
+            transferTickets[token]?.busy = true
+            return ticket
+        }
+        defer { membershipLock.withLock { transferTickets[token]?.busy = false } }
+        let authorization = CorrespondenceTransferAuthorization(lock: membershipLock, session: session) { [self] in
+            pruneTransferTickets()
+            guard transferMembershipMutations == 0, let current = transferTickets[token], current.revision == appliedAuthorizationRevision,
+                  transferMembershipAllows(principal, request: request, action: action) else { throw CorrespondenceAttachmentError.unavailable }
+            if let session { try session.check(identity: principal, requiresIdentity: true) }
+        }
+        guard let source = attachmentCells[request.senderIdentityUUID] else { throw CorrespondenceAttachmentError.unavailable }
+        await beforeAttachmentCommitForTesting?()
+        let result: ValueType
+        let complete: Bool
+        if action == "attachments.upload" {
+            try await source.storage.upload(request, now: nowProvider(), authorization: authorization)
+            result = .object(["status": .string("ok")]); complete = request.chunk?.isFinal == true
+        } else {
+            let chunk = try await source.storage.fetch(request, recipientKey: ticket.principal.signingPublicKeyFingerprint!,
+                now: nowProvider(), authorization: authorization)
+            result = try CorrespondenceCellCodec.encode(chunk); complete = chunk.isFinal
+        }
+        // Recheck after the actor hop, before releasing bytes or a success reply.
+        let committed = try authorization.perform {
+            if complete { transferTickets.removeValue(forKey: token) }
+            else {
+                transferTickets[token]?.expires = nowProvider().addingTimeInterval(120)
+                transferTickets[token]?.expiresUptime = ProcessInfo.processInfo.systemUptime + 120
+            }
+            return result
+        }
+        emit(event: action, fields: ["messageID": .string(request.messageID),
+            "senderIdentityUUID": .string(request.senderIdentityUUID)])
+        return committed
+    }
+
 }

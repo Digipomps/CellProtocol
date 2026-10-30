@@ -99,6 +99,7 @@ jobs:
             EphemeralIdentityVaultConcurrencyTests PublisherAsyncLifetimeTests BridgeDescriptionConcurrencyTests BridgePeerRecordLayerTests BridgePeerV3Tests BridgePeerFlowControlTests BridgeCanonicalKeyQuotaTests \
             BridgeResponseLifetimeTests BridgeFeedAndRPCOrderingTests BridgeFactoryLifetimeTests BridgeSigningLifetimeTests BridgeMuxSendLifetimeTests \
             BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
+            CorrespondenceRelationshipTests CorrespondenceAttachmentTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
             SkeletonDataBindingTests InteropFixturesV1Tests; do
