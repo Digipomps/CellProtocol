@@ -1000,6 +1000,10 @@ public struct SkeletonView: View {
                 CellAudioView(skeletonAudio: audio, userInfoValue: userInfoValue)
                     .applySkeletonModifiers(audio.modifiers, userInfoValue: userInfoValue)
             )
+        case .AudioQueue:
+            // H/I: the queue player is web-only for now. Native shows nothing
+            // rather than a player that cannot reach the surface's root data.
+            return AnyView(EmptyView())
         case .TextField(let tf):
             return AnyView(
                 CellTextFieldView(skeletonTextField: tf, userInfoValue: userInfoValue)
