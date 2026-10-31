@@ -104,6 +104,10 @@ final class SkeletonAudioQueueTests: XCTestCase {
         XCTAssertFalse(albumButton.isPlaying(item: album, playingTrackID: "so-much-fun", playingQueueIDs: ["so-much-fun"]),
                        "another list with the same track is not this album")
         XCTAssertFalse(albumButton.isPlaying(item: album, playingTrackID: nil, playingQueueIDs: []))
+
+        let playAll = SkeletonButton(keypath: "", label: "Spill alle", playQueueKeypath: "queue")
+        XCTAssertFalse(playAll.isPlaying(item: album, playingTrackID: "so-much-fun", playingQueueIDs: ["morgenlys", "so-much-fun"]),
+                       "without playingLabel a button shows no playing state")
     }
 
     func testCurrentTrackNeedsIdAndSource() {

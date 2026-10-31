@@ -153,8 +153,9 @@ public extension SkeletonButton {
 
     /// Whether this button shows `playingLabel`: its own track is playing, or,
     /// without a start track, the player plays exactly this button's list.
+    /// A button without `playingLabel` never shows a playing state.
     func isPlaying(item: ValueType?, playingTrackID: String?, playingQueueIDs: [String]) -> Bool {
-        guard startsAudioQueue, let playingTrackID else { return false }
+        guard startsAudioQueue, SkeletonDataBinding.normalized(playingLabel) != nil, let playingTrackID else { return false }
         if let startID = SkeletonDataBinding.string(at: playQueueStartKeypath, in: item) {
             return startID == playingTrackID
         }
