@@ -48,3 +48,25 @@ Alle feltene er valgfrie. En konfigurasjon uten dem rendres som før. Eldre rend
 ## Nedstrøms
 
 `SkeletonElement` har fått casen `.Audio`. Kode i andre repoer som gjør en uttømmende `switch` over `SkeletonElement` må legge til én linje når de oppdaterer CellProtocol.
+
+## H og I. Spillerkø med spillerlinje (Butterpop steg 2)
+
+Godkjent av Kjetil 30.10.2026 (G1: «Ja til G1», G, H og I) og 31.10.2026 (G2).
+
+```json
+{"AudioQueue": {"currentKeypath": "player.current", "endedActionKeypath": "track.playedThrough", "label": "Spiller"}}
+{"Button": {"keypath": "", "label": "Spill sang", "playQueueKeypath": "freeQueue", "playQueueStartKeypath": "id", "playingLabel": "Spiller"}}
+{"Button": {"keypath": "", "label": "Spill album", "playQueueKeypath": "queue", "playingLabel": "Spiller"}}
+```
+
+- `AudioQueue` er spilleren. Det er én per flate, og den viser en spillerlinje nederst med tittel, pause, spoling, gjenta og lukk.
+- En `Button` med `playQueueKeypath` sender ingen handling. Den gir spilleren lista på nøkkelstien og starter den. Med `playQueueStartKeypath` starter lista på knappens egen sang, ellers øverst.
+- Mens knappens sang spiller, eller spilleren spiller nøyaktig knappens liste, viser knappen `playingLabel`. Det gir «Spiller»-merket. En knapp uten `playingLabel` viser ingen spillestatus, slik «Spill alle» i appen.
+- En sang er et objekt med `id` og `src`, og eventuelt `title`, `mode`, `detail` og `coverURL`. Sanger uten `src` hoppes over, så en betalt sang kommer aldri i køen.
+- `currentKeypath` (I): når objektet der får en ny `playID`, spiller spilleren den sangen. Serveren svarer slik når betalingsporten har godkjent et kjøp.
+- `endedActionKeypath` (I): når en sang er spilt ferdig, sendes handlingen med `{"id": <sang>}`. Uten vert, som i en åpen visning, sendes ingenting.
+- `src` åpnes etter samme regler som lenker.
+- `playQueueStartKeypath` og `playingLabel` uten `playQueueKeypath` er en formatfeil. Det samme er en tom `currentKeypath` eller `endedActionKeypath`.
+- Native viser ikke spilleren ennå. Køknapper sender ingenting der. Det tas i en egen Binding-runde.
+
+`SkeletonElement` har fått casen `.AudioQueue`. Kode med uttømmende `switch` over `SkeletonElement` må legge til én linje.
