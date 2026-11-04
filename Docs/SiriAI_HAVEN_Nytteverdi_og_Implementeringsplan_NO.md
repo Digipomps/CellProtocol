@@ -7,10 +7,23 @@ Dato: 2026-11-04. Status: se STATUS under.
 - G1: godkjent 2026-11-04 (Kjetil: «G1 godkjent, start fase 1»)
 - G2 (fase 1): godkjent 2026-11-04 ved samme ord; fase 2–4 venter på WP0.1-måling og egen G2
 - Fase 1 (WP1.1–WP1.4): implementert 2026-11-04 på branch `claude/youthful-hawking-sm0c4i`,
-  dokumentert i `Docs/Assistant_Exposure_Contract.md`. Verifisering: `swift test` kunne ikke
-  kjøres i skysesjonen (ingen Swift-toolchain, download.swift.org og Docker Hub er stengt i
-  sesjonens nettverk). Testene er lagt i Linux-CI-gaten; CI-resultatet og lokal
-  `swift test --filter Assistant` på Mac er bevisene som skal inn i TESTRESULT.md.
+  dokumentert i `Docs/Assistant_Exposure_Contract.md`.
+- Fase 1 verifisering (TESTRESULT, `#linux-gate`): `swift test` kunne ikke kjøres i
+  skysesjonen (ingen Swift-toolchain; download.swift.org og Docker Hub er stengt i sesjonens
+  nettverk). De tre suitene ble lagt i Linux-CI-gaten og kjørt der:
+  - Run 236 (commit 38f596c): 212 tester, 3 feil. 17 av 18 Assistant-tester grønne;
+    `testProjectionIsDeterministicAndOrderIndependent` rød fordi `ValueType.==` regner alle
+    objekter som ulike (lesson.valuetype-equality-false-for-objects). Rettet med strukturell
+    likhet (`deepEqual`) i commit 156274b.
+  - Run 237 (commit 156274b): `AssistantDescriptorTests`, `AssistantExposureContractTests` og
+    `AssistantRequesterContractTests` alle grønne (18 tester). Eneste røde test i gaten er
+    `BridgeIdentityBoundaryTests.testOwnerAttachPresenceOverBridge…` («threw error
+    unavailable»), som også er rød på main (run 235, 09754c2) og er uavhengig av denne endringen.
+  - Ikke kjørt: full `swift test` med CellApple (macOS), `ListsCellTests`,
+    `ExploreContractValidatorTests` og golden-regenerering. Det ligger i Codex Slice D.
+- P6-lærdom: `lesson.valuetype-equality-false-for-objects` gjentok seg i produksjonskode
+  (synthesised `Equatable` på typer som bærer `ValueType`), ikke bare i tester. Forebygging:
+  typer med `ValueType`-felt må skrive egen `==` via `ExploreContractValidator.deepEqual`.
 - Fase 0 (måling på enhet): ikke startet; Codex-handoff i
   `commons/prompts/codex_siri_ai_fase0_prompt.md` er fortsatt merket blocked til Kjetil frigir den.
 - G3: ikke bedt om. Faktagrunnlaget om Apple ligger i
