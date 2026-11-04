@@ -252,6 +252,14 @@ public enum AppInitializer {
         )
         try await registerResolve(
             on: resolver,
+            name: "ContextFlowFilter",
+            cellScope: .identityUnique,
+            persistency: .persistant,
+            identityDomain: "private",
+            type: ContextFlowFilterCell.self
+        )
+        try await registerResolve(
+            on: resolver,
             name: "Vault",
             cellScope: .identityUnique,
             persistency: .persistant,

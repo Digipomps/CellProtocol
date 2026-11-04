@@ -47,10 +47,6 @@ public struct SkeletonReachabilityFinding: Equatable, Sendable {
         case recursiveComponentDefinition
         case duplicateComponentInstanceID
         case unsupportedElement
-        /// A link (`modifiers.linkURL`/`linkURLKeypath`, or a link Button) inside
-        /// another element-wide link. Browsers cannot nest links, so the inner
-        /// one is either lost or breaks the outer card.
-        case nestedLink
     }
 
     public var kind: Kind
@@ -141,7 +137,6 @@ public enum SkeletonReachabilityAudit {
         let root = builder.build(element, path: "", context: context, definitions: [])
         var findings: [SkeletonReachabilityFinding] = []
         walk(root, findings: &findings)
-        findNestedLinks(element, path: "", insideLink: false, findings: &findings)
         for action in requiredActionKeypaths.subtracting(reachable(root)).sorted() {
             findings.append(SkeletonReachabilityFinding(kind: .missingRequiredAction, path: root.path,
                 elementKind: root.kind, detail: "Required action \(action) is not reachable.", lostActionKeypaths: [action]))
@@ -191,12 +186,8 @@ public enum SkeletonReachabilityAudit {
             switch element {
             case .Unsupported(let unsupported):
                 node.findings.append(finding(.unsupportedElement, unsupported.reason ?? unsupported.elementType))
-            // A link button (url or urlKeypath, empty keypath) navigates instead of acting;
-            // SkeletonButtonNavigation decides whether the resolved link may be opened.
-            // A queue button (playQueueKeypath) starts the surface's AudioQueue locally.
-            case .Button(let button) where !nonempty(button.keypath) && !nonempty(button.keypathKeypath)
-                && !nonempty(button.url) && !nonempty(button.urlKeypath) && !nonempty(button.playQueueKeypath):
-                node.findings.append(finding(.missingRequiredAction, "Button requires keypath, keypathKeypath, url, urlKeypath or playQueueKeypath."))
+            case .Button(let button) where !nonempty(button.keypath) && !nonempty(button.keypathKeypath):
+                node.findings.append(finding(.missingRequiredAction, "Button requires keypath or keypathKeypath."))
             case .Tree(let tree):
                 for (name, value) in [("selectionActionKeypath", tree.selectionActionKeypath),
                                       ("expansionActionKeypath", tree.expansionActionKeypath)] where !nonempty(value) {
@@ -362,33 +353,6 @@ public enum SkeletonReachabilityAudit {
         }
     }
 
-    private static func hasElementLink(_ element: SkeletonElement) -> Bool {
-        let modifiers = modifiers(of: element)
-        return nonempty(modifiers?.linkURL) || nonempty(modifiers?.linkURLKeypath)
-    }
-
-    private static func isLinkButton(_ element: SkeletonElement) -> Bool {
-        guard case .Button(let button) = element else { return false }
-        return !nonempty(button.keypath) && !nonempty(button.keypathKeypath)
-            && (nonempty(button.url) || nonempty(button.urlKeypath))
-    }
-
-    /// Structural only: Tree rows and ComponentSurface definitions are not entered.
-    private static func findNestedLinks(_ element: SkeletonElement, path: String, insideLink: Bool,
-                                        findings: inout [SkeletonReachabilityFinding]) {
-        let kind = elementKind(element)
-        let here = path.isEmpty ? kind : "\(path).\(kind)"
-        let linked = hasElementLink(element)
-        if insideLink && (linked || isLinkButton(element)) {
-            findings.append(SkeletonReachabilityFinding(kind: .nestedLink, path: here, elementKind: kind,
-                detail: "A link inside an element-wide link (modifiers.linkURL/linkURLKeypath). Remove one of them.",
-                lostActionKeypaths: []))
-        }
-        for (index, child) in children(of: element).enumerated() {
-            findNestedLinks(child.element, path: "\(here)[\(index)]", insideLink: insideLink || linked, findings: &findings)
-        }
-    }
-
     private static func nonempty(_ value: String?) -> Bool {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
@@ -408,7 +372,6 @@ public enum SkeletonReachabilityAudit {
         case .Picker(let value): actions += valid([value.selectionActionKeypath])
         case .FileUpload(let value): actions += valid([value.actionKeypath])
         case .Visualization(let value): actions += valid([value.actionKeypath])
-        case .AudioQueue(let value): actions += valid([value.endedActionKeypath])
         case .List(let value): actions += valid([value.selectionActionKeypath, value.activationActionKeypath])
         case .Tabs(let value): actions += valid([value.selectionActionKeypath])
         case .NavigationBar(let value): actions += valid(value.items.map(\.keypath))
@@ -444,8 +407,6 @@ public enum SkeletonReachabilityAudit {
         case .Toggle: return "Toggle"
         case .Picker: return "Picker"
         case .Visualization: return "Visualization"
-        case .Audio: return "Audio"
-        case .AudioQueue: return "AudioQueue"
         case .Unsupported: return "Unsupported"
         @unknown default: return "Unknown"
         }
@@ -478,8 +439,6 @@ public enum SkeletonReachabilityAudit {
         case .Toggle(let value): return value.modifiers
         case .Picker(let value): return value.modifiers
         case .Visualization(let value): return value.modifiers
-        case .Audio(let value): return value.modifiers
-        case .AudioQueue(let value): return value.modifiers
         case .Unsupported(let value): return value.modifiers
         @unknown default: return nil
         }

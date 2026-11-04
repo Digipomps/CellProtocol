@@ -207,9 +207,21 @@ func nativeRead(_ keypath: String, viewModel: PortholeViewModel) async -> ValueT
 @MainActor
 func skeletonNativeSend(keypath: String, payload: ValueType?, scope: SkeletonNativeActionScope?,
                         handler: SkeletonNativeActionHandler?, viewModel: PortholeViewModel) async throws -> ValueType {
-    let request = scope?.request(keypath: keypath, payload: payload)
+    var request = scope?.request(keypath: keypath, payload: payload)
         ?? SkeletonNativeActionRequest(keypath: keypath, payload: payload, sourceCellEndpoint: nil, mount: nil)
-    if let handler { return try await handler.send(request) }
+    if let handler {
+        guard let requester = await viewModel.executionRequesterIdentity() else { return try await handler.send(request) }
+        let endpoint = request.sourceCellEndpoint ?? "cell:///Porthole"
+        let actionScope = "\(requester.uuid.utf8.count):\(requester.uuid)\(endpoint)"
+        let submission = try viewModel.prepareOriginalUserAction(keypath: request.keypath, payload: request.payload, scope: actionScope)
+        if let submission {
+            request = SkeletonNativeActionRequest(keypath: request.keypath, payload: submission.payload,
+                sourceCellEndpoint: request.sourceCellEndpoint, mount: request.mount)
+        }
+        let result = try await handler.send(request)
+        if let submission { viewModel.completeOriginalUserAction(submission, result: result) }
+        return result
+    }
     guard scope == nil else { throw SkeletonNativeRuntimeError.sourceActionAdapterMissing }
     let button = SkeletonButton(keypath: keypath, label: "", payload: payload)
     guard let response = await button.execute(requester: await viewModel.executionRequesterIdentity()) else {

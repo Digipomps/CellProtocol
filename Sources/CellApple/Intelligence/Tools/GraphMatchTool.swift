@@ -66,81 +66,10 @@ final class GraphMatchTool: Tool {
             return "PerspectiveCell not available"
         }
 
-        // 2) Finn startnode
-        let perspective = perspectiveCell.context
-        let startRef = try await resolveStartRef(args: arguments.args, perspective: perspective)
-
-        // 3) Kjør match
-        let signal = Signal(
-            relationship: .interests,
-            weight: 0.5,
-            tolerance: Double.greatestFiniteMagnitude,
-            token: UUID().uuidString,
-            ttl: 1.0,
-            hops: 2
-        )
-        let configuration = WeightedGraphRuntimeConfiguration(
-            relationships: [.interests, .purposes, .entities, .states, .types, .parts, .partOf, .subTypes],
-            maxHops: 2,
-            ttl: 1.0,
-            maxHits: 50
-        )
-
-        guard let start = await findNode(ref: startRef, type: nil, perspective: perspective) else {
-            return "Start node not found"
-        }
-        let result = try await WeightedGraphRuntime().match(
-            start: start,
-            signal: signal,
-            configuration: configuration
-        )
-
-        // 4) Resultat
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(result)
+        let data = try await perspectiveCell.matchPrimaryPurposeGraph(requester: requester)
         return String(data: data, encoding: .utf8) ?? "Graph match result could not be encoded"
     }
 
-    private func parseRelationship(_ s: String) throws -> PerspectiveRelationship {
-        switch s {
-        case "types": return .types
-        case "subTypes": return .subTypes
-        case "parts": return .parts
-        case "partOf": return .partOf
-        case "interests": return .interests
-        case "purposes": return .purposes
-        case "entities": return .entities
-        case "states": return .states
-        default: throw NSError(domain: "GraphMatchTool", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown relationship"])
-        }
-    }
-
-    private func resolveStartRef(args: GraphMatchArguments, perspective: Perspective) async throws -> String {
-//        if let r = args.startRef, !r.isEmpty { return r }
-        // Fallback til høyest vektet aktiv purpose
-        if let best = try? await perspective.getPrimaryPurpose() {
-            return best.reference
-        }
-        throw NSError(domain: "GraphMatchTool", code: 2, userInfo: [NSLocalizedDescriptionKey: "No startRef and no active purposes"])
-    }
-
-    private func findNode(ref: String, type: String?, perspective: Perspective) async -> (any WeightedMatch & PerspectiveNode)? {
-        print("findNode ref: \(ref) type: \(String(describing: type)) ")
-        switch type {
-        case "interest":
-            return await perspective.findInterestByReference(ref)
-        case "entity":
-            return await perspective.findENtityRepresentationByReference(ref)
-        case "purpose", nil:
-            if let p = await perspective.findPurposeByReference(ref) { return p }
-            if let i = await perspective.findInterestByReference(ref) { return i }
-            if let e = await perspective.findENtityRepresentationByReference(ref) { return e }
-            return nil
-        default:
-            return nil
-        }
-    }
 }
 
 #endif

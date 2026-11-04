@@ -47,6 +47,26 @@ private struct RelationalEligibilityTrace: Sendable {
     var reason: String
 }
 
+private enum RelationalWeightApplication: Equatable {
+    case changed, stale, duplicate
+}
+
+/// Semantic time wins per complete edge. At equal time an explicit choice wins
+/// over inferred outcomes, then the original source ID is the stable tie-break.
+private struct RelationalWeightOrder: Comparable, Sendable {
+    let timestamp: TimeInterval
+    let explicit: Bool
+    let sourceRevision: UInt64
+    let sourceID: String
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+        if lhs.explicit != rhs.explicit { return !lhs.explicit }
+        if lhs.sourceRevision != rhs.sourceRevision { return lhs.sourceRevision < rhs.sourceRevision }
+        return lhs.sourceID < rhs.sourceID
+    }
+}
+
 public actor RelationalLearningEngine {
     private let config: RelationalLearningConfig
     private var edgesByKey: [RelationalEdgeKey: RelationalEdge]
@@ -56,6 +76,10 @@ public actor RelationalLearningEngine {
     private var appliedWeightUpdateEventIDs: Set<String>
     private var appliedDecayPolicyEventIDs: Set<String>
     private var appliedSourceEventKeys: Set<String>
+    private var sourcePayloads: [String: String] = [:]
+    private var derivedFeedbackPayloads: [String: String] = [:]
+    private var latestWeightOrders: [RelationalEdgeKey: RelationalWeightOrder] = [:]
+    private var latestExplicitOrders: [RelationalEdgeKey: RelationalWeightOrder] = [:]
     private var persistedJournal: RelationalLearningPersistedJournal
 
     public init(config: RelationalLearningConfig = .default) {
@@ -82,43 +106,84 @@ public actor RelationalLearningEngine {
             try Self.validateEnvelope(record.envelope)
         }
 
-        reset(keepPolicies: false)
-        for record in journal.records {
-            let result = try applyEnvelopeTransaction(record.envelope)
-            guard result.applied, result.sequence == record.sequence else {
-                throw RelationalLearningError.invalidJournal(
-                    "record \(record.sequence) did not restore exactly once"
-                )
+        // Validate identities before reset, including contradictory duplicate IDs.
+        try validateSourceIdentities(journal.records.map(\.envelope), resetFirst: true)
+        let legacyCount = journal.version == 1 ? journal.records.count : (journal.legacyRecordCount ?? 0)
+        let previousState = (edgesByKey, sessionsByPurpose, activeContextByDomain, policiesByProfile, appliedWeightUpdateEventIDs, appliedDecayPolicyEventIDs, appliedSourceEventKeys, sourcePayloads, derivedFeedbackPayloads, latestWeightOrders, latestExplicitOrders, persistedJournal)
+        do {
+            reset(keepPolicies: false)
+            for (index, record) in journal.records.enumerated() {
+                let result = try applyEnvelopeTransaction(record.envelope, legacyOrdering: index < legacyCount, restoring: true)
+                guard result.sequence == record.sequence else {
+                    throw RelationalLearningError.invalidJournal(
+                        "record \(record.sequence) did not restore exactly once"
+                    )
+                }
             }
-        }
-        guard persistedJournal.revision == journal.revision else {
-            throw RelationalLearningError.invalidJournal("restored revision mismatch")
+            guard persistedJournal.revision == journal.revision else {
+                throw RelationalLearningError.invalidJournal("restored revision mismatch")
+            }
+            // A read-only legacy restore remains a v1 roundtrip. Promotion occurs on
+            // the first new consumed event, preserving the legacy prefix verbatim.
+            persistedJournal = journal
+        } catch {
+            (edgesByKey, sessionsByPurpose, activeContextByDomain, policiesByProfile, appliedWeightUpdateEventIDs, appliedDecayPolicyEventIDs, appliedSourceEventKeys, sourcePayloads, derivedFeedbackPayloads, latestWeightOrders, latestExplicitOrders, persistedJournal) = previousState
+            throw error
         }
     }
 
     public func applyEnvelopeTransaction(
         _ envelope: RelationalLearningEventEnvelope
     ) throws -> RelationalLearningTransactionResult {
+        try applyEnvelopeTransaction(envelope, legacyOrdering: false)
+    }
+
+    private func applyEnvelopeTransaction(
+        _ envelope: RelationalLearningEventEnvelope,
+        legacyOrdering: Bool,
+        restoring: Bool = false
+    ) throws -> RelationalLearningTransactionResult {
         try Self.validateEnvelope(envelope)
+        try validateSourceIdentities([envelope], resetFirst: false)
         let eventID = try Self.validatedEventIdentifier(for: envelope)
         let sourceKey = "\(envelope.eventType.rawValue)|\(eventID)"
         guard !appliedSourceEventKeys.contains(sourceKey) else {
             return RelationalLearningTransactionResult(applied: false, sequence: nil)
         }
 
-        try ensureJournalCapacity(adding: [envelope], resetFirst: false)
+        if envelope.eventType == .weightUpdate {
+            let update = try RelationalLearningCodec.decode(RelationalWeightUpdateEvent.self, from: envelope.payload)
+            if update.sourceFeedbackKind != nil {
+                guard derivedFeedbackPayloads[update.eventId] == canonicalPayloadString(envelope.payload) else {
+                    throw RelationalLearningError.invalidEvent("typed derived weight is not an accepted original feedback echo")
+                }
+                return RelationalLearningTransactionResult(applied: false, sequence: nil)
+            }
+        }
+        if !restoring { try ensureJournalCapacity(adding: [envelope], resetFirst: false) }
 
         let weightUpdates: [RelationalWeightUpdateEvent]
         let applied: Bool
+        var ignoredReason: String?
         switch envelope.eventType {
+        case .userFeedback:
+            let event = try RelationalLearningCodec.decode(RelationalUserFeedbackEvent.self, from: envelope.payload)
+            guard event.expectedJournalRevision == persistedJournal.revision else {
+                throw RelationalLearningError.invalidEvent("stale feedback journal revision; reread current decision")
+            }
+            let derived = try deriveUserFeedbackWeightUpdates(event)
+            let canonicalDerived = try derived.map { ($0.eventId, canonicalPayloadString(try RelationalLearningCodec.encodeObject($0))) }
+            for (id, payload) in canonicalDerived { derivedFeedbackPayloads[id] = payload }
+            weightUpdates = derived.filter { applyWeightUpdate($0, legacyOrdering: legacyOrdering) == .changed }
+            applied = derived.isEmpty || !weightUpdates.isEmpty
+            if !applied { ignoredReason = "stale_event" }
         case .purposeLifecycle:
             let event = try RelationalLearningCodec.decode(
                 RelationalPurposeLifecycleEvent.self,
                 from: envelope.payload
             )
-            weightUpdates = ingestPurposeLifecycleEvent(event)
-            for update in weightUpdates {
-                _ = applyWeightUpdateEvent(update)
+            weightUpdates = ingestPurposeLifecycleEvent(event).filter {
+                applyWeightUpdate($0, legacyOrdering: legacyOrdering) == .changed
             }
             applied = true
         case .weightUpdate:
@@ -127,7 +192,9 @@ public actor RelationalLearningEngine {
                 from: envelope.payload
             )
             weightUpdates = []
-            applied = applyWeightUpdateEvent(event)
+            let application = applyWeightUpdate(event, legacyOrdering: legacyOrdering)
+            applied = application == .changed
+            if application == .stale { ignoredReason = "stale_event" }
         case .decayPolicyUpdated:
             let event = try RelationalLearningCodec.decode(
                 RelationalDecayPolicyUpdatedEvent.self,
@@ -149,24 +216,29 @@ public actor RelationalLearningEngine {
                 from: envelope.payload
             )
             let update = deriveExplicitPreferenceWeightUpdate(event)
-            weightUpdates = [update]
-            applied = applyWeightUpdateEvent(update)
+            let application = applyWeightUpdate(update, legacyOrdering: legacyOrdering)
+            applied = application == .changed
+            weightUpdates = applied ? [update] : []
+            if application == .stale { ignoredReason = "stale_event" }
         }
 
-        guard applied else {
+        guard applied || ignoredReason != nil else {
             return RelationalLearningTransactionResult(applied: false, sequence: nil)
         }
 
         appliedSourceEventKeys.insert(sourceKey)
+        sourcePayloads[sourceKey] = canonicalPayloadString(envelope.payload)
+        if !restoring { promoteJournalIfNeeded() }
         let sequence = persistedJournal.revision + 1
         persistedJournal.records.append(
             RelationalLearningJournalRecord(sequence: sequence, envelope: envelope)
         )
         persistedJournal.revision = sequence
         return RelationalLearningTransactionResult(
-            applied: true,
+            applied: applied,
             sequence: sequence,
-            weightUpdates: weightUpdates
+            weightUpdates: weightUpdates,
+            ignoredReason: ignoredReason
         )
     }
 
@@ -177,23 +249,25 @@ public actor RelationalLearningEngine {
         for envelope in events {
             try Self.validateEnvelope(envelope)
         }
+        try validateSourceIdentities(events, resetFirst: resetFirst)
         let sorted = sortedReplayEvents(events)
         try ensureJournalCapacity(adding: sorted, resetFirst: resetFirst)
 
-        if resetFirst {
-            reset(keepPolicies: false)
-        }
-
-        var appliedCount = 0
-        for envelope in sorted {
-            if try applyEnvelopeTransaction(envelope).applied {
-                appliedCount += 1
+        let previousState = (edgesByKey, sessionsByPurpose, activeContextByDomain, policiesByProfile, appliedWeightUpdateEventIDs, appliedDecayPolicyEventIDs, appliedSourceEventKeys, sourcePayloads, derivedFeedbackPayloads, latestWeightOrders, latestExplicitOrders, persistedJournal)
+        do {
+            if resetFirst { reset(keepPolicies: false) }
+            var appliedCount = 0
+            // Incremental v2 feedback is a causally ordered history, not an unordered set.
+            // Its expected revisions reject an incompatible history before publishing it.
+            let ordered = events.contains { $0.eventType == .userFeedback } ? events : sorted
+            for envelope in ordered {
+                if try applyEnvelopeTransaction(envelope).applied { appliedCount += 1 }
             }
+            return RelationalLearningReplayResult(appliedCount: appliedCount, journal: persistedJournal)
+        } catch {
+            (edgesByKey, sessionsByPurpose, activeContextByDomain, policiesByProfile, appliedWeightUpdateEventIDs, appliedDecayPolicyEventIDs, appliedSourceEventKeys, sourcePayloads, derivedFeedbackPayloads, latestWeightOrders, latestExplicitOrders, persistedJournal) = previousState
+            throw error
         }
-        return RelationalLearningReplayResult(
-            appliedCount: appliedCount,
-            journal: persistedJournal
-        )
     }
 
     // MARK: Event ingestion
@@ -335,6 +409,44 @@ public actor RelationalLearningEngine {
         }
     }
 
+    private func deriveUserFeedbackWeightUpdates(_ event: RelationalUserFeedbackEvent) throws -> [RelationalWeightUpdateEvent] {
+        let targets: [(RelationalEdgeRelationType, RelationalNode, Double)]
+        let correction: Bool
+        switch event.kind {
+        case .purposeChoice, .purposeCorrection:
+            targets = event.contextBlocks.filter { $0.confidence >= config.contextConfidenceGate }.sorted { $0.node.id < $1.node.id }.map {
+                (.purposeContextBlock, $0.node, config.eligibilityContextBlock * $0.confidence)
+            }
+            guard !targets.isEmpty else { throw RelationalLearningError.invalidEvent("purpose feedback has no qualified context") }
+            correction = event.kind == .purposeCorrection
+        case .confirmedOutcome, .configurationCorrection:
+            guard let configuration = event.configuration else { return [] }
+            targets = [(.purposeConfiguration, configuration.node, config.eligibilityActive)]
+            correction = event.kind == .configurationCorrection
+        case .configurationChoice: return [] // a chosen/open surface is not confirmed utility
+        }
+        let policy = resolvePolicy(profileId: RelationalDecayPolicy.defaultNoa.profileId, at: event.timestamp,
+                                   fallbackVersion: RelationalDecayPolicy.defaultNoa.version)
+        return targets.map { relation, target, eligibility in
+            let from = RelationalNode(type: .purpose, id: event.purposeId)
+            let key = RelationalEdgeKey(fromNode: from, relationType: relation, toNode: target)
+            let existing = edgesByKey[key]
+            let previous = existing?.weightStored ?? config.unknownWeight
+            let rate = correction ? config.alphaFail : config.alphaSuccess
+            let next = reinforcedWeight(previous: previous, eligibility: eligibility, learningRate: rate,
+                                        outcome: correction ? .failure : .success)
+            let edge = RelationalEdge(fromNode: from, relationType: relation, toNode: target, weightStored: next,
+                lastReinforcedAt: event.timestamp, decayProfileId: policy.profileId, decayParamsVersion: policy.version,
+                metadata: ["reason": event.kind.rawValue, "sourceFeedbackEventId": event.eventId,
+                           "sessionId": event.sessionId, "episodeId": event.episodeId])
+            let outcome: RelationalLearningOutcome = correction ? .failure : .success
+            return RelationalWeightUpdateEvent(eventId: deterministicWeightUpdateEventID(sourceEventID: event.eventId, outcome: outcome, edge: edge),
+                emittedAt: event.timestamp, sourceEventId: event.eventId, outcome: outcome, edge: edge,
+                previousWeightStored: previous, newWeightStored: next, learningRate: rate, eligibility: eligibility, reason: event.kind.rawValue,
+                sourceFeedbackKind: event.kind, sourceFeedbackRevision: event.expectedJournalRevision + 1)
+        }
+    }
+
     public func deriveExplicitPreferenceWeightUpdate(_ event: RelationalExplicitPreferenceEvent) -> RelationalWeightUpdateEvent {
         let policyAtEvent = resolvePolicy(profileId: RelationalDecayPolicy.defaultNoa.profileId,
                                           at: event.timestamp,
@@ -391,16 +503,50 @@ public actor RelationalLearningEngine {
 
     @discardableResult
     public func applyWeightUpdateEvent(_ event: RelationalWeightUpdateEvent) -> Bool {
-        if appliedWeightUpdateEventIDs.contains(event.eventId) {
-            return false
-        }
+        do { try Self.validateEnvelope(.from(event)) } catch { return false }
+        guard event.sourceFeedbackKind == nil else { return false } // typed weights are derived receipts, never independent inputs
+        return applyWeightUpdate(event, legacyOrdering: false) == .changed
+    }
 
+    private func applyWeightUpdate(
+        _ event: RelationalWeightUpdateEvent,
+        legacyOrdering: Bool
+    ) -> RelationalWeightApplication {
+        guard !appliedWeightUpdateEventIDs.contains(event.eventId) else { return .duplicate }
         appliedWeightUpdateEventIDs.insert(event.eventId)
-
+        let order = RelationalWeightOrder(
+            timestamp: event.edge.lastReinforcedAt,
+            explicit: event.outcome == .explicitPreference || event.sourceFeedbackKind != nil,
+            sourceRevision: event.sourceFeedbackRevision ?? 0,
+            sourceID: event.sourceEventId ?? event.eventId
+        )
+        let previousOrder = latestWeightOrders[event.edge.key]
+        if !legacyOrdering {
+            if order.explicit, let previousOrder {
+                if order < previousOrder { return .stale }
+                if order == previousOrder { return .duplicate }
+            } else if let correction = latestExplicitOrders[event.edge.key],
+                      order.timestamp <= correction.timestamp {
+                // An inferred result from before the user's correction cannot
+                // undo that correction. Later valid outcomes still all learn,
+                // including concurrent arrivals out of timestamp order.
+                return .stale
+            }
+        }
+        if previousOrder == nil || previousOrder! < order {
+            latestWeightOrders[event.edge.key] = order
+        }
+        if order.explicit,
+           latestExplicitOrders[event.edge.key].map({ $0 < order }) ?? true {
+            latestExplicitOrders[event.edge.key] = order
+        }
         var edge = event.edge
+        if !legacyOrdering, let previous = edgesByKey[edge.key] {
+            edge.lastReinforcedAt = max(edge.lastReinforcedAt, previous.lastReinforcedAt)
+        }
         edge.weightStored = RelationalMath.clamp01(event.newWeightStored)
         edgesByKey[edge.key] = edge
-        return true
+        return .changed
     }
 
     public func reset(keepPolicies: Bool = true) {
@@ -410,6 +556,10 @@ public actor RelationalLearningEngine {
         appliedWeightUpdateEventIDs = []
         appliedDecayPolicyEventIDs = []
         appliedSourceEventKeys = []
+        sourcePayloads = [:]
+        derivedFeedbackPayloads = [:]
+        latestWeightOrders = [:]
+        latestExplicitOrders = [:]
         persistedJournal = .empty
 
         if keepPolicies {
@@ -458,13 +608,7 @@ public actor RelationalLearningEngine {
                                                     activeContextMap: activeContextMap)
                 guard eligibility > 0.0 else { continue }
 
-                let policy = resolvePolicy(profileId: edge.decayProfileId,
-                                           at: timestamp,
-                                           fallbackVersion: edge.decayParamsVersion)
-                let retention = RelationalDecay.retention(policy: policy,
-                                                          now: timestamp,
-                                                          lastReinforcedAt: edge.lastReinforcedAt)
-                let effectiveWeight = RelationalMath.clamp01(edge.weightStored * retention)
+                let (effectiveWeight, policy) = effectiveWeightAndPolicy(edge, at: timestamp)
                 let contribution = effectiveWeight * eligibility
                 rawScore += contribution
 
@@ -678,9 +822,27 @@ public actor RelationalLearningEngine {
             }
             return RelationalMath.clamp01(config.eligibilityContextBlock * signal.confidence)
 
-        case .purposePurpose:
+        case .purposePurpose, .purposeConfiguration:
             return 0.0
         }
+    }
+
+    private func effectiveWeightAndPolicy(_ edge: RelationalEdge, at timestamp: TimeInterval) -> (Double, RelationalDecayPolicy) {
+        let policy = resolvePolicy(profileId: edge.decayProfileId, at: timestamp, fallbackVersion: edge.decayParamsVersion)
+        let retention = RelationalDecay.retention(policy: policy, now: timestamp, lastReinforcedAt: edge.lastReinforcedAt)
+        return (RelationalMath.clamp01(edge.weightStored * retention), policy)
+    }
+    public func scoreConfigurations(purposeId: String, candidateConfigurationIDs: Set<String>? = nil,
+                                    at timestamp: TimeInterval) -> [RelationalConfigurationScore] {
+        edgesByKey.values.compactMap { edge -> RelationalConfigurationScore? in
+            guard edge.fromNode.id == purposeId, edge.relationType == .purposeConfiguration,
+                  candidateConfigurationIDs?.contains(edge.toNode.id) ?? true,
+                  let reference = try? RelationalConfigurationReference(nodeID: edge.toNode.id) else { return nil }
+            let (weight, policy) = effectiveWeightAndPolicy(edge, at: timestamp)
+            return RelationalConfigurationScore(configuration: reference, score: weight,
+                explain: RelationalEdgeContributionExplain(edge: edge, effectiveWeight: weight, contribution: weight,
+                    decayProfileId: policy.profileId, decayParamsVersion: policy.version, decayParams: policy.noaParameters))
+        }.sorted { $0.score == $1.score ? $0.configuration.node.id < $1.configuration.node.id : $0.score > $1.score }
     }
 
     private func resolvePolicy(profileId: String,
@@ -751,6 +913,10 @@ public actor RelationalLearningEngine {
         resetFirst: Bool
     ) throws {
         var candidate = resetFirst ? RelationalLearningPersistedJournal.empty : persistedJournal
+        if candidate.version == 1 {
+            candidate.legacyRecordCount = candidate.records.count
+            candidate.version = RelationalLearningPersistedJournal.currentVersion
+        }
         for envelope in envelopes {
             let sequence = candidate.revision + 1
             candidate.records.append(
@@ -759,6 +925,27 @@ public actor RelationalLearningEngine {
             candidate.revision = sequence
         }
         try candidate.validateShapeAndSize()
+    }
+
+    private func promoteJournalIfNeeded() {
+        if persistedJournal.version == 1 {
+            persistedJournal.legacyRecordCount = persistedJournal.records.count
+            persistedJournal.version = RelationalLearningPersistedJournal.currentVersion
+        }
+    }
+
+    private func validateSourceIdentities(
+        _ events: [RelationalLearningEventEnvelope], resetFirst: Bool
+    ) throws {
+        var identities = resetFirst ? [:] : sourcePayloads
+        for envelope in events {
+            let key = "\(envelope.eventType.rawValue)|\(try Self.validatedEventIdentifier(for: envelope))"
+            let payload = canonicalPayloadString(envelope.payload)
+            if let previous = identities[key], previous != payload {
+                throw RelationalLearningError.invalidEvent("event identity reused with different content")
+            }
+            identities[key] = payload
+        }
     }
 
     private func sortedReplayEvents(
@@ -782,7 +969,7 @@ public actor RelationalLearningEngine {
     }
 
     private static func validateEnvelope(_ envelope: RelationalLearningEventEnvelope) throws {
-        guard envelope.schemaVersion == "1.0" else {
+        guard ["1.0", "2.0"].contains(envelope.schemaVersion) else {
             throw RelationalLearningError.unsupportedSchemaVersion(envelope.schemaVersion)
         }
         guard envelope.emittedAt.isFinite else {
@@ -791,6 +978,11 @@ public actor RelationalLearningEngine {
         _ = try validatedEventIdentifier(for: envelope)
 
         switch envelope.eventType {
+        case .userFeedback:
+            guard envelope.schemaVersion == "2.0" else { throw RelationalLearningError.invalidEvent("typed user feedback requires envelope v2") }
+            let event = try RelationalLearningCodec.decode(RelationalUserFeedbackEvent.self, from: envelope.payload)
+            try event.validate()
+            guard event.timestamp == envelope.emittedAt else { throw RelationalLearningError.invalidEvent("feedback envelope time mismatch") }
         case .purposeLifecycle:
             let event = try RelationalLearningCodec.decode(
                 RelationalPurposeLifecycleEvent.self,
@@ -825,6 +1017,13 @@ public actor RelationalLearningEngine {
                   event.learningRate.isFinite,
                   event.learningRate >= 0 else {
                 throw RelationalLearningError.invalidEvent("invalid weight update")
+            }
+            guard envelope.schemaVersion == "2.0" || (event.edge.relationType != .purposeConfiguration && event.sourceFeedbackKind == nil && event.sourceFeedbackRevision == nil) else {
+                throw RelationalLearningError.invalidEvent("configuration relation requires envelope v2")
+            }
+            guard (event.sourceFeedbackKind == nil) == (event.sourceFeedbackRevision == nil),
+                  event.sourceFeedbackRevision.map({ $0 > 0 }) ?? true else {
+                throw RelationalLearningError.invalidEvent("invalid typed feedback ordering authority")
             }
             try validateEdgeShape(
                 relationType: event.edge.relationType,
@@ -884,6 +1083,9 @@ public actor RelationalLearningEngine {
                   !event.targetNode.id.isEmpty else {
                 throw RelationalLearningError.invalidEvent("invalid explicit preference")
             }
+            guard envelope.schemaVersion == "2.0" || event.relationType != .purposeConfiguration else {
+                throw RelationalLearningError.invalidEvent("configuration relation requires envelope v2")
+            }
             try validateEdgeShape(
                 relationType: event.relationType,
                 fromNode: RelationalNode(type: .purpose, id: event.purposeId),
@@ -914,6 +1116,9 @@ public actor RelationalLearningEngine {
             expectedTargetType = .contextBlock
         case .purposePurpose:
             expectedTargetType = .purpose
+        case .purposeConfiguration:
+            expectedTargetType = .configuration
+            _ = try RelationalConfigurationReference(nodeID: toNode.id)
         }
         guard toNode.type == expectedTargetType else {
             throw RelationalLearningError.invalidEvent(

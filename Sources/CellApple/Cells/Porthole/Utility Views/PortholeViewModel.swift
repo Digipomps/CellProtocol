@@ -48,6 +48,48 @@ public class PortholeViewModel: ObservableObject {
     @Published var historyMenuConfigurations = [CellConfiguration]()
     @Published private(set) var currentRequesterIdentity: Identity?
     
+    // Accessed only through MainActor submission methods. Kept outside views
+    // so rebuilding a Button/TextArea does not mint a retry learning event.
+    private var originalUserActions = OriginalUserActionLedger()
+
+    @MainActor
+    func executeOriginalUserActionButton(_ input: SkeletonButton, requester: Identity?) async -> ValueType? {
+        var button = input
+        guard let requester else { return await button.execute(requester: nil) }
+        let scope = "\(requester.uuid.utf8.count):\(requester.uuid)\(button.url ?? "cell:///Porthole")"
+        do {
+            let submission = try originalUserActions.prepare(keypath: button.keypath, scope: scope, payload: button.payload)
+            if let submission { button.payload = submission.payload }
+            let result = await button.execute(requester: requester)
+            if let submission, let result, !Self.originalActionIsPending(result) {
+                originalUserActions.complete(submission)
+            }
+            return result
+        } catch { return nil }
+    }
+
+    @MainActor
+    func prepareOriginalUserAction(keypath: String, payload: ValueType?, scope: String) throws -> OriginalUserActionLedger.Submission? {
+        try originalUserActions.prepare(keypath: keypath, scope: scope, payload: payload)
+    }
+
+    @MainActor
+    func completeOriginalUserAction(_ submission: OriginalUserActionLedger.Submission, result: ValueType) {
+        if !Self.originalActionIsPending(result) { originalUserActions.complete(submission) }
+    }
+
+    private static func originalActionIsPending(_ value: ValueType) -> Bool {
+        guard case let .object(object) = value else { return false }
+        if case .bool(true)? = object["retrySameEventID"] { return true }
+        if case .string("unknown")? = object["outcome"] { return true }
+        if case let .string(status)? = object["status"],
+           ["pending", "processing", "outcome_unknown", "reconciliation_required"].contains(status) { return true }
+        // Transport success does not imply that the nested learning write is known.
+        return ["result", "purposeVisitLearning"].contains { key in
+            object[key].map(Self.originalActionIsPending) ?? false
+        }
+    }
+
     private var valueCache: Object = [:] // Change to Actor for thread safety
     public let cache = PortholeCache()
     @Published var showAlert = false

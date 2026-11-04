@@ -8,6 +8,7 @@ public enum RelationalNodeType: String, Codable, CaseIterable, Sendable {
     case interest
     case entityRepresentation
     case contextBlock
+    case configuration
 }
 
 public struct RelationalNode: Codable, Hashable, Sendable {
@@ -25,6 +26,7 @@ public enum RelationalEdgeRelationType: String, Codable, CaseIterable, Sendable 
     case purposeEntity
     case purposeContextBlock
     case purposePurpose
+    case purposeConfiguration
 }
 
 public struct RelationalEdgeKey: Codable, Hashable, Sendable {
@@ -86,6 +88,7 @@ public enum RelationalLearningEventType: String, Codable, Sendable {
     case decayPolicyUpdated
     case contextTransition
     case explicitPreference
+    case userFeedback
 }
 
 public struct RelationalLearningEventEnvelope: Codable, Sendable {
@@ -136,29 +139,47 @@ public struct RelationalLearningJournalRecord: Codable, Sendable {
 }
 
 public struct RelationalLearningPersistedJournal: Codable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2
     public static let maximumRecordCount = 2_048
     public static let maximumEncodedBytes = 2 * 1_024 * 1_024
 
     public var version: Int
     public var revision: UInt64
     public var records: [RelationalLearningJournalRecord]
+    /// The immutable legacy prefix retains v1 replay semantics after migration.
+    /// New records use semantic ordering; a v1 journal never contains this field.
+    public var legacyRecordCount: Int?
 
     public init(
         version: Int = RelationalLearningPersistedJournal.currentVersion,
         revision: UInt64 = 0,
-        records: [RelationalLearningJournalRecord] = []
+        records: [RelationalLearningJournalRecord] = [],
+        legacyRecordCount: Int? = nil
     ) {
         self.version = version
         self.revision = revision
         self.records = records
+        self.legacyRecordCount = version == 1 ? legacyRecordCount : (legacyRecordCount ?? 0)
     }
 
     public static let empty = RelationalLearningPersistedJournal()
 
     public func validateShapeAndSize() throws {
-        guard version == Self.currentVersion else {
+        guard version == 1 || version == Self.currentVersion else {
             throw RelationalLearningError.invalidJournal("unsupported version \(version)")
+        }
+        if version == 1 {
+            guard legacyRecordCount == nil else {
+                throw RelationalLearningError.invalidJournal("v1 must not declare v2 ordering")
+            }
+        } else {
+            guard let legacyRecordCount, (0 ... records.count).contains(legacyRecordCount) else {
+                throw RelationalLearningError.invalidJournal("invalid legacy record prefix")
+            }
+        }
+        let legacyPrefix = version == 1 ? records.count : (legacyRecordCount ?? 0)
+        guard records.prefix(legacyPrefix).allSatisfy({ $0.envelope.schemaVersion == "1.0" }) else {
+            throw RelationalLearningError.invalidJournal("legacy prefix cannot contain v2 events")
         }
         guard records.count <= Self.maximumRecordCount else {
             throw RelationalLearningError.journalCapacityExceeded
@@ -189,15 +210,19 @@ public struct RelationalLearningTransactionResult: Sendable {
     public var applied: Bool
     public var sequence: UInt64?
     public var weightUpdates: [RelationalWeightUpdateEvent]
+    /// A unique stale event has a sequence but no state change. A duplicate has neither.
+    public var ignoredReason: String?
 
     public init(
         applied: Bool,
         sequence: UInt64?,
-        weightUpdates: [RelationalWeightUpdateEvent] = []
+        weightUpdates: [RelationalWeightUpdateEvent] = [],
+        ignoredReason: String? = nil
     ) {
         self.applied = applied
         self.sequence = sequence
         self.weightUpdates = weightUpdates
+        self.ignoredReason = ignoredReason
     }
 }
 
@@ -317,6 +342,8 @@ public struct RelationalWeightUpdateEvent: Codable, Sendable {
     public var learningRate: Double
     public var eligibility: Double
     public var reason: String
+    public var sourceFeedbackKind: RelationalUserFeedbackKind?
+    public var sourceFeedbackRevision: UInt64?
 
     public init(eventId: String = UUID().uuidString,
                 emittedAt: TimeInterval,
@@ -327,7 +354,11 @@ public struct RelationalWeightUpdateEvent: Codable, Sendable {
                 newWeightStored: Double,
                 learningRate: Double,
                 eligibility: Double,
-                reason: String) {
+                reason: String,
+                sourceFeedbackKind: RelationalUserFeedbackKind? = nil,
+                sourceFeedbackRevision: UInt64? = nil) {
+        self.sourceFeedbackKind = sourceFeedbackKind
+        self.sourceFeedbackRevision = sourceFeedbackRevision
         self.eventId = eventId
         self.emittedAt = emittedAt
         self.sourceEventId = sourceEventId
@@ -529,6 +560,7 @@ public extension RelationalLearningEventEnvelope {
 
     static func from(_ event: RelationalWeightUpdateEvent) throws -> RelationalLearningEventEnvelope {
         RelationalLearningEventEnvelope(eventType: .weightUpdate,
+                                        schemaVersion: event.edge.relationType == .purposeConfiguration || event.sourceFeedbackKind != nil ? "2.0" : "1.0",
                                         emittedAt: event.emittedAt,
                                         payload: try RelationalLearningCodec.encodeObject(event))
     }
@@ -547,6 +579,7 @@ public extension RelationalLearningEventEnvelope {
 
     static func from(_ event: RelationalExplicitPreferenceEvent) throws -> RelationalLearningEventEnvelope {
         RelationalLearningEventEnvelope(eventType: .explicitPreference,
+                                        schemaVersion: event.relationType == .purposeConfiguration ? "2.0" : "1.0",
                                         emittedAt: event.timestamp,
                                         payload: try RelationalLearningCodec.encodeObject(event))
     }

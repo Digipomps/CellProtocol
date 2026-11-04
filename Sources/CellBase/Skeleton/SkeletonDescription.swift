@@ -1086,28 +1086,6 @@ public struct SkeletonModifiers: Codable {
         set { uniqueBox().fields.backgroundKeypath = newValue }
     }
 
-    /// D: makes the whole element one link. See `SkeletonDataBinding.linkURL`.
-    public var linkURL: String? {
-        get { box.fields.linkURL }
-        set { uniqueBox().fields.linkURL = newValue }
-    }
-
-    public var linkURLKeypath: String? {
-        get { box.fields.linkURLKeypath }
-        set { uniqueBox().fields.linkURLKeypath = newValue }
-    }
-
-    /// E: theme colours by name (`SkeletonStyleVariables.allowedNames`).
-    public var styleVariables: [String: String]? {
-        get { box.fields.styleVariables }
-        set { uniqueBox().fields.styleVariables = newValue }
-    }
-
-    public var styleVariablesKeypath: String? {
-        get { box.fields.styleVariablesKeypath }
-        set { uniqueBox().fields.styleVariablesKeypath = newValue }
-    }
-
     public var cornerRadius: Double? {
         get { box.fields.cornerRadius }
         set { uniqueBox().fields.cornerRadius = newValue }
@@ -1499,14 +1477,6 @@ struct SkeletonModifiersFields: Codable {
     public var textDecoration: SkeletonTextDecoration?
     public var textRotationDegrees: Double?
     public var leadingMarker: SkeletonLeadingMarker?
-    // D and E (PDD kunstnerside-som-flate). Nil keeps today's rendering.
-    // linkURLKeypath / styleVariablesKeypath resolve on the row value inside a
-    // List/Grid item, else on the root value. styleVariables accepts only
-    // SkeletonStyleVariables.allowedNames with #RRGGBB[AA] colours.
-    public var linkURL: String?
-    public var linkURLKeypath: String?
-    public var styleVariables: [String: String]?
-    public var styleVariablesKeypath: String?
 
     public init() {}
 
@@ -1541,10 +1511,6 @@ struct SkeletonModifiersFields: Codable {
         case textDecoration
         case textRotationDegrees
         case leadingMarker
-        case linkURL
-        case linkURLKeypath
-        case styleVariables
-        case styleVariablesKeypath
         case localization
         case padding
         case maxWidthInfinity
@@ -1633,22 +1599,6 @@ struct SkeletonModifiersFields: Codable {
         if let fontFamilies {
             for family in fontFamilies { try skeletonNonempty(family, field: "fontFamilies") }
         }
-        self.linkURL = try container.skeletonValue(String.self, forKey: .linkURL)
-        self.linkURLKeypath = try container.skeletonValue(String.self, forKey: .linkURLKeypath)
-        self.styleVariables = try container.skeletonValue([String: String].self, forKey: .styleVariables)
-        self.styleVariablesKeypath = try container.skeletonValue(String.self, forKey: .styleVariablesKeypath)
-        if let linkURL { try skeletonNonempty(linkURL, field: "linkURL") }
-        if let linkURLKeypath { try skeletonNonempty(linkURLKeypath, field: "linkURLKeypath") }
-        if let styleVariablesKeypath { try skeletonNonempty(styleVariablesKeypath, field: "styleVariablesKeypath") }
-        for (name, color) in (styleVariables ?? [:]).sorted(by: { $0.key < $1.key }) {
-            guard SkeletonStyleVariables.isAllowedName(name) else {
-                throw SkeletonFormatError(field: "styleVariables.\(name)",
-                    reason: "unknown name; allowed: \(SkeletonStyleVariables.allowedNames.joined(separator: ", "))")
-            }
-            guard SkeletonStyleVariables.isColor(color) else {
-                throw SkeletonFormatError(field: "styleVariables.\(name)", reason: "must be #RRGGBB or #RRGGBBAA")
-            }
-        }
 
         self.localization = try container.decodeIfPresent([String: SkeletonLocalizedText].self, forKey: .localization)
         self.padding = Self.decodeLossy(Double.self, from: container, forKey: .padding)
@@ -1720,13 +1670,6 @@ public struct SkeletonImage : Codable, Identifiable {
     public var id = UUID()
     
     public var url: URL?
-    /// C: row field (dotted keypath) that holds this image's URL, the way
-    /// `SkeletonButton.urlKeypath` supplies a link. When set, the static `url`
-    /// is not used, and a row without a value shows the missing-image state.
-    public var urlKeypath: String?
-    /// Text alternative. `altKeypath` reads it from the row, like `urlKeypath`.
-    public var alt: String?
-    public var altKeypath: String?
     public var name: String?
     public var type: String? // png, jpeg, gif
     public var resizable = false
@@ -1743,9 +1686,6 @@ public struct SkeletonImage : Codable, Identifiable {
         if let urlString = try container.decodeIfPresent(String.self, forKey: .url) {
             self.url = URL(string: urlString)
         }
-        self.urlKeypath = try container.decodeIfPresent(String.self, forKey: .urlKeypath)
-        self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
-        self.altKeypath = try container.decodeIfPresent(String.self, forKey: .altKeypath)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.type = try container.decodeIfPresent(String.self, forKey: .type)
         
@@ -1766,9 +1706,6 @@ public struct SkeletonImage : Codable, Identifiable {
     public enum CodingKeys: CodingKey {
         //        case id
         case url
-        case urlKeypath
-        case alt
-        case altKeypath
         case name
         case type
         case resizable
@@ -1789,9 +1726,6 @@ public struct SkeletonImage : Codable, Identifiable {
                                                               forKey: .Image)
         //        try container.encode(self.id, forKey: .id)
         try elementContainer.encodeIfPresent(self.url, forKey: .url)
-        try elementContainer.encodeIfPresent(self.urlKeypath, forKey: .urlKeypath)
-        try elementContainer.encodeIfPresent(self.alt, forKey: .alt)
-        try elementContainer.encodeIfPresent(self.altKeypath, forKey: .altKeypath)
         try elementContainer.encodeIfPresent(self.name, forKey: .name)
         try elementContainer.encodeIfPresent(self.type, forKey: .type)
         if self.resizable {
@@ -3252,15 +3186,6 @@ public struct SkeletonButton: Codable, Identifiable {
     /// SF-Symbol-to-Lucide mapping table in skeleton-runtime.js) rather than the
     /// protocol carrying platform-specific icon identifiers.
     public var icon: String?
-    /// H: row (or root) field with a list of tracks. When set, the button
-    /// starts the surface's AudioQueue with that list instead of sending
-    /// `keypath`. See SkeletonAudioQueue.
-    public var playQueueKeypath: String?
-    /// H: row field with the id of this button's own track. The queue starts
-    /// there, and the button counts as playing while that track plays.
-    public var playQueueStartKeypath: String?
-    /// H: label shown while this button's track or list plays, e.g. «Spiller».
-    public var playingLabel: String?
     public var modifiers: SkeletonModifiers?
 
     public init(
@@ -3272,10 +3197,7 @@ public struct SkeletonButton: Codable, Identifiable {
         labelKeypath: String? = nil,
         payloadKeypath: String? = nil,
         icon: String? = nil,
-        urlKeypath: String? = nil,
-        playQueueKeypath: String? = nil,
-        playQueueStartKeypath: String? = nil,
-        playingLabel: String? = nil
+        urlKeypath: String? = nil
     ) {
         self.keypath = keypath
         self.label = label
@@ -3286,9 +3208,6 @@ public struct SkeletonButton: Codable, Identifiable {
         self.payloadKeypath = payloadKeypath
         self.icon = icon
         self.urlKeypath = urlKeypath
-        self.playQueueKeypath = playQueueKeypath
-        self.playQueueStartKeypath = playQueueStartKeypath
-        self.playingLabel = playingLabel
     }
 
     public enum CodingKeys: CodingKey {
@@ -3302,9 +3221,6 @@ public struct SkeletonButton: Codable, Identifiable {
         case payloadKeypath
         case urlKeypath
         case icon
-        case playQueueKeypath
-        case playQueueStartKeypath
-        case playingLabel
         case modifiers
     }
 
@@ -3327,13 +3243,9 @@ public struct SkeletonButton: Codable, Identifiable {
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
         self.urlKeypath = try container.decodeIfPresent(String.self, forKey: .urlKeypath)
         self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
-        self.playQueueKeypath = try container.decodeIfPresent(String.self, forKey: .playQueueKeypath)
-        self.playQueueStartKeypath = try container.decodeIfPresent(String.self, forKey: .playQueueStartKeypath)
-        self.playingLabel = try container.decodeIfPresent(String.self, forKey: .playingLabel)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
-        if playQueueStartKeypath != nil || playingLabel != nil, SkeletonDataBinding.normalized(playQueueKeypath) == nil {
-            throw SkeletonFormatError(field: "playQueueKeypath", reason: "playQueueStartKeypath and playingLabel need playQueueKeypath")
-        }
+
+
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -3351,19 +3263,12 @@ public struct SkeletonButton: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
         try elementContainer.encodeIfPresent(self.urlKeypath, forKey: .urlKeypath)
         try elementContainer.encodeIfPresent(self.icon, forKey: .icon)
-        try elementContainer.encodeIfPresent(self.playQueueKeypath, forKey: .playQueueKeypath)
-        try elementContainer.encodeIfPresent(self.playQueueStartKeypath, forKey: .playQueueStartKeypath)
-        try elementContainer.encodeIfPresent(self.playingLabel, forKey: .playingLabel)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
         
     
     public func execute(requester explicitRequester: Identity? = nil) async -> ValueType? {
         guard SkeletonButtonNavigation.isNavigationButton(self) == false else {
-            return nil
-        }
-        // H: a queue button starts the surface's player; it sends nothing.
-        guard startsAudioQueue == false else {
             return nil
         }
         guard let resolver = CellBase.defaultCellResolver else {
@@ -3619,12 +3524,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
     public var payloadKeypath: String?
     public var activeValue: String?
     public var activeConfigurationName: String?
-    /// SF Symbol name (e.g. "person.circle", "calendar", "message"), matching the
-    /// convention `SkeletonButton.icon`/`SkeletonImage.name` already use. Web
-    /// renderers translate this into their own icon set (see the SF-Symbol-to-Lucide
-    /// mapping table in skeleton-runtime.js) rather than the protocol carrying
-    /// platform-specific icon identifiers.
-    public var icon: String?
     public var modifiers: SkeletonModifiers?
 
     public init(
@@ -3637,7 +3536,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         payloadKeypath: String? = nil,
         activeValue: String? = nil,
         activeConfigurationName: String? = nil,
-        icon: String? = nil,
         modifiers: SkeletonModifiers? = nil
     ) {
         self.keypath = keypath
@@ -3649,7 +3547,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         self.payloadKeypath = payloadKeypath
         self.activeValue = activeValue
         self.activeConfigurationName = activeConfigurationName
-        self.icon = icon
         self.modifiers = modifiers
     }
 
@@ -3664,7 +3561,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         case payloadKeypath
         case activeValue
         case activeConfigurationName
-        case icon
         case modifiers
     }
 
@@ -3682,7 +3578,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
         self.activeValue = try container.decodeIfPresent(String.self, forKey: .activeValue)
         self.activeConfigurationName = try container.decodeIfPresent(String.self, forKey: .activeConfigurationName)
-        self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
     }
 
@@ -3698,7 +3593,6 @@ public struct SkeletonNavigationBarItem: Codable, Identifiable {
         try container.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
         try container.encodeIfPresent(self.activeValue, forKey: .activeValue)
         try container.encodeIfPresent(self.activeConfigurationName, forKey: .activeConfigurationName)
-        try container.encodeIfPresent(self.icon, forKey: .icon)
         try container.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
 }
@@ -4303,8 +4197,6 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     case Toggle(SkeletonToggle)
     case Picker(SkeletonPicker)
     case Visualization(SkeletonVisualization)
-    case Audio(SkeletonAudio)
-    case AudioQueue(SkeletonAudioQueue)
     case Unsupported(SkeletonUnsupported)
     
     public var id: UUID {
@@ -4377,12 +4269,6 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case .Picker(let value):
             return value.id
         case .Visualization(let value):
-            return value.id
-
-        case .Audio(let value):
-            return value.id
-
-        case .AudioQueue(let value):
             return value.id
 
         case .Unsupported(let value):
@@ -4479,10 +4365,6 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return decode(SkeletonPicker.self, wrap: SkeletonElement.Picker)
         case "Visualization":
             return decode(SkeletonVisualization.self, wrap: SkeletonElement.Visualization)
-        case "Audio":
-            return decode(SkeletonAudio.self, wrap: SkeletonElement.Audio)
-        case "AudioQueue":
-            return decode(SkeletonAudioQueue.self, wrap: SkeletonElement.AudioQueue)
         case "Unsupported":
             return decode(SkeletonUnsupported.self, wrap: SkeletonElement.Unsupported)
         default:
@@ -4621,10 +4503,6 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case let .Picker(value):
             try container.encode(value)
         case let .Visualization(value):
-            try container.encode(value)
-        case let .Audio(value):
-            try container.encode(value)
-        case let .AudioQueue(value):
             try container.encode(value)
         case let .Unsupported(value):
             try container.encode(value)

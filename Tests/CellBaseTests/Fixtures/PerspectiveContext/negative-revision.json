@@ -1,0 +1,15 @@
+{
+  "valid": false,
+  "evaluatedAt": "2026-10-12T07:00:00Z",
+  "observation": {
+    "schemaVersion": 1,
+    "revision": -1,
+    "observedAt": "2026-10-12T07:00:00Z",
+    "validUntil": "2026-10-12T08:00:00Z",
+    "transition": "entered",
+    "labels": [
+      "home"
+    ],
+    "configurationRevision": 3
+  }
+}

@@ -381,6 +381,15 @@ public class OrchestratorCell: GeneralCell {
         return self.cellConfiguration
     }
 
+    /// Trusted native host inspection after a normal resolver-authorized load.
+    /// The unrestricted local snapshot remains internal. This SPI requires the
+    /// live owner and the existing skeleton read admission; it grants no access.
+    @_spi(HAVENRuntime)
+    public func activeConfigurationForRuntimeBinding(requester: Identity) async throws -> CellConfiguration? {
+        guard await requesterProvesOwnership(requester), await validateAccess("r---", at: "skeleton", for: requester) else { throw FlowError.denied }
+        return cellConfiguration
+    }
+
     private func availableCellConfigurationCandidates() -> [CellConfiguration] {
         var candidates = [CellConfiguration]()
         if let cellConfiguration {

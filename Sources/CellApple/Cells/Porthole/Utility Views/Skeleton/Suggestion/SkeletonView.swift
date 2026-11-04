@@ -279,29 +279,8 @@ private func renderConfiguredImage(_ baseImage: Image, image: SkeletonImage) -> 
     )
 }
 
-/// C: a data-bound image (`urlKeypath`) is loaded only under the same rules as
-/// links (https, or same origin when relative). A row without a usable value
-/// gets the missing-image placeholder, never a broken or empty frame.
-private func dataBoundImageURL(_ image: SkeletonImage, item: ValueType?) -> URL? {
-    guard image.urlKeypath != nil else { return image.url }
-    guard let raw = image.resolvedURLString(item: item) else { return nil }
-    return SkeletonButtonNavigation.resolveURL(
-        for: SkeletonButton(keypath: "", label: "", url: raw),
-        relativeTo: SkeletonButtonNavigation.configuredBaseURL()
-    )
-}
-
-private func renderSkeletonImage(_ image: SkeletonImage, item: ValueType? = nil) -> AnyView {
-    let view = renderSkeletonImageContent(image, item: item)
-    guard let alt = image.resolvedAlt(item: item) else { return view }
-    return AnyView(view.accessibilityLabel(Text(alt)))
-}
-
-private func renderSkeletonImageContent(_ image: SkeletonImage, item: ValueType?) -> AnyView {
-    if image.urlKeypath != nil && dataBoundImageURL(image, item: item) == nil {
-        return renderConfiguredImage(Image(systemName: "photo"), image: image)
-    }
-    if let url = dataBoundImageURL(image, item: item) {
+private func renderSkeletonImage(_ image: SkeletonImage) -> AnyView {
+    if let url = image.url {
         return AnyView(
             AsyncImage(url: url) { phase in
                 switch phase {
@@ -772,22 +751,7 @@ public struct SkeletonView: View {
             .applySkeletonKeyboardToolbar(enabled: showsKeyboardToolbar)
     }
 
-    /// D: an element-wide link (`modifiers.linkURL`/`linkURLKeypath`) makes the
-    /// whole rendered element open the link, under the same rules as link buttons.
     private func render(_ element: SkeletonElement) -> AnyView {
-        let rendered = renderUnlinked(element)
-        let item = dataContext.item ?? userInfoValue
-        guard let raw = SkeletonDataBinding.linkURL(element.nativeModifiers, item: item) else {
-            return rendered
-        }
-        let link = SkeletonButton(keypath: "", label: "", url: raw)
-        guard SkeletonButtonNavigation.resolveURL(for: link, relativeTo: SkeletonButtonNavigation.configuredBaseURL()) != nil else {
-            return rendered
-        }
-        return AnyView(SkeletonNativeElementLink(content: rendered, link: link))
-    }
-
-    private func renderUnlinked(_ element: SkeletonElement) -> AnyView {
         guard skeletonElementIsVisible(element) else {
             return AnyView(EmptyView())
         }
@@ -824,7 +788,7 @@ public struct SkeletonView: View {
                     .environmentObject(viewModel)
             )
         case .Image(let image):
-            return renderSkeletonImage(image, item: userInfoValue)
+            return renderSkeletonImage(image)
         case .Spacer(let spacer):
             // WP-F: som i SwiftUI-stakken tar en Spacer uten bredde ledig plass. Vekst settes i
             // modifikatorene, fordi stilmodifikatorens egen layoutverdi ligger innerst og vinner.
@@ -995,15 +959,6 @@ public struct SkeletonView: View {
                     .applySkeletonModifiers(visualization.modifiers, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
             )
-        case .Audio(let audio):
-            return AnyView(
-                CellAudioView(skeletonAudio: audio, userInfoValue: userInfoValue)
-                    .applySkeletonModifiers(audio.modifiers, userInfoValue: userInfoValue)
-            )
-        case .AudioQueue:
-            // H/I: the queue player is web-only for now. Native shows nothing
-            // rather than a player that cannot reach the surface's root data.
-            return AnyView(EmptyView())
         case .TextField(let tf):
             return AnyView(
                 CellTextFieldView(skeletonTextField: tf, userInfoValue: userInfoValue)
@@ -1881,7 +1836,7 @@ private struct CellActionButtonView: View {
                let cachedValueType = await viewModel.cache.get(url.absoluteString) {
                 button = resolvedActionButton(button, cachedValue: cachedValueType)
             }
-            response = await button.execute(requester: requester)
+            response = await viewModel.executeOriginalUserActionButton(button, requester: requester)
         }
 
         await finishExecution(succeeded: response != nil, marksMutation: true)
@@ -3250,18 +3205,11 @@ private struct CellNavigationBarView: View {
                 await activate(item)
             }
         } label: {
-            VStack(spacing: 2) {
-                if let iconName = item.icon, iconName.isEmpty == false {
-                    Image(systemName: iconName)
-                        .font(.body)
-                        .accessibilityHidden(true)
-                }
-                Text(resolvedLabel(for: item))
-                    .font(item.icon?.isEmpty == false ? .caption : .subheadline)
-                    .fontWeight(active ? .semibold : .regular)
-            }
-            .foregroundStyle(active ? Color.accentColor : Color.primary)
-            .frame(maxWidth: .infinity)
+            Text(resolvedLabel(for: item))
+                .font(.subheadline)
+                .fontWeight(active ? .semibold : .regular)
+                .foregroundStyle(active ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("skeleton.navigationBar.item.\(item.id.uuidString)")
@@ -3537,7 +3485,7 @@ private struct CellTextFieldView: View {
             }
         }
         let requester = try? await requester()
-        let response = await submitButton.execute(requester: requester)
+        let response = await viewModel.executeOriginalUserActionButton(submitButton, requester: requester)
         guard response != nil else {
             return
         }
@@ -3917,20 +3865,18 @@ private struct CellTextAreaView: View {
     }
 
     private var plainEditorBody: some View {
-        paragraphEditor
-            .frame(minHeight: minHeight(), maxHeight: maxHeight())
-            // TextEditor paints its own background on macOS. The placeholder
-            // must be above it, and must not intercept focus/editing clicks.
-            .overlay(alignment: .topLeading) {
-                if text.isEmpty, !localizedPlaceholder.isEmpty {
-                    Text(localizedPlaceholder)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 8)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
+        ZStack(alignment: .topLeading) {
+            if text.isEmpty, !localizedPlaceholder.isEmpty {
+                Text(localizedPlaceholder)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 8)
             }
+
+            paragraphEditor
+                .frame(minHeight: minHeight(), maxHeight: maxHeight())
+
+        }
     }
 
     @ViewBuilder private var paragraphEditor: some View {
@@ -4018,7 +3964,7 @@ private struct CellTextAreaView: View {
             }
         }
         let requester = try? await requester()
-        let response = await submitButton.execute(requester: requester)
+        let response = await viewModel.executeOriginalUserActionButton(submitButton, requester: requester)
         guard response != nil else {
             return
         }
