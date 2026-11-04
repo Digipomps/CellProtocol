@@ -18,15 +18,15 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Toolchain
         run: swift --version
-      - name: Build all targets and tests
-        run: swift build --build-tests --force-resolved-versions -j 2 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+      # CellBaseTests depends on CellApple (Apple-only frameworks), so tests
+      # cannot run on Linux. This proves the moved Perspective sources compile
+      # in CellBase on Linux with OpenCombine, which is GP6-A's Linux claim.
+      - name: Build CellBase on Linux
         shell: bash
-      - name: Perspective and RelationalLearning tests
-        run: swift test --skip-build --filter 'Perspective|RelationalLearning' 2>&1 | tee test.log; exit ${PIPESTATUS[0]}
-        shell: bash
+        run: swift build --target CellBase --force-resolved-versions -j 2 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
       - name: Summary
         if: always()
         shell: bash
         run: |
-          grep -E "error:" build.log | head -40 || true
-          grep -E "Executed|failed \(" test.log | tail -40 || true
+          grep -E "error:" build.log | sort | uniq -c | sort -rn | head -60 || true
+          grep -cE "warning:" build.log || true
