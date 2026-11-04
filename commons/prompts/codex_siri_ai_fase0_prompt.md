@@ -12,7 +12,7 @@ Status for slicene (bare Kjetil endrer status):
 - Slice A (WP0.1 enhetsmåling): **blocked** — venter på Kjetils ord
 - Slice B (WP0.2 Apple-eksempel med `@AppIntent(.tool)`): **blocked** — venter på Kjetils ord
 - Slice C (WP0.3 Foundation Models-baseline for `AppleIntelligenceCell`): **blocked** — venter på Kjetils ord
-- Slice D (fase 1 verifisering, `swift test --filter Assistant`): **blocked** — venter på Kjetils ord
+- Slice D (fase 1 verifisering, `swift test --filter Assistant`): **godkjent** 2026-11-04 (Kjetil: «Slice D godkjent, kjør det med Codex»)
 
 Regler: utfør bare slices merket **godkjent**. Ingen git gjennom mount. Ikke rør
 andre filer enn de som er nevnt. Skriv rå output til evidensfiler; ikke
