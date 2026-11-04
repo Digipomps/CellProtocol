@@ -45,6 +45,10 @@ public struct AssistantPropertyDescriptor: Codable, Equatable, Sendable {
     }
 }
 
+/// `ValueType.==` reports every `.object`/`.list` pair as unequal
+/// (lesson.valuetype-equality-false-for-objects), so the descriptor types
+/// that carry schemas compare them structurally with
+/// `ExploreContractValidator.deepEqual` instead of the synthesised `==`.
 public struct AssistantToolDescriptor: Codable, Equatable {
     public var id: String
     public var cellType: String
@@ -92,6 +96,22 @@ public struct AssistantToolDescriptor: Codable, Equatable {
         self.returnType = returnType
         self.flowTopics = flowTopics
         self.inputSchema = inputSchema
+    }
+
+    public static func == (lhs: AssistantToolDescriptor, rhs: AssistantToolDescriptor) -> Bool {
+        lhs.id == rhs.id
+            && lhs.cellType == rhs.cellType
+            && lhs.key == rhs.key
+            && lhs.method == rhs.method
+            && lhs.title == rhs.title
+            && lhs.description == rhs.description
+            && lhs.permission == rhs.permission
+            && lhs.authentication == rhs.authentication
+            && lhs.parameters == rhs.parameters
+            && lhs.inputType == rhs.inputType
+            && lhs.returnType == rhs.returnType
+            && lhs.flowTopics == rhs.flowTopics
+            && ExploreContractValidator.deepEqual(lhs.inputSchema, rhs.inputSchema)
     }
 }
 
@@ -143,6 +163,23 @@ public struct AssistantEntityDescriptor: Codable, Equatable {
         self.indexable = indexable
         self.properties = properties
         self.itemSchema = itemSchema
+    }
+
+    public static func == (lhs: AssistantEntityDescriptor, rhs: AssistantEntityDescriptor) -> Bool {
+        lhs.id == rhs.id
+            && lhs.cellType == rhs.cellType
+            && lhs.key == rhs.key
+            && lhs.method == rhs.method
+            && lhs.typeName == rhs.typeName
+            && lhs.description == rhs.description
+            && lhs.permission == rhs.permission
+            && lhs.idKey == rhs.idKey
+            && lhs.titleKey == rhs.titleKey
+            && lhs.itemsKey == rhs.itemsKey
+            && lhs.authentication == rhs.authentication
+            && lhs.indexable == rhs.indexable
+            && lhs.properties == rhs.properties
+            && ExploreContractValidator.deepEqual(lhs.itemSchema, rhs.itemSchema)
     }
 }
 

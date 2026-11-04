@@ -65,6 +65,22 @@ public enum AssistantGatewayOutcome: Equatable {
     case denied
     /// The cell answered.
     case response(ValueType?)
+
+    /// Structural comparison; `ValueType.==` cannot compare objects or lists.
+    public static func == (lhs: AssistantGatewayOutcome, rhs: AssistantGatewayOutcome) -> Bool {
+        switch (lhs, rhs) {
+        case let (.refused(left), .refused(right)):
+            return left == right
+        case let (.invalidInput(left), .invalidInput(right)):
+            return left == right
+        case (.denied, .denied):
+            return true
+        case let (.response(left), .response(right)):
+            return ExploreContractValidator.deepEqual(left, right)
+        default:
+            return false
+        }
+    }
 }
 
 /// The single entry point an assistant adapter calls. It enforces the opt-in

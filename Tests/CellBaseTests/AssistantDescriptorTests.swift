@@ -207,6 +207,8 @@ final class AssistantDescriptorTests: XCTestCase {
 
         let forward = AssistantDescriptorProjection.project(cellType: "ListsCell", contracts: contracts)
         let reversed = AssistantDescriptorProjection.project(cellType: "ListsCell", contracts: contracts.reversed())
+        // Descriptor equality compares schemas structurally; `ValueType.==` alone would
+        // call every object unequal (lesson.valuetype-equality-false-for-objects).
         XCTAssertEqual(forward, reversed)
         XCTAssertEqual(try Self.json(forward), try Self.json(reversed))
 
