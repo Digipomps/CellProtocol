@@ -1269,6 +1269,25 @@ public class CellResolver: CellResolverProtocol {
         )
     }
 
+    /// Opens one host-selected WebSocket endpoint with exact, process-local proof
+    /// scopes, including known child Cells needed before description discovery.
+    /// Supply these from trusted host policy, never from a remote configuration
+    /// or signing challenge. An empty list denies every identity-origin scope.
+    /// Ordinary lookups and lookups with different pins cannot reuse this bridge.
+    public func cellAtEndpoint(
+        endpoint: String,
+        requester: Identity,
+        identityProofScopes: [BridgeIdentityProofScope]
+    ) async throws -> Emit {
+        guard let url = URL(string: endpoint),
+              url.scheme == "ws" || url.scheme == "wss" else {
+            throw CellResolverError.invalidRemoteCellReference(endpoint: endpoint)
+        }
+        return try await emitCellAtWSEndpoint(
+            endpoint: endpoint, requester: requester, identityProofScopes: identityProofScopes
+        )
+    }
+
     /// Resolves a remote `cell://` endpoint through exactly the supplied host
     /// route. If another caller changes the host route before resolution
     /// completes, this operation fails instead of silently continuing through
@@ -1352,7 +1371,11 @@ public class CellResolver: CellResolverProtocol {
         return preparedCell
     }
     
-    private func emitCellAtWSEndpoint(endpoint: String, requester: Identity) async throws -> Emit {
+    private func emitCellAtWSEndpoint(
+        endpoint: String,
+        requester: Identity,
+        identityProofScopes: [BridgeIdentityProofScope]? = nil
+    ) async throws -> Emit {
         guard let endpointURL = URL(string: endpoint) else {
             throw TransportError.InvalidURL
         }
@@ -1365,7 +1388,8 @@ public class CellResolver: CellResolverProtocol {
         )
         let emitCell = try await self.cellBridgeEmit(
             for: endpoint,
-            principal: principal
+            principal: principal,
+            identityProofScopes: identityProofScopes
         )
         await touchLifecycle(for: emitCell)
         return emitCell
@@ -2193,9 +2217,18 @@ public class CellResolver: CellResolverProtocol {
     
     private func cellBridgeEmit(
         for endpoint: String,
-        principal: ProvenRemoteBridgePrincipal
+        principal: ProvenRemoteBridgePrincipal,
+        identityProofScopes: [BridgeIdentityProofScope]? = nil
     ) async throws -> Emit {
-        let cacheKey = legacyBridgeCacheKey(endpoint: endpoint, principal: principal)
+        var cacheKey = legacyBridgeCacheKey(endpoint: endpoint, principal: principal)
+        if let identityProofScopes {
+            // Pin policy is part of both cache and in-flight identity. Keep nil
+            // (discovery) distinct from [] (explicit deny), and compare sets.
+            let scopes = Set(identityProofScopes).map {
+                cacheKeyComponent($0.domain) + cacheKeyComponent($0.resource)
+            }.sorted()
+            cacheKey += "|pinned-identity-proof-v1|" + scopes.map(cacheKeyComponent).joined(separator: "|")
+        }
 
         if let cachedBridge = withStateLock({ remoteBridgeCache[cacheKey] }),
            (cachedBridge as? BridgeBase)?.hasAuthenticatedChannel == true {
@@ -2213,7 +2246,8 @@ public class CellResolver: CellResolverProtocol {
                 }
                 return try await self.makeCellBridgeEmit(
                     for: endpoint,
-                    and: principal.requester
+                    and: principal.requester,
+                    identityProofScopes: identityProofScopes
                 )
             }
             pendingRemoteBridgeTasks[cacheKey] = task
@@ -2235,7 +2269,11 @@ public class CellResolver: CellResolverProtocol {
         }
     }
 
-    private func makeCellBridgeEmit(for endpoint: String, and identity: Identity) async throws -> Emit {
+    private func makeCellBridgeEmit(
+        for endpoint: String,
+        and identity: Identity,
+        identityProofScopes: [BridgeIdentityProofScope]? = nil
+    ) async throws -> Emit {
         guard var endpointUrl = URL(string: endpoint) else {
             throw TransportError.InvalidURL
         }
@@ -2251,7 +2289,7 @@ public class CellResolver: CellResolverProtocol {
             endpoint: .init(url: endpointUrl, domain: "bridge",
                 allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
         // TODO: Consider refactoring 
-        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), uuid: bridgeID, transport: transport, connection: .outbound)
+        let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), uuid: bridgeID, transport: transport, connection: .outbound, identityProofScopes: identityProofScopes)
         let cellBridge = try await BridgeBase(bridgeConfig)
         try await cellBridge.setTransport(transport, connection: .outbound)
         
