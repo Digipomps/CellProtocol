@@ -89,6 +89,8 @@ jobs:
             "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/Fixtures/EntityRelation*.json \
             "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
+          cp Tests/CellBaseTests/Fixtures/AssistantSurface.*.json \
+            "${gate_root}/Tests/DeviceIngressLinuxTests/Fixtures/"
           cp Tests/CellBaseTests/TestSupport/MockCellResolver.swift \
             "${gate_root}/Tests/DeviceIngressLinuxTests/"
           # Exercise security authorization under OpenCombine, independently of
@@ -101,11 +103,13 @@ jobs:
             BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
-            SkeletonDataBindingTests InteropFixturesV1Tests; do
+            SkeletonDataBindingTests InteropFixturesV1Tests \
+            AssistantExposureContractTests AssistantDescriptorTests AssistantRequesterContractTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
             Tests/CellBaseTests/TestSupport/TestFixtures.swift \
+            Tests/CellBaseTests/TestSupport/CellContractHarness.swift \
             Tests/CellBaseTests/TestSupport/MockIdentityVault.swift \
             Tests/CellBaseTests/TestSupport/SimulatedEntity.swift \
             Tests/CellBaseTests/TestSupport/MockBridgeTransport.swift \

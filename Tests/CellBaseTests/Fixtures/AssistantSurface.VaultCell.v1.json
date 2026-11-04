@@ -1,0 +1,111 @@
+{
+  "cellType" : "VaultCell",
+  "entities" : [
+    {
+      "authentication" : "requiresAuthentication",
+      "idKey" : "id",
+      "indexable" : true,
+      "itemsKey" : "notes",
+      "key" : "vault.state",
+      "method" : "get",
+      "permission" : "r---",
+      "properties" : [
+        {
+          "name" : "content",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "createdAtEpochMs",
+          "required" : true,
+          "type" : "integer"
+        },
+        {
+          "name" : "id",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "slug",
+          "required" : false,
+          "type" : "string"
+        },
+        {
+          "name" : "tags",
+          "required" : true,
+          "type" : "list"
+        },
+        {
+          "name" : "title",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "updatedAtEpochMs",
+          "required" : true,
+          "type" : "integer"
+        }
+      ],
+      "titleKey" : "title",
+      "typeName" : "Vault state notes"
+    }
+  ],
+  "grants" : [
+    {
+      "keypath" : "vault.note.create",
+      "permission" : "-w--"
+    },
+    {
+      "keypath" : "vault.note.list",
+      "permission" : "-w--"
+    },
+    {
+      "keypath" : "vault.state",
+      "permission" : "r---"
+    }
+  ],
+  "schemaVersion" : "haven.assistant.surface.v1",
+  "tools" : [
+    {
+      "authentication" : "requiresAuthentication",
+      "inputType" : "oneOf",
+      "key" : "vault.note.create",
+      "method" : "set",
+      "parameters" : [
+        {
+          "name" : "value",
+          "options" : [
+            "object",
+            "object"
+          ],
+          "required" : true,
+          "type" : "oneOf"
+        }
+      ],
+      "permission" : "-w--",
+      "returnType" : "oneOf",
+      "title" : "Vault note create"
+    },
+    {
+      "authentication" : "requiresAuthentication",
+      "inputType" : "oneOf",
+      "key" : "vault.note.list",
+      "method" : "set",
+      "parameters" : [
+        {
+          "name" : "value",
+          "options" : [
+            "null",
+            "object",
+            "object"
+          ],
+          "required" : true,
+          "type" : "oneOf"
+        }
+      ],
+      "permission" : "-w--",
+      "returnType" : "oneOf",
+      "title" : "Vault note list"
+    }
+  ]
+}

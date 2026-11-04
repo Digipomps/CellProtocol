@@ -1,0 +1,145 @@
+{
+  "cellType" : "ListsCell",
+  "entities" : [
+    {
+      "authentication" : "requiresAuthentication",
+      "idKey" : "id",
+      "indexable" : true,
+      "itemsKey" : "lists",
+      "key" : "lists.state",
+      "method" : "get",
+      "permission" : "r---",
+      "properties" : [
+        {
+          "name" : "doneCount",
+          "required" : true,
+          "type" : "integer"
+        },
+        {
+          "name" : "id",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "isActive",
+          "required" : true,
+          "type" : "bool"
+        },
+        {
+          "name" : "kind",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "mount",
+          "required" : true,
+          "type" : "object"
+        },
+        {
+          "name" : "openCount",
+          "required" : true,
+          "type" : "integer"
+        },
+        {
+          "name" : "selectPayload",
+          "required" : true,
+          "type" : "object"
+        },
+        {
+          "name" : "summaryText",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "title",
+          "required" : true,
+          "type" : "string"
+        }
+      ],
+      "titleKey" : "title",
+      "typeName" : "Lists state lists"
+    }
+  ],
+  "grants" : [
+    {
+      "keypath" : "lists.item.add",
+      "permission" : "-w--"
+    },
+    {
+      "keypath" : "lists.item.toggle",
+      "permission" : "-w--"
+    },
+    {
+      "keypath" : "lists.list.create",
+      "permission" : "-w--"
+    },
+    {
+      "keypath" : "lists.state",
+      "permission" : "r---"
+    }
+  ],
+  "schemaVersion" : "haven.assistant.surface.v1",
+  "tools" : [
+    {
+      "authentication" : "requiresAuthentication",
+      "inputType" : "oneOf",
+      "key" : "lists.item.add",
+      "method" : "set",
+      "parameters" : [
+        {
+          "name" : "value",
+          "options" : [
+            "string",
+            "object"
+          ],
+          "required" : true,
+          "type" : "oneOf"
+        }
+      ],
+      "permission" : "-w--",
+      "returnType" : "oneOf",
+      "title" : "Lists item add"
+    },
+    {
+      "authentication" : "requiresAuthentication",
+      "inputType" : "object",
+      "key" : "lists.item.toggle",
+      "method" : "set",
+      "parameters" : [
+        {
+          "name" : "itemId",
+          "required" : true,
+          "type" : "string"
+        },
+        {
+          "name" : "listId",
+          "required" : true,
+          "type" : "string"
+        }
+      ],
+      "permission" : "-w--",
+      "returnType" : "oneOf",
+      "title" : "Lists item toggle"
+    },
+    {
+      "authentication" : "requiresAuthentication",
+      "inputType" : "oneOf",
+      "key" : "lists.list.create",
+      "method" : "set",
+      "parameters" : [
+        {
+          "name" : "value",
+          "options" : [
+            "string",
+            "object"
+          ],
+          "required" : true,
+          "type" : "oneOf"
+        }
+      ],
+      "permission" : "-w--",
+      "returnType" : "oneOf",
+      "title" : "Lists list create"
+    }
+  ]
+}

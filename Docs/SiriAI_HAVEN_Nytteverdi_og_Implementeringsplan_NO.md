@@ -1,7 +1,19 @@
 # Siri AI × HAVEN: nytteverdi og implementeringsplan
 
-Dato: 2026-11-04. Status: **forslag til G1**. Ingen gate er godkjent; ingen kode er
-endret. Faktagrunnlaget om Apple ligger i
+Dato: 2026-11-04. Status: se STATUS under.
+
+## STATUS
+
+- G1: godkjent 2026-11-04 (Kjetil: «G1 godkjent, start fase 1»)
+- G2 (fase 1): godkjent 2026-11-04 ved samme ord; fase 2–4 venter på WP0.1-måling og egen G2
+- Fase 1 (WP1.1–WP1.4): implementert 2026-11-04 på branch `claude/youthful-hawking-sm0c4i`,
+  dokumentert i `Docs/Assistant_Exposure_Contract.md`. Verifisering: `swift test` kunne ikke
+  kjøres i skysesjonen (ingen Swift-toolchain, download.swift.org og Docker Hub er stengt i
+  sesjonens nettverk). Testene er lagt i Linux-CI-gaten; CI-resultatet og lokal
+  `swift test --filter Assistant` på Mac er bevisene som skal inn i TESTRESULT.md.
+- Fase 0 (måling på enhet): ikke startet; Codex-handoff i
+  `commons/prompts/codex_siri_ai_fase0_prompt.md` er fortsatt merket blocked til Kjetil frigir den.
+- G3: ikke bedt om. Faktagrunnlaget om Apple ligger i
 `Docs/SiriAI_Developer_Preview_Funn_2026-11-04.md`. Alt om HAVEN under er lest fra
 dette repoet i denne sesjonen (stier oppgitt) med mindre det er merket *recalled*.
 

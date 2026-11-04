@@ -3,11 +3,16 @@
 Kontekst: `CellProtocol/Docs/SiriAI_HAVEN_Nytteverdi_og_Implementeringsplan_NO.md`
 §6 fase 0 og `CellProtocol/Docs/SiriAI_Developer_Preview_Funn_2026-11-04.md`.
 
+G1 ble godkjent 2026-11-04 og fase 1 er implementert i CellProtocol
+(`Docs/Assistant_Exposure_Contract.md`). Slicene under er fortsatt egne
+beslutninger; i tillegg kommer **Slice D** som verifiserer fase 1 lokalt.
+
 Status for slicene (bare Kjetil endrer status):
 
-- Slice A (WP0.1 enhetsmåling): **blocked** — venter på G1
-- Slice B (WP0.2 Apple-eksempel med `@AppIntent(.tool)`): **blocked** — venter på G1
-- Slice C (WP0.3 Foundation Models-baseline for `AppleIntelligenceCell`): **blocked** — venter på G1
+- Slice A (WP0.1 enhetsmåling): **blocked** — venter på Kjetils ord
+- Slice B (WP0.2 Apple-eksempel med `@AppIntent(.tool)`): **blocked** — venter på Kjetils ord
+- Slice C (WP0.3 Foundation Models-baseline for `AppleIntelligenceCell`): **blocked** — venter på Kjetils ord
+- Slice D (fase 1 verifisering, `swift test --filter Assistant`): **blocked** — venter på Kjetils ord
 
 Regler: utfør bare slices merket **godkjent**. Ingen git gjennom mount. Ikke rør
 andre filer enn de som er nevnt. Skriv rå output til evidensfiler; ikke
@@ -59,3 +64,17 @@ Mål: vite hva dagens `AppleIntelligenceCell` gjør på 27.3 før vi endrer den.
 - Tre evidensfiler finnes under `HAVEN-Deploy/_handoff/SIRI-AI/maal/`.
 - Hver måling har dato, enhet, OS-versjon og språk/region.
 - Rapporten til Kjetil sier per slice: utført / blocked (grunn) / delvis (hva).
+
+## Slice D — Fase 1 verifisering på Mac (Codex)
+
+Mål: bevise at fase 1 bygger og testene er grønne på et ekte toolchain.
+
+1. I `CellProtocol` på branch `claude/youthful-hawking-sm0c4i`:
+   `swift build` og deretter
+   `swift test --filter 'AssistantExposureContractTests|AssistantDescriptorTests|AssistantRequesterContractTests|ListsCellTests|VaultCellTests|ExploreContractValidatorTests'`.
+   Rå output til `HAVEN-Deploy/_handoff/SIRI-AI/maal/FASE1-swift-test.log`.
+2. Hvis golden-fixturene avviker: kjør
+   `HAVEN_WRITE_ASSISTANT_FIXTURES=1 swift test --filter AssistantDescriptorTests`,
+   legg diffen i loggen og ikke commit den regenererte fixturen uten å si hva som endret seg.
+3. Kjør hele `swift test` én gang og noter antall tester og eventuelle nye feil
+   mot `origin/main` (bruk `land-cellprotocol.sh <spec>` med `PORTS_ONLY=1` hvis tilgjengelig).

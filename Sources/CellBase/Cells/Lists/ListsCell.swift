@@ -17,6 +17,12 @@ import Foundation
 public final class ListsCell: GeneralCell {
     public static let endpoint = ListsSkeletonFactory.cellEndpoint
     public static let grantArea = "lists"
+    /// Keys an assistant (Siri AI tool intent, Foundation Models tool, Claude/Codex) may call
+    /// with its own requester identity. Each needs an exact `-w--` grant in the Contract
+    /// (`AssistantRequesterContract`); the template below lists them so admission can sign it.
+    public static let assistantToolKeys = ["lists.list.create", "lists.item.add", "lists.item.toggle"]
+    /// The one key whose rows (`lists.state.lists[]`) an assistant may read and index.
+    public static let assistantEntityKey = "lists.state"
     public static let unverifiedNotice = "Kunne ikke lagre siste endring (lagring ikke bekreftet). Endringen er gjort i minnet — prøv igjen."
 
     private let stateLock = NSLock()
@@ -54,6 +60,10 @@ public final class ListsCell: GeneralCell {
 
     public override func installCellRuntimeBindingsForAccess() async throws {
         agreementTemplate.ensureGrant("rw--", for: Self.grantArea)
+        for key in Self.assistantToolKeys {
+            agreementTemplate.ensureGrant("-w--", for: key)
+        }
+        agreementTemplate.ensureGrant("r---", for: Self.assistantEntityKey)
         await registerKeys(owner: owner)
     }
 
@@ -85,7 +95,21 @@ public final class ListsCell: GeneralCell {
                 "schemaVersion": ExploreContract.schema(type: "string"),
                 "stateVersion": ExploreContract.schema(type: "integer"),
                 "activeListId": ExploreContract.oneOfSchema(options: [ExploreContract.schema(type: "string"), .null]),
-                "lists": ExploreContract.listSchema(item: ExploreContract.schema(type: "object", description: "ListRow med mount")),
+                "lists": ExploreContract.listSchema(item: ExploreContract.objectSchema(
+                    properties: [
+                        "id": ExploreContract.schema(type: "string", description: "Listens stabile ID."),
+                        "title": ExploreContract.schema(type: "string", description: "Listens navn."),
+                        "kind": ExploreContract.schema(type: "string", description: "shopping | reminders | ideas | custom"),
+                        "isActive": ExploreContract.schema(type: "bool"),
+                        "openCount": ExploreContract.schema(type: "integer", description: "Antall åpne punkter."),
+                        "doneCount": ExploreContract.schema(type: "integer", description: "Antall utførte punkter."),
+                        "summaryText": ExploreContract.schema(type: "string"),
+                        "selectPayload": ExploreContract.schema(type: "object"),
+                        "mount": ExploreContract.schema(type: "object", description: "SkeletonComponentMount")
+                    ],
+                    requiredKeys: ["id", "title", "kind", "isActive", "openCount", "doneCount", "summaryText", "selectPayload", "mount"],
+                    description: "ListRow med mount"
+                )),
                 "activeAsRows": ExploreContract.listSchema(item: ExploreContract.schema(type: "object", description: "ListView, 0 eller 1 rad")),
                 "emptyHint": ExploreContract.listSchema(item: ExploreContract.schema(type: "object")),
                 "notice": ExploreContract.listSchema(item: ExploreContract.schema(type: "object")),
@@ -113,9 +137,10 @@ public final class ListsCell: GeneralCell {
             return .object(["state": self.statePayload()])
         }
         await registerGet(key: "lists.state", owner: owner, returns: stateSchema, permissions: ["r---"],
-                          description: .string("Brukerens lister, aktiv liste som rad, og én komponentmontering per liste.")) { [weak self] requester in
+                          description: .string("Brukerens lister, aktiv liste som rad, og én komponentmontering per liste."),
+                          assistant: .entity(idKey: "id", titleKey: "title", itemsKey: "lists", authentication: .requiresAuthentication, indexable: true)) { [weak self] requester in
             guard let self else { return .string("failure") }
-            guard await self.validateAccess("r---", at: Self.grantArea, for: requester) else { return .string("denied") }
+            guard await self.validateAccess("r---", atKey: Self.assistantEntityKey, orArea: Self.grantArea, for: requester) else { return .string("denied") }
             return self.statePayload()
         }
 
@@ -132,9 +157,10 @@ public final class ListsCell: GeneralCell {
             ("lists.item.remove", itemRef, "Slett punkt.")
         ]
         for (key, input, description) in setKeys {
-            await registerSet(key: key, owner: owner, input: input, returns: resultSchema, permissions: ["-w--"], description: .string(description)) { [weak self] requester, payload in
+            let assistant: AssistantExposure? = Self.assistantToolKeys.contains(key) ? .tool(authentication: .requiresAuthentication) : nil
+            await registerSet(key: key, owner: owner, input: input, returns: resultSchema, permissions: ["-w--"], description: .string(description), assistant: assistant) { [weak self] requester, payload in
                 guard let self else { return .string("failure") }
-                guard await self.validateAccess("-w--", at: Self.grantArea, for: requester) else { return .string("denied") }
+                guard await self.validateAccess("-w--", atKey: key, orArea: Self.grantArea, for: requester) else { return .string("denied") }
                 return await self.handle(keypath: key, payload: payload)
             }
         }

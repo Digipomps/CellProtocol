@@ -59,6 +59,7 @@ public extension GeneralCell {
         required: Bool = false,
         flowEffects: [ValueType] = [],
         description: ValueType = .string("*"),
+        assistant: AssistantExposure? = nil,
         handler: @escaping (_ requester: Identity) async -> ValueType
     ) async {
         await registerExploreContract(
@@ -70,7 +71,8 @@ public extension GeneralCell {
             permissions: permissions,
             required: required,
             flowEffects: flowEffects,
-            description: description
+            description: description,
+            assistant: assistant
         )
         await addInterceptForGet(requester: owner, key: key) { _, requester in
             await handler(requester)
@@ -87,6 +89,7 @@ public extension GeneralCell {
         required: Bool = false,
         flowEffects: [ValueType] = [],
         description: ValueType = .string("*"),
+        assistant: AssistantExposure? = nil,
         handler: @escaping (_ requester: Identity, _ payload: ValueType) async throws -> ValueType?
     ) async {
         await registerExploreContract(
@@ -98,7 +101,8 @@ public extension GeneralCell {
             permissions: permissions,
             required: required,
             flowEffects: flowEffects,
-            description: description
+            description: description,
+            assistant: assistant
         )
         await addInterceptForSet(requester: owner, key: key) { _, value, requester in
             try await handler(requester, value)

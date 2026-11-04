@@ -108,9 +108,18 @@ public final class VaultCell: GeneralCell {
         try container.encode(updatedAtEpochMs, forKey: .updatedAtEpochMs)
     }
 
+    /// Keys an assistant may call with its own requester identity (exact-key grants only).
+    public static let assistantToolKeys = ["vault.note.create", "vault.note.list"]
+    /// The key whose `notes[]` an assistant may read and index.
+    public static let assistantEntityKey = "vault.state"
+
     private func setupPermissions(owner: Identity) async {
         agreementTemplate.ensureGrant("rw--", for: "vault")
         agreementTemplate.ensureGrant("rw--", for: "feed")
+        for key in Self.assistantToolKeys {
+            agreementTemplate.ensureGrant("-w--", for: key)
+        }
+        agreementTemplate.ensureGrant("r---", for: Self.assistantEntityKey)
     }
 
     private func setupKeys(owner: Identity) async {
@@ -132,13 +141,13 @@ public final class VaultCell: GeneralCell {
 
         await addInterceptForGet(requester: owner, key: "vault.state") { [weak self] _, requester in
             guard let self else { return .string("failure") }
-            guard await self.validateAccess("r---", at: "vault", for: requester) else { return .string("denied") }
+            guard await self.validateAccess("r---", atKey: Self.assistantEntityKey, orArea: "vault", for: requester) else { return .string("denied") }
             return self.statePayload()
         }
 
         await addInterceptForSet(requester: owner, key: "vault.note.create") { [weak self] _, value, requester in
             guard let self else { return .string("failure") }
-            guard await self.validateAccess("-w--", at: "vault", for: requester) else { return .string("denied") }
+            guard await self.validateAccess("-w--", atKey: "vault.note.create", orArea: "vault", for: requester) else { return .string("denied") }
             return self.handleNoteCreate(value: value)
         }
 
@@ -156,7 +165,7 @@ public final class VaultCell: GeneralCell {
 
         await addInterceptForSet(requester: owner, key: "vault.note.list") { [weak self] _, value, requester in
             guard let self else { return .string("failure") }
-            guard await self.validateAccess("-w--", at: "vault", for: requester) else { return .string("denied") }
+            guard await self.validateAccess("-w--", atKey: "vault.note.list", orArea: "vault", for: requester) else { return .string("denied") }
             return self.handleNoteList(value: value)
         }
 
@@ -189,7 +198,8 @@ public final class VaultCell: GeneralCell {
             returns: Self.stateSchema(),
             permissions: ["r---"],
             required: false,
-            description: .string("Returns a full, versioned vault snapshot for sync. Clients fetch this once, then follow VaultMutationEvent flow updates and re-fetch on version gaps.")
+            description: .string("Returns a full, versioned vault snapshot for sync. Clients fetch this once, then follow VaultMutationEvent flow updates and re-fetch on version gaps."),
+            assistant: .entity(idKey: "id", titleKey: "title", itemsKey: "notes", authentication: .requiresAuthentication, indexable: true)
         )
 
         await registerExploreContract(
@@ -200,7 +210,8 @@ public final class VaultCell: GeneralCell {
             returns: Self.noteMutationResponseSchema(operation: "vault.note.create"),
             permissions: ["-w--"],
             required: true,
-            description: .string("Creates a vault note from a raw note payload or an object containing `note`.")
+            description: .string("Creates a vault note from a raw note payload or an object containing `note`."),
+            assistant: .tool(authentication: .requiresAuthentication)
         )
 
         await registerExploreContract(
@@ -233,7 +244,8 @@ public final class VaultCell: GeneralCell {
             returns: Self.noteListResponseSchema(),
             permissions: ["-w--"],
             required: false,
-            description: .string("Lists notes with optional filtering, sorting, and pagination.")
+            description: .string("Lists notes with optional filtering, sorting, and pagination."),
+            assistant: .tool(authentication: .requiresAuthentication)
         )
 
         await registerExploreContract(

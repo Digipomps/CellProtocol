@@ -157,7 +157,8 @@ public enum ExploreContractCatalogBuilder {
                 permissions: permissions,
                 inputType: inputType,
                 returnType: returnType,
-                flowTopics: flowTopics
+                flowTopics: flowTopics,
+                assistant: ExploreContract.assistantExposure(from: contract)
             ),
             contract: contract,
             markdown: renderMarkdown(
@@ -204,12 +205,18 @@ public enum ExploreContractCatalogBuilder {
         permissions: [String],
         inputType: String,
         returnType: String,
-        flowTopics: [String]
+        flowTopics: [String],
+        assistant: AssistantExposure? = nil
     ) -> [String] {
         var tags = [cellType.lowercased(), method.lowercased(), inputType.lowercased(), returnType.lowercased()]
         tags.append(contentsOf: key.split(separator: ".").map { String($0).lowercased() })
         tags.append(contentsOf: permissions.map { $0.lowercased() })
         tags.append(contentsOf: flowTopics.map { $0.lowercased() })
+        if let assistant {
+            if assistant.exposeAsTool { tags.append("assistant.tool") }
+            if assistant.exposeAsEntity { tags.append("assistant.entity") }
+            if assistant.indexable { tags.append("assistant.indexable") }
+        }
 
         var deduped = [String]()
         var seen = Set<String>()

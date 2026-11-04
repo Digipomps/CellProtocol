@@ -34,6 +34,8 @@ public enum ExploreContract {
         public static let required = "required"
         public static let flowEffects = "flowEffects"
         public static let summary = "summary"
+        /// Additive, opt-in: see `AssistantExposure`. Absent on every contract that does not set it.
+        public static let assistant = "assistant"
 
         public static let type = "type"
         public static let description = "description"
@@ -74,9 +76,13 @@ public enum ExploreContract {
         permissions: [String] = [],
         required: Bool = false,
         flowEffects: [ValueType] = [],
-        summary: String = "*"
+        summary: String = "*",
+        assistant: AssistantExposure? = nil
     ) -> ValueType {
         var object = Object()
+        if let assistant, assistant.isExposed {
+            object[Field.assistant] = assistant.valueType()
+        }
         object[Field.contractVersion] = .integer(version)
         object[Field.key] = .string(key)
         object[Field.method] = .string(method.rawValue)
@@ -466,7 +472,8 @@ public extension GeneralCell {
         permissions: [String] = [],
         required: Bool = false,
         flowEffects: [ValueType] = [],
-        description: ValueType = .string("*")
+        description: ValueType = .string("*"),
+        assistant: AssistantExposure? = nil
     ) async {
         let summary = ExploreContract.string(from: description) ?? "*"
         let schema = ExploreContract.keyContract(
@@ -477,7 +484,8 @@ public extension GeneralCell {
             permissions: permissions,
             required: required,
             flowEffects: flowEffects,
-            summary: summary
+            summary: summary,
+            assistant: assistant
         )
 
         await registerExploreSchema(

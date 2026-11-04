@@ -25,3 +25,10 @@ one byte-pinned, cryptographically bound DeviceIngress registration exchange.
 The requester's locally derived response expectation, not server-provided
 admission metadata, is the response-verification authority. The v1 and v2
 envelope fixtures remain pinned negative vectors and must fail closed.
+
+`AssistantSurface.ListsCell.v1.json` and `AssistantSurface.VaultCell.v1.json`
+pin the stable summary of what each cell exposes to assistants (tools,
+entities, grants) as projected by `AssistantDescriptorProjection`. They are
+decode-and-compare fixtures, not byte fixtures. Regenerate after a deliberate
+exposure change with `HAVEN_WRITE_ASSISTANT_FIXTURES=1 swift test --filter
+AssistantDescriptorTests`; see `Docs/Assistant_Exposure_Contract.md`.

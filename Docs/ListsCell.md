@@ -50,6 +50,16 @@ Every set returns `{status: "ok", stateVersion, …}` or `{status: "error", code
 explicit `listId` → `SkeletonComponentActionContext.mount?.instanceID` when a host dispatches a mounted
 action → `activeListId` → `no_target_list`.
 
+## Assistant exposure (Siri AI fase 1)
+
+`lists.list.create`, `lists.item.add` and `lists.item.toggle` are exposed as assistant tools, and
+`lists.state` rows (`lists[]`) as an entity collection (`indexable`). An assistant never acts as the
+owner: it is admitted with `AssistantRequesterContract` and holds exact `-w--`/`r---` grants on those
+four keys only, so `lists.item.remove`, `lists.list.rename` and the rest stay denied. The handlers for
+the exposed keys accept either the owner-area grant or the exact-key grant
+(`validateAccess(_:atKey:orArea:for:)`). Contract and tests: `Docs/Assistant_Exposure_Contract.md`,
+`AssistantRequesterContractTests`.
+
 ## Ordering invariant
 
 After every mutation, `items == open items (manual order) + checked items (doneAtEpochMs ascending)`.
