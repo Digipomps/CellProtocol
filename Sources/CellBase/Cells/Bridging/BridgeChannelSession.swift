@@ -446,7 +446,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
         try check(identity: presented, requiresIdentity: true)
         guard let descriptor = publicIdentity else { throw Auth.Failure.closed }
         let identity = descriptor.makeIdentity()
-        identity.identityVault = BridgeIdentityVault(cloudBridge: bridge)
+        identity.identityVault = BridgeIdentityVault(cloudBridge: bridge, attachmentTransferSession: self)
         return identity
     }
     public func revoke() { terminate(.revoked) }

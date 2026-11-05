@@ -641,6 +641,292 @@ final class CorrespondenceRelationshipTests: XCTestCase {
         print("PURPOSE cold restart: trusted host root purged expired disk entry without member reconnect")
     }
 
+    func testTransferTicketIssuedAtPrepare() async throws {
+        let f = try await fixture()
+        let sealed = try AttachmentStreamV1.seal(plaintext: Data([1]))
+        let request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: .init(name: "synthetic", mediaType: "application/octet-stream", byteCount: 1),
+            header: sealed.stream.header)
+        guard case .object(var wire) = try CorrespondenceCellCodec.encode(request) else { return XCTFail() }
+        wire["requestTransferTicket"] = .bool(true)
+        let result = try await f.cell.set(keypath: "attachments.prepare", value: .object(wire), requester: f.owner)
+        guard case .string(let ticket)? = field("transferTicket", result) else { return XCTFail("prepare must issue a transfer ticket") }
+        XCTAssertGreaterThanOrEqual(ticket.count, 43)
+    }
+
+    private func ticketUpload(_ f: Fixture, sender: Identity? = nil, bytes: Data = Data([1])) async throws
+        -> (CorrespondenceAttachmentRequest, [AttachmentStreamChunk], CorrespondenceAttachmentPlan, Data) {
+        let sender = sender ?? f.owner
+        let sealed = try AttachmentStreamV1.seal(plaintext: bytes)
+        var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: sender.uuid == f.owner.uuid ? f.cell.uuid : f.contract.agreement.uuid,
+            senderIdentityUUID: sender.uuid, metadata: .init(name: "synthetic", mediaType: "application/octet-stream", byteCount: UInt64(bytes.count)),
+            header: sealed.stream.header)
+        request.requestTransferTicket = true
+        let result = try await f.cell.set(keypath: "attachments.prepare", value: CorrespondenceCellCodec.encode(request), requester: sender)
+        let plan = try CorrespondenceCellCodec.decode(result, as: CorrespondenceAttachmentPlan.self)
+        request.requestTransferTicket = nil; request.attachmentID = plan.attachmentID
+        request.transferTicket = try XCTUnwrap(plan.transferTicket)
+        return (request, sealed.stream.chunks, plan, sealed.contentKey.withUnsafeBytes { Data($0) })
+    }
+    private func rejectTicket(_ f: Fixture, _ request: CorrespondenceAttachmentRequest,
+                              action: String = "attachments.upload", requester: Identity? = nil) async {
+        do {
+            let value = try await f.cell.set(keypath: action, value: CorrespondenceCellCodec.encode(request), requester: requester ?? f.owner)
+            XCTAssertEqual(field("status", value), .string("error"), "Ticket unexpectedly accepted for \(action)")
+        } catch { }
+    }
+    func testTransferTicketScopeExpiryCapacityAndNoPersistence() async throws {
+        let clock = Clock()
+        let f = try await fixture(nowProvider: { clock.now })
+        let (initial, chunks, _, _) = try await ticketUpload(f)
+        var request = initial; request.chunk = chunks[0]
+        var wrong = request; wrong.attachmentID = UUID().uuidString; await rejectTicket(f, wrong)
+        wrong = request; wrong.messageID = UUID().uuidString; await rejectTicket(f, wrong)
+        wrong = request; wrong.agreementID = UUID().uuidString; await rejectTicket(f, wrong)
+        await rejectTicket(f, request, action: "attachments.fetch")
+        await rejectTicket(f, request, action: "attachments.revoke")
+        await rejectTicket(f, request, action: "attachments.upload.nested")
+        await rejectTicket(f, request, requester: f.invitee)
+        let impostor = f.owner.publicIdentitySnapshot()
+        impostor.publicSecureKey = f.invitee.publicSecureKey
+        await rejectTicket(f, request, requester: impostor)
+        let snapshot = String(decoding: try JSONEncoder().encode(f.cell), as: UTF8.self)
+        XCTAssertFalse(snapshot.contains(try XCTUnwrap(initial.transferTicket)))
+        for _ in 0..<7 { _ = try await ticketUpload(f) }
+        do { _ = try await ticketUpload(f); XCTFail("ticket cap must reject") } catch { }
+        clock.now = clock.now.addingTimeInterval(121)
+        await rejectTicket(f, request)
+        _ = try await ticketUpload(f)
+    }
+    func testTransferTicketCompletionRevokeAndMembershipRemoval() async throws {
+        for termination in ["complete", "revoke", "remove", "revokeContract", "heldRemoval"] {
+            let f = try await fixture()
+            let (initial, chunks, _, _) = try await ticketUpload(f, sender: f.invitee)
+            var request = initial; request.chunk = chunks[0]
+            if termination == "complete" {
+                for chunk in chunks {
+                    request.chunk = chunk
+                    _ = try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+                }
+            } else if termination == "revoke" {
+                var revoke = initial; revoke.transferTicket = nil
+                _ = try await f.cell.set(keypath: "attachments.revoke", value: CorrespondenceCellCodec.encode(revoke), requester: f.invitee)
+            } else if termination == "revokeContract" {
+                let revocation = try await ContractRevocation.signed(contract: f.contract, owner: f.owner)
+                let revoked = await f.cell.acceptExternallySignedRevocation(revocation)
+                XCTAssertTrue(revoked)
+            } else if termination == "heldRemoval" {
+                f.cell.beforeAttachmentCommitForTesting = {
+                    await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner)
+                }
+            } else { await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner) }
+            await rejectTicket(f, request, requester: f.invitee)
+        }
+    }
+    func testTransferTicketSlidingExpiryHasAbsoluteMaximum() async throws {
+        let clock = Clock()
+        let f = try await fixture(nowProvider: { clock.now })
+        let (initial, chunks, _, _) = try await ticketUpload(f, bytes: Data(repeating: 1, count: 8 * 65_536))
+        var request = initial
+        for index in 0..<5 {
+            clock.now = clock.now.addingTimeInterval(110)
+            request.chunk = chunks[index]
+            _ = try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+        }
+        clock.now = clock.now.addingTimeInterval(51)
+        request.chunk = chunks[5]
+        await rejectTicket(f, request)
+    }
+    func testTransferTicketOneMegabyteBridgeBothDirectionsUsesOneProofPerTransfer() async throws {
+        let previousPolicy = CellBase.securityContainmentPolicy
+        let previousController = CellBase.securityContainmentController
+        defer { CellBase.securityContainmentPolicy = previousPolicy; CellBase.securityContainmentController = previousController }
+        let f = try await fixture()
+        let bytes = Data((0..<1_100_037).map { UInt8($0 % 251) })
+        for (sender, recipient, senderVault) in [(f.owner, f.invitee, f.e), (f.invitee, f.owner, f.i)] {
+            let upload = try await TicketBridge(cell: f.cell, identity: sender)
+            let download = try await TicketBridge(cell: f.cell, identity: recipient)
+            CellBase.securityContainmentController = CellSecurityContainmentController()
+            CellBase.securityContainmentPolicy = .localProtection
+            let sealed = try AttachmentStreamV1.seal(plaintext: bytes)
+            var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+                agreementID: sender.uuid == f.owner.uuid ? f.cell.uuid : f.contract.agreement.uuid,
+                senderIdentityUUID: sender.uuid,
+                metadata: .init(name: "synthetic", mediaType: "application/octet-stream", byteCount: UInt64(bytes.count)),
+                header: sealed.stream.header)
+            request.requestTransferTicket = true
+            let uploadStart = Date(), uploadProofs = upload.proofs
+            let plan = try CorrespondenceCellCodec.decode(try await upload.call("attachments.prepare", request), as: CorrespondenceAttachmentPlan.self)
+            request.attachmentID = plan.attachmentID; request.transferTicket = try XCTUnwrap(plan.transferTicket)
+            request.requestTransferTicket = nil
+            for chunk in sealed.stream.chunks {
+                request.chunk = chunk
+                let response = try await upload.call("attachments.upload", request)
+                XCTAssertEqual(field("status", response), .string("ok"))
+            }
+            let uploadSeconds = Date().timeIntervalSince(uploadStart)
+            XCTAssertEqual(upload.proofs - uploadProofs, 1)
+            XCTAssertLessThan(uploadSeconds, 20)
+            request.transferTicket = nil; request.chunk = nil
+            let manifest = CorrespondenceAttachment(attachmentID: plan.attachmentID, messageID: request.messageID,
+                agreementID: request.agreementID, cellID: f.cell.uuid, senderIdentityUUID: sender.uuid,
+                metadata: plan.metadata, mode: plan.mode, reason: plan.reason, header: plan.header,
+                contentKey: sealed.contentKey.withUnsafeBytes { Data($0) })
+            _ = try await send(f, sender: sender, recipient: recipient, vault: senderVault, attachment: manifest, request: request)
+            let downloadStart = Date(), downloadProofs = download.proofs
+            request.requestTransferTicket = true
+            let fetchedPlan = try CorrespondenceCellCodec.decode(try await download.call("attachments.metadata", request), as: CorrespondenceAttachmentPlan.self)
+            request.transferTicket = try XCTUnwrap(fetchedPlan.transferTicket); request.requestTransferTicket = nil
+            let opener = try AttachmentStreamOpener(header: plan.header, contentKey: sealed.contentKey)
+            var received = Data()
+            for index in sealed.stream.chunks.indices {
+                request.index = UInt64(index)
+                let chunk = try CorrespondenceCellCodec.decode(try await download.call("attachments.fetch", request), as: AttachmentStreamChunk.self)
+                received.append(try opener.append(chunk))
+            }
+            let downloadSeconds = Date().timeIntervalSince(downloadStart)
+            XCTAssertEqual(received, bytes)
+            XCTAssertEqual(download.proofs - downloadProofs, 1)
+            XCTAssertLessThan(downloadSeconds, 20)
+            await rejectTicket(f, request, action: "attachments.fetch", requester: recipient)
+            print("K18 1100037 bytes sender=\(sender.uuid == f.owner.uuid ? "owner" : "member") upload=\(uploadSeconds)s proofs=\(upload.proofs - uploadProofs) download=\(downloadSeconds)s proofs=\(download.proofs - downloadProofs)")
+            await upload.close(); await download.close()
+        }
+    }
+    func testTransferTicketChannelBindingAndClosedChannel() async throws {
+        let f = try await fixture()
+        let first = try await TicketBridge(cell: f.cell, identity: f.owner)
+        let other = try await TicketBridge(cell: f.cell, identity: f.owner)
+        let sealed = try AttachmentStreamV1.seal(plaintext: Data([1]))
+        var request = CorrespondenceAttachmentRequest(messageID: UUID().uuidString,
+            agreementID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+            metadata: .init(name: "synthetic", mediaType: "application/octet-stream", byteCount: 1), header: sealed.stream.header)
+        request.requestTransferTicket = true
+        let plan = try CorrespondenceCellCodec.decode(try await first.call("attachments.prepare", request), as: CorrespondenceAttachmentPlan.self)
+        request.attachmentID = plan.attachmentID; request.transferTicket = try XCTUnwrap(plan.transferTicket)
+        request.requestTransferTicket = nil; request.chunk = sealed.stream.chunks[0]
+        do { _ = try await other.call("attachments.upload", request); XCTFail("Another channel accepted the ticket") } catch { }
+        let session = try XCTUnwrap(first.wire.channelSession)
+        let proxy = f.owner.publicIdentitySnapshot()
+        proxy.identityVault = BridgeIdentityVault(cloudBridge: first.bridge, attachmentTransferSession: session)
+        _ = try await first.call("attachments.upload", request)
+        session.revoke()
+        request.chunk = sealed.stream.chunks[1]
+        await rejectTicket(f, request, requester: proxy)
+        await first.close(); await other.close()
+    }
+    func testTransferTicketFencedBeforeMembershipRefreshApplies() async throws {
+        let f = try await fixture()
+        var (request, chunks, _, _) = try await ticketUpload(f, sender: f.invitee)
+        request.chunk = chunks[0]
+        var checked = false
+        f.cell.beforeMembershipApplyForTesting = {
+            f.cell.beforeMembershipApplyForTesting = nil
+            checked = true
+            await self.rejectTicket(f, request, requester: f.invitee)
+        }
+        await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner)
+        XCTAssertTrue(checked)
+    }
+    func testTransferTicketStaleChunkCannotCommitDuringAuthoritativeRemoval() async throws {
+        let f = try await fixture()
+        var (request, chunks, _, _) = try await ticketUpload(f, sender: f.invitee)
+        request.chunk = chunks[0]
+        let frozen = request
+        let chunkPause = Pause(), membershipPause = Pause()
+        let chunkEntered = expectation(description: "chunk passed membership refresh")
+        let mutationEntered = expectation(description: "removal committed but membership refresh held")
+        f.cell.beforeAttachmentCommitForTesting = { await chunkPause.stop(chunkEntered) }
+        let chunk = Task {
+            try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(frozen), requester: f.invitee)
+        }
+        await fulfillment(of: [chunkEntered], timeout: 3)
+        f.cell.beforeMembershipApplyForTesting = { await membershipPause.stop(mutationEntered) }
+        let removal = Task { await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner) }
+        await fulfillment(of: [mutationEntered], timeout: 3)
+        await chunkPause.resume()
+        do { _ = try await chunk.value; XCTFail("Stale chunk committed after authoritative removal") } catch { }
+        await membershipPause.resume()
+        await removal.value
+    }
+
+    func testTransferTicketDownloadScopeTerminationAndLegacyClient() async throws {
+        for termination in ["final", "revoke", "remove", "expire", "legacy"] {
+            let clock = Clock()
+            let f = try await fixture(nowProvider: { clock.now })
+            var (request, chunks, plan, key) = try await ticketUpload(f)
+            for chunk in chunks {
+                request.chunk = chunk
+                _ = try await f.cell.set(keypath: "attachments.upload", value: CorrespondenceCellCodec.encode(request), requester: f.owner)
+            }
+            request.transferTicket = nil; request.chunk = nil
+            let manifest = CorrespondenceAttachment(attachmentID: plan.attachmentID, messageID: request.messageID,
+                agreementID: request.agreementID, cellID: f.cell.uuid, senderIdentityUUID: f.owner.uuid,
+                metadata: plan.metadata, mode: plan.mode, reason: plan.reason, header: plan.header, contentKey: key)
+            _ = try await send(f, sender: f.owner, recipient: f.invitee, vault: f.e, attachment: manifest, request: request)
+            if termination != "legacy" {
+                request.requestTransferTicket = true
+                let response = try await f.cell.set(keypath: "attachments.metadata", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+                let downloadPlan = try CorrespondenceCellCodec.decode(response, as: CorrespondenceAttachmentPlan.self)
+                request.transferTicket = try XCTUnwrap(downloadPlan.transferTicket); request.requestTransferTicket = nil
+            }
+            request.index = 0
+            if termination == "final" || termination == "legacy" {
+                if termination == "final" {
+                    var wrong = request; wrong.attachmentID = UUID().uuidString
+                    await rejectTicket(f, wrong, action: "attachments.fetch", requester: f.invitee)
+                    await rejectTicket(f, request, action: "attachments.upload", requester: f.invitee)
+                    await rejectTicket(f, request, action: "attachments.fetch", requester: f.owner)
+                }
+                for index in chunks.indices {
+                    request.index = UInt64(index)
+                    let value = try await f.cell.set(keypath: "attachments.fetch", value: CorrespondenceCellCodec.encode(request), requester: f.invitee)
+                    let fetched = try CorrespondenceCellCodec.decode(value, as: AttachmentStreamChunk.self)
+                    XCTAssertEqual(fetched.combinedCiphertext, chunks[index].combinedCiphertext)
+                }
+            } else if termination == "revoke" {
+                var revoke = request; revoke.transferTicket = nil
+                _ = try await f.cell.set(keypath: "attachments.revoke", value: CorrespondenceCellCodec.encode(revoke), requester: f.owner)
+            } else if termination == "remove" { await f.cell.removeMember(uuid: f.invitee.uuid, requester: f.owner) }
+            else { clock.now = clock.now.addingTimeInterval(121) }
+            if termination != "legacy" { await rejectTicket(f, request, action: "attachments.fetch", requester: f.invitee) }
+        }
+    }
+
+    private final class TicketBridge {
+        let identity: Identity, bridge: BridgeBase, wire: BridgeLifecycleWire
+        var cid = 1000
+        var proofs: Int { wire.commands.filter { $0.command == .sign }.count }
+        init(cell: CorrespondenceCell, identity: Identity) async throws {
+            self.identity = identity
+            let bridge = BridgeBase(owner: identity), wire = BridgeLifecycleWire()
+            self.bridge = bridge; self.wire = wire
+            wire.channelSession = try await authenticatedSessionFixture(principal: identity)
+            try await bridge.setTransport(wire, connection: .outbound)
+            try bridge.activateAuthenticatedChannel(); bridge.emitCellAtEndpoint = cell
+            wire.beforeAccept = { command in
+                if command.command == .sign, case .signData(let data)? = command.payload {
+                    let signed = try await identity.sign(data: data)
+                    let signature = try XCTUnwrap(signed)
+                    try await bridge.consumeResponse(command: orderingReply(to: command, payload: .signature(signature)))
+                }
+            }
+        }
+        func call(_ action: String, _ request: CorrespondenceAttachmentRequest) async throws -> ValueType {
+            cid += 1
+            let value = try CorrespondenceCellCodec.encode(request)
+            try await bridge.consumeCommand(command: .init(cmd: "set", identity: identity,
+                payload: .keyValue(.init(key: action, value: value)), cid: cid))
+            let response = try XCTUnwrap(wire.commands.last { $0.cid == cid })
+            guard case .setValueResponse(let result)? = response.payload, result.state == .ok,
+                  let value = result.value else { throw CorrespondenceAttachmentError.unavailable }
+            return value
+        }
+        func close() async { if let session = wire.channelSession { await bridge.channelDidClose(session) } }
+    }
+
     private func field(_ key: String, _ value: ValueType) -> ValueType? {
         guard case .object(let object) = value else { return nil }; return object[key]
     }

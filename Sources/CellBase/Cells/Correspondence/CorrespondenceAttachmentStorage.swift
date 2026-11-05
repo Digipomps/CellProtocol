@@ -51,6 +51,8 @@ public struct CorrespondenceAttachmentPlan: Codable, Sendable {
     /// Present only for a source already held by the sender's Cell. Copy keys
     /// stay in the sender's client and encrypted message, never in server state.
     public var sourceContentKey: Data?
+    /// Ephemeral, returned only by an explicitly requested transfer start. Never stored.
+    public var transferTicket: String? = nil
 }
 
 public struct CorrespondenceAttachmentRequest: Codable, Equatable, Sendable {
@@ -64,9 +66,11 @@ public struct CorrespondenceAttachmentRequest: Codable, Equatable, Sendable {
     public var chunk: AttachmentStreamChunk?
     public var index: UInt64?
     public var confirmation: String?
+    public var requestTransferTicket: Bool?
+    public var transferTicket: String?
 
     private enum CodingKeys: String, CodingKey {
-        case attachmentID, messageID, agreementID, senderIdentityUUID, sourceID, metadata, header, chunk, index, confirmation
+        case attachmentID, messageID, agreementID, senderIdentityUUID, sourceID, metadata, header, chunk, index, confirmation, requestTransferTicket, transferTicket
     }
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
@@ -80,6 +84,8 @@ public struct CorrespondenceAttachmentRequest: Codable, Equatable, Sendable {
         try values.encodeIfPresent(chunk, forKey: .chunk)
         try values.encodeIfPresent(index, forKey: .index)
         try values.encodeIfPresent(confirmation, forKey: .confirmation)
+        try values.encodeIfPresent(requestTransferTicket, forKey: .requestTransferTicket)
+        try values.encodeIfPresent(transferTicket, forKey: .transferTicket)
     }
 
     public init(messageID: String, agreementID: String, senderIdentityUUID: String,
@@ -91,6 +97,7 @@ public struct CorrespondenceAttachmentRequest: Codable, Equatable, Sendable {
         self.senderIdentityUUID = senderIdentityUUID; self.attachmentID = attachmentID
         self.sourceID = sourceID; self.metadata = metadata; self.header = header
         self.chunk = chunk; self.index = index; self.confirmation = confirmation
+        self.requestTransferTicket = nil; self.transferTicket = nil
     }
 }
 
@@ -315,7 +322,11 @@ actor CorrespondenceAttachmentStorage {
         guard !entry.revoked else { throw CorrespondenceAttachmentError.unavailable }
         return (id, entry)
     }
-    func upload(_ request: CorrespondenceAttachmentRequest, now: Date) throws {
+    func upload(_ request: CorrespondenceAttachmentRequest, now: Date,
+                authorization: CorrespondenceTransferAuthorization? = nil) throws {
+        if let authorization {
+            return try authorization.perform { try upload(request, now: now) }
+        }
         let (id, item) = try entry(request, now: now)
         guard item.sourceID == nil, !item.published, let chunk = request.chunk else {
             throw CorrespondenceAttachmentError.contextMismatch
@@ -371,7 +382,11 @@ actor CorrespondenceAttachmentStorage {
         safe.reference = nil
         return safe
     }
-    func fetch(_ request: CorrespondenceAttachmentRequest, recipientKey: String, now: Date) throws -> AttachmentStreamChunk {
+    func fetch(_ request: CorrespondenceAttachmentRequest, recipientKey: String, now: Date,
+               authorization: CorrespondenceTransferAuthorization? = nil) throws -> AttachmentStreamChunk {
+        if let authorization {
+            return try authorization.perform { try fetch(request, recipientKey: recipientKey, now: now) }
+        }
         let (id, item) = try entry(request, now: now)
         guard item.plan.mode != .reference, item.published, let index = request.index, item.transferredTo == nil else {
             throw CorrespondenceAttachmentError.incomplete
