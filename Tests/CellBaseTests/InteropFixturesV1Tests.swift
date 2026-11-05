@@ -976,9 +976,48 @@ final class InteropFixturesV1Tests: XCTestCase {
             XCTAssertEqual(Self.verifies(signature, canonical, signer), expect["signatureValid"] as? Bool, "\(id): signature verdict")
 
             let freshCase = try XCTUnwrap(fresh[id], "\(id): no longer produced by buildCases()")
-            XCTAssertEqual(freshCase.canonical, canonical, "\(id): builder output drifted from the fixture")
+            // Apple's Curve25519 signer is randomized; BoringSSL (Linux) is not. A fresh
+            // build on Darwin therefore embeds new signature bytes wherever a signed
+            // artifact is nested (ticketToken, verifiableCredential proofs). Compare
+            // with those nested signatures masked; the fixture's own canonical bytes
+            // and signature are still checked exactly above.
+            if freshCase.canonical != canonical {
+                XCTAssertEqual(try Self.maskingNestedSignatures(freshCase.canonical),
+                               try Self.maskingNestedSignatures(canonical),
+                               "\(id): builder output drifted from the fixture")
+            }
             XCTAssertEqual(freshCase.verdict, expect["verdict"] as? String, "\(id): verdict drifted")
         }
+    }
+
+    static let nestedSignatureKeys: Set<String> = ["sg", "signature", "signatureData"]
+
+    /// Canonical bytes with every nested signature value replaced, including inside
+    /// base64url `ticketToken`s. Used only for the fresh-builder drift comparison.
+    static func maskingNestedSignatures(_ data: Data) throws -> String {
+        func mask(_ value: Any) throws -> Any {
+            if let object = value as? [String: Any] {
+                var out: [String: Any] = [:]
+                for (key, item) in object {
+                    if nestedSignatureKeys.contains(key), item is String {
+                        out[key] = "<signature>"
+                    } else if key == "ticketToken", let token = item as? String {
+                        var base64 = token.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+                        let inner = try XCTUnwrap(Data(base64Encoded: base64), "ticketToken is not base64url")
+                        out[key] = try mask(JSONSerialization.jsonObject(with: inner))
+                    } else {
+                        out[key] = try mask(item)
+                    }
+                }
+                return out
+            }
+            if let array = value as? [Any] { return try array.map(mask) }
+            return value
+        }
+        let masked = try mask(JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
+        let bytes = try JSONSerialization.data(withJSONObject: masked, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// Decode with the Swift type, then produce the bytes the signature covers.

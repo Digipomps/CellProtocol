@@ -90,8 +90,10 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         try await client.setTransport(outgoing, connection: .outbound)
         try await server.setTransport(incoming, connection: .inbound(publisherUuid: "Owned"))
         outgoing.peer = server; incoming.peer = client
+        // A bare "ready" frame no longer opens a bridge; both ends need a
+        // verified channel session, as in the other paired-bridge tests.
         for endpoint in [client, server] {
-            try await endpoint.consumeCommand(command: BridgeCommand(cmd: "ready", payload: nil, cid: 0))
+            try await authenticateBridgeFixture(endpoint, principal: human)
         }
         await client.sendCommand(command: .get, identity: human,
             payload: .string(OwnerAttachEntityExtensionHost.offerKeypath))
