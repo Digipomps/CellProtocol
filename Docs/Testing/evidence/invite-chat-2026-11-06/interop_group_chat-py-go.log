@@ -1,0 +1,145 @@
+OK   group host=python guests=python+python 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  python Guest1 proof accepted
+       ok  python Guest1 gets a signed Agreement
+       ok  python Guest2 proof accepted
+       ok  python Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=python guests=python+go 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  python Guest1 proof accepted
+       ok  python Guest1 gets a signed Agreement
+       ok  go Guest2 proof accepted
+       ok  go Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=python guests=go+python 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  go Guest1 proof accepted
+       ok  go Guest1 gets a signed Agreement
+       ok  python Guest2 proof accepted
+       ok  python Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=python guests=go+go 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  go Guest1 proof accepted
+       ok  go Guest1 gets a signed Agreement
+       ok  go Guest2 proof accepted
+       ok  go Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=go     guests=python+python 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  python Guest1 proof accepted
+       ok  python Guest1 gets a signed Agreement
+       ok  python Guest2 proof accepted
+       ok  python Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=go     guests=python+go 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  python Guest1 proof accepted
+       ok  python Guest1 gets a signed Agreement
+       ok  go Guest2 proof accepted
+       ok  go Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=go     guests=go+python 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  go Guest1 proof accepted
+       ok  go Guest1 gets a signed Agreement
+       ok  python Guest2 proof accepted
+       ok  python Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+OK   group host=go     guests=go+go 17/17
+       ok  host requires a proven invitation
+       ok  one artifact per guest
+       ok  guest2 cannot hand in guest1's artifact
+       ok  go Guest1 proof accepted
+       ok  go Guest1 gets a signed Agreement
+       ok  go Guest2 proof accepted
+       ok  go Guest2 gets a signed Agreement
+       ok  guest1 sends
+       ok  guest2 sends
+       ok  Guest1 reads the same ordered thread
+       ok  Guest2 reads the same ordered thread
+       ok  host attributes every message to its author
+       ok  revoked guest1 refused to read
+       ok  revoked guest1 refused to send
+       ok  guest2 still sends
+       ok  guest2 still reads, now four messages
+       ok  host sees all four
+all green

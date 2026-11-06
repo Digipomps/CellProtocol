@@ -1,0 +1,129 @@
+OK   extend host=python guest=python 5/5
+       ok  guest builds request
+       ok  host reviews, same human code
+       ok  host signs approval
+       ok  guest verifies approval signature
+       ok  guest refuses an approval for someone else's request
+OK   invite host=python guest=python 7/7
+       ok  host prepares and publishes on its landing
+       ok  guest verifies the link
+       ok  guest replies via short code
+       ok  host sees joined
+       ok  host pulls and verifies the reply
+       ok  reply is collected once
+       ok  revoked link refuses the reply
+OK   chat   host=python guest=python 17/17
+       ok  host requires a proven invitation in the Agreement
+       ok  guest signs acceptance on its own node
+       ok  guest refused before accepting
+       ok  no contract without proof
+       ok  host verifies both signatures
+       ok  proof alone opens nothing
+       ok  widened grants refused
+       ok  dropped conditions refused
+       ok  host signs the guest's Agreement
+       ok  guest sends over the bridge
+       ok  guest reads both messages
+       ok  host attributes the message to the guest
+       ok  stranger gets no contract
+       ok  stranger refused
+       ok  guest refused on owner keys
+       ok  guest cannot change the conditions
+       ok  revoked guest refused
+OK   extend host=python guest=go     5/5
+       ok  guest builds request
+       ok  host reviews, same human code
+       ok  host signs approval
+       ok  guest verifies approval signature
+       ok  guest refuses an approval for someone else's request
+OK   invite host=python guest=go     7/7
+       ok  host prepares and publishes on its landing
+       ok  guest verifies the link
+       ok  guest replies via short code
+       ok  host sees joined
+       ok  host pulls and verifies the reply
+       ok  reply is collected once
+       ok  revoked link refuses the reply
+OK   chat   host=python guest=go     17/17
+       ok  host requires a proven invitation in the Agreement
+       ok  guest signs acceptance on its own node
+       ok  guest refused before accepting
+       ok  no contract without proof
+       ok  host verifies both signatures
+       ok  proof alone opens nothing
+       ok  widened grants refused
+       ok  dropped conditions refused
+       ok  host signs the guest's Agreement
+       ok  guest sends over the bridge
+       ok  guest reads both messages
+       ok  host attributes the message to the guest
+       ok  stranger gets no contract
+       ok  stranger refused
+       ok  guest refused on owner keys
+       ok  guest cannot change the conditions
+       ok  revoked guest refused
+OK   extend host=go     guest=python 5/5
+       ok  guest builds request
+       ok  host reviews, same human code
+       ok  host signs approval
+       ok  guest verifies approval signature
+       ok  guest refuses an approval for someone else's request
+OK   invite host=go     guest=python 7/7
+       ok  host prepares and publishes on its landing
+       ok  guest verifies the link
+       ok  guest replies via short code
+       ok  host sees joined
+       ok  host pulls and verifies the reply
+       ok  reply is collected once
+       ok  revoked link refuses the reply
+OK   chat   host=go     guest=python 17/17
+       ok  host requires a proven invitation in the Agreement
+       ok  guest signs acceptance on its own node
+       ok  guest refused before accepting
+       ok  no contract without proof
+       ok  host verifies both signatures
+       ok  proof alone opens nothing
+       ok  widened grants refused
+       ok  dropped conditions refused
+       ok  host signs the guest's Agreement
+       ok  guest sends over the bridge
+       ok  guest reads both messages
+       ok  host attributes the message to the guest
+       ok  stranger gets no contract
+       ok  stranger refused
+       ok  guest refused on owner keys
+       ok  guest cannot change the conditions
+       ok  revoked guest refused
+OK   extend host=go     guest=go     5/5
+       ok  guest builds request
+       ok  host reviews, same human code
+       ok  host signs approval
+       ok  guest verifies approval signature
+       ok  guest refuses an approval for someone else's request
+OK   invite host=go     guest=go     7/7
+       ok  host prepares and publishes on its landing
+       ok  guest verifies the link
+       ok  guest replies via short code
+       ok  host sees joined
+       ok  host pulls and verifies the reply
+       ok  reply is collected once
+       ok  revoked link refuses the reply
+OK   chat   host=go     guest=go     17/17
+       ok  host requires a proven invitation in the Agreement
+       ok  guest signs acceptance on its own node
+       ok  guest refused before accepting
+       ok  no contract without proof
+       ok  host verifies both signatures
+       ok  proof alone opens nothing
+       ok  widened grants refused
+       ok  dropped conditions refused
+       ok  host signs the guest's Agreement
+       ok  guest sends over the bridge
+       ok  guest reads both messages
+       ok  host attributes the message to the guest
+       ok  stranger gets no contract
+       ok  stranger refused
+       ok  guest refused on owner keys
+       ok  guest cannot change the conditions
+       ok  revoked guest refused
+all green

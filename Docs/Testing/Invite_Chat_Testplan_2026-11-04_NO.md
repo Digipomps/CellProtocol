@@ -252,3 +252,36 @@ Samlet: én VIRKER-oppføring per IC-tilfelle (VIRKER / VIRKER IKKE / VIRKER MED
 3. Fase 4 krever Xcode 27 og iOS 27-simulator på M5, pluss telefon og iPad for IC-19. Er det tilgjengelig i perioden?
 4. Skal gapene (agent som chatpart, swarm `chatParticipant`, SwiftWebScaffold-chat) få egne formålstrær nå, eller vente til kjernesettet er grønt?
 5. Kjernesettet er 28 av 139 kombinasjoner. Er det riktig nivå, eller vil du ha hele «klar»-settet (38) i første runde?
+
+---
+
+## 10. Fase 1 status (2026-11-06, claude-code i sky, Linux)
+
+Kjørt i skymiljøet med Python-peer (PyCellProtocol `711aae8`, venv med `[scaffold]`) og Go-peer (GoCellProtocol `9ea5cc9`, `go build ./cmd/interop-peer`). Swift-peer er ikke kjørt: den krever CellScaffold-bygg på Mac eller Linux-CI (Codex). Evidens: `Docs/Testing/evidence/invite-chat-2026-11-06/`.
+
+| ID | Resultat | Evidens |
+|---|---|---|
+| IC-01 | VIRKER (python/go). Invitasjonsartefakt, aksept på egen node, Agreement `invitationAccepted`, send og les over autentisert bridge. | `TESTRESULT-fase1-py-go.md`, `run_matrix-py-go.log` (116 steg, alle ok) |
+| IC-02 | VIRKER MED FORBEHOLD: 4 av 9 vert/gjest-par (python→python, python→go, go→python, go→go). Swift-parene (5) er UPRØVD. | samme |
+| IC-03 | VIRKER (python/go). Vert + to gjester, alle 8 kombinasjoner, 17 steg hver: artefakt matchet på `invitedIdentity.uuid`, gjest kan ikke bruke den andres artefakt, lik ordnet tråd hos alle tre, forfatter riktig attribuert, tilbakekalt gjest stenges ute straks mens den andre fortsetter. Rekey-sjekk på `crypto.*` er ikke eksponert i peer-protokollen og er derfor UPRØVD. | `TESTRESULT-fase1-gruppe-py-go.md`, `interop_group_chat-py-go.log` (136 steg, alle ok) |
+| IC-04 | VIRKER (python/go). Uten bevis, bevis alene, utvidet grant, droppet betingelse, fremmed, eier-nøkler fra gjest, endring av betingelser fra gjest, tilbakekalt gjest: alle avvist. | `run_matrix-py-go.log` |
+| IC-05 | VIRKER (python/go). Ticket publisert på `/i/`, lenke verifisert, svar via kortkode, utsteder ser `joined`, svar hentes én gang, tilbakekalt lenke avviser svar. | `run_matrix-py-go.log` |
+| IC-52 | UPRØVD. Swarm-scaffoldet krever CellScaffold-bygg. | – |
+
+Driver for IC-03: `Docs/Testing/interop_group_chat.py` (bruker `Peer`, `Steps`, `agreed`, `refused` fra PyCellProtocol `interop/matrix/run_matrix.py`). Bør flyttes til PyCellProtocol `interop/matrix/` og inn i `interop-matrix.yml` når Kjetil godkjenner.
+
+Kommandoer som ble kjørt:
+
+```bash
+python3 -m venv pyenv && pyenv/bin/pip install -e 'PyCellProtocol[scaffold]'
+go build -o interop-peer-go ./cmd/interop-peer        # i GoCellProtocol
+pyenv/bin/python PyCellProtocol/interop/matrix/run_matrix.py \
+  --peer python="pyenv/bin/python -m cellprotocol_scaffold.interop_peer" \
+  --peer go=./interop-peer-go --verbose --out TESTRESULT-fase1-py-go.md
+pyenv/bin/python CellProtocol/Docs/Testing/interop_group_chat.py \
+  --matrix-dir PyCellProtocol/interop/matrix \
+  --peer python="pyenv/bin/python -m cellprotocol_scaffold.interop_peer" \
+  --peer go=./interop-peer-go --verbose --out TESTRESULT-fase1-gruppe-py-go.md
+```
+
+Neste i fase 1 (Codex på Mac): bygg `InteropPeer` med `scripts/run_swift_bounded.sh build --product InteropPeer` i CellScaffold og kjør begge kommandoene med `--peer swift=<sti>` i tillegg, slik at de 5 Swift-parene og 19 Swift-gruppekombinasjonene dekkes.
