@@ -155,7 +155,11 @@ Beviskontrakten, `Purpose.goal`, vekter, relasjoner og grupper er uendret fra
 undergruppesteget. De delte `$defs` er identiske i de to gjeldende skjemaene.
 De øvrige spesialiserte undertrærne i `proofs` er bevart.
 Åpne detaljer om endpoints, scaffold-tilstedeværelse, identitetslikhet
-og wire-eksponering er fortsatt uavklart.
+og wire-eksponering er fortsatt uavklart. Det samme gjelder de fire
+konferanseforslagene fra 24.09 i [proposals-2026-09-24.json](proposals-2026-09-24.json)
+(`conference` nøklet per konferanse, utstedte celler, `matchConsent`, grant-betingelse
+for medlemskapsbevis); de er avstemt mot 22.–25.09-beslutningene 06.11 men ikke besvart.
+Kortversjon i [SAMMENDRAG-KONFERANSEDELING-2026-09-24.md](SAMMENDRAG-KONFERANSEDELING-2026-09-24.md).
 [16.09-notatet](OPPDATERT-ETTER-GJENNOMGANG-2026-09-16.md) beskriver det historiske
 mellomsteget; det er ikke en konkurrerende gjeldende målform.
 
