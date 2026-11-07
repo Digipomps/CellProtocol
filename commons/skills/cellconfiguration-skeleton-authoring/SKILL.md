@@ -141,9 +141,11 @@ Reglene under gjelder hver gang du skriver eller endrer et skeleton; hele settet
   det gir web `defaultTabTitle(id)` («Overview») og Apple kapitalisert id. (G3)
 - **Rad-knapper erklærer kontrakten:** `labelKeypath` + `payloadKeypath`, norsk fallback-verb i
   `label`, aldri «Action». (B1, D4)
-- **`selectionStateKeypath` peker på state (`.state.`), aldri på en action.** Lister/Picker som
-  skal utløse noe har `selectionActionKeypath`. (D2)
-- **Ingen ubundet input.** `TextField`/`TextArea` uten `targetKeypath` er en feil; send-knappen leser samme utkast. (D1)
+- **Valg trenger både tilstand og handling, og de må være ulike.** `selectionActionKeypath` for
+  handlingen (web dispatcher aldri uten), eget `.state.`-felt i `selectionStateKeypath`; samme verdi i
+  begge gir dobbel dispatch på Apple. (D2)
+- **Ingen ubundet input.** `targetKeypath`, eller `submitActionKeypath` + `submitOnEnter`; en
+  send-knapp ved feltet bærer samme tekst, aldri `payload: true`. (D1)
 - **Tre tilstander per List** (rader / ingen / kunne ikke lese) – fra cellen eller via `visibility`;
   aldri statisk ro-tekst. (C1)
 - **Farlig verb = to trinn + konsekvens + kvittering**, egen HStack, ikke `primary-action`. (D3)

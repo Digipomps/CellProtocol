@@ -1,0 +1,462 @@
+{
+  "c1": {
+    "Mermaid Renderer Playground": {
+      "canvas view-mode": {
+        "renderError": null,
+        "textCount": 10,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "rgb(255, 255, 255) <- canvas view-mode",
+          "rgb(255, 255, 255) <- skeleton-section"
+        ],
+        "minContrast": 1.3,
+        "maxContrast": 1.3,
+        "sample": [
+          {
+            "text": "Mermaid Renderer Playground",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Rediger kilde, bruk Cmd/Ctrl+Enter for standard SV",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Interactive Source",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          },
+          {
+            "text": "Rediger diagramkilden og bruk Cmd/Ctrl+Enter for å",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          }
+        ]
+      },
+      "canvas product-view view-mode": {
+        "renderError": null,
+        "textCount": 10,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18),  <- canvas product-view view-mode",
+          "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Mermaid Renderer Playground",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Rediger kilde, bruk Cmd/Ctrl+Enter for standard SV",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Interactive Source",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Rediger diagramkilden og bruk Cmd/Ctrl+Enter for å",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      },
+      "canvas conference-view view-mode": {
+        "renderError": null,
+        "textCount": 10,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24),  <- canvas conference-view view-mode",
+          "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Mermaid Renderer Playground",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Rediger kilde, bruk Cmd/Ctrl+Enter for standard SV",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Interactive Source",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Rediger diagramkilden og bruk Cmd/Ctrl+Enter for å",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      }
+    },
+    "Staging Demo (Obsidian + Mermaid)": {
+      "canvas view-mode": {
+        "renderError": null,
+        "textCount": 17,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "rgb(255, 255, 255) <- canvas view-mode",
+          "rgb(255, 255, 255) <- skeleton-section"
+        ],
+        "minContrast": 1.3,
+        "maxContrast": 1.3,
+        "sample": [
+          {
+            "text": "Staging Demo (Obsidian + Mermaid)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Samlet skeleton for notatflyt og diagramrendering.",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          }
+        ]
+      },
+      "canvas product-view view-mode": {
+        "renderError": null,
+        "textCount": 17,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18),  <- canvas product-view view-mode",
+          "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Staging Demo (Obsidian + Mermaid)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Samlet skeleton for notatflyt og diagramrendering.",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      },
+      "canvas conference-view view-mode": {
+        "renderError": null,
+        "textCount": 17,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24),  <- canvas conference-view view-mode",
+          "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Staging Demo (Obsidian + Mermaid)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Samlet skeleton for notatflyt og diagramrendering.",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      }
+    },
+    "Vault Workspace (Obsidian-style)": {
+      "canvas view-mode": {
+        "renderError": null,
+        "textCount": 9,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "rgb(255, 255, 255) <- canvas view-mode",
+          "rgb(255, 255, 255) <- skeleton-section"
+        ],
+        "minContrast": 1.3,
+        "maxContrast": 1.3,
+        "sample": [
+          {
+            "text": "Vault Workspace (Obsidian-style)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Skeletonen speiler Vault MVP-kontrakten i web-lage",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "canvas view-mode",
+            "contrast": 1.3
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "rgb(255, 255, 255)",
+            "bgFrom": "skeleton-section",
+            "contrast": 1.3
+          }
+        ]
+      },
+      "canvas product-view view-mode": {
+        "renderError": null,
+        "textCount": 9,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18),  <- canvas product-view view-mode",
+          "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Vault Workspace (Obsidian-style)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Skeletonen speiler Vault MVP-kontrakten i web-lage",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 10% 8%, rgba(72, 162, 173, 0.18), ",
+            "bgFrom": "canvas product-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 30, 39, 0.97), rgba(10, 22, 31, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      },
+      "canvas conference-view view-mode": {
+        "renderError": null,
+        "textCount": 9,
+        "fgSet": [
+          "rgb(213, 228, 237)"
+        ],
+        "bgSet": [
+          "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24),  <- canvas conference-view view-mode",
+          "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9 <- skeleton-section"
+        ],
+        "minContrast": null,
+        "maxContrast": null,
+        "sample": [
+          {
+            "text": "Vault Workspace (Obsidian-style)",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Skeletonen speiler Vault MVP-kontrakten i web-lage",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:radial-gradient(circle at 8% 12%, rgba(42, 110, 134, 0.24), ",
+            "bgFrom": "canvas conference-view view-mode",
+            "contrast": null
+          },
+          {
+            "text": "Vault Actions",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          },
+          {
+            "text": "Denne skeletonen fokuserer på de eksplisitte set/g",
+            "fg": "rgb(213, 228, 237)",
+            "bg": "gradient:linear-gradient(rgba(15, 29, 39, 0.97), rgba(11, 23, 32, 0.9",
+            "bgFrom": "skeleton-section",
+            "contrast": null
+          }
+        ]
+      }
+    }
+  },
+  "c3": {
+    "palazzoGjest": {
+      "textareas": 1,
+      "placeholder": "Hva er anledningen i kveld?",
+      "ariaLabel": null,
+      "labelledBy": 0,
+      "actionsAfterEnter": [
+        {
+          "keypath": "entity.entity.record",
+          "payload": "Bursdag, fire personer",
+          "trigger": "textarea-submit"
+        }
+      ]
+    },
+    "palazzoParity": {
+      "afterButton": [
+        {
+          "keypath": "palazzo.concierge.ask",
+          "payload": true,
+          "trigger": "button"
+        }
+      ],
+      "afterEnter": [
+        {
+          "keypath": "palazzo.concierge.ask",
+          "payload": true,
+          "trigger": "button"
+        },
+        {
+          "keypath": "palazzo.concierge.ask",
+          "payload": "Hvilke retter uten melk?",
+          "trigger": "textarea-submit"
+        }
+      ]
+    }
+  },
+  "c4": {
+    "withoutState": {
+      "value": "0",
+      "text": "Segment A"
+    },
+    "withState": {
+      "value": "1",
+      "text": "Segment B"
+    },
+    "afterChange": {
+      "value": "2",
+      "actions": [
+        {
+          "keypath": "conferenceAdminShell.accessRequests.selectSegment",
+          "payload": {
+            "selectionMode": "single",
+            "trigger": "select",
+            "selectedIndex": 2,
+            "selected": "seg-c"
+          },
+          "trigger": "picker-selection-action"
+        }
+      ]
+    },
+    "afterStaleRefresh": {
+      "value": "2"
+    },
+    "optionLabelKeypath": "title"
+  }
+}

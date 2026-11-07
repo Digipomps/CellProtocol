@@ -1,0 +1,26 @@
+{
+  "arrangor-B.skeleton.json": {
+    "bytes": 1955610,
+    "err": null,
+    "createMs": 20,
+    "paintedMs": 126,
+    "domNodes": 61,
+    "visibleTexts": 12
+  },
+  "arrangor-A.skeleton.json": {
+    "bytes": 91416,
+    "err": null,
+    "createMs": 2,
+    "paintedMs": 9,
+    "domNodes": 53,
+    "visibleTexts": 8
+  },
+  "utstiller-B.skeleton.json": {
+    "bytes": 81699,
+    "err": null,
+    "createMs": 2,
+    "paintedMs": 14,
+    "domNodes": 55,
+    "visibleTexts": 4
+  }
+}
