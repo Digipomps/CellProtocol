@@ -4,6 +4,8 @@
 - `codex_add_taxonomy_prompt.md`: legg til/oppdater taxonomy-pakker
 - `codex_add_keypath_prompt.md`: legg til/oppdater keypaths og routes
 - `codex_review_prompt.md`: code review med risikofokus
+- `codex_ux_surface_review_prompt.md`: rollemal for UX/GUI/design-panelet (skill `haven-ux-surface-review`)
+- `codex_ux_panel_skill_distribution_handoff_2026-11-07.md`: handoff til Codex for å distribuere UX-panelets skill og læring til CellScaffold, ~/.claude, ~/.codex og Desktop-ZIP
 - `codex_cellscaffold_commons_cells_prompt.md`: pakk Commons inn i CellScaffold-klare celler
 - `relational_learning_code_assistant_prompt.md`: arbeidsmal for videreutvikling av relasjonslaering i kode
 - `relational_learning_deepresearch_prompt.md`: DeepResearch-mal for decay/update-policy og evaluering

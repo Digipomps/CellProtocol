@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Inventory of all JSON-defined HAVEN surfaces (CellConfiguration / skeleton) in CellScaffold."""
+"""Inventory of all JSON-defined HAVEN surfaces (CellConfiguration / skeleton).
+
+Usage: python3 -I surface_inventory.py <repo-root> <out-dir>
+Writes inventory.json and inventory.md. Pure stdlib. Counts both object-form
+({"VStack": {"elements": [...]}}) and array-form ({"VStack": [...]}) stacks.
+"""
 import json, os, re, sys, collections
 ROOT = sys.argv[1]
 OUT = sys.argv[2]
@@ -15,8 +20,12 @@ def is_skeleton_root(d):
 def walk(node, st, depth=0, parent=None):
     if isinstance(node, dict):
         for k, v in node.items():
-            if k in ELEMENTS and isinstance(v, dict):
+            if k in ELEMENTS and isinstance(v, (dict, list)):
                 st["types"][k] += 1
+                if isinstance(v, list):
+                    st["maxdepth"] = max(st["maxdepth"], depth)
+                    walk(v, st, depth+1, k)
+                    continue
                 st["maxdepth"] = max(st["maxdepth"], depth)
                 if k == "Button":
                     lbl = v.get("label") or v.get("title") or v.get("text") or v.get("keypath") or "?"

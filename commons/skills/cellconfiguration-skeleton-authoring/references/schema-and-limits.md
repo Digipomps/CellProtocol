@@ -383,3 +383,33 @@ Stopp og si fra til Kjetil før implementering hvis ønsket krever:
 - ny stylingmotor
 - filopplasting/media/embed utover det som faktisk finnes i enumen
 - andre nye capabilities som ikke allerede er kodet
+
+## Felt og elementer brukt i publiserte flater som ikke er dokumentert over (2026-11-07)
+
+UX-panelet fant disse i produksjons-skeletons og verifiserte dem i `Public/js/skeleton-runtime.js`
+(web). Binding/Apple-paritet er **ikke** verifisert for noen av dem; kontroller
+`SkeletonDescription.swift` og renderer før du lover paritet. Lista skal holdes à jour
+(regel I3): en skill som ikke kjenner feltene avviser gyldige mønstre og godtar døde.
+
+| Felt / element | Brukt i | Web | Apple/Binding |
+|---|---|---|---|
+| `Button.labelKeypath`, `Button.payloadKeypath` | Konferansedemo-dashbord, Korrespondansegodkjenning | ja | ikke verifisert |
+| `Button.urlKeypath` | Kunstnerportefølje | ja | ikke verifisert |
+| `Text.linkURL`, `Text.linkURLKeypath` | Butterpop, Kunstnerportefølje | ja | ikke verifisert |
+| `Image.altKeypath`, `Image.urlKeypath` | Kunstnerportefølje | ja | ikke verifisert |
+| `modifiers.backgroundKeypath` | Kunstnerportefølje | ja | ikke verifisert |
+| `Button.playQueueKeypath` | Butterpop | ja (web-only) | nei |
+| `Tabs` (`panels[]`, `tabsKeypath`, `activeTabStateKeypath`) | Conference, Co-Pilot | ja | ja (`SkeletonView.swift`) |
+| `Audio`, `AudioQueue` | Butterpop | ja | delvis (CellProtocol #78) |
+| `Visualization` (`kind=table`, `gamePreview`) | Spillverksted, sponsor | ja | ikke verifisert |
+
+Kjente renderer-avvik forfattere må kjenne til:
+
+- Web statisk `Image` leser `accessibilityLabel || name || "skeleton-image"`, ikke `alt`
+  (`skeleton-runtime.js` ≈ l. 2860); Apple leser `alt`. Sett begge til bildet er rettet.
+- Web setter `aria-label` på tekstfelt bare for `styleRole: admin-form-field`; bruk
+  `modifiers.accessibilityLabel` på alle felt.
+- `Tabs` uten `tabsKeypath` får renderer-avledede titler (web `defaultTabTitle`, Apple
+  `defaultPanelTitle`) – alltid engelsk/id-basert.
+- Rot-scopet `visibility.when` mot celletilstand evalueres som `false` i eldre Binding når keypath
+  ikke kan slås opp (lesson.unresolvable-condition-is-invisible).

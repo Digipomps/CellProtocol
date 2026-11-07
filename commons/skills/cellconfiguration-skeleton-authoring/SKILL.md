@@ -125,3 +125,35 @@ Use plain language:
 
 - `This part is not supported by today's skeleton format.`
 - `This would require implementation work. I should ask Kjetil before adding it.`
+
+## UX-panelets forfatterregler (lagt til 2026-11-07)
+
+Et UX/GUI/design-panel gikk gjennom alle flatene i CellScaffold 7. november 2026
+(`<HAVEN_ROOT>/CellProtocol/Deliverables/UX_Panel_CellScaffold_2026-11-07/RAPPORT.md`).
+Reglene under gjelder hver gang du skriver eller endrer et skeleton; hele settet står i
+`<HAVEN_ROOT>/CellProtocol/commons/skills/haven-ux-surface-review/references/rules.md`.
+
+- **Formålet reiser med filen.** `description` + `discovery.purpose` (purpose://-ref eller
+  `candidate.*`) + `purposeDescription` som svarer på hvem, hva, utfall, målbart mål og
+  avgrensning. Skrevet for brukeren, ikke for rendereren. (A1–A3)
+- **Hvert element har en setning i formålet, hvert løfte har et element.** Stryk eller utvid før commit. (A4)
+- **Tabs har forfattede etiketter** (`tabsKeypath` + `labelKeypath` eller tittel per panel); uten
+  det gir web `defaultTabTitle(id)` («Overview») og Apple kapitalisert id. (G3)
+- **Rad-knapper erklærer kontrakten:** `labelKeypath` + `payloadKeypath`, norsk fallback-verb i
+  `label`, aldri «Action». (B1, D4)
+- **`selectionStateKeypath` peker på state (`.state.`), aldri på en action.** Lister/Picker som
+  skal utløse noe har `selectionActionKeypath`. (D2)
+- **Ingen ubundet input.** `TextField`/`TextArea` uten `targetKeypath` er en feil; send-knappen leser samme utkast. (D1)
+- **Tre tilstander per List** (rader / ingen / kunne ikke lese) – fra cellen eller via `visibility`;
+  aldri statisk ro-tekst. (C1)
+- **Farlig verb = to trinn + konsekvens + kvittering**, egen HStack, ikke `primary-action`. (D3)
+- **Fargepar, aldri enkeltfarge;** kontrast ≥ 4,5:1 skal kunne regnes fra JSON. Velg én
+  stylingstrategi (tema-CSS via `styleClasses` / `styleVariables` / fast palett ≤ 12) og si det i
+  `description`. Én typografiskala 12·14·16·20·24·32. (F1–F4)
+- **Tilgjengelig navn på alt:** `alt`/`altKeypath` på `Image`, `label` på `Picker`/`Toggle`,
+  `accessibilityLabel` på tekstfelt og ikon-knapper. (G1–G2)
+- **Ett språk per flate** (samme som `purposeDescription`); internspråk bare bak «Avansert». (E1, E3)
+- **Owner-entity-access er et element:** synlig vei til egen entitet/Co-Pilot, eller `shellProvided`
+  markert og bevist i reachability-auditen. Flater uten Porthole-skall må alltid ha elementet selv. (H1)
+- **Gjentakelser er rader** (List/Grid med `flowElementSkeleton`), ikke statisk utrulling. (B4)
+- **Én kilde per flate.** Playwright-kopier eksporteres fra katalogen eller testes for erklært avvik. (I1)
