@@ -1210,6 +1210,41 @@ final class BridgeTests: XCTestCase {
         }
     }
 
+    func testDeniedFeedBeforeSubscriptionDoesNotTerminateNextFeed() async throws {
+        let transport = MockBridgeTransport()
+        let owner = TestFixtures.makeIdentity()
+        let bridge = try await BridgeBase(.init(owner: owner, transport: transport, connection: .outbound))
+        try await bridge.setTransport(transport, connection: .outbound)
+        try await markBridgeReady(bridge, identity: owner)
+        let first = try await bridge.flow(requester: owner)
+        let sent = try await waitUntilTransportHasSent(1, transport: transport)
+        let cid = try XCTUnwrap(sent.first).cid
+        let denial = BridgeCommand(cmd: "response", payload: .setValueResponse(
+            SetValueResponse(state: .denied, value: .string("ACCESS_DENIED"))), cid: cid)
+        try await bridge.consumeResponse(command: denial)
+
+        let next = try await bridge.flow(requester: owner)
+        let commands = try await waitUntilTransportHasSent(2, transport: transport)
+        let nextCommand = try XCTUnwrap(commands.last)
+        XCTAssertEqual(nextCommand.command, .feed)
+        XCTAssertNotEqual(cid, nextCommand.cid)
+        let failed = expectation(description: "old subject remembers its failure")
+        let received = expectation(description: "new subject receives its own event")
+        let oldSink = first.sink(receiveCompletion: {
+            guard case let .failure(error as BridgeFeedFailure) = $0 else { return XCTFail("missing typed denial") }
+            XCTAssertEqual(error.state, .denied)
+            XCTAssertEqual(error.code, "ACCESS_DENIED")
+            failed.fulfill()
+        }, receiveValue: { _ in XCTFail("denied feed delivered a value") })
+        let newSink = next.sink(receiveCompletion: { _ in XCTFail("old CID terminated new feed") },
+                                receiveValue: { XCTAssertEqual($0.title, "fresh"); received.fulfill() })
+        defer { oldSink.cancel(); newSink.cancel() }
+        try await bridge.consumeResponse(command: denial)
+        try await bridge.consumeResponse(command: .init(cmd: "response", payload: .flowElement(
+            FlowElement(title: "fresh", content: .string("ok"), properties: nil)), cid: nextCommand.cid))
+        await fulfillment(of: [failed, received], timeout: 1)
+    }
+
     func testBridgeBaseSharesOneRemoteFeedAcrossLocalSubscribers() async throws {
         let transport = MockBridgeTransport()
         let owner = TestFixtures.makeIdentity(displayName: "owner")
