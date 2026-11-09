@@ -755,6 +755,46 @@ final class SkeletonTests: XCTestCase {
         XCTAssertNil(legacy.foregroundColorKeypath)
     }
 
+    func testModifiersEncodeAndDecodePurposeRef() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.purposeRef = "purpose://candidate.game-workshop.project.create"
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+        XCTAssertEqual(json["purposeRef"] as? String, "purpose://candidate.game-workshop.project.create")
+
+        let decoded = try JSONDecoder().decode(SkeletonModifiers.self, from: data)
+        XCTAssertEqual(decoded.purposeRef, "purpose://candidate.game-workshop.project.create")
+
+        // A Button carrying the purpose round-trips through the element enum too.
+        var button = SkeletonButton(keypath: "gameHelper.ask", label: "Lag spill")
+        button.modifiers = modifiers
+        let element = SkeletonElement.Button(button)
+        let elementData = try JSONEncoder().encode(element)
+        let decodedElement = try JSONDecoder().decode(SkeletonElement.self, from: elementData)
+        guard case .Button(let decodedButton) = decodedElement else {
+            return XCTFail("expected Button, got \(decodedElement)")
+        }
+        XCTAssertEqual(decodedButton.modifiers?.purposeRef, "purpose://candidate.game-workshop.project.create")
+    }
+
+    func testModifiersWithoutPurposeRefStayUnchanged() throws {
+        var modifiers = SkeletonModifiers()
+        modifiers.styleRole = "chatComposer"
+        let data = try JSONEncoder().encode(modifiers)
+        let json = decodeJSONObject(data)
+        XCTAssertNil(json["purposeRef"], "absent purposeRef must not be encoded")
+
+        let legacy = try JSONDecoder().decode(SkeletonModifiers.self, from: Data("{\"styleRole\":\"chatComposer\"}".utf8))
+        XCTAssertEqual(legacy.styleRole, "chatComposer")
+        XCTAssertNil(legacy.purposeRef)
+    }
+
+    func testModifiersRejectBlankOrForeignPurposeRef() {
+        for invalid in ["{\"purposeRef\":\"\"}", "{\"purposeRef\":\"   \"}", "{\"purposeRef\":\"game-workshop.project.create\"}"] {
+            XCTAssertThrowsError(try JSONDecoder().decode(SkeletonModifiers.self, from: Data(invalid.utf8)), invalid)
+        }
+    }
+
     func testModifiersEncodeStyleMetadata() throws {
         var modifiers = SkeletonModifiers()
         modifiers.styleRole = "chatComposer"
