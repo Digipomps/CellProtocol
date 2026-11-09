@@ -2,12 +2,24 @@
 
 Skrevet av Claude (cloud-sesjon, bare skrivetilgang til CellProtocol-branch `claude/jolly-clarke-56hwv7`).
 Codex kjører på Mac-en med hele HAVEN-roten og tar distribusjonen. Les hele filen før du gjør noe.
-Kjør fra HAVEN-roten:
+
+Forutsetning: filen ligger på CellProtocol-branchen `claude/jolly-clarke-56hwv7`. Hent den først (worktree, så
+den lokale klonen ikke må bytte branch):
 
 ```bash
-/Users/kjetil/.local/bin/codex exec -C /Users/kjetil/Build/Digipomps/HAVEN \
-  "Les CellProtocol/commons/prompts/codex_ux_panel_skill_distribution_handoff_2026-11-07.md og utfør slicene som er merket GODKJENT. Rør ikke slicer merket BLOKKERT."
+git -C /Users/kjetil/Build/Digipomps/HAVEN/CellProtocol fetch origin claude/jolly-clarke-56hwv7
+git -C /Users/kjetil/Build/Digipomps/HAVEN/CellProtocol worktree add ../CellProtocol-ux-panel origin/claude/jolly-clarke-56hwv7
 ```
+
+Kjør fra HAVEN-roten. HAVEN-roten er ikke et git-repo, så Codex krever `--skip-git-repo-check`
+(feilen «Not inside a trusted directory and --skip-git-repo-check was not specified», sett 2026-11-09):
+
+```bash
+/Users/kjetil/.local/bin/codex exec --skip-git-repo-check -C /Users/kjetil/Build/Digipomps/HAVEN \
+  "Les CellProtocol-ux-panel/commons/prompts/codex_ux_panel_skill_distribution_handoff_2026-11-07.md og utfør slicene som er merket GODKJENT. Der filen sier CellProtocol/..., les fra CellProtocol-ux-panel/... Rør ikke slicer merket BLOKKERT."
+```
+
+Når branchen er merget til main kan worktree-en fjernes (`git worktree remove ../CellProtocol-ux-panel`) og stiene leses fra `CellProtocol/`.
 
 ## Objektiv
 
@@ -66,14 +78,20 @@ Finnes ikke skriptet: skriv de to linjene i `CellScaffold/memory/context-ledger.
 ```bash
 cd CellScaffold
 python3 scripts/sync_claude_desktop_skills.py --skill haven-ux-surface-review --skill cellconfiguration-skeleton-authoring \
-  --skill haven-gui-testing --skill haven-panel-task-decomposition --include-user --include-codex --build-artifacts --dry-run
+  --skill haven-gui-testing --skill haven-panel-task-decomposition --skill codex-collaboration --include-user --include-codex --build-artifacts --dry-run
 ```
-Les driften. Hvis `~/.claude/skills` eller `~/.codex/skills` har nyere lokale endringer i disse fire, stopp og rapporter.
+Les driften. Hvis `~/.claude/skills` eller `~/.codex/skills` har nyere lokale endringer i disse fem, stopp og rapporter.
 Ellers kjør samme kommando uten `--dry-run`, og deretter `--check --include-user --include-codex`.
 Rapporter de eksakte ZIP-stiene under `Documentation/ClaudeSkills/desktop-zips/` (Kjetil laster dem opp til claude.ai selv – de oppdaterer seg ikke).
 
 ### Slice 6 – GODKJENT: oppdater Documentation/ClaudeSkills/README.md og Claude_Skills_and_Codex_Collaboration.md
 Legg `haven-ux-surface-review.zip` i bundle-lista og skillen i «Current skills».
+
+### Slice 6b – GODKJENT: læring inn i codex-collaboration
+Legg i `CellScaffold/.claude/skills/codex-collaboration/SKILL.md` under «Codex CLI» (og ta med i sync i slice 5):
+«`codex exec -C <HAVEN_ROOT>` feiler med «Not inside a trusted directory and --skip-git-repo-check was not specified»
+fordi HAVEN-roten ikke er et git-repo. Bruk `--skip-git-repo-check` når `-C` peker på roten, eller pek `-C` på ett repo.
+Handoff-filer som ligger på en upushet/umerget branch må hentes først (fetch + worktree).» Verifisert 2026-11-09.
 
 ### Slice 7 – BLOKKERT (krever Kjetils ja): produktendringer
 Ingen av funnene i RAPPORT.md skal rettes i skeletons, Swift, CSS eller Leaf uten eksplisitt godkjenning fra Kjetil
