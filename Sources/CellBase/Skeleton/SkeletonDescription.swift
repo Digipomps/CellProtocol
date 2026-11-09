@@ -1402,6 +1402,15 @@ public struct SkeletonModifiers: Codable {
         get { box.fields.leadingMarker }
         set { uniqueBox().fields.leadingMarker = newValue }
     }
+
+    /// The `purpose://…` node this element serves (Book 23). Tests and the
+    /// reachability audit read it to judge whether the element belongs on its
+    /// surface and to derive what the element must observably do. Renderers
+    /// ignore it; it never grants or widens any right.
+    public var purposeRef: String? {
+        get { box.fields.purposeRef }
+        set { uniqueBox().fields.purposeRef = newValue }
+    }
 }
 
 /// Feltene til `SkeletonModifiers`, uendret fra da de lå inline. Brukes bare
@@ -1507,6 +1516,9 @@ struct SkeletonModifiersFields: Codable {
     public var linkURLKeypath: String?
     public var styleVariables: [String: String]?
     public var styleVariablesKeypath: String?
+    // Metadata for tests and audits, not for rendering: the purpose node the
+    // element serves. Must be a non-blank `purpose://` reference when present.
+    public var purposeRef: String?
 
     public init() {}
 
@@ -1545,6 +1557,7 @@ struct SkeletonModifiersFields: Codable {
         case linkURLKeypath
         case styleVariables
         case styleVariablesKeypath
+        case purposeRef
         case localization
         case padding
         case maxWidthInfinity
@@ -1640,6 +1653,13 @@ struct SkeletonModifiersFields: Codable {
         if let linkURL { try skeletonNonempty(linkURL, field: "linkURL") }
         if let linkURLKeypath { try skeletonNonempty(linkURLKeypath, field: "linkURLKeypath") }
         if let styleVariablesKeypath { try skeletonNonempty(styleVariablesKeypath, field: "styleVariablesKeypath") }
+        self.purposeRef = try container.skeletonValue(String.self, forKey: .purposeRef)
+        if let purposeRef {
+            try skeletonNonempty(purposeRef, field: "purposeRef")
+            guard purposeRef.hasPrefix("purpose://") else {
+                throw SkeletonFormatError(field: "purposeRef", reason: "must start with purpose://")
+            }
+        }
         for (name, color) in (styleVariables ?? [:]).sorted(by: { $0.key < $1.key }) {
             guard SkeletonStyleVariables.isAllowedName(name) else {
                 throw SkeletonFormatError(field: "styleVariables.\(name)",
