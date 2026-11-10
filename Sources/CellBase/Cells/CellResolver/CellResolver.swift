@@ -1380,7 +1380,7 @@ public class CellResolver: CellResolverProtocol {
         guard let endpointURL = URL(string: endpoint) else {
             throw TransportError.InvalidURL
         }
-        if endpointURL.scheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if endpointURL.scheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: endpointURL.host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: endpoint)
         }
         let principal = try await proveRemoteBridgePrincipal(
@@ -1666,7 +1666,7 @@ public class CellResolver: CellResolverProtocol {
             resolvedScheme = "wss"
         }
 
-        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: cellEndpointURL.absoluteString)
         }
 
@@ -1758,14 +1758,14 @@ public class CellResolver: CellResolverProtocol {
             resolvedScheme = "wss"
         }
 
-        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: endpoint)
         }
         return resolvedScheme
     }
 
     private func allowsAutomaticInsecureWebSocket(for host: String) -> Bool {
-        guard CellBase.allowsInsecureWebSockets else { return false }
+        guard CellBase.allowsInsecureWebSocket(toHost: host) else { return false }
         let normalizedHost = normalizedHostKey(host)
         return normalizedHost == "127.0.0.1"
             || normalizedHost == "::1"
