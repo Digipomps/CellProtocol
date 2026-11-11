@@ -64,6 +64,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     }
     
 
+    private let upgradeHeaders: HTTPHeaders
     private let stateLock = NSLock()
     private var delegate: BridgeDelegateProtocol?
     private var webSocket: WebSocket?
@@ -102,7 +103,12 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
     
     /// Public ingress hosts must pass their owned NIO Channel close operation;
     /// a WebSocket close frame alone cannot force an uncooperative peer to leave.
-    public init(webSocket: WebSocket? = nil, closeUnderlyingChannel: (@Sendable () async -> Void)? = nil) {
+    /// Host-selected HTTP upgrade credentials, separate from the authenticated endpoint.
+    /// The host must bind these headers to its intended destination. They grant no
+    /// Cell authority. A fresh transport must be explicitly configured again.
+    public init(webSocket: WebSocket? = nil, closeUnderlyingChannel: (@Sendable () async -> Void)? = nil,
+                upgradeHeaders: HTTPHeaders = [:]) {
+        self.upgradeHeaders = upgradeHeaders
         self.webSocket = webSocket
         self.closeUnderlyingChannel = closeUnderlyingChannel
         self.identityDomain = "private" // May not be needed?
@@ -173,7 +179,7 @@ public class VaporBridgeTransport: BridgeTransportProtocol, @unchecked Sendable 
         // WebSocketKit's HTTP upgrade future may complete before onUpgrade has
         // installed our socket. Readiness is this explicit callback, not that future.
         let connection: EventLoopFuture<Void> = client.connect(scheme: scheme, host: host,
-            port: target.port ?? (scheme == "wss" ? 443 : 80), path: target.percentEncodedPath, query: target.percentEncodedQuery) { [weak self] socket in
+            port: target.port ?? (scheme == "wss" ? 443 : 80), path: target.percentEncodedPath, query: target.percentEncodedQuery, headers: upgradeHeaders) { [weak self] socket in
             guard let self else { socket.close(promise: nil); waiter.complete(.failure(TransportError.TransportNotFound)); return }
             let installed = self.withStateLock { () -> Bool in
                 guard self.connectionGeneration == generation, self.setupWaiter === waiter else { return false }

@@ -3252,6 +3252,15 @@ public struct SkeletonButton: Codable, Identifiable {
     /// SF-Symbol-to-Lucide mapping table in skeleton-runtime.js) rather than the
     /// protocol carrying platform-specific icon identifiers.
     public var icon: String?
+    /// H: row (or root) field with a list of tracks. When set, the button
+    /// starts the surface's AudioQueue with that list instead of sending
+    /// `keypath`. See SkeletonAudioQueue.
+    public var playQueueKeypath: String?
+    /// H: row field with the id of this button's own track. The queue starts
+    /// there, and the button counts as playing while that track plays.
+    public var playQueueStartKeypath: String?
+    /// H: label shown while this button's track or list plays, e.g. «Spiller».
+    public var playingLabel: String?
     public var modifiers: SkeletonModifiers?
 
     public init(
@@ -3263,7 +3272,10 @@ public struct SkeletonButton: Codable, Identifiable {
         labelKeypath: String? = nil,
         payloadKeypath: String? = nil,
         icon: String? = nil,
-        urlKeypath: String? = nil
+        urlKeypath: String? = nil,
+        playQueueKeypath: String? = nil,
+        playQueueStartKeypath: String? = nil,
+        playingLabel: String? = nil
     ) {
         self.keypath = keypath
         self.label = label
@@ -3274,6 +3286,9 @@ public struct SkeletonButton: Codable, Identifiable {
         self.payloadKeypath = payloadKeypath
         self.icon = icon
         self.urlKeypath = urlKeypath
+        self.playQueueKeypath = playQueueKeypath
+        self.playQueueStartKeypath = playQueueStartKeypath
+        self.playingLabel = playingLabel
     }
 
     public enum CodingKeys: CodingKey {
@@ -3287,6 +3302,9 @@ public struct SkeletonButton: Codable, Identifiable {
         case payloadKeypath
         case urlKeypath
         case icon
+        case playQueueKeypath
+        case playQueueStartKeypath
+        case playingLabel
         case modifiers
     }
 
@@ -3309,9 +3327,13 @@ public struct SkeletonButton: Codable, Identifiable {
         self.payloadKeypath = try container.decodeIfPresent(String.self, forKey: .payloadKeypath)
         self.urlKeypath = try container.decodeIfPresent(String.self, forKey: .urlKeypath)
         self.icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        self.playQueueKeypath = try container.decodeIfPresent(String.self, forKey: .playQueueKeypath)
+        self.playQueueStartKeypath = try container.decodeIfPresent(String.self, forKey: .playQueueStartKeypath)
+        self.playingLabel = try container.decodeIfPresent(String.self, forKey: .playingLabel)
         self.modifiers = try container.decodeIfPresent(SkeletonModifiers.self, forKey: .modifiers)
-
-
+        if playQueueStartKeypath != nil || playingLabel != nil, SkeletonDataBinding.normalized(playQueueKeypath) == nil {
+            throw SkeletonFormatError(field: "playQueueKeypath", reason: "playQueueStartKeypath and playingLabel need playQueueKeypath")
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -3329,12 +3351,19 @@ public struct SkeletonButton: Codable, Identifiable {
         try elementContainer.encodeIfPresent(self.payloadKeypath, forKey: .payloadKeypath)
         try elementContainer.encodeIfPresent(self.urlKeypath, forKey: .urlKeypath)
         try elementContainer.encodeIfPresent(self.icon, forKey: .icon)
+        try elementContainer.encodeIfPresent(self.playQueueKeypath, forKey: .playQueueKeypath)
+        try elementContainer.encodeIfPresent(self.playQueueStartKeypath, forKey: .playQueueStartKeypath)
+        try elementContainer.encodeIfPresent(self.playingLabel, forKey: .playingLabel)
         try elementContainer.encodeIfPresent(self.modifiers, forKey: .modifiers)
     }
         
     
     public func execute(requester explicitRequester: Identity? = nil) async -> ValueType? {
         guard SkeletonButtonNavigation.isNavigationButton(self) == false else {
+            return nil
+        }
+        // H: a queue button starts the surface's player; it sends nothing.
+        guard startsAudioQueue == false else {
             return nil
         }
         guard let resolver = CellBase.defaultCellResolver else {
@@ -4275,6 +4304,7 @@ public indirect enum SkeletonElement : Codable, Identifiable {
     case Picker(SkeletonPicker)
     case Visualization(SkeletonVisualization)
     case Audio(SkeletonAudio)
+    case AudioQueue(SkeletonAudioQueue)
     case Unsupported(SkeletonUnsupported)
     
     public var id: UUID {
@@ -4350,6 +4380,9 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return value.id
 
         case .Audio(let value):
+            return value.id
+
+        case .AudioQueue(let value):
             return value.id
 
         case .Unsupported(let value):
@@ -4448,6 +4481,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
             return decode(SkeletonVisualization.self, wrap: SkeletonElement.Visualization)
         case "Audio":
             return decode(SkeletonAudio.self, wrap: SkeletonElement.Audio)
+        case "AudioQueue":
+            return decode(SkeletonAudioQueue.self, wrap: SkeletonElement.AudioQueue)
         case "Unsupported":
             return decode(SkeletonUnsupported.self, wrap: SkeletonElement.Unsupported)
         default:
@@ -4588,6 +4623,8 @@ public indirect enum SkeletonElement : Codable, Identifiable {
         case let .Visualization(value):
             try container.encode(value)
         case let .Audio(value):
+            try container.encode(value)
+        case let .AudioQueue(value):
             try container.encode(value)
         case let .Unsupported(value):
             try container.encode(value)

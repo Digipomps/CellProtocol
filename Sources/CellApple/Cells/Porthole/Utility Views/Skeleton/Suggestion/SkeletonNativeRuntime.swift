@@ -357,6 +357,7 @@ extension SkeletonElement {
         case .Picker(let value): return value.modifiers
         case .Visualization(let value): return value.modifiers
         case .Audio(let value): return value.modifiers
+        case .AudioQueue(let value): return value.modifiers
         case .Unsupported(let value): return value.modifiers
         @unknown default: return nil
         }
@@ -389,6 +390,7 @@ extension SkeletonElement {
         case .Picker(var value): value.modifiers = modifiers; return .Picker(value)
         case .Visualization(var value): value.modifiers = modifiers; return .Visualization(value)
         case .Audio(var value): value.modifiers = modifiers; return .Audio(value)
+        case .AudioQueue(var value): value.modifiers = modifiers; return .AudioQueue(value)
         case .Unsupported(var value): value.modifiers = modifiers; return .Unsupported(value)
         @unknown default: return self
         }
