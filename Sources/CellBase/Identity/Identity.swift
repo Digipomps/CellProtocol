@@ -10,7 +10,8 @@ import OpenCombine
 #endif
 
 // Identity is intentionally still a mutable reference type for public API compatibility.
-// Vaults and cells own synchronization around cross-actor use.
+// Vaults and cells own synchronization around cross-actor use, except for the
+// vault binding (`identityVault`/`homeVaultReference`), which Identity locks itself.
 final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked Sendable {
 
     
@@ -29,8 +30,45 @@ final public class Identity: Codable, Grantable, Meddle, Equatable, @unchecked S
 
     public var entityAnchorReference = "cell:///EntityAnchor" // each scaffold should have a identity unique cell act as the anchor to the - should it only be the VaultIdentity? At least don't leak this to others
     
-    public var identityVault: IdentityVaultProtocol?
-    public var homeVaultReference: String?
+    /// The runtime vault binding is shared state: resolvers rebind a stored
+    /// cell owner to each request's vault (`bindStoredOwnerToRuntimeIdentity`)
+    /// while other requests read the same owner's vault to sign challenges.
+    /// An unsynchronized existential reference here is a data race; on
+    /// 2026-11-11 eight parallel reads for one account released a per-request
+    /// vault mid-call and crashed in `randomBytes64` (SIGSEGV). Each read and
+    /// write is one locked operation, and a replaced vault is released only
+    /// after the lock is dropped.
+    private let vaultBindingLock = NSLock()
+    private var storedIdentityVault: IdentityVaultProtocol?
+    private var storedHomeVaultReference: String?
+
+    public var identityVault: IdentityVaultProtocol? {
+        get {
+            vaultBindingLock.lock()
+            defer { vaultBindingLock.unlock() }
+            return storedIdentityVault
+        }
+        set {
+            vaultBindingLock.lock()
+            let replaced = storedIdentityVault
+            storedIdentityVault = newValue
+            vaultBindingLock.unlock()
+            withExtendedLifetime(replaced) {}
+        }
+    }
+
+    public var homeVaultReference: String? {
+        get {
+            vaultBindingLock.lock()
+            defer { vaultBindingLock.unlock() }
+            return storedHomeVaultReference
+        }
+        set {
+            vaultBindingLock.lock()
+            defer { vaultBindingLock.unlock() }
+            storedHomeVaultReference = newValue
+        }
+    }
 
     // Local holder startup authority; deliberately absent from CodingKeys and public snapshots.
     var bridgeConnectHolder: BridgeConnectHolderCapability?
