@@ -349,4 +349,107 @@ final class ContactOperationHolderTests: XCTestCase {
             do { _ = try await cell.set(keypath: "contact.request", value: request, requester: subject); XCTFail("Invalid expiry accepted") } catch {}
         }
     }
+    // R2 additive review coverage. The seventeen R1 methods remain unchanged.
+    private final class ControlledClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var date: Date
+        private var uptime: TimeInterval
+        init(date: Date, uptime: TimeInterval = 100) { self.date = date; self.uptime = uptime }
+        func wall() -> Date { lock.withLock { date } }
+        func monotonic() -> TimeInterval { lock.withLock { uptime } }
+        func advance(wall: TimeInterval, monotonic: TimeInterval) {
+            lock.withLock { date = date.addingTimeInterval(wall); uptime += monotonic }
+        }
+    }
+
+    func testEachClockExpiryInsideVaultAwaitPreventsPrivateSigning() async throws {
+        for expireWallClock in [false, true] {
+            let f = try await fixture(), barrier = Barrier(), clock = ControlledClock(date: Date())
+            let lease = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request,
+                wallClock: { clock.wall() }, monotonic: { clock.monotonic() })
+            let secondsToExpiry = lease.snapshot.expiresAt.timeIntervalSince(clock.wall())
+            XCTAssertGreaterThan(secondsToExpiry, 0)
+            let originalWall = clock.wall(), originalMonotonic = clock.monotonic()
+            await f.vault.configure(barrier: barrier)
+            let task = Task { try await ContactOperationHolder.prepare(lease: lease, requester: f.subject) }
+            await fulfillment(of: [barrier.entered], timeout: 5)
+            // Change one injected clock only, after entry in the actual vault
+            // await. No retire() call and no real time delay supplies the denial.
+            clock.advance(wall: expireWallClock ? secondsToExpiry + 1 : 0,
+                          monotonic: expireWallClock ? 0 : secondsToExpiry + 1)
+            if expireWallClock { XCTAssertEqual(clock.monotonic(), originalMonotonic) }
+            else { XCTAssertEqual(clock.wall(), originalWall) }
+            await barrier.release()
+            do { _ = try await task.value; XCTFail("Expired operation returned a holder") }
+            catch { XCTAssertEqual(error as? ContactOperationFailure, .expired) }
+            let count = await f.vault.signingCount()
+            XCTAssertEqual(count, 0)
+            XCTAssertFalse(lease.applicationDispatchWasAdmitted)
+
+            // A fresh operation with a current independent clock still works.
+            await f.vault.configure()
+            let freshClock = ControlledClock(date: Date())
+            let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request,
+                wallClock: { freshClock.wall() }, monotonic: { freshClock.monotonic() })
+            _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+            let afterFresh = await f.vault.signingCount()
+            XCTAssertEqual(afterFresh, 1)
+        }
+    }
+
+    func testFailedPrivateCallCannotRetryConsumedContextWhileLeaseRemainsActive() async throws {
+        let f = try await fixture(), bytes = Data("synthetic failed signing attempt".utf8)
+        let context = ContactSigningContext(lease: f.lease, source: f.vault, messageData: bytes)
+        await f.vault.configure(failSigning: true)
+        do {
+            _ = try await f.vault.signContactMessage(messageData: bytes, originalIdentity: f.subject, context: context)
+            XCTFail("Injected private signer failure did not throw")
+        } catch {}
+        let afterFailure = await f.vault.signingCount()
+        XCTAssertEqual(afterFailure, 1, "Must reach the injected failure inside the signer closure")
+        XCTAssertTrue(context.didConsume)
+        XCTAssertNoThrow(try f.lease.withCurrent {})
+
+        // Remove the signer fault. Only consumption may reject this retry:
+        // the original lease has not been retired, cancelled or expired.
+        await f.vault.configure()
+        do {
+            _ = try await f.vault.signContactMessage(messageData: bytes, originalIdentity: f.subject, context: context)
+            XCTFail("Consumed context admitted a second private call")
+        } catch { XCTAssertEqual(error as? ContactOperationFailure, .signingDenied) }
+        let afterRetry = await f.vault.signingCount()
+        XCTAssertEqual(afterRetry, 1)
+        XCTAssertNoThrow(try f.lease.withCurrent {})
+
+        let freshContext = ContactSigningContext(lease: f.lease, source: f.vault, messageData: bytes)
+        let signature = try await f.vault.signContactMessage(messageData: bytes,
+            originalIdentity: f.subject, context: freshContext)
+        XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(signature: signature, messageData: bytes, identity: f.subject))
+        let afterFresh = await f.vault.signingCount()
+        XCTAssertEqual(afterFresh, 2)
+    }
+
+    func testActualBridgeIdentityVaultCannotMintLocalHolder() async throws {
+        let f = try await fixture()
+        let remote = f.subject.publicIdentitySnapshot()
+        // Same public key and full-looking home cannot turn this actual proxy
+        // type into a local holder. It has no live network connection in this test.
+        remote.homeVaultReference = f.subject.homeVaultReference
+        remote.identityVault = BridgeIdentityVault(cloudBridge: nil)
+        XCTAssertTrue(remote.identityVault is BridgeIdentityVault)
+        do {
+            _ = try await ContactOperationHolder.prepare(lease: f.lease, requester: remote)
+            XCTFail("Proxy vault acquired local signing authority")
+        } catch { XCTAssertEqual(error as? ContactOperationFailure, .unsupportedSigner) }
+        let count = await f.vault.signingCount()
+        XCTAssertEqual(count, 0)
+        XCTAssertFalse(f.lease.applicationDispatchWasAdmitted)
+        XCTAssertNoThrow(try f.lease.withCurrent {})
+        _ = try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject)
+        let afterLocal = await f.vault.signingCount()
+        XCTAssertEqual(afterLocal, 1)
+    }
+    // End R2 additive review coverage.
 }
