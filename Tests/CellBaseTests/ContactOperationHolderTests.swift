@@ -452,4 +452,373 @@ final class ContactOperationHolderTests: XCTestCase {
         XCTAssertEqual(afterLocal, 1)
     }
     // End R2 additive review coverage.
+    // R4 additive registry-owner coverage. The twenty R2 methods remain unchanged.
+    // Synthetic trusted-host restore/register inputs exercise retirement, not
+    // the enrollment verification ceremony (covered in the existing tests).
+    private func registryRecord(owner: Identity, linkID: String = "synthetic-link") async throws -> IdentityLinkRecord {
+        let phone = await LocalVault().identity()
+        return IdentityLinkRecord(linkID: linkID,
+            entityBinding: EntityBindingDescriptor(mode: .localEntityAnchor,
+                entityAnchorReference: EntityGenesisService.anchorReference),
+            linkedIdentity: try IdentityLinkProtocolService.descriptor(for: phone),
+            approvedDomains: ["private"], approvedIdentityContexts: [],
+            approvedScopes: [IdentityLinkScope.sameEntity], issuerIdentityUUID: owner.uuid,
+            issuerType: .existingDevice, status: .active,
+            linkedAt: IdentityLinkProtocolService.iso8601(Date()))
+    }
+
+    private func registryCompletion(_ record: IdentityLinkRecord) -> IdentityLinkCompletionResult {
+        IdentityLinkCompletionResult(record: record, requestHash: Data([1]),
+            approvalJTI: "synthetic", credentialID: "synthetic", presentationID: "synthetic")
+    }
+
+    private func attach(_ lease: ContactOperationLease, registry: IdentityLinkRegistry,
+        owner: String, record: IdentityLinkRecord) async throws -> IdentityLinkContactAttachment {
+        let observed = await registry.contactOperationRevision(ownerUUID: owner, matching: record)
+        let revision = try XCTUnwrap(observed)
+        let attached = await registry.attachContactOperation(lease, to: revision)
+        return try XCTUnwrap(attached)
+    }
+
+    func testRegistryMutationsDuringActualSignerAwaitRetireOriginalOperation() async throws {
+        for mutation in ["register-key", "register-scope", "register-identical", "restore-identical", "revoke", "clear"] {
+            let f = try await fixture(), registry = IdentityLinkRegistry(), barrier = Barrier()
+            let record = try await registryRecord(owner: f.subject)
+            var replacement = record
+            if mutation == "register-key" {
+                let other = await LocalVault().identity()
+                replacement.linkedIdentity = try IdentityLinkProtocolService.descriptor(for: other)
+                replacement.linkedIdentity.uuid = record.linkedIdentity.uuid
+            }
+            if mutation == "register-scope" { replacement.approvedScopes = ["contact-only"] }
+            await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+            _ = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: record)
+            await f.vault.configure(barrier: barrier)
+            let task = Task { try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject) }
+            await fulfillment(of: [barrier.entered], timeout: 5)
+            // The actual authority owner, not a direct test lease.retire call.
+            switch mutation {
+            case "register-key", "register-scope", "register-identical":
+                await registry.register(ownerUUID: f.subject.uuid, completion: registryCompletion(replacement))
+            case "restore-identical": await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+            case "revoke": await registry.revoke(ownerUUID: f.subject.uuid, linkID: record.linkID, revokedAt: "synthetic-now")
+            default: await registry.clear(ownerUUID: f.subject.uuid)
+            }
+            let published = await registry.activeLinks(ownerUUID: f.subject.uuid)
+            if mutation == "revoke" || mutation == "clear" { XCTAssertTrue(published.isEmpty, mutation) }
+            else { XCTAssertEqual(published, [replacement], mutation) }
+            XCTAssertThrowsError(try f.lease.withCurrent {}) {
+                XCTAssertEqual($0 as? ContactOperationFailure, .staleIntent, mutation)
+            }
+            await barrier.release()
+            do { _ = try await task.value; XCTFail("Stale signer returned: \(mutation)") }
+            catch { XCTAssertEqual(error as? ContactOperationFailure, .staleIntent, mutation) }
+            let count = await f.vault.signingCount()
+            XCTAssertEqual(count, 0, mutation)
+            XCTAssertFalse(f.lease.applicationDispatchWasAdmitted)
+
+            // Restoring authority permits a NEW operation; never revives old one.
+            await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+            await f.vault.configure()
+            let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request)
+            _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: record)
+            _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+            let afterFresh = await f.vault.signingCount()
+            XCTAssertEqual(afterFresh, 1, mutation)
+            XCTAssertThrowsError(try f.lease.withCurrent {})
+            await registry.clear(ownerUUID: f.subject.uuid)
+        }
+    }
+
+    func testRegistryRevisionRequiresCompleteActiveRecordAndOriginalRegistry() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry(), foreign = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        var wrongKey = record, wrongScope = record, inactive = record
+        let other = await LocalVault().identity()
+        wrongKey.linkedIdentity = try IdentityLinkProtocolService.descriptor(for: other)
+        wrongKey.linkedIdentity.uuid = record.linkedIdentity.uuid
+        wrongScope.approvedScopes = []; inactive.status = .revoked
+        for mismatch in [wrongKey, wrongScope, inactive] {
+            let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: mismatch)
+            XCTAssertNil(observed)
+        }
+        let wrongOwner = await registry.contactOperationRevision(ownerUUID: "unrelated-owner", matching: record)
+        XCTAssertNil(wrongOwner)
+        await foreign.restore(ownerUUID: f.subject.uuid, records: [record])
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let revision = try XCTUnwrap(observed)
+        let rejected = await foreign.attachContactOperation(f.lease, to: revision)
+        XCTAssertNil(rejected)
+        XCTAssertThrowsError(try f.lease.withCurrent {})
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 0)
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: foreign, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        await foreign.clear(ownerUUID: f.subject.uuid)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [inactive])
+        let inactiveObserved = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: inactive)
+        XCTAssertNil(inactiveObserved)
+    }
+
+    func testRegistryRevisionCannotAttachAfterSameRecordABA() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let original = try XCTUnwrap(observed)
+        var changed = record; changed.approvedScopes = []
+        await registry.restore(ownerUUID: f.subject.uuid, records: [changed])
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let stale = await registry.attachContactOperation(f.lease, to: original)
+        XCTAssertNil(stale)
+        XCTAssertThrowsError(try f.lease.withCurrent {})
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 1)
+        await registry.clear(ownerUUID: f.subject.uuid)
+    }
+
+    func testRegistryDetachIsExactInstanceAndCannotDetachSuccessor() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let original = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: record)
+        let duplicate = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: record)
+        XCTAssertEqual(original, duplicate)
+        let sibling = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        let siblingHandle = try await attach(sibling, registry: registry, owner: f.subject.uuid, record: record)
+        XCTAssertNotEqual(original, siblingHandle)
+        let wrongInstance = await registry.detachContactOperation(sibling, attachment: original)
+        XCTAssertFalse(wrongInstance)
+        XCTAssertNoThrow(try f.lease.withCurrent {}); XCTAssertNoThrow(try sibling.withCurrent {})
+        let detached = await registry.detachContactOperation(f.lease, attachment: original)
+        XCTAssertTrue(detached); XCTAssertThrowsError(try f.lease.withCurrent {})
+        _ = try await ContactOperationHolder.prepare(lease: sibling, requester: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        XCTAssertThrowsError(try sibling.withCurrent {})
+        let successor = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        let successorHandle = try await attach(successor, registry: registry, owner: f.subject.uuid, record: record)
+        let staleOriginal = await registry.detachContactOperation(f.lease, attachment: original)
+        let staleSibling = await registry.detachContactOperation(successor, attachment: siblingHandle)
+        XCTAssertFalse(staleOriginal); XCTAssertFalse(staleSibling)
+        _ = try await ContactOperationHolder.prepare(lease: successor, requester: f.subject)
+        let finalDetach = await registry.detachContactOperation(successor, attachment: successorHandle)
+        XCTAssertTrue(finalDetach); XCTAssertThrowsError(try successor.withCurrent {})
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 2)
+    }
+
+    func testRegistryFreshRevisionCannotReattachRetiredOriginalOperation() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        _ = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: record)
+        await registry.clear(ownerUUID: f.subject.uuid)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let revision = try XCTUnwrap(observed)
+        let rejected = await registry.attachContactOperation(f.lease, to: revision)
+        XCTAssertNil(rejected)
+        do { _ = try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject); XCTFail("Retired lease revived") }
+        catch { XCTAssertEqual(error as? ContactOperationFailure, .staleIntent) }
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 0)
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        await registry.clear(ownerUUID: f.subject.uuid)
+    }
+
+    func testRegistryMutationPreservesOtherLinkAndOtherOwnerOperations() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let first = try await registryRecord(owner: f.subject, linkID: "first")
+        let second = try await registryRecord(owner: f.subject, linkID: "second")
+        let other = try await fixture()
+        let otherRecord = try await registryRecord(owner: other.subject, linkID: "first")
+        await registry.restore(ownerUUID: f.subject.uuid, records: [first, second])
+        await registry.restore(ownerUUID: other.subject.uuid, records: [otherRecord])
+        let sibling = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: first)
+        _ = try await attach(sibling, registry: registry, owner: f.subject.uuid, record: second)
+        _ = try await attach(other.lease, registry: registry, owner: other.subject.uuid, record: otherRecord)
+        await registry.revoke(ownerUUID: f.subject.uuid, linkID: first.linkID, revokedAt: "synthetic-now")
+        XCTAssertThrowsError(try f.lease.withCurrent {})
+        _ = try await ContactOperationHolder.prepare(lease: sibling, requester: f.subject)
+        await registry.clear(ownerUUID: f.subject.uuid)
+        XCTAssertThrowsError(try sibling.withCurrent {})
+        _ = try await ContactOperationHolder.prepare(lease: other.lease, requester: other.subject)
+        let count = await f.vault.signingCount(), otherCount = await other.vault.signingCount()
+        XCTAssertEqual(count, 1); XCTAssertEqual(otherCount, 1)
+        await registry.clear(ownerUUID: other.subject.uuid)
+    }
+    func testRegistryPartialMultiOwnerAttachFailureRetiresAndDetachesOriginal() async throws {
+        let f = try await fixture(), firstOwner = IdentityLinkRegistry(), secondOwner = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await firstOwner.restore(ownerUUID: f.subject.uuid, records: [record])
+        await secondOwner.restore(ownerUUID: f.subject.uuid, records: [record])
+        let first = try await attach(f.lease, registry: firstOwner, owner: f.subject.uuid, record: record)
+        let observed = await secondOwner.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let originalSecond = try XCTUnwrap(observed)
+        await secondOwner.restore(ownerUUID: f.subject.uuid, records: [record])
+        let rejected = await secondOwner.attachContactOperation(f.lease, to: originalSecond)
+        XCTAssertNil(rejected)
+        XCTAssertThrowsError(try f.lease.withCurrent {})
+        let removed = await firstOwner.detachContactOperation(f.lease, attachment: first)
+        let removedAgain = await firstOwner.detachContactOperation(f.lease, attachment: first)
+        XCTAssertTrue(removed); XCTAssertFalse(removedAgain)
+        do { _ = try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject); XCTFail("Partial admission signed") }
+        catch { XCTAssertEqual(error as? ContactOperationFailure, .staleIntent) }
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 0)
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: firstOwner, owner: f.subject.uuid, record: record)
+        _ = try await attach(fresh, registry: secondOwner, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        await secondOwner.clear(ownerUUID: f.subject.uuid)
+        XCTAssertThrowsError(try fresh.withCurrent {})
+        await firstOwner.clear(ownerUUID: f.subject.uuid)
+    }
+    func testRegistryPerLinkCapacityPreservesExistingOperationsAndDetachReleasesSlot() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let revision = try XCTUnwrap(observed)
+        var retained: [(ContactOperationLease, IdentityLinkContactAttachment)] = []
+        for _ in 0..<IdentityLinkRegistry.maximumContactOperationsPerLink {
+            let lease = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request)
+            let result = await registry.attachContactOperation(lease, to: revision)
+            retained.append((lease, try XCTUnwrap(result)))
+        }
+        let duplicate = await registry.attachContactOperation(retained[0].0, to: revision)
+        XCTAssertEqual(duplicate, retained[0].1)
+        let rejected = await registry.attachContactOperation(f.lease, to: revision)
+        XCTAssertNil(rejected); XCTAssertThrowsError(try f.lease.withCurrent {})
+        for entry in retained { XCTAssertNoThrow(try entry.0.withCurrent {}) }
+        _ = try await ContactOperationHolder.prepare(lease: retained[1].0, requester: f.subject)
+        let detached = await registry.detachContactOperation(retained[0].0, attachment: retained[0].1)
+        XCTAssertTrue(detached)
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        await registry.clear(ownerUUID: f.subject.uuid)
+        for entry in retained { XCTAssertThrowsError(try entry.0.withCurrent {}) }
+        XCTAssertThrowsError(try fresh.withCurrent {})
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let afterClear = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(afterClear, registry: registry, owner: f.subject.uuid, record: record)
+        await registry.clear(ownerUUID: f.subject.uuid)
+    }
+
+    func testRegistryGlobalCapacityBoundsDifferentLinksAndOnlyExactDetachReleasesSlot() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let base = try await registryRecord(owner: f.subject)
+        let linkCount = IdentityLinkRegistry.maximumContactRegistrations / IdentityLinkRegistry.maximumContactOperationsPerLink + 1
+        let records = (0..<linkCount).map { index -> IdentityLinkRecord in
+            var record = base; record.linkID = "capacity-\(index)"; return record
+        }
+        await registry.restore(ownerUUID: f.subject.uuid, records: records)
+        var retained: [(ContactOperationLease, IdentityLinkContactAttachment)] = []
+        for index in 0..<IdentityLinkRegistry.maximumContactRegistrations {
+            let lease = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request)
+            let handle = try await attach(lease, registry: registry, owner: f.subject.uuid,
+                record: records[index / IdentityLinkRegistry.maximumContactOperationsPerLink])
+            retained.append((lease, handle))
+        }
+        let spareRecord = try XCTUnwrap(records.last)
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: spareRecord)
+        let spareRevision = try XCTUnwrap(observed)
+        let rejected = await registry.attachContactOperation(f.lease, to: spareRevision)
+        XCTAssertNil(rejected); XCTAssertThrowsError(try f.lease.withCurrent {})
+        for entry in retained { XCTAssertNoThrow(try entry.0.withCurrent {}) }
+        let wrong = await registry.detachContactOperation(retained[1].0, attachment: retained[0].1)
+        XCTAssertFalse(wrong)
+        let stillFull = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        let rejectedAgain = await registry.attachContactOperation(stillFull, to: spareRevision)
+        XCTAssertNil(rejectedAgain); XCTAssertThrowsError(try stillFull.withCurrent {})
+        let detached = await registry.detachContactOperation(retained[0].0, attachment: retained[0].1)
+        XCTAssertTrue(detached)
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: spareRecord)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        await registry.clear(ownerUUID: f.subject.uuid)
+        for entry in retained { XCTAssertThrowsError(try entry.0.withCurrent {}) }
+        XCTAssertThrowsError(try fresh.withCurrent {})
+    }
+
+    func testRegistryExpiredRegistrationsStayBoundedUntilExactOwnerCleanup() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry(), clock = ControlledClock(date: Date())
+        let record = try await registryRecord(owner: f.subject)
+        await registry.restore(ownerUUID: f.subject.uuid, records: [record])
+        let observed = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: record)
+        let revision = try XCTUnwrap(observed)
+        var retained: [(ContactOperationLease, IdentityLinkContactAttachment)] = []
+        for _ in 0..<IdentityLinkRegistry.maximumContactOperationsPerLink {
+            let lease = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request,
+                wallClock: { clock.wall() }, monotonic: { clock.monotonic() })
+            let result = await registry.attachContactOperation(lease, to: revision)
+            retained.append((lease, try XCTUnwrap(result)))
+        }
+        clock.advance(wall: 1000, monotonic: 1000)
+        // Expired entries cannot grow or silently evict a different operation.
+        // The admitting owner remains responsible for exact terminal cleanup.
+        for _ in 0..<3 {
+            let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+                admission: f.admission, request: f.request)
+            let rejected = await registry.attachContactOperation(fresh, to: revision)
+            XCTAssertNil(rejected); XCTAssertThrowsError(try fresh.withCurrent {})
+        }
+        for entry in retained {
+            XCTAssertThrowsError(try entry.0.withCurrent {}) { XCTAssertEqual($0 as? ContactOperationFailure, .expired) }
+            let detached = await registry.detachContactOperation(entry.0, attachment: entry.1)
+            XCTAssertTrue(detached)
+        }
+        let fresh = try ContactOperationLease(binding: f.binding, requester: f.subject,
+            admission: f.admission, request: f.request)
+        _ = try await attach(fresh, registry: registry, owner: f.subject.uuid, record: record)
+        _ = try await ContactOperationHolder.prepare(lease: fresh, requester: f.subject)
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 1)
+        await registry.clear(ownerUUID: f.subject.uuid)
+    }
+    func testRegistryColdRestoreAllowsFirstCaptureButRejectsReplacedEvidence() async throws {
+        let f = try await fixture(), registry = IdentityLinkRegistry()
+        let originalEvidenceRecord = try await registryRecord(owner: f.subject)
+        let beforeRecovery = await registry.contactOperationRevision(ownerUUID: f.subject.uuid,
+            matching: originalEvidenceRecord)
+        XCTAssertNil(beforeRecovery)
+        // Actual registry recovery boundary. The application must independently
+        // revalidate its authenticated evidence after this await; this test
+        // supplies synthetic trusted evidence and does not simulate CS auth.
+        await registry.restore(ownerUUID: f.subject.uuid, records: [originalEvidenceRecord])
+        _ = try await attach(f.lease, registry: registry, owner: f.subject.uuid, record: originalEvidenceRecord)
+        _ = try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject)
+        var replacement = originalEvidenceRecord; replacement.approvedScopes = ["contact-only"]
+        await registry.restore(ownerUUID: f.subject.uuid, records: [replacement])
+        let staleEvidence = await registry.contactOperationRevision(ownerUUID: f.subject.uuid,
+            matching: originalEvidenceRecord)
+        XCTAssertNil(staleEvidence)
+        XCTAssertThrowsError(try f.lease.withCurrent {})
+        // The old operation cannot use even a current observation as a rescue.
+        let current = await registry.contactOperationRevision(ownerUUID: f.subject.uuid, matching: replacement)
+        let currentRevision = try XCTUnwrap(current)
+        let oldOperation = await registry.attachContactOperation(f.lease, to: currentRevision)
+        XCTAssertNil(oldOperation)
+        let count = await f.vault.signingCount(); XCTAssertEqual(count, 1)
+        await registry.clear(ownerUUID: f.subject.uuid)
+    }
+    // End R4 additive registry-owner coverage.
 }
