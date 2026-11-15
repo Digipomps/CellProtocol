@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Stiftelsen Digipomps and HAVEN contributors
 
 import Foundation
+import Crypto
 
 public enum ContractError: Error {
     case signingFailed
@@ -220,6 +221,24 @@ public struct Contract: Codable {
             return false
         }
         return await verifySignature(now: now)
+    }
+
+    /// A content identifier, not an authorization decision. The caller must
+    /// independently verify the signature, subject, target and current policy.
+    public func signedContentDigest() throws -> Data {
+        guard let signature else { throw ContractError.signingFailed }
+        let content = try signingData()
+        guard content.count <= Int(UInt32.max), signature.count <= Int(UInt32.max) else {
+            throw ContractError.signingFailed
+        }
+        var bytes = Data("org.haven.contact-contract-digest.v1".utf8)
+        for field in [content, signature] {
+            let size = UInt32(field.count)
+            bytes.append(contentsOf: [UInt8((size >> 24) & 255), UInt8((size >> 16) & 255),
+                                      UInt8((size >> 8) & 255), UInt8(size & 255)])
+            bytes.append(field)
+        }
+        return Data(SHA256.hash(data: bytes))
     }
 
     private func signingData() throws -> Data {

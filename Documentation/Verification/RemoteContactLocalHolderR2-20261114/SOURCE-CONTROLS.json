@@ -1,0 +1,87 @@
+{
+  "status": "SOURCE_ONLY_NOT_BEHAVIORAL_TESTS",
+  "checks": [
+    {
+      "check": "exact R1 parent",
+      "pass": true
+    },
+    {
+      "check": "whole R1 test file unchanged outside additive block",
+      "pass": true
+    },
+    {
+      "check": "all product and package bytes unchanged",
+      "pass": true
+    },
+    {
+      "check": "20 unique methods, 3 additions",
+      "pass": true
+    },
+    {
+      "check": "expiry tests both isolated clocks",
+      "pass": true
+    },
+    {
+      "check": "expiry positive entry bounded",
+      "pass": true
+    },
+    {
+      "check": "expiry typed denial and zero private-call assertion",
+      "pass": true
+    },
+    {
+      "check": "failed call retry original active lease checked before and after",
+      "pass": true
+    },
+    {
+      "check": "fresh same-lease signature verified",
+      "pass": true
+    },
+    {
+      "check": "actual BridgeIdentityVault type and unsupportedSigner assertion",
+      "pass": true
+    },
+    {
+      "check": "no actual retire call in new tests",
+      "pass": true
+    },
+    {
+      "check": "no negative sleeps",
+      "pass": true
+    },
+    {
+      "check": "unchanged public API hash",
+      "pass": true
+    }
+  ],
+  "authoredMethods": [
+    "testLocalHolderUsesExplicitFinalSignerAndPreservesOriginalHome",
+    "testRetirementInsideVaultAwaitPreventsPrivateSigningAndSiblingStillSucceeds",
+    "testCancellationInsideVaultAwaitPreventsPrivateSigning",
+    "testCallerMutationCannotReplaceCapturedPrincipalDuringVaultAwait",
+    "testNilHomeSnapshotCannotMintHolder",
+    "testSameUUIDWithAnotherKeyCannotMintHolder",
+    "testLegacyVaultIsNotAnImplicitContactSigner",
+    "testValidSignatureWithoutContextConsumptionIsRejected",
+    "testFinalContextRejectsChangedBytesHomeAndKeyBeforeEffect",
+    "testFailedSigningConsumesContextAndRetirementDoesNotUndoPriorEffect",
+    "testDifferentConcreteVaultCannotUseContextWithOriginalDescriptor",
+    "testInvalidatedContextAndFailedLiveScopePerformNoSigning",
+    "testReferenceEndpointRequiresCanonicalCellAndExplicitPort",
+    "testRetainedRequestRoundTripPreservesIntegralExpiryAndDigest",
+    "testReferenceRejectsWrongOwnerSubjectRouteAndChangedSignedFields",
+    "testCanonicalReferenceRejectsDuplicateUnknownAndNoncanonicalJSON",
+    "testActualContactCellAcceptsIntegralAndFractionalJSONExpiry",
+    "testEachClockExpiryInsideVaultAwaitPreventsPrivateSigning",
+    "testFailedPrivateCallCannotRetryConsumedContextWhileLeaseRemainsActive",
+    "testActualBridgeIdentityVaultCannotMintLocalHolder"
+  ],
+  "addedMethods": [
+    "testEachClockExpiryInsideVaultAwaitPreventsPrivateSigning",
+    "testFailedPrivateCallCannotRetryConsumedContextWhileLeaseRemainsActive",
+    "testActualBridgeIdentityVaultCannotMintLocalHolder"
+  ],
+  "newMethods": 3,
+  "swiftCommandsExecuted": 0,
+  "testsRun": 0
+}

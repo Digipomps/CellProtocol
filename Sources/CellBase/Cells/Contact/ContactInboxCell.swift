@@ -178,7 +178,7 @@ public final class ContactInboxCell: GeneralCell, MeddleOperationAuthorizationRe
     }
     private func post(_ object: Object, requester: Identity) throws -> ValueType {
         guard case let .string(requestID)? = object["requestID"], !requestID.isEmpty, requestID.utf8.count <= 128,
-              case let .float(expiresAt)? = object["expiresAt"], expiresAt.isFinite,
+              let expiresAt = Self.requestExpiry(object["expiresAt"]),
               let payload = object["payload"], try JSONEncoder().encode(payload).count <= 32768,
               requester.signingPublicKeyFingerprint != nil else { throw Failure.invalidRequest }
         let now = Date().timeIntervalSince1970
@@ -199,6 +199,16 @@ public final class ContactInboxCell: GeneralCell, MeddleOperationAuthorizationRe
                 expiresAt: expiresAt, acceptedAt: now)
             inbox.entries.append(entry)
             return receipt(entry)
+        }
+    }
+    /// JSON has one number type. ValueType decodes integral JSON numbers as
+    /// .integer, including an encoded .float whose fractional part was zero.
+    /// Keep the wire acceptance independent of that in-memory representation.
+    static func requestExpiry(_ value: ValueType?) -> TimeInterval? {
+        switch value {
+        case let .float(seconds)?: return seconds.isFinite ? seconds : nil
+        case let .integer(seconds)?: return Double(seconds)
+        default: return nil
         }
     }
     /// Trusted host routing metadata. It is not exposed by Meddle to senders.

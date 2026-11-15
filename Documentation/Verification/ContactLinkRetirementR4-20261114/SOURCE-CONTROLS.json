@@ -1,0 +1,156 @@
+{
+  "status": "SOURCE_ONLY_NOT_BEHAVIORAL_TESTS",
+  "parent": "c5662dc5e00fa014a18803d75f119c839408cadf",
+  "checks": [
+    {
+      "check": "exact reviewed R2 parent",
+      "pass": true
+    },
+    {
+      "check": "all parent test bytes unchanged outside additive R4 block",
+      "pass": true
+    },
+    {
+      "check": "31 unique authored methods,11 new",
+      "pass": true
+    },
+    {
+      "check": "only registry production and additive test modified",
+      "pass": true
+    },
+    {
+      "check": "register retirement precedes authority publication",
+      "pass": true
+    },
+    {
+      "check": "register mutation has no await or task spawn",
+      "pass": true
+    },
+    {
+      "check": "restore retirement precedes authority publication",
+      "pass": true
+    },
+    {
+      "check": "restore mutation has no await or task spawn",
+      "pass": true
+    },
+    {
+      "check": "revoke retirement precedes authority publication",
+      "pass": true
+    },
+    {
+      "check": "revoke mutation has no await or task spawn",
+      "pass": true
+    },
+    {
+      "check": "clear retirement precedes authority publication",
+      "pass": true
+    },
+    {
+      "check": "clear mutation has no await or task spawn",
+      "pass": true
+    },
+    {
+      "check": "full active record and exact registry incarnation checked",
+      "pass": true
+    },
+    {
+      "check": "idempotence precedes both hard bounds",
+      "pass": true
+    },
+    {
+      "check": "constant per-link64 and global256 retention bounds",
+      "pass": true
+    },
+    {
+      "check": "one increment; exact detach and owner retire decrement",
+      "pass": true
+    },
+    {
+      "check": "capacity retirement outside lease.withCurrent closure",
+      "pass": true
+    },
+    {
+      "check": "detach exact instance handle and retire-before-remove",
+      "pass": true
+    },
+    {
+      "check": "actual registry mutations held inside signer await with zero effect assertion",
+      "pass": true
+    },
+    {
+      "check": "new block never directly retires lease or sleeps",
+      "pass": true
+    },
+    {
+      "check": "key changes preserve UUID in mutation and mismatch cases",
+      "pass": true
+    },
+    {
+      "check": "no enrollment wire/API/package or prior registry test edits",
+      "pass": true
+    },
+    {
+      "check": "holder API unchanged",
+      "pass": true
+    },
+    {
+      "check": "git diff whitespace check",
+      "pass": true
+    }
+  ],
+  "authoredMethods": [
+    "testLocalHolderUsesExplicitFinalSignerAndPreservesOriginalHome",
+    "testRetirementInsideVaultAwaitPreventsPrivateSigningAndSiblingStillSucceeds",
+    "testCancellationInsideVaultAwaitPreventsPrivateSigning",
+    "testCallerMutationCannotReplaceCapturedPrincipalDuringVaultAwait",
+    "testNilHomeSnapshotCannotMintHolder",
+    "testSameUUIDWithAnotherKeyCannotMintHolder",
+    "testLegacyVaultIsNotAnImplicitContactSigner",
+    "testValidSignatureWithoutContextConsumptionIsRejected",
+    "testFinalContextRejectsChangedBytesHomeAndKeyBeforeEffect",
+    "testFailedSigningConsumesContextAndRetirementDoesNotUndoPriorEffect",
+    "testDifferentConcreteVaultCannotUseContextWithOriginalDescriptor",
+    "testInvalidatedContextAndFailedLiveScopePerformNoSigning",
+    "testReferenceEndpointRequiresCanonicalCellAndExplicitPort",
+    "testRetainedRequestRoundTripPreservesIntegralExpiryAndDigest",
+    "testReferenceRejectsWrongOwnerSubjectRouteAndChangedSignedFields",
+    "testCanonicalReferenceRejectsDuplicateUnknownAndNoncanonicalJSON",
+    "testActualContactCellAcceptsIntegralAndFractionalJSONExpiry",
+    "testEachClockExpiryInsideVaultAwaitPreventsPrivateSigning",
+    "testFailedPrivateCallCannotRetryConsumedContextWhileLeaseRemainsActive",
+    "testActualBridgeIdentityVaultCannotMintLocalHolder",
+    "testRegistryMutationsDuringActualSignerAwaitRetireOriginalOperation",
+    "testRegistryRevisionRequiresCompleteActiveRecordAndOriginalRegistry",
+    "testRegistryRevisionCannotAttachAfterSameRecordABA",
+    "testRegistryDetachIsExactInstanceAndCannotDetachSuccessor",
+    "testRegistryFreshRevisionCannotReattachRetiredOriginalOperation",
+    "testRegistryMutationPreservesOtherLinkAndOtherOwnerOperations",
+    "testRegistryPartialMultiOwnerAttachFailureRetiresAndDetachesOriginal",
+    "testRegistryPerLinkCapacityPreservesExistingOperationsAndDetachReleasesSlot",
+    "testRegistryGlobalCapacityBoundsDifferentLinksAndOnlyExactDetachReleasesSlot",
+    "testRegistryExpiredRegistrationsStayBoundedUntilExactOwnerCleanup",
+    "testRegistryColdRestoreAllowsFirstCaptureButRejectsReplacedEvidence"
+  ],
+  "addedMethods": [
+    "testRegistryMutationsDuringActualSignerAwaitRetireOriginalOperation",
+    "testRegistryRevisionRequiresCompleteActiveRecordAndOriginalRegistry",
+    "testRegistryRevisionCannotAttachAfterSameRecordABA",
+    "testRegistryDetachIsExactInstanceAndCannotDetachSuccessor",
+    "testRegistryFreshRevisionCannotReattachRetiredOriginalOperation",
+    "testRegistryMutationPreservesOtherLinkAndOtherOwnerOperations",
+    "testRegistryPartialMultiOwnerAttachFailureRetiresAndDetachesOriginal",
+    "testRegistryPerLinkCapacityPreservesExistingOperationsAndDetachReleasesSlot",
+    "testRegistryGlobalCapacityBoundsDifferentLinksAndOnlyExactDetachReleasesSlot",
+    "testRegistryExpiredRegistrationsStayBoundedUntilExactOwnerCleanup",
+    "testRegistryColdRestoreAllowsFirstCaptureButRejectsReplacedEvidence"
+  ],
+  "newMethods": 11,
+  "swiftCommandsExecuted": 0,
+  "testsRun": 0,
+  "limitations": [
+    "Text/diff/hash checks cannot establish compilation or concurrency correctness.",
+    "Strong retention bounded64 per link/256 registry; expired entries require exact owner cleanup.",
+    "No production caller or native/staging/remote acceptance."
+  ]
+}
