@@ -273,6 +273,19 @@ public actor CellSecurityContainmentController {
         return quarantinedResources[resourceKey(kind: resourceKind, identifier: identifier)] != nil
     }
 
+    /// Seconds until a quarantine on this resource ends, or nil when it is not quarantined.
+    public func quarantineRetryAfter(
+        resourceKind: String,
+        identifier: String,
+        now: Date = Date()
+    ) -> TimeInterval? {
+        purgeExpired(now: now)
+        guard let expiresAt = quarantinedResources[resourceKey(kind: resourceKind, identifier: identifier)] else {
+            return nil
+        }
+        return max(1, expiresAt.timeIntervalSince(now))
+    }
+
     public func requireReauthentication(
         actor: CellSecurityActor,
         now: Date = Date()

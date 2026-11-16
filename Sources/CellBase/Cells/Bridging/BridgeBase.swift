@@ -884,6 +884,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         try await sendCommandChecked(command: .get, identity: requester, payload: .string(keypath), commandId: commandID)
         let value = try await result.getOneWithTimeout()
         if let retry = BridgeSigningBackpressure.rejection(value) { throw retry }
+        // A structured refusal with a known wait is an error the caller can act on.
+        // Without one, keep handing back the legacy `failure: …` text that
+        // existing consumers of get already recognise.
+        if case .object(let fields) = value, fields["&bridgeRefusal"] != nil,
+           let refusal = BridgeRefusal.parse(value) {
+            if refusal.retryAfterSeconds != nil { throw refusal }
+            return refusal.legacyFailureText
+        }
         return value
     }
 
@@ -1153,7 +1161,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                             requiredAction: denial.requiredAction
                         )
                         if let seconds = denial.retryAfterSeconds {
-                            promise(.failure(BridgeSigningBackpressure(retryAfterSeconds: seconds)))
+                            promise(.failure(BridgeSigningBackpressure(retryAfterSeconds: seconds, cause: denial.reasonCode)))
                         } else { promise(.failure(BridgeError.denied)) }
                         return
                     }
@@ -1260,11 +1268,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             return nil
         }
 
-        if await controller.isQuarantined(resourceKind: "bridge", identifier: uuid) {
+        if let remaining = await controller.quarantineRetryAfter(resourceKind: "bridge", identifier: uuid) {
+            // The quarantine has a known end, so the caller learns when to try
+            // again instead of a bare denial.
+            let seconds = max(1, Int(ceil(remaining)))
             return (
-                "bridge is temporarily quarantined",
+                "bridge is temporarily quarantined; retry after \(seconds)s",
                 CellSecurityReasonCode.bridgeQuarantined,
-                "wait_for_quarantine_or_reauthenticate", nil
+                "wait_for_quarantine_or_reauthenticate", seconds
             )
         }
 
@@ -1525,6 +1536,19 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     if let rejection = error as? BridgePreEffectSigningRejection,
                        let getPublisher, rejection.matches(getPublisher, keypath: key) {
                         let response = BridgeCommand(cmd: "response", payload: rejection.retry.rejection, cid: command.cid)
+                        if let bytes = try? JSONEncoder().encode(response), let transport {
+                            try await transport.sendData(bytes)
+                        }
+                        break
+                    }
+                    // Signing that must wait (rate limit or quarantine) outside an
+                    // audited pre-effect gate: report why and how long, as data.
+                    // It is not a replay invitation; the client surfaces it as an error.
+                    if let retry = error as? BridgeSigningBackpressure {
+                        let refusal = BridgeRefusal(reasonCode: retry.cause,
+                                                    message: "signingTemporarilyUnavailable",
+                                                    retryAfterSeconds: retry.retryAfterSeconds)
+                        let response = BridgeCommand(cmd: "response", payload: refusal.value, cid: command.cid)
                         if let bytes = try? JSONEncoder().encode(response), let transport {
                             try await transport.sendData(bytes)
                         }
