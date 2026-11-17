@@ -63,6 +63,10 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     var connectService: ScannerService?
     var requester: Identity?
+    // Private, generation-bound meeting invitations; never beacon/lobby fields.
+    private var meetingInvitations: [UUID: (MeetingNearbyInvitation, ScannerConsumerContext)] = [:]
+    private var seenMeetingInvitations: [UUID: Date] = [:]
+
 
     let pendingRequests = ScannerPendingRequests()
     // Deterministic barriers retain all real verification/resolver/storage work.
@@ -151,6 +155,60 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private func setupKeys(owner: Identity) async {
         emitScannerEvent = await makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
         await registerContracts(requester: owner)
+        for key in ["meetingOffers"] { agreementTemplate.ensureGrant("r---", for: key) }
+        for key in ["inviteToMeeting", "acceptMeeting"] { agreementTemplate.ensureGrant("-w--", for: key) }
+        await addInterceptForGet(requester: owner, key: "meetingOffers", getValueIntercept: { @MainActor [weak self] _, requester in
+            guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("r---", at: "meetingOffers", for: requester) else { return .string("denied") }
+            return MeetingNearbyAppRuntime.shared.pending(identity: requester)
+        })
+        for key in ["inviteToMeeting", "acceptMeeting"] {
+            await addInterceptForSet(requester: owner, key: key, setValueIntercept: { @MainActor [weak self] _, value, requester in
+                guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("-w--", at: key, for: requester), let service = self.connectService else { return .string("denied") }
+                do {
+                    let configuration: CellConfiguration
+                    if key == "inviteToMeeting" {
+                        guard let remote = self.radarLedger.selectedRemoteUUID else { throw MeetingSessionError.unavailable }
+                        let context = try service.consumerContext(remoteUUID: remote)
+                        configuration = try await MeetingNearbyAppRuntime.shared.invite(service: service, context: context, identity: requester,
+                            purpose: self.string(from: value) ?? "Privat møtedokumentasjon")
+                    } else {
+                        guard let id = self.string(from: value), let nonce = UUID(uuidString: id) else { throw MeetingSessionError.invalidPlan }
+                        configuration = try await MeetingNearbyAppRuntime.shared.accept(nonce, service: service, identity: requester)
+                    }
+                    return .cellConfiguration(configuration)
+                } catch { return .object(["status": .string("error"), "code": .string("meetingConnectionUnavailable")]) }
+            })
+        }
+
+        await addInterceptForGet(requester: owner, key: "meetingInvitations", getValueIntercept: { @MainActor [weak self] _, requester in
+            guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("r---", at: "meetingInvitations", for: requester) else { return .string("denied") }
+            self.pruneMeetingInvitations()
+            return .list(self.meetingInvitations.values.sorted { $0.0.issuedAt < $1.0.issuedAt }.compactMap { self.valueType(from: $0.0) })
+        })
+        await addInterceptForSet(requester: owner, key: "sendMeetingInvitation", setValueIntercept: { @MainActor [weak self] _, value, requester in
+            guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("-w--", at: "sendMeetingInvitation", for: requester) else { return .string("denied") }
+            do {
+                guard let object = self.object(from: value), let remoteUUID = self.string(from: object["remoteUUID"]),
+                      let payload = object["invitation"], let service = self.connectService else { throw MeetingSessionError.unavailable }
+                let bytes = try JSONEncoder().encode(payload)
+                guard bytes.count <= 16384 else { throw MeetingSessionError.invalidPlan }
+                let invite = try JSONDecoder().decode(MeetingNearbyInvitation.self, from: bytes)
+                let context = try service.consumerContext(remoteUUID: remoteUUID)
+                try invite.verify(authenticatedPeer: requester, localRecipient: context.identity.makeIdentity())
+                guard let content = self.flowValue(from: invite) else { throw MeetingSessionError.invalidPlan }
+                var event = FlowElement(title: "Private meeting invitation", content: content,
+                    properties: FlowElement.Properties(type: .event, contentType: .object))
+                event.topic = "scanner.meeting.invitation.v1"
+                try await service.sendScannerFlowElement(event, context: context)
+                return .object(["status": .string("sent"), "recordingConsent": .bool(false)])
+            } catch { return .object(["status": .string("error"), "code": .string("meetingInvitationUnavailable")]) }
+        })
+        await addInterceptForSet(requester: owner, key: "dismissMeetingInvitation", setValueIntercept: { @MainActor [weak self] _, value, requester in
+            guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("-w--", at: "dismissMeetingInvitation", for: requester),
+                  let id = self.string(from: value), let nonce = UUID(uuidString: id) else { return .string("denied") }
+            self.meetingInvitations.removeValue(forKey: nonce)
+            return .string("ok")
+        })
 
         // NI tokens are consumed only by ScannerService's authenticated
         // ScannerConsumerContext path. A generic Cell feed has no physical
@@ -1355,6 +1413,20 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         guard manager === connectService else { throw CancellationError() }
         try context.check()
         switch flowElement.topic {
+        case "scanner.meeting.offer.v1":
+            try MeetingNearbyAppRuntime.shared.receiveOffer(flowElement.content, context: context)
+        case "scanner.meeting.invitation.v1":
+            let bytes = try JSONEncoder().encode(flowElement.content)
+            guard bytes.count <= 16384 else { throw MeetingSessionError.invalidPlan }
+            let invite = try JSONDecoder().decode(MeetingNearbyInvitation.self, from: bytes)
+            try invite.verify(authenticatedPeer: context.identity.makeIdentity(), localRecipient: context.localIdentity.makeIdentity())
+            pruneMeetingInvitations()
+            guard seenMeetingInvitations[invite.nonce] == nil else { return }
+            guard seenMeetingInvitations.count < 128, meetingInvitations.count < 32 else { throw MeetingSessionError.unavailable }
+            try context.perform {
+                seenMeetingInvitations[invite.nonce] = invite.expiresAt
+                meetingInvitations[invite.nonce] = (invite, context)
+            }
         case EntityScannerTopics.transportRequest:
             try await handleIncomingContactRequest(flowElement: flowElement, context: context)
         case EntityScannerTopics.transportAcceptance:
@@ -1370,6 +1442,12 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
         default: break
         }
         try context.check()
+    }
+
+    private func pruneMeetingInvitations() {
+        let now = Date()
+        meetingInvitations = meetingInvitations.filter { $0.value.0.expiresAt > now && $0.value.1.isLive }
+        seenMeetingInvitations = seenMeetingInvitations.filter { $0.value > now }
     }
 
     private func sendProbeRequest(payload: ValueType) async -> ValueType {
@@ -1936,6 +2014,25 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
 
     private func registerContracts(requester: Identity) async {
         await registerAdvertisementContracts(requester: requester)
+        await registerExploreContract(requester: requester, key: "meetingOffers", method: .get, input: .null,
+            returns: ExploreContract.listSchema(item: ExploreContract.schema(type: "object")), permissions: ["r---"], required: false,
+            description: .string("Live signed meeting offers addressed to this local identity. Joining does not approve recording."))
+        for key in ["inviteToMeeting", "acceptMeeting"] {
+            await registerExploreContract(requester: requester, key: key, method: .set,
+                input: ExploreContract.schema(type: "string"), returns: ExploreContract.schema(type: "cellConfiguration"),
+                permissions: ["-w--"], required: false,
+                description: .string("Explicit local-owner action: invite the selected authenticated peer, or accept an exact offer nonce; opens the shared private meeting Skeleton."))
+        }
+
+        await registerExploreContract(requester: requester, key: "meetingInvitations", method: .get, input: .null,
+            returns: ExploreContract.listSchema(item: ExploreContract.schema(type: "object")), permissions: ["r---"], required: false,
+            description: .string("Private signed meeting invitations for the local scanner owner; invitation is not recording consent."))
+        for key in ["sendMeetingInvitation", "dismissMeetingInvitation"] {
+            await registerExploreContract(requester: requester, key: key, method: .set,
+                input: ExploreContract.schema(type: key == "sendMeetingInvitation" ? "object" : "string"),
+                returns: ExploreContract.schema(type: "object"), permissions: ["-w--"], required: false,
+                description: .string("Owner-only meeting invitation over a verified current scanner peer; no admission or recording authority."))
+        }
         await registerExploreContract(
             requester: requester,
             key: "verificationMethods",

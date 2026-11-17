@@ -90,6 +90,22 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     private var queuedBytes = 0
     var gate: BridgeChannelTransport!
     var bridge: BridgeBase?
+    private let meetingLock = NSLock()
+    private var meetingRelays: [UUID: ScannerMeetingRelay] = [:]
+    func meetingRelay(_ id: UUID) -> ScannerMeetingRelay? { meetingLock.withLock { meetingRelays[id] } }
+    func removeMeetingRelay(_ relay: ScannerMeetingRelay) {
+        meetingLock.withLock { if meetingRelays[relay.channelID] === relay { meetingRelays[relay.channelID] = nil } }
+    }
+    func installMeetingRelay(_ relay: ScannerMeetingRelay) throws {
+        try meetingLock.withLock {
+            guard meetingRelays.count < 8, meetingRelays[relay.channelID] == nil else { throw MeetingSessionError.unavailable }
+            meetingRelays[relay.channelID] = relay
+        }
+    }
+    func meetingControl(_ command: BridgeCommand) -> Bool {
+        guard let frame = try? ScannerMeetingRelay.frame(command) else { return false }
+        return meetingRelay(frame.channelID)?.isControl(frame) == true
+    }
     fileprivate var setupScheduled = false // accessed only on service stateQueue
     var channelSession: BridgeChannelSession? { gate?.session }
 
@@ -161,7 +177,7 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
                 // sign RPC may overtake application work. Payload shape alone
                 // cannot promote a flow/command to the control lane. All normal
                 // gate, session, permit and signature checks still run.
-                let control = command.command == .sign || bridge?.isOriginSigningResponse(command) == true
+                let control = command.command == .sign || bridge?.isOriginSigningResponse(command) == true || meetingControl(command)
                 return receiveLock.withLock {
                     let prior = control ? nil : dispatchTail
                     let dispatch = Task { [self] in
@@ -189,6 +205,10 @@ final class ScannerPeerTransport: BridgeTransportProtocol {
     }
 
     func close() async {
+        let meeting = meetingLock.withLock { () -> [ScannerMeetingRelay] in
+            let all = Array(meetingRelays.values); meetingRelays.removeAll(); return all
+        }
+        for relay in meeting { await relay.close() }
         let task = receiveLock.withLock { () -> Task<Void, Never> in
             if let closeTask { return closeTask }
             let task = Task<Void, Never> { [service] in await service?.peerChannelClosed(self) }
@@ -1001,6 +1021,22 @@ class ScannerService :  NSObject, ObservableObject {
         try context.check()
     }
 
+    func makeMeetingRelay(context: ScannerConsumerContext, cellID: String, channelID: UUID, inbound: Bool) async throws -> ScannerMeetingRelay {
+        try context.check()
+        guard UUID(uuidString: cellID) != nil else { throw MeetingSessionError.invalidPlan }
+        let relay = ScannerMeetingRelay(service: self, context: context, cellID: cellID, channelID: channelID)
+        let connection: BridgeBase.Connection = inbound ? .inbound(publisherUuid: cellID) : .outbound
+        let bridge = try await BridgeBase(.init(owner: owner, identityDomain: "private", uuid: cellID,
+            transport: relay, connection: connection, inboundPublisherLookupIdentity: inbound ? owner : nil,
+            identityProofScopes: [.init(domain: "private", resource: cellID)]))
+        relay.bridge = bridge
+        try await bridge.setTransport(relay, connection: connection)
+        try bridge.activateAuthenticatedChannel()
+        try context.check()
+        try context.physical.installMeetingRelay(relay)
+        return relay
+    }
+
     func setupBridge(remoteUUID: String, peerID: MCPeerID) async throws {
         try await setupBridge(prepareBridge(remoteUUID: remoteUUID, peerID: peerID))
     }
@@ -1447,6 +1483,18 @@ extension ScannerService {
     
     func handleOutOfBandFlowElement(_ flowElement: FlowElement, context: ScannerConsumerContext) async throws {
         try context.check()
+        if flowElement.topic == ScannerMeetingRelay.topic {
+            let outer = BridgeCommand(cmd: "response", payload: .flowElement(flowElement), cid: -1)
+            // The outer record has already passed the physical authenticated gate.
+            // Invalid application frames retire only their logical route; they
+            // must not poison the shared ordered Lobby dispatch queue.
+            guard let frame = try? ScannerMeetingRelay.frame(outer),
+                  let relay = context.physical.meetingRelay(frame.channelID) else { return }
+            do { try await relay.receive(frame, on: context) }
+            catch { await relay.close() }
+            try context.check()
+            return
+        }
         guard case let .object(contentObject) = flowElement.content else {
             try await radarDelegate?.scannerFlowReceived(manager: self, flowElement: flowElement, context: context)
             return
