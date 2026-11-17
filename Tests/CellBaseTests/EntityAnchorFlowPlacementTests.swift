@@ -109,12 +109,14 @@ final class EntityAnchorFlowPlacementTests: XCTestCase {
         for scaffold in Scaffold.allCases {
             let entity = await SimulatedEntity.make("A-\(scaffold.rawValue)")
             let anchor = await scaffold.anchor(owner: entity.owner)
-            XCTAssertEqual(status(try await addSource(anchor, requester: entity.owner)), "stored", scaffold.rawValue)
+            let added = try await addSource(anchor, requester: entity.owner)
+            XCTAssertEqual(status(added), "stored", scaffold.rawValue)
             let before = try await decisions(anchor, requester: entity.owner)
             XCTAssertEqual(before.map(\.endpoint), [endpoint], scaffold.rawValue)
             XCTAssertEqual(before.map(\.venueID), [nil], "\(scaffold.rawValue): nothing online yet")
 
-            XCTAssertEqual(status(try await reportAgent(anchor, requester: entity.owner)), "reported", scaffold.rawValue)
+            let reported = try await reportAgent(anchor, requester: entity.owner)
+            XCTAssertEqual(status(reported), "reported", scaffold.rawValue)
             let after = try await decisions(anchor, requester: entity.owner)
             XCTAssertEqual(after.map(\.venueID), ["mac-agent"], scaffold.rawValue)
         }
