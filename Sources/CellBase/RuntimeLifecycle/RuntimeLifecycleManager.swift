@@ -25,6 +25,8 @@ public enum RuntimeLifecycleWarningCommand: Sendable, Equatable {
     case extendPersistedTTL(byTicks: UInt64)
     case persistAndUnload
     case delete
+    /// Owner-requested deletion without tombstone grace (G4).
+    case deleteNow
     case ignore
 }
 
@@ -111,6 +113,14 @@ public actor RuntimeLifecycleManager {
                 generation: state.memoryGeneration,
                 fencingToken: state.fencingToken,
                 atTick: memoryTick
+            ))
+        }
+        if let persistedWarningTick = state.persistedWarningTick {
+            effects.append(.schedulePersistedWarning(
+                cellID: state.cellID,
+                generation: state.persistedGeneration,
+                fencingToken: state.fencingToken,
+                atTick: persistedWarningTick
             ))
         }
         if let persistedTick = state.persistedExpiryTick {
@@ -223,6 +233,14 @@ public actor RuntimeLifecycleManager {
                     fencingToken: lease.fencingToken
                 )
             )
+        case .deleteNow:
+            return try await applyCAS(
+                cellID: cellID,
+                input: .requestImmediateDeletion(
+                    nowTick: timeSource.nowTick(),
+                    fencingToken: lease.fencingToken
+                )
+            )
         case .ignore:
             guard let state = await stateStore.read(cellID: cellID) else {
                 throw RuntimeLifecycleManagerError.stateNotFound(cellID)
@@ -321,6 +339,12 @@ public actor RuntimeLifecycleManager {
             case .persistedExpiry:
                 persistedExpiredCount &+= 1
                 input = .persistedExpiryFired(
+                    generation: item.generation,
+                    nowTick: now,
+                    fencingToken: item.fencingToken
+                )
+            case .persistedWarning:
+                input = .persistedWarningFired(
                     generation: item.generation,
                     nowTick: now,
                     fencingToken: item.fencingToken
@@ -435,6 +459,17 @@ public actor RuntimeLifecycleManager {
                     RuntimeWheelItem(
                         cellID: cellID,
                         kind: .hardDelete,
+                        generation: generation,
+                        fencingToken: fencingToken
+                    ),
+                    deadlineTick: atTick
+                )
+            case .schedulePersistedWarning(let cellID, let generation, let fencingToken, let atTick):
+                await metricsSink.increment(.wheelScheduled, by: 1, dimensions: ["kind": RuntimeWheelItemKind.persistedWarning.rawValue])
+                await wheel.schedule(
+                    RuntimeWheelItem(
+                        cellID: cellID,
+                        kind: .persistedWarning,
                         generation: generation,
                         fencingToken: fencingToken
                     ),

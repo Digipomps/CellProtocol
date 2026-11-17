@@ -175,6 +175,10 @@ public class CellResolver: CellResolverProtocol {
     private var runtimeShadowNodeID = "local-node"
     private var runtimeShadowLeaseDurationTicks: UInt64 = 300
     private var runtimeShadowTickDurationNanoseconds: UInt64 = 1_000_000_000
+    private var runtimeAuthority: RuntimeLifecycleAuthority?
+    private var runtimeAuthorityBindings = [String: RuntimeLifecycleAuthorityResolveBinding]()
+    private var runtimeAuthorityTask: Task<Void, Never>?
+    public var runtimeAuthorityProcessingInterval: TimeInterval = 1.0
     public weak var lifecycleEventResponder: CellLifecycleEventResponder?
     public var lifecycleSweepInterval: TimeInterval = 1.0
     public var runtimeShadowSweepInterval: TimeInterval = 0.5
@@ -203,6 +207,7 @@ public class CellResolver: CellResolverProtocol {
     deinit {
         lifecycleSweepTask?.cancel()
         runtimeShadowTask?.cancel()
+        runtimeAuthorityTask?.cancel()
     }
 
     private func withStateLock<T>(_ block: () throws -> T) rethrows -> T {
@@ -270,6 +275,114 @@ public class CellResolver: CellResolverProtocol {
         runtimeShadowTask = nil
         runtimeShadowManager = nil
         runtimeShadowTimeSource = nil
+    }
+
+    // MARK: Runtime lifecycle authority (P1, opt-in per resolve)
+
+    /// Makes the runtime lifecycle authoritative for the named resolves. Cells
+    /// resolved through these names are registered with `authority` (TTL from
+    /// the binding's resource class, never non-expiring) and are not tracked by
+    /// the legacy `ResolverLifecycleTracker` sweep or the P0 shadow manager.
+    /// Other resolves keep their existing behaviour.
+    ///
+    /// The authority's persistence adapter must be rooted at
+    /// `CellBase.documentRootPath`: storage locations are registered as
+    /// `<uuid>` and `CellsContainer/<uuid>` relative to that root, matching the
+    /// legacy delete path.
+    public func enableRuntimeLifecycleAuthority(
+        _ authority: RuntimeLifecycleAuthority,
+        bindings: [String: RuntimeLifecycleAuthorityResolveBinding],
+        processingInterval: TimeInterval = 1.0,
+        startProcessingLoop: Bool = true
+    ) async {
+        withStateLock {
+            runtimeAuthority = authority
+            runtimeAuthorityBindings = bindings
+            runtimeAuthorityProcessingInterval = max(0.05, processingInterval)
+        }
+        await authority.setHardDeleteObserver { [weak self] receipt in
+            guard let self else { return }
+            await self.auditor.evictCellInstance(uuid: receipt.resourceID)
+            await self.lifecycleTracker.untrackCell(uuid: receipt.resourceID)
+            await self.lifecycleTracker.untrackPersistedCell(uuid: receipt.resourceID)
+        }
+        runtimeAuthorityTask?.cancel()
+        runtimeAuthorityTask = nil
+        if startProcessingLoop {
+            runtimeAuthorityTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    let interval = max(0.05, self.runtimeAuthorityProcessingInterval)
+                    try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                    guard let authority = self.withStateLock({ self.runtimeAuthority }) else { continue }
+                    try? await authority.processDue()
+                }
+            }
+        }
+    }
+
+    public func disableRuntimeLifecycleAuthority() async {
+        runtimeAuthorityTask?.cancel()
+        runtimeAuthorityTask = nil
+        let authority = withStateLock { () -> RuntimeLifecycleAuthority? in
+            let current = runtimeAuthority
+            runtimeAuthority = nil
+            runtimeAuthorityBindings = [:]
+            return current
+        }
+        await authority?.setHardDeleteObserver(nil)
+    }
+
+    public func runtimeLifecycleAuthorityBinding(forResolveName name: String) -> RuntimeLifecycleAuthorityResolveBinding? {
+        withStateLock { runtimeAuthorityBindings[name] }
+    }
+
+#if DEBUG
+    /// Whether the legacy tracker currently tracks `uuid` (memory, persisted).
+    @_spi(Testing)
+    public func legacyLifecycleTrackingStateForTesting(uuid: String) async -> (memory: Bool, persisted: Bool) {
+        await lifecycleTracker.trackingStateForTesting(uuid: uuid)
+    }
+#endif
+
+    /// Registers `cell` with the runtime authority when its resolve opted in.
+    /// Returns `true` when the authority owns the lifecycle (legacy is skipped).
+    private func registerWithRuntimeAuthorityIfOptedIn(
+        cell: Emit,
+        resolve: CellResolve,
+        identity: Identity?
+    ) async -> Bool {
+        let (authority, binding) = withStateLock {
+            (runtimeAuthority, runtimeAuthorityBindings[resolve.name])
+        }
+        guard let authority, let binding else {
+            return false
+        }
+        if await authority.isAuthoritative(for: cell.uuid) {
+            return true
+        }
+        let agreementOwner = cell.agreementTemplate.owner.uuid
+        let ownerUUID = agreementOwner.isEmpty ? (identity?.uuid ?? "") : agreementOwner
+        let descriptor = RuntimeResourceDescriptor(
+            resourceID: cell.uuid,
+            resourceClass: binding.resourceClass,
+            ownerIdentityUUID: ownerUUID,
+            isTestData: binding.isTestData,
+            storageLocations: [cell.uuid, "CellsContainer/\(cell.uuid)"]
+        )
+        do {
+            try await authority.register(descriptor, ttlOverrideTicks: binding.ttlOverrideTicks)
+        } catch RuntimeLifecycleAuthorityError.alreadyRegistered {
+            return true
+        } catch {
+            CellBase.diagnosticLog(
+                "Runtime lifecycle authority refused \(cell.uuid): \(error)",
+                domain: .lifecycle
+            )
+            // Opted-in resolves never fall back to legacy tracking.
+            return true
+        }
+        return true
     }
 
     public func setCellLifecycleEventResponder(_ responder: CellLifecycleEventResponder?) {
@@ -629,6 +742,10 @@ public class CellResolver: CellResolverProtocol {
         identity: Identity?,
         typeName: String? = nil
     ) async {
+        if let resolve,
+           await registerWithRuntimeAuthorityIfOptedIn(cell: cell, resolve: resolve, identity: identity) {
+            return
+        }
         guard let resolve,
               let policy = resolve.lifecyclePolicy else {
             return
