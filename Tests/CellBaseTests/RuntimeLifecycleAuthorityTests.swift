@@ -38,15 +38,15 @@ private actor FlakyPersistenceAdapter: RuntimeLifecyclePersistenceAdapter {
         self.hardDeleteFailuresLeft = hardDeleteFailures
     }
 
-    func writeTombstone(for descriptor: RuntimeResourceDescriptor, deleteAfterTick: UInt64, atTick: UInt64) async throws {
+    func writeTombstone(for descriptor: RuntimeResourceDescriptor, deleteAfterTick: UInt64, atTick: UInt64) async throws -> UInt64 {
         if tombstoneFailuresLeft > 0 {
             tombstoneFailuresLeft -= 1
             throw InjectedFailure()
         }
-        try await inner.writeTombstone(for: descriptor, deleteAfterTick: deleteAfterTick, atTick: atTick)
+        return try await inner.writeTombstone(for: descriptor, deleteAfterTick: deleteAfterTick, atTick: atTick)
     }
 
-    func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> [String] {
+    func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> RuntimeHardDeleteResult {
         if hardDeleteFailuresLeft > 0 {
             hardDeleteFailuresLeft -= 1
             throw InjectedFailure()
@@ -498,7 +498,7 @@ final class RuntimeLifecycleAuthorityTests: XCTestCase {
         let adapter = FileSystemRuntimeLifecyclePersistenceAdapter(rootURL: root)
         var bad = descriptor("rel-8")
         bad.storageLocations = ["../\(outside.lastPathComponent)"]
-        try await adapter.writeTombstone(for: bad, deleteAfterTick: 0, atTick: 0)
+        _ = try await adapter.writeTombstone(for: bad, deleteAfterTick: 0, atTick: 0)
         do {
             _ = try await adapter.hardDelete(bad, atTick: 0)
             XCTFail("escaping location must be refused")

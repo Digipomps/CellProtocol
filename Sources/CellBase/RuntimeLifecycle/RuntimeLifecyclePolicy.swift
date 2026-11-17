@@ -85,6 +85,7 @@ public enum RuntimeLifecycleEventType: String, Codable, Sendable, Equatable {
     case memoryTTLExtended
     case persistedTTLExtended
     case persistedTTLWarning
+    case recovered
     case memoryExpired
     case unloaded
     case tombstoned

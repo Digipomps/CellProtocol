@@ -395,10 +395,32 @@ hard delete of data/snapshot/backup, delete-now (also during grace), stale fence
 hard-delete retry, tombstone-before-delete, root escape, duplicate warning delivery, pre-P1 decode,
 and resolver opt-in vs. unchanged legacy resolve.
 
+Durability (restart-safe deadlines):
+- `RuntimeLifecycleAuthority.durable(directoryURL:...)` stores lifecycle state
+  (`FileRuntimeLifecycleStateStore`, `states/`) and descriptors
+  (`FileRuntimeResourceDescriptorStore`, `descriptors/`), one JSON file per resource, hex-encoded
+  file names, atomic writes. A CAS is visible only after its file write succeeded; an unreadable
+  entry fails startup (fail closed) instead of silently dropping a deadline.
+- `recover()` at startup re-registers descriptors and calls `RuntimeLifecycleManager.recoverStoredStates`:
+  new lease above the stored fencing token (`RuntimeLeaseCoordinator.raiseFencingTokenFloor`), then
+  reducer input `.recover` rebuilds timers. Loaded cells become unloaded; overdue deadlines are
+  scheduled at the current tick and fire on the next `processDue()` in deterministic order;
+  already-processed warnings are not repeated (generation checks). Tombstoned state replays the
+  tombstone write before the hard delete; deleted state replays the hard delete.
+- Persistence effects are idempotent: a replayed tombstone keeps the original tick, a replayed hard
+  delete returns the original result, so receipts are reproduced after a restart.
+- The wheel starts at the current tick. Durable deadlines need ticks that survive a restart:
+  `WallClockEpochTimeSource` (epoch seconds, never decreasing within a process, optional floor).
+  `SystemMonotonicTimeSource` restarts at 0 and must not be combined with a durable store.
+  Downtime counts towards TTL, which is intended for retention deadlines.
+- Tests: `Tests/CellBaseTests/RuntimeLifecycleDurabilityTests.swift` (restart after warning,
+  extend after restart, downtime past the deadline, restart in tombstone grace, crash before
+  the tombstone write, restart after deletion, fencing after recovery, file store CAS/fail-closed,
+  epoch time source).
+
 Open for P1 completion (not in this change):
-- Lifecycle state store and owner registrations are in memory; a restart loses schedules.
-  A durable `RuntimeLifecycleStateStore` and re-registration on load are needed before relying
-  on deletion across restarts.
+- After a restart, a replayed owner-requested deletion is reported with trigger `expired`
+  (the trigger is not stored in the tombstone record).
 - A tombstoned resource can still be loaded from disk by the resolver during the grace window.
 - The resolver's own persist path can re-create files for a cell that is still in memory after
   a hard delete; the authority evicts the instance, but callers holding a reference can persist it.

@@ -305,6 +305,33 @@ public actor RuntimeLifecycleManager {
         )
     }
 
+    /// Recovers every stored state after a restart (sorted by cell ID for
+    /// determinism): takes a new lease with a fencing token above the stored
+    /// one and rebuilds timers via `.recover`. Overdue deadlines fire on the
+    /// next `processDueExpiries()`. Returns the new leases.
+    public func recoverStoredStates(
+        nodeID: String,
+        leaseDurationTicks: UInt64
+    ) async throws -> [RuntimeLease] {
+        let states = await stateStore.snapshotStates().sorted { $0.cellID.rawValue < $1.cellID.rawValue }
+        var leases = [RuntimeLease]()
+        for state in states {
+            await leaseCoordinator.raiseFencingTokenFloor(cellID: state.cellID, to: state.fencingToken)
+            let lease = try await acquireLease(
+                cellID: state.cellID,
+                nodeID: nodeID,
+                leaseDurationTicks: leaseDurationTicks
+            )
+            _ = try await applyCAS(
+                cellID: state.cellID,
+                input: .recover(nowTick: timeSource.nowTick(), fencingToken: lease.fencingToken)
+            )
+            leases.append(lease)
+        }
+        await emitPhaseGauges()
+        return leases
+    }
+
     public func readState(cellID: RuntimeCellID) async -> RuntimeLifecycleState? {
         await stateStore.read(cellID: cellID)
     }

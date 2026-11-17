@@ -188,6 +188,13 @@ public enum RuntimeLifecycleInput: Sendable {
     /// Owner-requested deletion: tombstone now and hard delete at `nowTick`,
     /// skipping the tombstone grace window (G4 "slett nå").
     case requestImmediateDeletion(nowTick: UInt64, fencingToken: UInt64)
+    /// Rebuilds timers after a restart from durably stored state. Memory is
+    /// empty after a restart, so loaded cells become unloaded. Overdue
+    /// deadlines are scheduled at `nowTick` and fire on the next processing
+    /// pass; reducer generation checks keep already-processed ones idempotent.
+    /// Tombstoned state re-emits the tombstone write before the hard delete;
+    /// deleted state re-emits the (idempotent) hard delete.
+    case recover(nowTick: UInt64, fencingToken: UInt64)
     case leaseGranted(RuntimeLease)
     case leaseExpired(nowTick: UInt64, fencingToken: UInt64)
 }
@@ -630,6 +637,48 @@ public enum RuntimeLifecycleTransitionReducer {
                 atTick: hardDeleteAt
             ))
             emit(.tombstoned, tick: nowTick, deadlineTick: hardDeleteAt)
+
+        case .recover(let nowTick, let fencingToken):
+            if let rejection = ensureFence(fencingToken) { return reject(rejection) }
+            state.version &+= 1
+            func clamp(_ tick: UInt64) -> UInt64 { max(tick, nowTick) }
+            switch state.phase {
+            case .activeLoaded, .activeUnloaded:
+                if state.phase == .activeLoaded {
+                    state.phase = .activeUnloaded
+                    state.memoryGeneration &+= 1
+                    state.memoryExpiryTick = nil
+                    state.memoryWarningTick = nil
+                }
+                if let warningTick = state.persistedWarningTick {
+                    effects.append(.schedulePersistedWarning(
+                        cellID: state.cellID,
+                        generation: state.persistedGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: clamp(warningTick)
+                    ))
+                }
+                if let expiryTick = state.persistedExpiryTick {
+                    effects.append(.schedulePersistedExpiry(
+                        cellID: state.cellID,
+                        generation: state.persistedGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: clamp(expiryTick)
+                    ))
+                }
+            case .tombstoned:
+                let hardDeleteAt = state.hardDeleteTick ?? nowTick
+                effects.append(.writeTombstone(cellID: state.cellID, deleteAfterTick: hardDeleteAt))
+                effects.append(.scheduleHardDelete(
+                    cellID: state.cellID,
+                    generation: state.hardDeleteGeneration,
+                    fencingToken: state.fencingToken,
+                    atTick: clamp(hardDeleteAt)
+                ))
+            case .deleted:
+                effects.append(.hardDeletePersistedData(cellID: state.cellID))
+            }
+            emit(.recovered, tick: nowTick, deadlineTick: state.persistedExpiryTick ?? state.hardDeleteTick)
 
         case .persistedWarningFired(let generation, let nowTick, let fencingToken):
             if let rejection = ensureFence(fencingToken) { return reject(rejection) }

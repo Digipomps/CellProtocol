@@ -190,17 +190,32 @@ public enum RuntimeLifecyclePersistenceError: Error, Sendable, Equatable {
     case tombstoneMissing(String)
 }
 
-/// Performs the persisted side effects of the lifecycle. Implementations must
-/// make `writeTombstone` durable before returning, and `hardDelete` must remove
-/// every location in the descriptor (data, snapshots, backups).
+/// Outcome of a hard delete. Replaying a completed hard delete returns the
+/// original tick and locations.
+public struct RuntimeHardDeleteResult: Codable, Sendable, Equatable {
+    public var hardDeletedAtTick: UInt64
+    public var removedLocations: [String]
+
+    public init(hardDeletedAtTick: UInt64, removedLocations: [String]) {
+        self.hardDeletedAtTick = hardDeletedAtTick
+        self.removedLocations = removedLocations
+    }
+}
+
+/// Performs the persisted side effects of the lifecycle. Both calls must be
+/// idempotent because they are replayed after a restart:
+/// - `writeTombstone` makes the tombstone durable before returning and returns
+///   the tick of the first tombstone for the resource;
+/// - `hardDelete` removes every location in the descriptor (data, snapshots,
+///   backups), refuses to run without a tombstone, and returns the original
+///   result when replayed.
 public protocol RuntimeLifecyclePersistenceAdapter: Sendable {
     func writeTombstone(
         for descriptor: RuntimeResourceDescriptor,
         deleteAfterTick: UInt64,
         atTick: UInt64
-    ) async throws
-    /// Returns the locations that existed and were removed.
-    func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> [String]
+    ) async throws -> UInt64
+    func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> RuntimeHardDeleteResult
 }
 
 /// Tombstone record. Holds identifiers and ticks only, never resource content,
@@ -246,12 +261,21 @@ public actor FileSystemRuntimeLifecyclePersistenceAdapter: RuntimeLifecyclePersi
         for descriptor: RuntimeResourceDescriptor,
         deleteAfterTick: UInt64,
         atTick: UInt64
-    ) async throws {
+    ) async throws -> UInt64 {
         let url = try tombstoneURL(for: descriptor.resourceID)
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        if var existing = try readTombstone(resourceID: descriptor.resourceID) {
+            // Replay (e.g. after restart): keep the original tombstone tick;
+            // only an earlier hard-delete deadline may be recorded.
+            if existing.hardDeletedAtTick == nil, deleteAfterTick < existing.deleteAfterTick {
+                existing.deleteAfterTick = deleteAfterTick
+                try write(existing, to: url)
+            }
+            return existing.tombstonedAtTick
+        }
         let record = RuntimeTombstoneRecord(
             resourceID: descriptor.resourceID,
             resourceClass: descriptor.resourceClass,
@@ -262,9 +286,10 @@ public actor FileSystemRuntimeLifecyclePersistenceAdapter: RuntimeLifecyclePersi
             removedLocations: nil
         )
         try write(record, to: url)
+        return atTick
     }
 
-    public func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> [String] {
+    public func hardDelete(_ descriptor: RuntimeResourceDescriptor, atTick: UInt64) async throws -> RuntimeHardDeleteResult {
         let tombstoneURL = try tombstoneURL(for: descriptor.resourceID)
         guard var record = try readTombstone(resourceID: descriptor.resourceID) else {
             // Hard delete is only reachable through a persisted tombstone.
@@ -278,10 +303,20 @@ public actor FileSystemRuntimeLifecyclePersistenceAdapter: RuntimeLifecyclePersi
                 removed.append(location)
             }
         }
+        if let previousTick = record.hardDeletedAtTick {
+            // Replay of a completed hard delete: report the original result
+            // plus anything that reappeared and was removed now.
+            let merged = (record.removedLocations ?? []) + removed.filter { !(record.removedLocations ?? []).contains($0) }
+            if merged != (record.removedLocations ?? []) {
+                record.removedLocations = merged
+                try write(record, to: tombstoneURL)
+            }
+            return RuntimeHardDeleteResult(hardDeletedAtTick: previousTick, removedLocations: merged)
+        }
         record.hardDeletedAtTick = atTick
         record.removedLocations = removed
         try write(record, to: tombstoneURL)
-        return removed
+        return RuntimeHardDeleteResult(hardDeletedAtTick: atTick, removedLocations: removed)
     }
 
     private func write(_ record: RuntimeTombstoneRecord, to url: URL) throws {
@@ -481,11 +516,13 @@ public actor RuntimeLifecycleResourceEffectRouter: RuntimeLifecycleEffectSink {
         }
         let now = timeSource.nowTick()
         do {
-            try await persistence.writeTombstone(for: descriptor, deleteAfterTick: deleteAfterTick, atTick: now)
+            let firstTombstoneTick = try await persistence.writeTombstone(
+                for: descriptor,
+                deleteAfterTick: deleteAfterTick,
+                atTick: now
+            )
             pendingTombstones[cellID] = nil
-            if tombstonedAt[cellID] == nil {
-                tombstonedAt[cellID] = now
-            }
+            tombstonedAt[cellID] = firstTombstoneTick
         } catch {
             pendingTombstones[cellID] = deleteAfterTick
             failures.append("writeTombstone \(cellID.rawValue): \(error)")
@@ -496,6 +533,11 @@ public actor RuntimeLifecycleResourceEffectRouter: RuntimeLifecycleEffectSink {
         guard let descriptor = descriptors[cellID] else {
             return
         }
+        if pendingTombstones[cellID] == nil, tombstonedAt[cellID] == nil {
+            // After a restart the tombstone tick is only on disk; the replayed
+            // write is idempotent and returns the original tick.
+            await writeTombstone(cellID: cellID, deleteAfterTick: timeSource.nowTick())
+        }
         guard pendingTombstones[cellID] == nil, let tombstonedAtTick = tombstonedAt[cellID] else {
             // Never delete before the tombstone is durable; retry later.
             pendingHardDeletes.insert(cellID)
@@ -504,7 +546,7 @@ public actor RuntimeLifecycleResourceEffectRouter: RuntimeLifecycleEffectSink {
         }
         let now = timeSource.nowTick()
         do {
-            let removed = try await persistence.hardDelete(descriptor, atTick: now)
+            let result = try await persistence.hardDelete(descriptor, atTick: now)
             pendingHardDeletes.remove(cellID)
             let receipt = RuntimeDeletionReceipt(
                 resourceID: descriptor.resourceID,
@@ -512,8 +554,8 @@ public actor RuntimeLifecycleResourceEffectRouter: RuntimeLifecycleEffectSink {
                 ownerIdentityUUID: descriptor.ownerIdentityUUID,
                 trigger: ownerRequested.contains(cellID) ? .ownerRequest : .expired,
                 tombstonedAtTick: tombstonedAtTick,
-                hardDeletedAtTick: now,
-                removedLocations: removed
+                hardDeletedAtTick: result.hardDeletedAtTick,
+                removedLocations: result.removedLocations
             )
             receipts[cellID] = receipt
             if let hardDeleteObserver {
@@ -574,7 +616,40 @@ public actor RuntimeLifecycleAuthority {
     private let manager: RuntimeLifecycleManager
     private let router: RuntimeLifecycleResourceEffectRouter
     private let leaseDurationTicks: UInt64
+    private let descriptorStore: RuntimeResourceDescriptorStore
     private var leases = [RuntimeCellID: RuntimeLease]()
+
+    /// Durable authority: lifecycle state and descriptors are stored under
+    /// `directoryURL` (`states/`, `descriptors/`), so deadlines survive a
+    /// restart. Call `recover()` once at startup before `processDue()`.
+    /// Use a time source whose ticks survive restarts
+    /// (`WallClockEpochTimeSource` in production, `DeterministicTimeSource` in tests).
+    public static func durable(
+        directoryURL: URL,
+        timeSource: MonotonicTimeSource,
+        registry: RuntimeResourceTTLPolicyRegistry = .standard(),
+        persistence: RuntimeLifecyclePersistenceAdapter,
+        notifier: RuntimeLifecycleOwnerNotifier = RuntimeNoopLifecycleOwnerNotifier(),
+        metricsSink: RuntimeLifecycleMetricsSink = RuntimeNoopLifecycleMetricsSink(),
+        nodeID: String = "local-node",
+        leaseDurationTicks: UInt64 = 3_600
+    ) throws -> RuntimeLifecycleAuthority {
+        RuntimeLifecycleAuthority(
+            timeSource: timeSource,
+            registry: registry,
+            persistence: persistence,
+            notifier: notifier,
+            metricsSink: metricsSink,
+            stateStore: try FileRuntimeLifecycleStateStore(
+                directoryURL: directoryURL.appendingPathComponent("states", isDirectory: true)
+            ),
+            descriptorStore: FileRuntimeResourceDescriptorStore(
+                directoryURL: directoryURL.appendingPathComponent("descriptors", isDirectory: true)
+            ),
+            nodeID: nodeID,
+            leaseDurationTicks: leaseDurationTicks
+        )
+    }
 
     public init(
         timeSource: MonotonicTimeSource,
@@ -583,6 +658,7 @@ public actor RuntimeLifecycleAuthority {
         notifier: RuntimeLifecycleOwnerNotifier = RuntimeNoopLifecycleOwnerNotifier(),
         metricsSink: RuntimeLifecycleMetricsSink = RuntimeNoopLifecycleMetricsSink(),
         stateStore: RuntimeLifecycleStateStore = InMemoryRuntimeLifecycleStateStore(),
+        descriptorStore: RuntimeResourceDescriptorStore = InMemoryRuntimeResourceDescriptorStore(),
         leaseCoordinator: RuntimeLeaseCoordinator = InMemoryRuntimeLeaseCoordinator(),
         nodeID: String = "local-node",
         leaseDurationTicks: UInt64 = 3_600
@@ -597,10 +673,14 @@ public actor RuntimeLifecycleAuthority {
         self.timeSource = timeSource
         self.router = router
         self.leaseDurationTicks = max(1, leaseDurationTicks)
+        self.descriptorStore = descriptorStore
         self.manager = RuntimeLifecycleManager(
             timeSource: timeSource,
             stateStore: stateStore,
             leaseCoordinator: leaseCoordinator,
+            // Start the wheel at the current tick: epoch-based ticks are large
+            // and a wheel starting at 0 would have to walk every tick since 0.
+            wheel: RuntimeHierarchicalTimingWheel(startTick: timeSource.nowTick()),
             effectSink: router,
             metricsSink: metricsSink
         )
@@ -629,6 +709,9 @@ public actor RuntimeLifecycleAuthority {
             isTestData: descriptor.isTestData,
             ttlOverrideTicks: ttlOverrideTicks
         )
+        // Descriptor first: if registration then fails, recovery still knows
+        // the owner and storage locations of any state that did get written.
+        try await descriptorStore.save(descriptor)
         await router.register(descriptor)
         let (state, lease) = try await manager.registerCell(
             cellID: cellID,
@@ -640,6 +723,46 @@ public actor RuntimeLifecycleAuthority {
         )
         leases[cellID] = lease
         return state
+    }
+
+    /// Restores descriptors and lifecycle state after a restart and rebuilds
+    /// timers. Overdue warnings, expiries and hard deletes fire on the next
+    /// `processDue()`, in deterministic order. Call once at startup.
+    @discardableResult
+    public func recover() async throws -> RuntimeLifecycleRecoveryReport {
+        var known = Set<String>()
+        for descriptor in try await descriptorStore.loadAll() {
+            await router.register(descriptor)
+            known.insert(descriptor.resourceID)
+        }
+        let recoveredLeases = try await manager.recoverStoredStates(
+            nodeID: nodeID,
+            leaseDurationTicks: leaseDurationTicks
+        )
+        var report = RuntimeLifecycleRecoveryReport(
+            recoveredResourceIDs: [],
+            activeResourceIDs: [],
+            tombstonedResourceIDs: [],
+            deletedResourceIDs: [],
+            statesWithoutDescriptor: []
+        )
+        for lease in recoveredLeases {
+            leases[lease.cellID] = lease
+            let id = lease.cellID.rawValue
+            report.recoveredResourceIDs.append(id)
+            if !known.contains(id) {
+                report.statesWithoutDescriptor.append(id)
+            }
+            switch await manager.readState(cellID: lease.cellID)?.phase {
+            case .tombstoned:
+                report.tombstonedResourceIDs.append(id)
+            case .deleted:
+                report.deletedResourceIDs.append(id)
+            default:
+                report.activeResourceIDs.append(id)
+            }
+        }
+        return report
     }
 
     public func isAuthoritative(for resourceID: String) async -> Bool {

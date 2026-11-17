@@ -28,6 +28,42 @@ public final class SystemMonotonicTimeSource: MonotonicTimeSource, @unchecked Se
     }
 }
 
+/// Wall-clock epoch ticks for lifecycle deadlines that must survive restarts
+/// (durable state store). `SystemMonotonicTimeSource` restarts at 0 with each
+/// process and therefore cannot be combined with persisted deadlines.
+/// The clock is only read here, never in the reducer, and never goes backwards
+/// within a process (`floorTick` also lets callers carry a persisted floor
+/// across restarts). Downtime counts towards TTL, which is the intent for
+/// retention deadlines.
+public final class WallClockEpochTimeSource: MonotonicTimeSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let tickDurationSeconds: Double
+    private let now: @Sendable () -> Date
+    private var lastTick: UInt64
+
+    public init(
+        tickDurationSeconds: Double = 1,
+        floorTick: UInt64 = 0,
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        precondition(tickDurationSeconds > 0, "tickDurationSeconds must be > 0")
+        self.tickDurationSeconds = tickDurationSeconds
+        self.now = now
+        self.lastTick = floorTick
+    }
+
+    public func nowTick() -> UInt64 {
+        let seconds = max(0, now().timeIntervalSince1970)
+        let tick = UInt64(seconds / tickDurationSeconds)
+        lock.lock()
+        defer { lock.unlock() }
+        if tick > lastTick {
+            lastTick = tick
+        }
+        return lastTick
+    }
+}
+
 /// Deterministic/manual time for tests and replay simulations.
 public final class DeterministicTimeSource: MonotonicTimeSource, @unchecked Sendable {
     private let lock = NSLock()
