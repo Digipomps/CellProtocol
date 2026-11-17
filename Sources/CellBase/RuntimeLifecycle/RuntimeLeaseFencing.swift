@@ -43,6 +43,15 @@ public protocol RuntimeLeaseCoordinator: Sendable {
     ) async throws -> RuntimeLease
 
     func release(lease: RuntimeLease) async
+
+    /// Ensures the next issued fencing token for `cellID` is greater than
+    /// `token`. Used when recovering durably stored lifecycle state so a fresh
+    /// coordinator never reissues a token that stored state already carries.
+    func raiseFencingTokenFloor(cellID: RuntimeCellID, to token: UInt64) async
+}
+
+public extension RuntimeLeaseCoordinator {
+    func raiseFencingTokenFloor(cellID: RuntimeCellID, to token: UInt64) async {}
 }
 
 /// Single-node/default implementation. Distributed deployments can replace this
@@ -118,6 +127,12 @@ public actor InMemoryRuntimeLeaseCoordinator: RuntimeLeaseCoordinator {
             fencingToken: lease.fencingToken,
             validUntilTick: renewed.validUntilTick
         )
+    }
+
+    public func raiseFencingTokenFloor(cellID: RuntimeCellID, to token: UInt64) async {
+        if (lastFencingTokenByCell[cellID] ?? 0) < token {
+            lastFencingTokenByCell[cellID] = token
+        }
     }
 
     public func release(lease: RuntimeLease) async {

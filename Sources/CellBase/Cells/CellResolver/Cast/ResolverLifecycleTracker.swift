@@ -173,6 +173,10 @@ actor ResolverLifecycleTracker {
     }
 
 #if DEBUG
+    func trackingStateForTesting(uuid: String) -> (memory: Bool, persisted: Bool) {
+        (trackedCells[uuid] != nil, trackedPersistedCells[uuid] != nil)
+    }
+
     func resetRuntimeStateForTesting() {
         trackedCells.removeAll(keepingCapacity: false)
         trackedPersistedCells.removeAll(keepingCapacity: false)

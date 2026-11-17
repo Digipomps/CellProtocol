@@ -9,6 +9,7 @@ public enum RuntimeWheelItemKind: String, Codable, Sendable {
     case memoryExpiry
     case persistedExpiry
     case hardDelete
+    case persistedWarning
 }
 
 public struct RuntimeWheelItem: Codable, Sendable, Hashable {
