@@ -158,15 +158,27 @@ public struct BridgeCommand: Codable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         cmd = try values.decode(String.self, forKey: .cmd)
         cid = try values.decode(Int.self, forKey: .cid)
-        identity = try? values.decodeIfPresent(Identity.self, forKey: .identity)
-        protocolVersion = try? values.decodeIfPresent(Int.self, forKey: .protocolVersion)
-        channelID = try? values.decodeIfPresent(String.self, forKey: .channelID)
-        targetEndpoint = try? values.decodeIfPresent(String.self, forKey: .targetEndpoint)
-        streamID = try? values.decodeIfPresent(String.self, forKey: .streamID)
-        sequence = try? values.decodeIfPresent(UInt64.self, forKey: .sequence)
-        resumeFromSequence = try? values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
+        if CellBase.usesExplicitObjectWire {
+            // Opt-in (loopback D252E): malformed present metadata is terminal.
+            identity = try values.decodeIfPresent(Identity.self, forKey: .identity)
+            protocolVersion = try values.decodeIfPresent(Int.self, forKey: .protocolVersion)
+            channelID = try values.decodeIfPresent(String.self, forKey: .channelID)
+            targetEndpoint = try values.decodeIfPresent(String.self, forKey: .targetEndpoint)
+            streamID = try values.decodeIfPresent(String.self, forKey: .streamID)
+            sequence = try values.decodeIfPresent(UInt64.self, forKey: .sequence)
+            resumeFromSequence = try values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
+            payload = try Self.decodeExplicitPayload(from: values)
+        } else {
+            identity = try? values.decodeIfPresent(Identity.self, forKey: .identity)
+            protocolVersion = try? values.decodeIfPresent(Int.self, forKey: .protocolVersion)
+            channelID = try? values.decodeIfPresent(String.self, forKey: .channelID)
+            targetEndpoint = try? values.decodeIfPresent(String.self, forKey: .targetEndpoint)
+            streamID = try? values.decodeIfPresent(String.self, forKey: .streamID)
+            sequence = try? values.decodeIfPresent(UInt64.self, forKey: .sequence)
+            resumeFromSequence = try? values.decodeIfPresent(UInt64.self, forKey: .resumeFromSequence)
+            payload = Self.decodePayload(from: values)
+        }
         peerGeneration = try values.decodeIfPresent(String.self, forKey: .peerGeneration)
-        payload = Self.decodePayload(from: values)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -218,7 +230,8 @@ public struct BridgeCommand: Codable {
                 try container.encode(value, forKey: .signature)
                 
             case let .object(value):
-                try container.encode(value, forKey: .object)
+                if CellBase.usesExplicitObjectWire { try container.encode(WireObject(value), forKey: .object) }
+                else { try container.encode(value, forKey: .object) }
                 
             case let .list(value):
                 try container.encode(value, forKey: .list)
@@ -254,6 +267,13 @@ public struct BridgeCommand: Codable {
                 break
             }
         }
+    }
+
+    /// Loopback D252E order: connectContext is a validated payload key there.
+    private static var explicitPayloadDecodingKeys: [CodingKeys] {
+        var keys = payloadDecodingKeys
+        keys.insert(.connectContext, at: (keys.firstIndex(of: .integer) ?? keys.endIndex - 1) + 1)
+        return keys
     }
 
     private static let payloadDecodingKeys: [CodingKeys] = [
@@ -298,5 +318,20 @@ public struct BridgeCommand: Codable {
             }
         }
         return nil
+    }
+
+    private static func decodeExplicitPayload(
+        from values: KeyedDecodingContainer<CodingKeys>
+    ) throws -> ValueType? {
+        var selected: ValueType?
+        // Keep the legacy key priority, but validate every present known payload.
+        // An invalid field cannot become absent because another field decodes.
+        for key in explicitPayloadDecodingKeys {
+            if values.contains(key), try !values.decodeNil(forKey: key) {
+                let value = try ValueTypeCodec.decodeWireValue(from: values.superDecoder(forKey: key), marker: key.rawValue)
+                if selected == nil { selected = value }
+            }
+        }
+        return selected
     }
 }

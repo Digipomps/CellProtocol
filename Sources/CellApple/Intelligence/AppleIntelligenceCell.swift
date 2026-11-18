@@ -944,8 +944,11 @@ public class AppleIntelligenceCell: GeneralCell {
         switch content {
         case .string:
             return (content, .string)
-        case .data:
-            return (content, .base64)
+        case let .data(data):
+            // Flow-ready JSON carries base64 as a string. Explicit WireObject
+            // encoding would otherwise preserve .data and leave the message
+            // outside FlowElement's wire shape.
+            return (.string(data.base64EncodedString()), .base64)
         case .object:
             return (content, .object)
         default:

@@ -50,6 +50,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
         weak var peer: BridgeDelegateProtocol?
         private let lock = NSLock()
         private var commands: [BridgeCommand] = []
+        var didDeliverFeed: (() -> Void)?
         static func new() -> BridgeTransportProtocol { PairedTransport() }
         func setDelegate(_ delegate: BridgeDelegateProtocol) {}
         func setup(_ endpointURL: URL, identity: Identity) async throws {}
@@ -63,6 +64,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
                 try await peer?.consumeResponse(command: command)
             } else {
                 try await peer?.consumeCommand(command: command)
+                if command.command == .feed { didDeliverFeed?() }
             }
         }
     }
@@ -427,6 +429,8 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
             let localDecision = await cell.authorizationDecision(requestedAccess: "r---", at: "feed", for: identity)
             XCTAssertTrue(localDecision.allowed, "Fresh local contract: \(localDecision.reasonCode)")
             let outgoing = PairedTransport()
+            let feedDelivered = expectation(description: "feed installed before first emission")
+            outgoing.didDeliverFeed = { feedDelivered.fulfill() }
             let incoming = PairedTransport()
             let client = try await BridgeBase(BridgeBase.Config(
                 owner: identity, transport: outgoing, connection: .outbound,
@@ -461,6 +465,7 @@ final class BridgeIdentityBoundaryTests: XCTestCase {
                 if element.title == "after", identity === second { after.fulfill() }
             }))
             bridges.append((client, server))
+            await fulfillment(of: [feedDelivered], timeout: 3)
         }
         let emitValue = await cell.makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
         let emit = try XCTUnwrap(emitValue)

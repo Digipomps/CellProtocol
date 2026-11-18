@@ -74,6 +74,71 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
     }
     
     public init(from decoder: Decoder) throws {
+        if CellBase.usesExplicitObjectWire { try self.init(explicitFrom: decoder) }
+        else { try self.init(legacyFrom: decoder) }
+    }
+
+    /// Loopback D252E/D256 strict decoder (opt-in `.explicitEntries`).
+    private init(explicitFrom decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        topic = try values.decodeIfPresent(String.self, forKey: .topic) ?? "*"
+        title = try values.decode(String.self, forKey: .title)
+        properties = try values.decodeIfPresent(Properties.self, forKey: .properties)
+        origin = try values.decodeIfPresent(String.self, forKey: .origin)
+        // Persisterte elementer fra for denne endringen har ingen hops-nokkel.
+        hops = try values.decodeIfPresent(Int.self, forKey: .hops) ?? 0
+        // Preserve legacy absent/null content without hiding a malformed present value.
+        guard values.contains(.content), try !values.decodeNil(forKey: .content) else {
+            content = .string("Decoding error")
+            return
+        }
+        switch properties?.contentType {
+        case .string:
+            let decoded = try values.decode(String.self, forKey: .content)
+            content = .string(decoded)
+        case .dslv17:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+        case .rdf:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+        case .base64:
+            let decoded = try values.decode(String.self, forKey: .content)
+            guard let decodedData = Data(base64Encoded: decoded) else {
+                throw Swift.DecodingError.dataCorrupted(
+                    Swift.DecodingError.Context(
+                        codingPath: values.codingPath + [CodingKeys.content],
+                        debugDescription: "Expected base64 encoded flow content"
+                    )
+                )
+            }
+            content = .data(decodedData)
+        case .html:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+        case .httpRedirect:
+            let decoded = try values.decode(String.self, forKey: .content)
+            content = .string(decoded)
+        case .login:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+        case .experienceTemplate:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+        case .object:
+            let decoded = try values.decode(WireObject.self, forKey: .content).value
+            content = .object(decoded)
+
+        case .none:
+            // Without a declared content type, preserve valid producer JSON.
+            // Nested errors must still reach the bridge's terminal boundary.
+            content = try Self.decodeUntypedContent(from: values.superDecoder(forKey: .content))
+        }
+    }
+
+    /// main's decoder (default `.legacyInference`).
+    private init(legacyFrom decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
         if let localLabel = try? values.decode(String.self, forKey: .topic) {
@@ -135,6 +200,17 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         }
     }
     
+    private static func decodeUntypedContent(from decoder: Decoder) throws -> FlowElementValueType {
+        let scalar = try decoder.singleValueContainer()
+        if let value = try? scalar.decode(Bool.self) { return .bool(value) }
+        if let value = try? scalar.decode(Int.self) { return .number(value) }
+        if let value = try? scalar.decode(String.self) { return .string(value) }
+        if (try? decoder.unkeyedContainer()) != nil {
+            return .list(try ValueTypeList(from: decoder))
+        }
+        return .object(try WireObject(from: decoder).value)
+    }
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -151,7 +227,8 @@ public struct FlowElement : Codable, /*Hashable, */Identifiable {
         case let .string(value):
             try container.encode(value, forKey: .content)
         case let .object(value):
-            try container.encode(value, forKey: .content)
+            if CellBase.usesExplicitObjectWire { try container.encode(WireObject(value), forKey: .content) }
+            else { try container.encode(value, forKey: .content) }
         case let .list(value):
             try container.encode(value, forKey: .content)
         case let .data(value):

@@ -16,6 +16,7 @@ internal final class CellRuntimeEnvironment: @unchecked Sendable {
     private var storedSendDataAsText = false
     private var storedDebugValidateAccessForEverything = false
     private var storedWebSocketSecurityPolicy: CellBase.WebSocketSecurityPolicy = .developmentOnlyInsecureAllowed
+    private var storedObjectWireFormat: CellBase.ObjectWireFormat = .legacyInference
     private var storedExploreContractEnforcementMode: CellBase.ExploreContractEnforcementMode = .permissive
     private var storedEnabledDiagnosticLogDomains = Set<CellBase.DiagnosticLogDomain>()
     private var storedDiagnosticLogHandler: ((CellBase.DiagnosticLogDomain, String) -> Void)?
@@ -24,6 +25,11 @@ internal final class CellRuntimeEnvironment: @unchecked Sendable {
     private var storedSigningChallengeReplayStore: CellSecuritySigningChallengeReplayStore? = CellSecuritySigningChallengeReplayStore()
     private var storedSecurityContainmentPolicy: CellSecurityContainmentPolicy = .monitorOnly
     private var storedSecurityContainmentController: CellSecurityContainmentController? = CellSecurityContainmentController()
+
+    var objectWireFormat: CellBase.ObjectWireFormat {
+        get { withLock { storedObjectWireFormat } }
+        set { withLock { storedObjectWireFormat = newValue } }
+    }
 
     var defaultIdentityVault: IdentityVaultProtocol? {
         get { withLock { storedDefaultIdentityVault } }

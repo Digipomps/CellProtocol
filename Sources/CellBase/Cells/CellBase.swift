@@ -11,6 +11,10 @@ public struct CellBase {
     public enum WebSocketSecurityPolicy {
         case developmentOnlyInsecureAllowed
         case requireTLS
+        /// Plain `ws://` is allowed to this machine only (`127.0.0.1`, `::1`,
+        /// `localhost`), in every build configuration. Every other host
+        /// requires TLS. A host app that talks to a local agent opts in.
+        case loopbackInsecureAllowed
     }
 
     public enum ExploreContractEnforcementMode {
@@ -79,6 +83,24 @@ public struct CellBase {
         set { runtimeEnvironment.debugValidateAccessForEverything = newValue }
     }
 
+    /// How ValueType Objects are written and how strictly present fields are read.
+    public enum ObjectWireFormat: Sendable, Equatable {
+        /// Default (main): JSON inference for Objects; malformed optional fields
+        /// fall back to their legacy defaults. Byte-compatible with existing peers.
+        case legacyInference
+        /// Opt-in (loopback D252E/D256): Objects whose variants JSON inference
+        /// would lose use the explicit `&objectEntries` form, and malformed
+        /// present fields throw. Requires a coordinated peer rollout before use
+        /// on a shared wire.
+        case explicitEntries
+    }
+
+    public static var objectWireFormat: ObjectWireFormat {
+        get { runtimeEnvironment.objectWireFormat }
+        set { runtimeEnvironment.objectWireFormat = newValue }
+    }
+    static var usesExplicitObjectWire: Bool { objectWireFormat == .explicitEntries }
+
     public static var webSocketSecurityPolicy: WebSocketSecurityPolicy {
         get { runtimeEnvironment.webSocketSecurityPolicy }
         set { runtimeEnvironment.webSocketSecurityPolicy = newValue }
@@ -124,9 +146,11 @@ public struct CellBase {
         set { runtimeEnvironment.securityContainmentController = newValue }
     }
 
+    /// Whether plain `ws://` is allowed to any host. `loopbackInsecureAllowed`
+    /// answers false here; ask `allowsInsecureWebSocket(toHost:)` for a host.
     public static var allowsInsecureWebSockets: Bool {
         switch webSocketSecurityPolicy {
-        case .requireTLS:
+        case .requireTLS, .loopbackInsecureAllowed:
             return false
         case .developmentOnlyInsecureAllowed:
 #if DEBUG
@@ -134,6 +158,36 @@ public struct CellBase {
 #else
             return false
 #endif
+        }
+    }
+
+    /// Whether the channel-authentication endpoint may name a loopback `ws://`
+    /// audience. The endpoint itself still accepts only loopback hosts.
+    static var allowsInsecureChannelLoopback: Bool {
+        webSocketSecurityPolicy == .developmentOnlyInsecureAllowed || webSocketSecurityPolicy == .loopbackInsecureAllowed
+    }
+
+    /// Whether plain `ws://` is allowed to `host` under the current policy.
+    public static func allowsInsecureWebSocket(toHost host: String?) -> Bool {
+        switch webSocketSecurityPolicy {
+        case .requireTLS:
+            return false
+        case .developmentOnlyInsecureAllowed:
+            return allowsInsecureWebSockets
+        case .loopbackInsecureAllowed:
+            return isLoopbackHost(host)
+        }
+    }
+
+    /// Exactly the names that cannot leave this machine. `.local` names and
+    /// other `127/8` addresses are not accepted.
+    public static func isLoopbackHost(_ host: String?) -> Bool {
+        guard let host else { return false }
+        switch host.lowercased() {
+        case "127.0.0.1", "::1", "[::1]", "localhost":
+            return true
+        default:
+            return false
         }
     }
 

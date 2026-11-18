@@ -155,6 +155,7 @@ public struct BridgeConnectionPoolKey: Hashable, Sendable {
         Self.isValidComponent(identityUUID, maximumBytes: 512)
             && Self.isValidComponent(signingKeyFingerprint, maximumBytes: 256)
             && Self.isValidComponent(homeVaultReference, maximumBytes: 2_048)
+            && Self.isValidComponent(sessionEndpoint, maximumBytes: 2_048)
             && URL(string: sessionEndpoint)?.scheme != nil
     }
 
@@ -169,6 +170,17 @@ public struct BridgeConnectionPoolKey: Hashable, Sendable {
     }
 }
 
+/// What a full pool does with a new key.
+public enum BridgeConnectionPoolCapacityPolicy: Sendable, Equatable {
+    /// Default (main): retire the least recently used session. A retired
+    /// session leaves the pool at once and does not count against the limit.
+    case evictLeastRecentlyUsed
+    /// Opt-in (loopback lifecycle): a session closes physically when its last
+    /// channel is released, and every session that is not yet fully closed
+    /// stays charged. A full pool refuses with resourceLimitExceeded.
+    case rejectUntilPhysicallyClosed
+}
+
 /// Owns identity-bound physical bridge sessions and creates lightweight logical
 /// channel transports for individual remote cells.
 public final class BridgeConnectionPool: @unchecked Sendable {
@@ -181,9 +193,14 @@ public final class BridgeConnectionPool: @unchecked Sendable {
     private let maximumSessions: Int
     private var sessions: [BridgeConnectionPoolKey: SessionEntry] = [:]
     private var accessCounter: UInt64 = 0
+    public let capacityPolicy: BridgeConnectionPoolCapacityPolicy
+    // Only used by .rejectUntilPhysicallyClosed: removed but still charged.
+    private var retiringSessions: [String: BridgeMultiplexSession] = [:]
 
-    public init(maximumSessions: Int = 32) {
+    public init(maximumSessions: Int = 32,
+                capacityPolicy: BridgeConnectionPoolCapacityPolicy = .evictLeastRecentlyUsed) {
         self.maximumSessions = max(1, maximumSessions)
+        self.capacityPolicy = capacityPolicy
     }
 
     public func channelTransport(
@@ -191,8 +208,32 @@ public final class BridgeConnectionPool: @unchecked Sendable {
         targetEndpoint: String,
         physicalTransportFactory: () throws -> BridgeTransportProtocol
     ) throws -> BridgeTransportProtocol {
+        // An invalid target must fail before a physical transport is constructed.
+        guard BridgeMultiplexSession.isValidTargetEndpoint(targetEndpoint) else {
+            throw BridgeMultiplexError.invalidChannel
+        }
         guard key.isSecurityBound else {
             throw BridgeMultiplexError.invalidSecurityContext
+        }
+        if capacityPolicy == .rejectUntilPhysicallyClosed {
+            return try stateLock.withLock { () throws -> BridgeTransportProtocol in
+                retiringSessions = retiringSessions.filter { !$0.value.isFullyClosed }
+                sessions = sessions.filter { !$0.value.session.isFullyClosed }
+                accessCounter &+= 1
+                if var existing = sessions[key], existing.session.canReuseConnection {
+                    existing.lastAccess = accessCounter
+                    sessions[key] = existing
+                    return try existing.session.channelTransport(targetEndpoint: targetEndpoint)
+                }
+                if let old = sessions.removeValue(forKey: key) { retiringSessions[old.session.uuid] = old.session }
+                guard sessions.count + retiringSessions.count < maximumSessions else {
+                    throw BridgeMultiplexError.resourceLimitExceeded
+                }
+                let created = BridgeMultiplexSession(physicalTransport: try physicalTransportFactory(), closesWhenIdle: true)
+                let channel = try created.channelTransport(targetEndpoint: targetEndpoint)
+                sessions[key] = SessionEntry(session: created, lastAccess: accessCounter)
+                return channel
+            }
         }
         let result = try stateLock.withLock { () throws -> (BridgeMultiplexSession, [BridgeMultiplexSession]) in
             accessCounter &+= 1
@@ -223,6 +264,9 @@ public final class BridgeConnectionPool: @unchecked Sendable {
     public func reset() {
         let retiredSessions = stateLock.withLock { () -> [BridgeMultiplexSession] in
             let retiredSessions = sessions.values.map(\.session)
+            if capacityPolicy == .rejectUntilPhysicallyClosed {
+                for session in retiredSessions { retiringSessions[session.uuid] = session }
+            }
             sessions.removeAll(keepingCapacity: false)
             return retiredSessions
         }
@@ -237,7 +281,11 @@ public final class BridgeConnectionPool: @unchecked Sendable {
                 URL(string: key.sessionEndpoint)?.host?.lowercased() == normalizedHost
                     && key.routeGeneration == routeGeneration
             }
-            return matchingKeys.compactMap { sessions.removeValue(forKey: $0)?.session }
+            let retiring = matchingKeys.compactMap { sessions.removeValue(forKey: $0)?.session }
+            if capacityPolicy == .rejectUntilPhysicallyClosed {
+                for session in retiring { retiringSessions[session.uuid] = session }
+            }
+            return retiring
         }
         retiredSessions.forEach { $0.retireFromPool() }
     }
@@ -277,12 +325,26 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
 
     static let maximumStreamIDBytes = 256
 
+    /// When true (pool policy .rejectUntilPhysicallyClosed), releasing the last
+    /// issued channel closes the physical transport; the session is single-use.
+    public let closesWhenIdle: Bool
+    private var physicallyClosed = false
+    var isClosed: Bool { stateLock.withLock { physicalTransportClosed } }
+    /// True once physical close has actually returned.
+    var isFullyClosed: Bool { stateLock.withLock { physicallyClosed } }
+    private func closePhysicalTransport() async {
+        await physicalTransport.close()
+        stateLock.withLock { physicallyClosed = true }
+    }
+
     public init(
         physicalTransport: BridgeTransportProtocol,
         channelOpenTimeoutNanoseconds: UInt64 = 5_000_000_000,
         maximumChannels: Int = 128,
-        maximumPendingChannelOpens: Int = 32
+        maximumPendingChannelOpens: Int = 32,
+        closesWhenIdle: Bool = false
     ) {
+        self.closesWhenIdle = closesWhenIdle
         self.physicalTransport = physicalTransport
         self.channelOpenTimeoutNanoseconds = channelOpenTimeoutNanoseconds
         self.maximumChannels = max(1, maximumChannels)
@@ -308,7 +370,8 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             throw BridgeMultiplexError.invalidChannel
         }
         let channelID = UUID().uuidString
-        let reserved = stateLock.withLock { () -> Bool in
+        let reserved = try stateLock.withLock { () throws -> Bool in
+            if closesWhenIdle, physicalTransportClosed { throw BridgeMultiplexError.sessionClosed }
             guard physicalTransportClosed == false,
                   issuedChannelIDs.count < maximumChannels else {
                 return false
@@ -343,10 +406,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             return true
         }
         guard shouldClose else { return }
-        let physicalTransport = physicalTransport
-        Task {
-            await physicalTransport.close()
-        }
+        Task { [self] in await closePhysicalTransport() }
     }
 
     fileprivate func register(_ delegate: BridgeDelegateProtocol?, channelID: String) {
@@ -388,7 +448,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         do { try await task.value }
         catch {
             stateLock.withLock { physicalTransportClosed = true; retiredFromPool = true }
-            await physicalTransport.close()
+            await closePhysicalTransport()
             throw error
         }
     }
@@ -465,7 +525,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             issuedChannelIDs.remove(channelID)
             let continuation = openContinuations.removeValue(forKey: channelID)
             let sendClose = configuredEndpoint != nil && physicalTransportClosed == false
-            let closePhysical = retiredFromPool && issuedChannelIDs.isEmpty && physicalTransportClosed == false
+            let closePhysical = (retiredFromPool || closesWhenIdle) && issuedChannelIDs.isEmpty && physicalTransportClosed == false
             if closePhysical {
                 physicalTransportClosed = true
             }
@@ -475,7 +535,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         releaseState.continuation?.resume(throwing: BridgeMultiplexError.channelNotFound)
         guard releaseState.sendClose else {
             if releaseState.closePhysical {
-                await physicalTransport.close()
+                await closePhysicalTransport()
             }
             return
         }
@@ -495,7 +555,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             try? await physicalTransport.sendData(data)
         }
         if releaseState.closePhysical {
-            await physicalTransport.close()
+            await closePhysicalTransport()
         }
     }
 
@@ -818,6 +878,7 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         private let lock = NSLock()
         private var retired = false
         private var tasks: [UUID: Task<Void, Error>] = [:]
+        private var retirement: Task<Void, Never>?
 
         init(delegate: BridgeDelegateProtocol, transport: ServerChannelTransport, quota: BridgeChannelResourceLease) {
             self.quota = quota
@@ -847,17 +908,64 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 if !lock.withLock({ retired }) { throw error }
             }
         }
+        /// Synchronous snapshot: admitted dispatches or delegate-owned work.
+        var hasInFlightWork: Bool {
+            lock.withLock { !tasks.isEmpty } || ((delegate as? BridgeBase)?.hasOutstandingOwnedWork ?? false)
+        }
+        private var hookPending: [Task<Void, Error>]?
+        /// Main's closer contract: revoke the destination, cancel admitted work
+        /// and await only the delegate's own retirement hook. For a BridgeBase
+        /// the hook is terminal retirement, started but not joined.
         func retire() async {
             let pending = lock.withLock { () -> [Task<Void, Error>]? in
                 guard !retired else { return nil }
                 retired = true
-                return Array(tasks.values)
+                let pending = Array(tasks.values)
+                hookPending = pending
+                return pending
             }
             guard let pending else { return }
             // Cancellation handlers may re-enter lifecycle code.
             pending.forEach { $0.cancel() }
-            if let bridge = delegate as? BridgeBase { await bridge.retireLogicalChannel() }
+            if let bridge = delegate as? BridgeBase { bridge.beginRetirement() }
             else { await delegate.pushError(errorMessage: "bridge_logical_channel_closed", error: BridgeMultiplexError.channelNotFound) }
+        }
+        /// Full join (loopback D245/D248, used by closeAndJoin and background
+        /// tracking): the BridgeBase is fully retired, then every dispatch that
+        /// was admitted before retirement has actually returned.
+        func retirementTask() -> Task<Void, Never> {
+            lock.withLock {
+                if let retirement { return retirement }
+                let pending = hookPending ?? Array(tasks.values)
+                let task = Task { [delegate] in
+                    if let bridge = delegate as? BridgeBase { await bridge.finishRetirement() }
+                    for task in pending { _ = try? await task.value }
+                }
+                retirement = task
+                return task
+            }
+        }
+    }
+
+    /// One-shot completion shared by everyone that waits for a pending open.
+    private final class Completion: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let immediate = lock.withLock { () -> Bool in
+                    if done { return true }
+                    waiters.append(continuation); return false
+                }
+                if immediate { continuation.resume() }
+            }
+        }
+        func complete() {
+            let pending = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+                done = true; let result = waiters; waiters.removeAll(); return result
+            }
+            pending.forEach { $0.resume() }
         }
     }
 
@@ -884,6 +992,12 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     private let maximumPendingChannelOpens: Int
     private let maximumTrackedOutboundStreams: Int
     private var channels: [String: ChannelRecord] = [:]
+    // Retirements still running (owned work held). Tracked only for the
+    // explicit closeAndJoin(); main's ID/capacity charge is sendingChannelIDs.
+    private var retiringChannels: [ObjectIdentifier: ChannelRecord] = [:]
+    private var pendingCompletions: [String: Completion] = [:]
+    private var closeTask: Task<Void, Never>?
+    private let beforeChannelSend: (@Sendable () async -> Void)?
     // A retired wire ID is unavailable until every admitted send has returned
     // from the physical transport, including non-cooperative queued sends.
     private var sendingChannelIDs: [String: Int] = [:]
@@ -901,9 +1015,11 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         maximumChannels: Int = 128,
         maximumPendingChannelOpens: Int = 32,
         maximumTrackedOutboundStreams: Int = 4_096,
+        beforeChannelSend: (@Sendable () async -> Void)? = nil,
         channelFactory: @escaping ChannelFactory
     ) {
         self.physicalTransport = physicalTransport
+        self.beforeChannelSend = beforeChannelSend
         self.maximumChannels = max(1, maximumChannels)
         self.maximumPendingChannelOpens = max(1, min(maximumPendingChannelOpens, maximumChannels))
         self.maximumTrackedOutboundStreams = max(1, maximumTrackedOutboundStreams)
@@ -989,15 +1105,47 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
     private func closeChannel(_ channelID: String, expected: ChannelRecord? = nil) async {
         let removed = stateLock.withLock { () -> ChannelRecord? in
+            if pendingChannelIDs.contains(channelID) { cancelledPendingChannelIDs.insert(channelID) }
             if let expected, channels[channelID] !== expected { return nil }
             let removed = channels.removeValue(forKey: channelID)
-            if pendingChannelIDs.contains(channelID) { cancelledPendingChannelIDs.insert(channelID) }
+            if let removed, removed.hasInFlightWork { retiringChannels[ObjectIdentifier(removed)] = removed }
             outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
             compactOutboundStreamInsertionOrderIfNeeded()
             return removed
         }
         defer { withExtendedLifetime(removed) {} }
-        await removed?.retire()
+        guard let removed else { return }
+        await removed.retire()
+        if stateLock.withLock({ retiringChannels[ObjectIdentifier(removed)] != nil }) { trackRetirement(removed) }
+    }
+
+    /// Starts a retirement that may be held by non-cooperative work; the record
+    /// is forgotten once it has actually returned. Closers never wait for it.
+    private func trackRetirement(_ record: ChannelRecord) {
+        let retirement = record.retirementTask()
+        let key = ObjectIdentifier(record)
+        Task { [self] in
+            await retirement.value
+            _ = stateLock.withLock { retiringChannels.removeValue(forKey: key) }
+        }
+    }
+
+    /// Started by the channel's own transport (its delegate). Never joins: the
+    /// caller may be owned work of the very retirement it starts.
+    fileprivate func beginClosingChannel(_ channelID: String, matching transport: ServerChannelTransport) {
+        let owned = stateLock.withLock { channels[channelID]?.transport === transport }
+        guard owned else { return }
+        Task { [self] in await closeChannel(channelID) }
+    }
+
+    /// Explicit owner join (loopback D245 guarantee, opt-in): closes the session,
+    /// then waits until every channel retirement and every pending factory has
+    /// actually returned. close() keeps main's non-blocking contract.
+    public func closeAndJoin() async {
+        await close()
+        let (records, pending) = stateLock.withLock { (Array(retiringChannels.values), Array(pendingCompletions.values)) }
+        for record in records { await record.retirementTask().value }
+        for completion in pending { await completion.wait() }
     }
 
     func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
@@ -1069,16 +1217,19 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
         let reservation = stateLock.withLock { () -> ChannelReservation in
             guard closed == false else { return .closed }
-            guard channels[channelID] == nil, pendingChannelIDs.contains(channelID) == false,
+            guard channels[channelID] == nil,
+                  pendingChannelIDs.contains(channelID) == false,
                   previousSends == 0 else {
                 return .conflict
             }
-            let retainedIDs = Set(channels.keys).union(pendingChannelIDs).union(sendingChannelIDs.keys).subtracting([channelID])
+            let retainedIDs = Set(channels.keys).union(pendingChannelIDs)
+                .union(sendingChannelIDs.keys).subtracting([channelID])
             guard retainedIDs.count < maximumChannels,
                   pendingChannelIDs.count < maximumPendingChannelOpens else {
                 return .capacityExceeded
             }
             pendingChannelIDs.insert(channelID)
+            pendingCompletions[channelID] = Completion()
             return .accepted
         }
         switch reservation {
@@ -1106,18 +1257,20 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         }
 
         defer {
-            stateLock.withLock {
+            let completion = stateLock.withLock { () -> Completion? in
                 pendingChannelIDs.remove(channelID)
                 cancelledPendingChannelIDs.remove(channelID)
+                return pendingCompletions.removeValue(forKey: channelID)
             }
+            completion?.complete()
         }
 
         var result: ChannelRecord?
+        let channelTransport = ServerChannelTransport(session: self, channelID: channelID)
         do {
             guard let channelSession else { throw BridgeChannelAuthentication.Failure.closed }
             let quota = try BridgeChannelResourceLease(session: channelSession, resource: .channel)
             defer { withExtendedLifetime(quota) {} }
-            let channelTransport = ServerChannelTransport(session: self, channelID: channelID)
             try channelSession.check(identity: identity, requiresIdentity: true)
             guard let principal = channelSession.publicIdentity?.makeIdentity() else { throw BridgeChannelAuthentication.Failure.closed }
             let delegate = try await channelFactory(targetEndpoint, principal, channelTransport)
@@ -1143,7 +1296,10 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
                 outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
                 compactOutboundStreamInsertionOrderIfNeeded()
             }
-            await result?.retire()
+            // A factory may have installed a delegate before failing: retire it
+            // before the reservation is released (loopback D245).
+            if let result { await result.retire() }
+            else { channelTransport.beginRetiringDelegate() }
             guard stateLock.withLock({ !closed && !cancelledPendingChannelIDs.contains(channelID) }),
                   !Task.isCancelled, (try? channelSession?.check()) != nil else { return }
             try await reject(command)
@@ -1224,24 +1380,30 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     public func close() async {
-        let retired = stateLock.withLock { () -> [ChannelRecord]? in
-            guard !closed else { return nil }
+        // One physical close shared by every closer. Pending factories own their
+        // reservations until they return; channel work is not joined here.
+        let task = stateLock.withLock { () -> Task<Void, Never> in
+            if let closeTask { return closeTask }
             closed = true
-            let retired = Array(channels.values)
+            let open = channels
+            for record in open.values where record.hasInFlightWork { retiringChannels[ObjectIdentifier(record)] = record }
             channels.removeAll(keepingCapacity: false)
-            // Pending factories own their reservations until they return.
             cancelledPendingChannelIDs.formUnion(pendingChannelIDs)
             outboundStreamSequences.removeAll(keepingCapacity: false)
             outboundStreamInsertionOrder.removeAll(keepingCapacity: false)
             outboundStreamInsertionHead = 0
-            return retired
+            let task = Task { [self] in
+                for record in open.values {
+                    await record.retire()
+                    if stateLock.withLock({ retiringChannels[ObjectIdentifier(record)] != nil }) { trackRetirement(record) }
+                }
+                await physicalTransport.close()
+                withExtendedLifetime(open) {}
+            }
+            closeTask = task
+            return task
         }
-        guard let retired else { return }
-        for record in retired {
-            await record.retire()
-        }
-        await physicalTransport.close()
-        withExtendedLifetime(retired) {}
+        await task.value
     }
 
     private func recordChannelRejection(
@@ -1360,19 +1522,19 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
 
         func sendData(_ data: Data) async throws {
             guard let session else { throw BridgeMultiplexError.sessionClosed }
+            await session.beforeChannelSend?()
             try await session.send(data, channelID: channelID, transport: self)
         }
 
+        /// Starts terminal retirement of an installed BridgeBase delegate.
+        func beginRetiringDelegate() {
+            (delegate as? BridgeBase)?.beginRetirement()
+        }
+
+        /// Called by the channel's own delegate (BridgeBase's finalizer included),
+        /// so it only starts the channel's retirement; external closers join.
         func close() async {
-            guard let session, session.stateLock.withLock({ session.channels[channelID]?.transport === self }) else { return }
-            try? await session.consumeCommand(command: BridgeCommand(
-                cmd: Command.closeChannel.rawValue,
-                identity: session.channelSession?.publicIdentity?.makeIdentity(),
-                payload: nil,
-                cid: 0,
-                protocolVersion: session.protocolVersion,
-                channelID: channelID
-            ))
+            session?.beginClosingChannel(channelID, matching: self)
         }
 
         func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {

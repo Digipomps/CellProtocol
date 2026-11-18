@@ -109,25 +109,25 @@ public class AnyCell: Emit, Codable {
     
     required public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        if values.contains(.uuid) {
-            if let suppliedUuid = try? values.decode(String.self, forKey: .uuid) {
-                uuid = suppliedUuid
-            } else {
-                uuid = UUID.init().uuidString
-            }
+        let strict = CellBase.usesExplicitObjectWire
+        if strict {
+            uuid = try values.decodeIfPresent(String.self, forKey: .uuid) ?? UUID().uuidString
         } else {
-            uuid = UUID.init().uuidString
+            uuid = (try? values.decodeIfPresent(String.self, forKey: .uuid)) ?? UUID.init().uuidString
         }
 
         name = try values.decode(String.self, forKey: .name)
         
-        owner = try? values.decode(Identity.self, forKey: .owner)
+        owner = strict ? try values.decodeIfPresent(Identity.self, forKey: .owner)
+            : try? values.decode(Identity.self, forKey: .owner)
         
         agreementTemplate = try values.decode(Agreement.self, forKey: .contractTemplate)
         
-        experiences =  try? values.decode([CellConfiguration].self, forKey: .experiences)
+        experiences = strict ? try values.decodeIfPresent([CellConfiguration].self, forKey: .experiences)
+            : try? values.decode([CellConfiguration].self, forKey: .experiences)
         
-        feedProperties =  try? values.decode(FeedProperties.self, forKey: .feedProperties)
+        feedProperties = strict ? try values.decodeIfPresent(FeedProperties.self, forKey: .feedProperties)
+            : try? values.decode(FeedProperties.self, forKey: .feedProperties)
         
         identityDomain = try values.decode(String.self, forKey: .identityDomain)
         
