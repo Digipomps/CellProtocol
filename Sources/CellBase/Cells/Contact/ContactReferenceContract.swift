@@ -164,7 +164,7 @@ public enum ContactReferenceCodec {
               try BridgeChannelAuthentication.PublicIdentity(contract.subject) == subject,
               contract.agreement.conditions.isEmpty, contract.agreement.grants.count == 1,
               contract.agreement.grants[0].keypath == "contact.request",
-              contract.agreement.grants[0].permission.fullPermissionString == "-w--",
+              contract.agreement.grants[0].permission.fullPermissionString == "-w------",
               await contract.verifySignature(now: now) else { throw ContactOperationFailure.invalidBinding }
     }
 
