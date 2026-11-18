@@ -22,6 +22,10 @@ public struct RuntimeLifecyclePolicy: Codable, Sendable, Equatable {
     public var persistedDataTTLTicks: UInt64?
     public var tombstoneGraceTicks: UInt64
     public var memoryExpiryAction: RuntimeMemoryExpiryAction
+    /// Lead time for the owner warning before persisted data expires.
+    /// `nil`/0 means no persisted warning (pre-P1 behaviour). Optional so older
+    /// encoded policies still decode.
+    public var persistedWarningLeadTicks: UInt64?
 
     public static let nonExpiring = RuntimeLifecyclePolicy(
         mode: .nonExpiring,
@@ -38,7 +42,8 @@ public struct RuntimeLifecyclePolicy: Codable, Sendable, Equatable {
         memoryWarningLeadTicks: UInt64,
         persistedDataTTLTicks: UInt64?,
         tombstoneGraceTicks: UInt64,
-        memoryExpiryAction: RuntimeMemoryExpiryAction
+        memoryExpiryAction: RuntimeMemoryExpiryAction,
+        persistedWarningLeadTicks: UInt64? = nil
     ) {
         self.mode = mode
         self.memoryTTLTicks = memoryTTLTicks
@@ -46,6 +51,7 @@ public struct RuntimeLifecyclePolicy: Codable, Sendable, Equatable {
         self.persistedDataTTLTicks = persistedDataTTLTicks
         self.tombstoneGraceTicks = tombstoneGraceTicks
         self.memoryExpiryAction = memoryExpiryAction
+        self.persistedWarningLeadTicks = persistedWarningLeadTicks
     }
 
     public static func expiring(
@@ -53,7 +59,8 @@ public struct RuntimeLifecyclePolicy: Codable, Sendable, Equatable {
         memoryWarningLeadTicks: UInt64 = 0,
         persistedDataTTLTicks: UInt64? = nil,
         tombstoneGraceTicks: UInt64 = 0,
-        memoryExpiryAction: RuntimeMemoryExpiryAction = .notifyOnly
+        memoryExpiryAction: RuntimeMemoryExpiryAction = .notifyOnly,
+        persistedWarningLeadTicks: UInt64? = nil
     ) -> RuntimeLifecyclePolicy {
         RuntimeLifecyclePolicy(
             mode: .expiring,
@@ -61,7 +68,8 @@ public struct RuntimeLifecyclePolicy: Codable, Sendable, Equatable {
             memoryWarningLeadTicks: memoryWarningLeadTicks,
             persistedDataTTLTicks: persistedDataTTLTicks,
             tombstoneGraceTicks: tombstoneGraceTicks,
-            memoryExpiryAction: memoryExpiryAction
+            memoryExpiryAction: memoryExpiryAction,
+            persistedWarningLeadTicks: persistedWarningLeadTicks
         )
     }
 
@@ -76,6 +84,8 @@ public enum RuntimeLifecycleEventType: String, Codable, Sendable, Equatable {
     case memoryTTLWarning
     case memoryTTLExtended
     case persistedTTLExtended
+    case persistedTTLWarning
+    case recovered
     case memoryExpired
     case unloaded
     case tombstoned
@@ -90,18 +100,23 @@ public struct RuntimeLifecycleEvent: Codable, Sendable, Equatable {
     public let version: UInt64
     public let tick: UInt64
     public let fencingToken: UInt64
+    /// Tick the event points at: persisted expiry for warnings/extensions,
+    /// hard-delete tick for tombstones. `nil` when not applicable.
+    public let deadlineTick: UInt64?
 
     public init(
         type: RuntimeLifecycleEventType,
         cellID: RuntimeCellID,
         version: UInt64,
         tick: UInt64,
-        fencingToken: UInt64
+        fencingToken: UInt64,
+        deadlineTick: UInt64? = nil
     ) {
         self.type = type
         self.cellID = cellID
         self.version = version
         self.tick = tick
         self.fencingToken = fencingToken
+        self.deadlineTick = deadlineTick
     }
 }

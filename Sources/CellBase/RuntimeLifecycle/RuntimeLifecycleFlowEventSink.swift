@@ -34,6 +34,17 @@ public actor RuntimeLifecycleFlowEventSink: RuntimeLifecycleEffectSink {
                 .string("ignore")
             ])
         }
+        if event.type == .persistedTTLWarning {
+            payload["warningCommandRoute"] = .string("RuntimeLifecycleManager.applyWarningCommand")
+            payload["warningCommands"] = .list([
+                .string("extendPersistedTTL"),
+                .string("deleteNow"),
+                .string("ignore")
+            ])
+        }
+        if let deadlineTick = event.deadlineTick {
+            payload["deadlineTick"] = .string(String(deadlineTick))
+        }
 
         var flowElement = FlowElement(
             title: "Runtime lifecycle event",
