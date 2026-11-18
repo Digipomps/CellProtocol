@@ -43,6 +43,7 @@ public class EntityAnchorCell: GeneralCell {
     static let authorityJournalFilename = "entity-authority-journal.json"
     private var storage: Entity
     private let signedAgreementCommitGate = SignedAgreementCommitGate()
+    private let flowPlacementGate = SignedAgreementCommitGate()
     private var authorityJournal = EntityAuthorityJournalDocument()
     private var persistenceFailureReason: String?
     private var legacySideFiles = Set<String>()
@@ -273,6 +274,8 @@ public class EntityAnchorCell: GeneralCell {
     
 	        return nil
 	    })
+
+        await installFlowPlacementKeys(owner: owner)
 
         await addInterceptForSet(requester: owner, key: "identityLinks", setValueIntercept: { [weak self] keypath, value, requester in
             guard let self = self else { return nil }
@@ -531,6 +534,13 @@ public class EntityAnchorCell: GeneralCell {
         await registerExploreContract(requester: requester, key: "identityLinks.completeEnrollment", method: .set, input: ExploreContract.schema(type: "object"), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Completes a previously approved identity enrollment."))
         await registerExploreContract(requester: requester, key: "identityLinks.revoke", method: .set, input: ExploreContract.oneOfSchema(options: [ExploreContract.schema(type: "string"), ExploreContract.objectSchema(properties: ["linkID": ExploreContract.schema(type: "string")], requiredKeys: ["linkID"])]), returns: identityLinkResult, permissions: ["-w--"], required: true, flowEffects: [identityLinkEffect], description: .string("Revokes an exact identity link."))
         await registerExploreContract(requester: requester, key: "reloadStorage", method: .get, input: .null, returns: ExploreContract.schema(type: "string"), permissions: [], required: false, description: .string("Legacy owner-only compatibility trigger that reloads persisted storage."))
+        let flowPlacementResult = ExploreContract.schema(type: "object", description: "Flow placement state: sources, venues and the decision for each source and purpose.")
+        let flowPlacementEffect = ExploreContract.flowEffect(trigger: .set, topic: FlowPlacementLedger.flowTopic, contentType: "object")
+        await registerExploreContract(requester: requester, key: FlowPlacementLedger.state, method: .get, input: .null, returns: flowPlacementResult, permissions: ["r---"], required: false, description: .string("Reads the entity's Flow sources, its runtimes and where each source is consumed. Owner or same-entity linked identity only."))
+        await registerExploreContract(requester: requester, key: FlowPlacementLedger.sourcesAdd, method: .set, input: ExploreContract.schema(type: "object", description: "A FlowSource, a list of them, or {linkCompletion, host, purposes, topics?}."), returns: flowPlacementResult, permissions: ["-w--"], required: false, flowEffects: [flowPlacementEffect], description: .string("Adds Flow sources the entity has access to. Placement never grants access."))
+        await registerExploreContract(requester: requester, key: FlowPlacementLedger.sourcesRemove, method: .set, input: ExploreContract.objectSchema(properties: ["sourceID": ExploreContract.schema(type: "string")], requiredKeys: ["sourceID"]), returns: flowPlacementResult, permissions: ["-w--"], required: false, flowEffects: [flowPlacementEffect], description: .string("Removes a Flow source."))
+        await registerExploreContract(requester: requester, key: FlowPlacementLedger.venuesReport, method: .set, input: ExploreContract.schema(type: "object", description: "A FlowVenue; expires within 24 hours unless reported again."), returns: flowPlacementResult, permissions: ["-w--"], required: false, flowEffects: [flowPlacementEffect], description: .string("A runtime of the entity reports itself as a place to consume Flow."))
+        await registerExploreContract(requester: requester, key: FlowPlacementLedger.venuesWithdraw, method: .set, input: ExploreContract.objectSchema(properties: ["venueID": ExploreContract.schema(type: "string")], requiredKeys: ["venueID"]), returns: flowPlacementResult, permissions: ["-w--"], required: false, flowEffects: [flowPlacementEffect], description: .string("A runtime withdraws itself as a place to consume Flow."))
     }
 
     private static func storedValueSchema() -> ValueType {
@@ -1316,6 +1326,55 @@ public class EntityAnchorCell: GeneralCell {
     private func safeIdentityLinkKey(_ value: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         return String(value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+    }
+
+    // MARK: - Flow placement (Docs/FlowPlacement.md)
+
+    private func installFlowPlacementKeys(owner: Identity) async {
+        await addInterceptForGet(requester: owner, key: FlowPlacementLedger.state, getValueIntercept: { [weak self] _, requester in
+            guard let self else { return .null }
+            guard await self.validateAccess("r---", at: "flowPlacement", for: requester) else {
+                return .string("denied")
+            }
+            do {
+                let book = try FlowPlacementLedger.load(try? self.storage.get(keypath: FlowPlacementLedger.bookKeypath))
+                return try FlowPlacementLedger.stateValue(book, now: Date())
+            } catch {
+                return .object(["status": .string("error"), "message": .string(String(describing: error))])
+            }
+        })
+        for action in FlowPlacementLedger.setActions {
+            await addInterceptForSet(requester: owner, key: action, setValueIntercept: { [weak self] keypath, value, requester in
+                guard let self else { return nil }
+                return await self.handleFlowPlacementSet(action: action, value: value, requester: requester)
+            })
+        }
+    }
+
+    /// Only the owner or a verified same-entity linked identity may change
+    /// placement. The template has no flowPlacement grant, so no contract opens it.
+    private func handleFlowPlacementSet(action: String, value: ValueType, requester: Identity) async -> ValueType? {
+        guard await validateAccess("-w--", at: "flowPlacement", for: requester) else {
+            return .object(["status": .string("denied"), "keypath": .string(action)])
+        }
+        return await flowPlacementGate.withExclusiveAccess {
+            do {
+                let current = try FlowPlacementLedger.load(try? self.storage.get(keypath: FlowPlacementLedger.bookKeypath))
+                let (book, response) = try FlowPlacementLedger.apply(action: action, value: value, to: current, now: Date())
+                var updated = self.storage
+                try updated.set(keypath: FlowPlacementLedger.bookKeypath, setValue: try FlowPlacementLedger.encode(book))
+                try await self.saveKeypathStorage(entity: updated)
+                if case let .object(object) = response, let decisions = object["decisions"] {
+                    var flowElement = FlowElement(title: "Flow placement", content: .object(["action": .string(action), "decisions": decisions]), properties: FlowElement.Properties(type: .event, contentType: .object))
+                    flowElement.origin = self.uuid
+                    flowElement.topic = FlowPlacementLedger.flowTopic
+                    self.pushFlowElement(flowElement, requester: requester)
+                }
+                return response
+            } catch {
+                return .object(["status": .string("error"), "keypath": .string(action), "message": .string(String(describing: error))])
+            }
+        }
     }
 
     private func pushIdentityLinkEvent(keypath: String, value: ValueType, requester: Identity) {

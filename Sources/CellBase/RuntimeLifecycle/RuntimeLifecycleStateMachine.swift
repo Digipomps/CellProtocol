@@ -37,6 +37,11 @@ public struct RuntimeLifecycleState: Codable, Sendable {
     public var hardDeleteGeneration: UInt64
     public var lastProcessedHardDeleteGeneration: UInt64
 
+    /// Tick at which the owner is warned that persisted data will expire.
+    /// Optional so state encoded before P1 still decodes.
+    public var persistedWarningTick: UInt64?
+    public var lastProcessedPersistedWarningGeneration: UInt64?
+
     public init(
         cellID: RuntimeCellID,
         version: UInt64,
@@ -57,7 +62,9 @@ public struct RuntimeLifecycleState: Codable, Sendable {
         lastProcessedPersistedGeneration: UInt64,
         hardDeleteTick: UInt64?,
         hardDeleteGeneration: UInt64,
-        lastProcessedHardDeleteGeneration: UInt64
+        lastProcessedHardDeleteGeneration: UInt64,
+        persistedWarningTick: UInt64? = nil,
+        lastProcessedPersistedWarningGeneration: UInt64? = nil
     ) {
         self.cellID = cellID
         self.version = version
@@ -79,6 +86,8 @@ public struct RuntimeLifecycleState: Codable, Sendable {
         self.hardDeleteTick = hardDeleteTick
         self.hardDeleteGeneration = hardDeleteGeneration
         self.lastProcessedHardDeleteGeneration = lastProcessedHardDeleteGeneration
+        self.persistedWarningTick = persistedWarningTick
+        self.lastProcessedPersistedWarningGeneration = lastProcessedPersistedWarningGeneration
     }
 
     public static func initial(
@@ -120,6 +129,7 @@ public struct RuntimeLifecycleState: Codable, Sendable {
             memoryExpiryTick = nil
             memoryWarningTick = nil
             persistedExpiryTick = nil
+            persistedWarningTick = nil
             hardDeleteTick = nil
             return
         }
@@ -144,6 +154,20 @@ public struct RuntimeLifecycleState: Codable, Sendable {
         } else {
             persistedExpiryTick = nil
         }
+        recomputePersistedWarningTick()
+    }
+
+    /// Derives the persisted-data warning tick from the current persisted expiry.
+    /// A warning is only scheduled when the lead is shorter than the time left.
+    mutating func recomputePersistedWarningTick() {
+        guard let expiry = persistedExpiryTick,
+              let lead = policy.persistedWarningLeadTicks,
+              lead > 0,
+              expiry > lead else {
+            persistedWarningTick = nil
+            return
+        }
+        persistedWarningTick = expiry &- lead
     }
 }
 
@@ -159,6 +183,18 @@ public enum RuntimeLifecycleInput: Sendable {
     case memoryExpiryFired(generation: UInt64, nowTick: UInt64, fencingToken: UInt64)
     case persistedExpiryFired(generation: UInt64, nowTick: UInt64, fencingToken: UInt64)
     case hardDeleteFired(generation: UInt64, nowTick: UInt64, fencingToken: UInt64)
+    /// Owner warning before persisted data expires (P1).
+    case persistedWarningFired(generation: UInt64, nowTick: UInt64, fencingToken: UInt64)
+    /// Owner-requested deletion: tombstone now and hard delete at `nowTick`,
+    /// skipping the tombstone grace window (G4 "slett nå").
+    case requestImmediateDeletion(nowTick: UInt64, fencingToken: UInt64)
+    /// Rebuilds timers after a restart from durably stored state. Memory is
+    /// empty after a restart, so loaded cells become unloaded. Overdue
+    /// deadlines are scheduled at `nowTick` and fire on the next processing
+    /// pass; reducer generation checks keep already-processed ones idempotent.
+    /// Tombstoned state re-emits the tombstone write before the hard delete;
+    /// deleted state re-emits the (idempotent) hard delete.
+    case recover(nowTick: UInt64, fencingToken: UInt64)
     case leaseGranted(RuntimeLease)
     case leaseExpired(nowTick: UInt64, fencingToken: UInt64)
 }
@@ -168,6 +204,7 @@ public enum RuntimeLifecycleEffect: Sendable {
     case scheduleMemoryExpiry(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64, atTick: UInt64)
     case schedulePersistedExpiry(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64, atTick: UInt64)
     case scheduleHardDelete(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64, atTick: UInt64)
+    case schedulePersistedWarning(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64, atTick: UInt64)
     case cancelMemoryWarning(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64)
     case cancelMemoryExpiry(cellID: RuntimeCellID, generation: UInt64, fencingToken: UInt64)
     case unloadFromMemory(cellID: RuntimeCellID)
@@ -235,7 +272,7 @@ public enum RuntimeLifecycleTransitionReducer {
             return nil
         }
 
-        func emit(_ type: RuntimeLifecycleEventType, tick: UInt64) {
+        func emit(_ type: RuntimeLifecycleEventType, tick: UInt64, deadlineTick: UInt64? = nil) {
             effects.append(
                 .emit(
                     RuntimeLifecycleEvent(
@@ -243,7 +280,8 @@ public enum RuntimeLifecycleTransitionReducer {
                         cellID: state.cellID,
                         version: state.version,
                         tick: tick,
-                        fencingToken: state.fencingToken
+                        fencingToken: state.fencingToken,
+                        deadlineTick: deadlineTick
                     )
                 )
             )
@@ -273,6 +311,16 @@ public enum RuntimeLifecycleTransitionReducer {
         }
 
         func schedulePersistedTimer() {
+            if let persistedWarningTick = state.persistedWarningTick {
+                effects.append(
+                    .schedulePersistedWarning(
+                        cellID: state.cellID,
+                        generation: state.persistedGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: persistedWarningTick
+                    )
+                )
+            }
             if let persistedExpiryTick = state.persistedExpiryTick {
                 effects.append(
                     .schedulePersistedExpiry(
@@ -283,6 +331,47 @@ public enum RuntimeLifecycleTransitionReducer {
                     )
                 )
             }
+        }
+
+        func tombstone(nowTick: UInt64, hardDeleteAt: UInt64) {
+            let wasLoaded = state.phase == .activeLoaded
+            state.phase = .tombstoned
+            state.memoryGeneration &+= 1
+            state.persistedGeneration &+= 1
+            state.memoryExpiryTick = nil
+            state.memoryWarningTick = nil
+            state.persistedExpiryTick = nil
+            state.persistedWarningTick = nil
+            state.hardDeleteGeneration &+= 1
+            state.hardDeleteTick = hardDeleteAt
+
+            effects.append(
+                .cancelMemoryWarning(
+                    cellID: state.cellID,
+                    generation: state.memoryGeneration,
+                    fencingToken: state.fencingToken
+                )
+            )
+            effects.append(
+                .cancelMemoryExpiry(
+                    cellID: state.cellID,
+                    generation: state.memoryGeneration,
+                    fencingToken: state.fencingToken
+                )
+            )
+            if wasLoaded {
+                effects.append(.unloadFromMemory(cellID: state.cellID))
+            }
+            effects.append(.writeTombstone(cellID: state.cellID, deleteAfterTick: hardDeleteAt))
+            effects.append(
+                .scheduleHardDelete(
+                    cellID: state.cellID,
+                    generation: state.hardDeleteGeneration,
+                    fencingToken: state.fencingToken,
+                    atTick: hardDeleteAt
+                )
+            )
+            emit(.tombstoned, tick: nowTick, deadlineTick: hardDeleteAt)
         }
 
         switch input {
@@ -357,8 +446,9 @@ public enum RuntimeLifecycleTransitionReducer {
             state.version &+= 1
             state.persistedGeneration &+= 1
             state.persistedExpiryTick = nextExpiry
+            state.recomputePersistedWarningTick()
             schedulePersistedTimer()
-            emit(.persistedTTLExtended, tick: nowTick)
+            emit(.persistedTTLExtended, tick: nowTick, deadlineTick: nextExpiry)
 
         case .persistAndUnloadNow(let nowTick, let fencingToken):
             if let rejection = ensureFence(fencingToken) { return reject(rejection) }
@@ -392,9 +482,11 @@ public enum RuntimeLifecycleTransitionReducer {
                let persistedTTL = state.policy.persistedDataTTLTicks {
                 state.persistedGeneration &+= 1
                 state.persistedExpiryTick = nowTick &+ persistedTTL
+                state.recomputePersistedWarningTick()
                 schedulePersistedTimer()
             } else {
                 state.persistedExpiryTick = nil
+                state.persistedWarningTick = nil
             }
             emit(.unloaded, tick: nowTick)
 
@@ -406,44 +498,28 @@ public enum RuntimeLifecycleTransitionReducer {
             }
 
             state.version &+= 1
-            let wasLoaded = state.phase == .activeLoaded
-            state.phase = .tombstoned
-            state.memoryGeneration &+= 1
-            state.persistedGeneration &+= 1
-            state.memoryExpiryTick = nil
-            state.memoryWarningTick = nil
-            state.persistedExpiryTick = nil
-            state.hardDeleteGeneration &+= 1
-            let hardDeleteAt = nowTick &+ state.policy.tombstoneGraceTicks
-            state.hardDeleteTick = hardDeleteAt
+            tombstone(nowTick: nowTick, hardDeleteAt: nowTick &+ state.policy.tombstoneGraceTicks)
 
-            effects.append(
-                .cancelMemoryWarning(
-                    cellID: state.cellID,
-                    generation: state.memoryGeneration,
-                    fencingToken: state.fencingToken
+        case .requestImmediateDeletion(let nowTick, let fencingToken):
+            if let rejection = ensureFence(fencingToken) { return reject(rejection) }
+            if state.phase == .deleted { return reject(.deleted) }
+            state.version &+= 1
+            if state.phase == .tombstoned {
+                // Already tombstoned: pull the hard delete forward to now.
+                state.hardDeleteGeneration &+= 1
+                state.hardDeleteTick = nowTick
+                effects.append(
+                    .scheduleHardDelete(
+                        cellID: state.cellID,
+                        generation: state.hardDeleteGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: nowTick
+                    )
                 )
-            )
-            effects.append(
-                .cancelMemoryExpiry(
-                    cellID: state.cellID,
-                    generation: state.memoryGeneration,
-                    fencingToken: state.fencingToken
-                )
-            )
-            if wasLoaded {
-                effects.append(.unloadFromMemory(cellID: state.cellID))
+                emit(.tombstoned, tick: nowTick, deadlineTick: nowTick)
+            } else {
+                tombstone(nowTick: nowTick, hardDeleteAt: nowTick)
             }
-            effects.append(.writeTombstone(cellID: state.cellID, deleteAfterTick: hardDeleteAt))
-            effects.append(
-                .scheduleHardDelete(
-                    cellID: state.cellID,
-                    generation: state.hardDeleteGeneration,
-                    fencingToken: state.fencingToken,
-                    atTick: hardDeleteAt
-                )
-            )
-            emit(.tombstoned, tick: nowTick)
 
         case .loadIntoMemory(let nowTick, let fencingToken):
             if let rejection = ensureFence(fencingToken) { return reject(rejection) }
@@ -550,6 +626,7 @@ public enum RuntimeLifecycleTransitionReducer {
             state.memoryExpiryTick = nil
             state.memoryWarningTick = nil
             state.persistedExpiryTick = nil
+            state.persistedWarningTick = nil
             let hardDeleteAt = nowTick &+ state.policy.tombstoneGraceTicks
             state.hardDeleteTick = hardDeleteAt
             effects.append(.writeTombstone(cellID: state.cellID, deleteAfterTick: hardDeleteAt))
@@ -559,7 +636,64 @@ public enum RuntimeLifecycleTransitionReducer {
                 fencingToken: state.fencingToken,
                 atTick: hardDeleteAt
             ))
-            emit(.tombstoned, tick: nowTick)
+            emit(.tombstoned, tick: nowTick, deadlineTick: hardDeleteAt)
+
+        case .recover(let nowTick, let fencingToken):
+            if let rejection = ensureFence(fencingToken) { return reject(rejection) }
+            state.version &+= 1
+            func clamp(_ tick: UInt64) -> UInt64 { max(tick, nowTick) }
+            switch state.phase {
+            case .activeLoaded, .activeUnloaded:
+                if state.phase == .activeLoaded {
+                    state.phase = .activeUnloaded
+                    state.memoryGeneration &+= 1
+                    state.memoryExpiryTick = nil
+                    state.memoryWarningTick = nil
+                }
+                if let warningTick = state.persistedWarningTick {
+                    effects.append(.schedulePersistedWarning(
+                        cellID: state.cellID,
+                        generation: state.persistedGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: clamp(warningTick)
+                    ))
+                }
+                if let expiryTick = state.persistedExpiryTick {
+                    effects.append(.schedulePersistedExpiry(
+                        cellID: state.cellID,
+                        generation: state.persistedGeneration,
+                        fencingToken: state.fencingToken,
+                        atTick: clamp(expiryTick)
+                    ))
+                }
+            case .tombstoned:
+                let hardDeleteAt = state.hardDeleteTick ?? nowTick
+                effects.append(.writeTombstone(cellID: state.cellID, deleteAfterTick: hardDeleteAt))
+                effects.append(.scheduleHardDelete(
+                    cellID: state.cellID,
+                    generation: state.hardDeleteGeneration,
+                    fencingToken: state.fencingToken,
+                    atTick: clamp(hardDeleteAt)
+                ))
+            case .deleted:
+                effects.append(.hardDeletePersistedData(cellID: state.cellID))
+            }
+            emit(.recovered, tick: nowTick, deadlineTick: state.persistedExpiryTick ?? state.hardDeleteTick)
+
+        case .persistedWarningFired(let generation, let nowTick, let fencingToken):
+            if let rejection = ensureFence(fencingToken) { return reject(rejection) }
+            if generation <= (state.lastProcessedPersistedWarningGeneration ?? 0) {
+                return RuntimeLifecycleTransitionResult(state: original, effects: [], changed: false, rejection: nil)
+            }
+            guard state.phase == .activeLoaded || state.phase == .activeUnloaded,
+                  generation == state.persistedGeneration,
+                  state.persistedSnapshotAvailable,
+                  state.persistedWarningTick != nil else {
+                return RuntimeLifecycleTransitionResult(state: original, effects: [], changed: false, rejection: nil)
+            }
+            state.lastProcessedPersistedWarningGeneration = generation
+            state.version &+= 1
+            emit(.persistedTTLWarning, tick: nowTick, deadlineTick: state.persistedExpiryTick)
 
         case .hardDeleteFired(let generation, let nowTick, let fencingToken):
             if let rejection = ensureFence(fencingToken) { return reject(rejection) }
@@ -578,6 +712,7 @@ public enum RuntimeLifecycleTransitionReducer {
             state.memoryExpiryTick = nil
             state.memoryWarningTick = nil
             state.persistedExpiryTick = nil
+            state.persistedWarningTick = nil
             state.hardDeleteTick = nil
             effects.append(.hardDeletePersistedData(cellID: state.cellID))
             emit(.hardDeleted, tick: nowTick)

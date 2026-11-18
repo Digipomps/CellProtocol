@@ -58,6 +58,15 @@ This section documents conflicts between the existing resolver lifecycle hooks a
   - additive storage write options include `encryptedAtRestRequired` and `ownerIdentityUUID`
   - persisted payload envelope uses authenticated encryption and is backward-compatible for plaintext reads
   - resolver persistence path derives encryption requirement from agreement lifecycle mapping.
+- `P1` runtime authority is implemented **opt-in** (no existing cell changes behaviour):
+  - `RuntimeLifecycleAuthority` (`Sources/CellBase/RuntimeLifecycle/RuntimeLifecycleAuthority.swift`)
+    owns the lifecycle of registered resources; the legacy `ResolverLifecycleTracker`
+    and the P0 shadow manager do not track them.
+  - Opt-in per resolve: `CellResolver.enableRuntimeLifecycleAuthority(_:bindings:)` with a
+    `RuntimeLifecycleAuthorityResolveBinding` (resource class, test marking, optional TTL override)
+    per resolve name. Resolves without a binding keep legacy behaviour.
+  - Not wired in `AppInitializer`/CellScaffold yet: nothing is authoritative until a host opts in.
+  - See section J.
 
 ---
 
@@ -326,7 +335,7 @@ P0 (Shadow mode, no behavior change)
   - implemented in `CellResolver` + runtime manager integration
   - enabled from `AppInitializer` once resolver emitter is ready.
 
-P1 (Runtime lifecycle authoritative for selected resolves)
+P1 (Runtime lifecycle authoritative for selected resolves) — implemented opt-in, see section J
 - Add resolver-level mode switch per resolve/domain:
   - legacy sweep OFF for migrated cells
   - runtime manager ON with effect sink adapters
@@ -340,6 +349,81 @@ P2 (Cluster-safe full rollout)
 - Decommission legacy `Date`-based lifecycle sweep path.
 
 ---
+
+## J) P1 runtime authority (opt-in)
+
+Status: implemented and tested in CellBase; not enabled by any host yet.
+
+Resource-class TTL policy:
+- `RuntimeResourceTTLPolicyRegistry` maps a resource class (e.g. `correspondence.relationship`)
+  to `RuntimeResourceTTLClassPolicy` with a `normal` and a `test` tier
+  (`ttlTicks`, `warningLeadTicks`, `tombstoneGraceTicks`).
+- Unknown classes use `defaultPolicy`. The registry only produces expiring policies, and
+  an override TTL must be > 0: registering a resource without a TTL never gives an unbounded
+  lifetime. The test tier must not outlive the normal tier.
+- `RuntimeResourceTTLPolicyRegistry.standard()` (1 tick = 1 s): normal 90 d, warning 7 d ahead,
+  7 d tombstone grace; test data 1 d, warning 1 h ahead, no grace.
+
+Owner warning and commands:
+- New reducer input `persistedWarningFired` and wheel kind `persistedWarning`, driven by
+  `RuntimeLifecyclePolicy.persistedWarningLeadTicks` (optional; `nil` keeps pre-P1 behaviour).
+  Idempotent per persisted generation like the other expiry kinds.
+- Events carry an optional `deadlineTick` (persisted expiry for warnings/extensions,
+  hard-delete tick for tombstones).
+- Owner notices (`RuntimeLifecycleOwnerNotice`) go only to the owner identity via
+  `RuntimeLifecycleOwnerNotifier`; `RuntimeLifecycleFlowOwnerNotifier` publishes on
+  `runtime.lifecycle` through the owner's emitter and never broadcasts.
+- `RuntimeLifecycleAuthority.extend(resourceID:byTicks:requesterIdentityUUID:)` and
+  `deleteNow(resourceID:requesterIdentityUUID:)` check that the requester is the owner.
+- `deleteNow` uses the new input `requestImmediateDeletion`: tombstone now, hard delete at the
+  same tick (also pulls an already tombstoned resource forward). Returns a
+  `RuntimeDeletionReceipt` (trigger, tombstone tick, hard-delete tick, removed locations).
+
+Effects:
+- `RuntimeLifecycleResourceEffectRouter` sends `writeTombstone`/`hardDeletePersistedData` to a
+  `RuntimeLifecyclePersistenceAdapter`. `FileSystemRuntimeLifecyclePersistenceAdapter` writes a
+  content-free tombstone record to `<root>/.lifecycle-tombstones/<id>.json` and removes every
+  storage location of the resource (data, snapshots, backups); locations may not escape the root.
+- Hard delete never runs before the tombstone is durable (router and adapter both check).
+  Failed tombstone writes and hard deletes are retried on every `processDue()` (F5).
+- Leases are renewed, not re-acquired, so the fencing token on scheduled wheel entries stays valid.
+  A stale owner (older fencing token) is rejected with `staleFence` and leaves state unchanged.
+
+Tests: `Tests/CellBaseTests/RuntimeLifecycleAuthorityTests.swift` (deterministic time):
+policy never non-expiring, test-data TTL, warning → extend, warning → no answer → tombstone →
+hard delete of data/snapshot/backup, delete-now (also during grace), stale fence, lease renewal,
+hard-delete retry, tombstone-before-delete, root escape, duplicate warning delivery, pre-P1 decode,
+and resolver opt-in vs. unchanged legacy resolve.
+
+Durability (restart-safe deadlines):
+- `RuntimeLifecycleAuthority.durable(directoryURL:...)` stores lifecycle state
+  (`FileRuntimeLifecycleStateStore`, `states/`) and descriptors
+  (`FileRuntimeResourceDescriptorStore`, `descriptors/`), one JSON file per resource, hex-encoded
+  file names, atomic writes. A CAS is visible only after its file write succeeded; an unreadable
+  entry fails startup (fail closed) instead of silently dropping a deadline.
+- `recover()` at startup re-registers descriptors and calls `RuntimeLifecycleManager.recoverStoredStates`:
+  new lease above the stored fencing token (`RuntimeLeaseCoordinator.raiseFencingTokenFloor`), then
+  reducer input `.recover` rebuilds timers. Loaded cells become unloaded; overdue deadlines are
+  scheduled at the current tick and fire on the next `processDue()` in deterministic order;
+  already-processed warnings are not repeated (generation checks). Tombstoned state replays the
+  tombstone write before the hard delete; deleted state replays the hard delete.
+- Persistence effects are idempotent: a replayed tombstone keeps the original tick, a replayed hard
+  delete returns the original result, so receipts are reproduced after a restart.
+- The wheel starts at the current tick. Durable deadlines need ticks that survive a restart:
+  `WallClockEpochTimeSource` (epoch seconds, never decreasing within a process, optional floor).
+  `SystemMonotonicTimeSource` restarts at 0 and must not be combined with a durable store.
+  Downtime counts towards TTL, which is intended for retention deadlines.
+- Tests: `Tests/CellBaseTests/RuntimeLifecycleDurabilityTests.swift` (restart after warning,
+  extend after restart, downtime past the deadline, restart in tombstone grace, crash before
+  the tombstone write, restart after deletion, fencing after recovery, file store CAS/fail-closed,
+  epoch time source).
+
+Open for P1 completion (not in this change):
+- After a restart, a replayed owner-requested deletion is reported with trigger `expired`
+  (the trigger is not stored in the tombstone record).
+- A tombstoned resource can still be loaded from disk by the resolver during the grace window.
+- The resolver's own persist path can re-create files for a cell that is still in memory after
+  a hard delete; the authority evicts the instance, but callers holding a reference can persist it.
 
 ## Optional Deep Research Prompt (for external validation)
 
