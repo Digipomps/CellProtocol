@@ -42,18 +42,60 @@ public actor IdentityLinkRuntimePolicy {
     }
 }
 
+/// Process-local observation of one exact active registry record/incarnation.
+/// Not Codable and not an authentication, ownership or same-Entity grant. The
+/// application must capture it during its existing authenticated admission and
+/// retain this original value across awaits, never recapture on a stale result.
+public struct IdentityLinkContactRevision: Sendable {
+    public let ownerUUID: String
+    public let record: IdentityLinkRecord
+    fileprivate let registryID: UUID
+    fileprivate let generation: UUID
+
+    fileprivate init(ownerUUID: String, record: IdentityLinkRecord, registryID: UUID, generation: UUID) {
+        self.ownerUUID = ownerUUID; self.record = record
+        self.registryID = registryID; self.generation = generation
+    }
+}
+
+/// Exact registration ownership, never a serializable or reusable capability.
+public struct IdentityLinkContactAttachment: Equatable, Sendable {
+    fileprivate let registryID: UUID
+    fileprivate let ownerUUID: String
+    fileprivate let linkID: String
+    fileprivate let generation: UUID
+    fileprivate let registrationID: UUID
+}
+
 public actor IdentityLinkRegistry {
     public static let shared = IdentityLinkRegistry()
+    /// Hard bounds on retained registrations, including expired operations
+    /// awaiting explicit owner cleanup. No eviction of another live operation.
+    public static let maximumContactOperationsPerLink = 64
+    public static let maximumContactRegistrations = 256
 
     private var linksByOwner: [String: [String: IdentityLinkRecord]] = [:]
     // Derived from a verified seal/record pair, never from a link ID convention
     // or from the linked identity being its own issuer. Keep the record in
     // linksByOwner: sameEntityLink is also the genesis authorization lookup.
     private var verifiedGenesisByOwner: [String: IdentityLinkRecord] = [:]
+    // Incarnations/attachments are derived runtime state on this existing
+    // registry, not another source of identity/link authority. Every write
+    // starts a new incarnation, even a replacement with identical record bytes.
+    private let contactRegistryID = UUID()
+    private var contactRevisionsByOwner: [String: [String: UUID]] = [:]
+    private struct ContactRegistration {
+        let lease: ContactOperationLease
+        let attachment: IdentityLinkContactAttachment
+    }
+    private var contactOperationsByOwner: [String: [String: [ObjectIdentifier: ContactRegistration]]] = [:]
+    private var contactRegistrationCount = 0
 
     public init() {}
 
     public func register(ownerUUID: String, completion: IdentityLinkCompletionResult) {
+        retireContactOperations(ownerUUID: ownerUUID, linkID: completion.record.linkID)
+        contactRevisionsByOwner[ownerUUID, default: [:]][completion.record.linkID] = UUID()
         linksByOwner[ownerUUID, default: [:]][completion.record.linkID] = completion.record
     }
 
@@ -65,6 +107,8 @@ public actor IdentityLinkRegistry {
         for record in records {
             byLinkID[record.linkID] = record
         }
+        retireContactOperations(ownerUUID: ownerUUID)
+        contactRevisionsByOwner[ownerUUID] = byLinkID.mapValues { _ in UUID() }
         linksByOwner[ownerUUID] = byLinkID
         verifiedGenesisByOwner[ownerUUID] = nil
         if let seal = genesisSeal,
@@ -76,14 +120,118 @@ public actor IdentityLinkRegistry {
 
     public func revoke(ownerUUID: String, linkID: String, revokedAt: String) {
         guard var record = linksByOwner[ownerUUID]?[linkID] else { return }
+        retireContactOperations(ownerUUID: ownerUUID, linkID: linkID)
+        contactRevisionsByOwner[ownerUUID, default: [:]][linkID] = UUID()
         record.status = .revoked
         record.revokedAt = revokedAt
         linksByOwner[ownerUUID]?[linkID] = record
     }
 
     public func clear(ownerUUID: String) {
+        retireContactOperations(ownerUUID: ownerUUID)
         linksByOwner[ownerUUID] = nil
         verifiedGenesisByOwner[ownerUUID] = nil
+    }
+
+    /// Match the COMPLETE record already selected by the authenticated caller,
+    /// including key, scope and binding. A UUID-only request cannot substitute
+    /// an arbitrary current record. This observation itself grants no access.
+    /// Capture FIRST after legitimate cold recovery AND revalidation of the
+    /// original authenticated evidence/key/home/install/request binding by its
+    /// owner. After this capture retain it; a stale attach cannot be recovered
+    /// by recapturing a new revision on the same operation.
+    public func contactOperationRevision(ownerUUID: String,
+        matching expectedRecord: IdentityLinkRecord) -> IdentityLinkContactRevision? {
+        guard expectedRecord.status == .active,
+              linksByOwner[ownerUUID]?[expectedRecord.linkID] == expectedRecord,
+              let generation = contactRevisionsByOwner[ownerUUID]?[expectedRecord.linkID] else { return nil }
+        return IdentityLinkContactRevision(ownerUUID: ownerUUID, record: expectedRecord,
+            registryID: contactRegistryID, generation: generation)
+    }
+
+    /// Conditional attach of the ORIGINAL operation instance. No await occurs
+    /// between revision validation and insertion. A stale/foreign revision
+    /// retires only the supplied operation and returns nil; callers must abort
+    /// partial multi-owner admission and detach its earlier registrations.
+    /// Capacity refusal also retires only the supplied operation (terminal).
+    /// Expired registrations consume capacity until exact detach or mutation;
+    /// the admitting owner must clean up terminal/cancelled/failed operations.
+    public func attachContactOperation(_ lease: ContactOperationLease,
+        to revision: IdentityLinkContactRevision) -> IdentityLinkContactAttachment? {
+        let owner = revision.ownerUUID, link = revision.record.linkID
+        guard revision.registryID == contactRegistryID, revision.record.status == .active,
+              contactRevisionsByOwner[owner]?[link] == revision.generation,
+              linksByOwner[owner]?[link] == revision.record else {
+            lease.retire(.linkChanged)
+            return nil
+        }
+        do {
+            let result = try lease.withCurrent { () -> IdentityLinkContactAttachment? in
+                let instance = ObjectIdentifier(lease)
+                if let existing = contactOperationsByOwner[owner]?[link]?[instance] {
+                    return existing.attachment
+                }
+                guard contactRegistrationCount < Self.maximumContactRegistrations,
+                      (contactOperationsByOwner[owner]?[link]?.count ?? 0) < Self.maximumContactOperationsPerLink else {
+                    return nil
+                }
+                let attachment = IdentityLinkContactAttachment(registryID: contactRegistryID,
+                    ownerUUID: owner, linkID: link, generation: revision.generation, registrationID: UUID())
+                contactOperationsByOwner[owner, default: [:]][link, default: [:]][instance] =
+                    ContactRegistration(lease: lease, attachment: attachment)
+                contactRegistrationCount += 1
+                return attachment
+            }
+            // Outside withCurrent: retire never reenters the lease lock.
+            guard let result else { lease.retire(.terminal); return nil }
+            return result
+        } catch is CancellationError {
+            lease.retire(.cancelled)
+            return nil
+        } catch {
+            lease.retire(.linkChanged)
+            return nil
+        }
+    }
+
+    /// Finish an exact attachment. Retire before detaching so the original
+    /// operation cannot continue outside this owner's retirement coverage.
+    /// Stale handles or another lease instance cannot detach/retire a successor.
+    @discardableResult
+    public func detachContactOperation(_ lease: ContactOperationLease,
+        attachment: IdentityLinkContactAttachment) -> Bool {
+        let owner = attachment.ownerUUID, link = attachment.linkID
+        let instance = ObjectIdentifier(lease)
+        guard attachment.registryID == contactRegistryID,
+              contactRevisionsByOwner[owner]?[link] == attachment.generation,
+              let existing = contactOperationsByOwner[owner]?[link]?[instance],
+              existing.lease === lease, existing.attachment == attachment else { return false }
+        lease.retire(.terminal)
+        contactOperationsByOwner[owner]?[link]?[instance] = nil
+        contactRegistrationCount -= 1
+        if contactOperationsByOwner[owner]?[link]?.isEmpty == true { contactOperationsByOwner[owner]?[link] = nil }
+        if contactOperationsByOwner[owner]?.isEmpty == true { contactOperationsByOwner[owner] = nil }
+        return true
+    }
+
+    /// Called only in the existing registry's synchronous actor mutation turn,
+    /// BEFORE replacement authority is published. No arbitrary observer callback
+    /// or Task is invoked. Lock order: registry actor -> operation lease; final
+    /// signer is lease -> context -> synchronous crypto and must not reenter an
+    /// authority owner. An already admitted private call can finish first.
+    private func retireContactOperations(ownerUUID: String, linkID: String? = nil) {
+        let registrations: [ContactRegistration]
+        if let linkID {
+            registrations = Array((contactOperationsByOwner[ownerUUID]?[linkID] ?? [:]).values)
+            contactOperationsByOwner[ownerUUID]?[linkID] = nil
+            contactRevisionsByOwner[ownerUUID]?[linkID] = nil
+            if contactOperationsByOwner[ownerUUID]?.isEmpty == true { contactOperationsByOwner[ownerUUID] = nil }
+        } else {
+            registrations = (contactOperationsByOwner.removeValue(forKey: ownerUUID) ?? [:]).values.flatMap { $0.values }
+            contactRevisionsByOwner[ownerUUID] = nil
+        }
+        contactRegistrationCount -= registrations.count
+        for registration in registrations { registration.lease.retire(.linkChanged) }
     }
 
     /// Aktive innmeldingslenker. Verifisert genesis-eierskap er ikke en innmelding,
