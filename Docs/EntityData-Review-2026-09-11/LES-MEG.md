@@ -2,6 +2,8 @@
 
 **Gjeldende målmodell, 25. september:** [EntityData.v2.schema.json](EntityData.v2.schema.json) er oppdatert i samme fil etter [22.09-beslutningene og bevisavklaringen 23.09](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#løst-23092026-følg-entityrepresentation-mønsteret). Start med [målmodellens forklaring](V2-BESLUTTET-FORM.md) og [current-review.json](current-review.json). Bevispostenes nye `supports` og avledede oppslag er målkrav, ikke implementert i Swift. Teksten nedenfor og `EntityData.review.schema.json` er det urørte runtime-grunnlaget fra 11. september.
 
+**Siste beslutning, 18. november:** [ett entitetsregister](BESLUTNING-ENTITETSREGISTER-2026-11-18.md). `entities.<uuid>` ved roten bærer `kind` og hele `entityRepresentation` for personer, organisasjoner, grupper og konferanser. Relasjoner, `groups`, `conference.<uuid>` og bevis refererer dit. `relations.entities` er flyttet, relasjonsposten bærer ikke lenger egen representasjon, og `groups.name` er tatt ut. Siste byggesteg er nå `apply_decisions_2026_11_18_entity_register.py`. Besluttet, ikke implementert i Swift.
+
 Undergruppesteget `apply_decisions_2026_09_23_groups.py` innfører: valgfri `partOf` på
 barnet, ingen persistert barneliste, og `relations.bokprosjekt` tatt ut av målskjemaet.
 Dekoderen må kontrollere referansetyper og avvise sykler. Dette er besluttet, ikke

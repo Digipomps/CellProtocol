@@ -1,0 +1,56 @@
+{
+  "status": "schema-and-reference-checks-passed",
+  "checks": 31,
+  "validator": "jsonschema 4.23.0",
+  "historicalRegressionChecks": {
+    "2026-09-22": 235,
+    "2026-09-23": 301,
+    "2026-09-23-GROUPS": 217,
+    "2026-09-25-SKILLS": 208
+  },
+  "notRun": [
+    {
+      "check": "Swift/runtime, lagringskontrakt og migrering",
+      "status": "ikke kjørt",
+      "reason": "Oppgaven endrer bare dokumentasjon og målskjema."
+    },
+    {
+      "check": "GitHub Actions",
+      "status": "ikke kjørt av denne jobben",
+      "reason": "Lokale dokumentasjonskontroller; ingen påstand om fjern-CI."
+    }
+  ],
+  "labels": [
+    "EntityData.v2.schema.json: written file equals in-memory build",
+    "EntityData.v2.example.json: written file equals in-memory build",
+    "EntityRepresentation.v2.schema.json: written file equals in-memory build",
+    "current-review.json: written file equals in-memory build",
+    "example passes schema",
+    "example passes reference checks",
+    "schema rejects: relations.entities (old location)",
+    "schema rejects: entityRepresentation embedded in relation record",
+    "schema rejects: relation subject without entityRef",
+    "schema rejects: relation entityRef that is not a uuid",
+    "schema rejects: group with its own name",
+    "schema rejects: entity without kind",
+    "schema rejects: entity with unknown kind",
+    "schema rejects: entity without entityRepresentation",
+    "schema rejects: entity key that is not a uuid",
+    "schema rejects: conference key that is not a uuid",
+    "schema rejects: entity with relationRefs",
+    "schema accepts but references reject: relation pointing at unknown entity",
+    "schema accepts but references reject: group member that is a group",
+    "schema accepts but references reject: groups key whose entity is not kind group",
+    "schema accepts but references reject: groups key missing from register",
+    "schema accepts but references reject: conference keyed by a person",
+    "schema accepts but references reject: conference key missing from register",
+    "schema accepts but references reject: proof supporting unknown entity",
+    "schema accepts but references reject: identityRef to unknown identity",
+    "schema accepts but references reject: partOf cycle",
+    "organisation and person resolve in the same register",
+    "organisation is a member next to a person",
+    "group names moved into register",
+    "relation representation moved into register",
+    "runtime baseline untouched"
+  ]
+}

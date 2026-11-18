@@ -142,6 +142,10 @@ eller løst av dagens fixture-oppløser. En sti til hele listen er ikke en kobli
 én node. Bevislager og `supports` er uendret; ingen erstatningsfelt er innført.
 Se [beslutningens bevis-sperre](BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md#åpen-sperre-2509-bevis-til-en-bestemt-skill-node).
 
+## Ett entitetsregister — 18.11
+
+Entiteter bor i `entities.<entity-uuid>` ved roten, med `kind` (`person`, `organization`, `group`, `event`) og hele `entityRepresentation`. `relations.records.<rel>.subject.entityRef` er påkrevd og peker dit; relasjonsposten bærer ikke egen representasjon. Grupper står i registeret med `kind = group`, og `groups.<uuid>` har bare `members` og `partOf`. Konferanseskiven nøkles `conference.<entity-uuid>`. Perspective bygges fra registeret. Lagring på tvers av iPhone, iPad, Mac og sky er en egen, uskrevet kontrakt. Se [beslutningen](BESLUTNING-ENTITETSREGISTER-2026-11-18.md). Besluttet, ikke implementert i Swift.
+
 ## Bevarte sperrer og uavklarte punkter
 
 **`relations.bokprosjekt` er fjernet fra målskjemaet.** Runtime-grunnlaget

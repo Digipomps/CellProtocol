@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:haven:entity-data:review-decisions:2026-09-16",
   "title": "EntityData – løpende målmodell etter beslutningene 25. september 2026",
-  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås. Undergrupper bruker partOf på barnet; relations.bokprosjekt er tatt ut av målskjemaet. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift.",
+  "description": "Én løpende målmodell etter eierens gjennomganger 16.09, 22.09 og 23.09.2026. Uuid-nøkling, uvektede grupper, én lagret retning per kant og bevisposter med supports som kilde for avledet oppslag. Ingen implementert Swift- eller wire-kontrakt påstås. Undergrupper bruker partOf på barnet; relations.bokprosjekt er tatt ut av målskjemaet. En skill er et formål brukeren hevder å kunne oppfylle, med samme Purpose-nodeform som ethvert annet formål. Grafen er det ene stedet skills bor; person.skills utgår helt, også som avledet liste. Ingen egen SearchPurpose eller Skill-type. Purpose.goal er påkrevd og må si hva oppfyllelse er: en skill uten et målbart resultat kan ikke uttrykkes i denne formen, og det er med vilje. Skjemaet krever goal-konfigurasjonen, men kan ikke bevise målbarhet. Besluttet 25.09.2026, ikke implementert i Swift. 18.11: ett entitetsregister ved roten; relasjoner, grupper og konferanser refererer til det.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -26,7 +26,7 @@
     },
     "relations": {
       "type": "object",
-      "description": "Objekt med bare reserverte nøkler. Eierdefinerte navngitte lister og det gamle relations.bokprosjekt-undertreet er erstattet av groups-roten. Relasjoner bærer den vektede perspektivgrafen; groups.members er uvektet entitetsmedlemskap og groups.partOf peker til foreldregruppen. records/<uuid>/entityRepresentation er den typede kontaktbanen. Den gamle formen avvises av målskjemaet; dagens Swift-lagring og runtime-grunnlaget er ikke endret.",
+      "description": "Objekt med bare reserverte nøkler. Relasjoner bærer den vektede perspektivgrafen og peker på entiteten i registeret entities med subject.entityRef; selve entityRepresentation ligger i registeret, ikke i relasjonsposten. Hva relasjonen heter, er opp til eieren. relations.entities er flyttet til roten entities. Dagens Swift-lagring og runtime-grunnlaget er ikke endret.",
       "title": "Relations root",
       "x-haven": {
         "keypath": "relations",
@@ -52,80 +52,6 @@
             "mutability": "read-write",
             "sourceOfTruthLabel": "ContactEndpointCell/EntityAnchorCell",
             "derived": false
-          }
-        },
-        "entities": {
-          "type": "object",
-          "title": "Entity records",
-          "description": "Entitetsposter nøklet på entitets-uuid. Relasjoners subject.entityRef og groups.members peker hit.",
-          "x-haven": {
-            "keypath": "relations.entities",
-            "sourceLine": 473,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "EntityAnchorCell",
-            "derived": false
-          },
-          "additionalProperties": {
-            "type": "object",
-            "title": "Entity record",
-            "description": "Entitetspost nøklet på entitets-uuid med identityRefs og valgfrie kontaktreferanser. relationRefs persisteres ikke; de bygges fra relasjonenes subject.entityRef ved dekoding, i minnet.",
-            "x-haven": {
-              "keypath": "relations.entities.<entityID>",
-              "sourceLine": 474,
-              "status": "registry-described",
-              "visibilityClass": "private",
-              "storageDomain": "entity-anchor",
-              "mutability": "read-write",
-              "sourceOfTruthLabel": "EntityAnchorCell",
-              "derived": false
-            },
-            "properties": {
-              "identityRefs": {
-                "type": "array",
-                "title": "Entity identity refs",
-                "description": "Referanser til relations.identities, lagret bare fra entitet til identitet. Motsatt retning, fra identitet til entiteter, bygges ved dekoding, i minnet.",
-                "x-haven": {
-                  "keypath": "relations.entities.<entityID>.identityRefs",
-                  "sourceLine": 475,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "EntityAnchorCell/SproutResolverAdapter",
-                  "derived": false
-                }
-              },
-              "contactEndpointRefs": {
-                "type": "array",
-                "title": "Entity contact endpoint refs",
-                "description": "References to public-safe contact endpoint descriptors associated with an entity record.",
-                "x-haven": {
-                  "keypath": "relations.entities.<entityID>.contactEndpointRefs",
-                  "sourceLine": 477,
-                  "status": "registry-described",
-                  "visibilityClass": "private",
-                  "storageDomain": "entity-anchor",
-                  "mutability": "read-write",
-                  "sourceOfTruthLabel": "ContactEndpointCell/EntityAnchorCell",
-                  "derived": false
-                }
-              }
-            },
-            "allOf": [
-              {
-                "not": {
-                  "required": [
-                    "relationRefs"
-                  ]
-                }
-              }
-            ]
-          },
-          "propertyNames": {
-            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
           }
         },
         "identities": {
@@ -469,7 +395,7 @@
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
                     "maxLength": 36,
-                    "description": "Entitets-uuid for entiteten beviset hevdes å gjelde, ikke bevis- eller identitets-uuid. Referanseoppløsning og identitetslikhet kontrolleres separat."
+                    "description": "Entitets-uuid for entiteten beviset hevdes å gjelde, ikke bevis- eller identitets-uuid. Referanseoppløsning og identitetslikhet kontrolleres separat. Uuid-en slås opp i entities."
                   },
                   "keypaths": {
                     "type": "array",
@@ -1252,191 +1178,204 @@
     },
     "conference": {
       "type": "object",
-      "title": "Conference participant slice",
-      "description": "Egen domeneskive ved roten. Formålssnapshot fornyes ved påmelding og deltakelse; consentRecords er ikke autoritativt Agreement-samtykke.",
+      "title": "Conference participant slices",
+      "description": "Én deltakerskive per konferanse, nøklet på konferansens entitets-uuid i entities (kind = event). Uuid-en slås opp i registeret uten å kjenne noen relasjon. Forslagene conference.<uuid>.cells[] og matchConsent er ikke besluttet og er ikke lagt inn. Besluttet 18.11.2026, ikke implementert i Swift.",
       "x-haven": {
         "status": "decided-target",
-        "movedFrom": "person.conference"
+        "movedFrom": "conference"
       },
-      "properties": {
-        "registration": {
-          "type": "object",
-          "title": "Conference registration",
-          "description": "Participant registration binding and display metadata.",
-          "x-haven": {
-            "keypath": "person.conference.registration",
-            "sourceLine": 429,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceRegistrationCell",
-            "derived": false
-          }
+      "propertyNames": {
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        "maxLength": 36
+      },
+      "additionalProperties": {
+        "type": "object",
+        "title": "Conference participant slice",
+        "description": "Egen domeneskive ved roten. Formålssnapshot fornyes ved påmelding og deltakelse; consentRecords er ikke autoritativt Agreement-samtykke.",
+        "x-haven": {
+          "status": "decided-target",
+          "movedFrom": "person.conference"
         },
-        "profile": {
-          "type": "object",
-          "title": "Conference profile draft",
-          "description": "Participant-owned profile data before public publication.",
-          "x-haven": {
-            "keypath": "person.conference.profile",
-            "sourceLine": 430,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceOnboardingCell",
-            "derived": false
-          }
-        },
-        "purposeSnapshot": {
-          "type": "object",
-          "title": "Conference purpose snapshot",
-          "description": "Purpose/interests snapshot used for conference matching.",
-          "x-haven": {
-            "keypath": "person.conference.purposeSnapshot",
-            "sourceLine": 431,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceOnboardingCell",
-            "derived": false
-          }
-        },
-        "consentRecords": {
-          "type": "object",
-          "title": "Conference consent records",
-          "description": "Consent records keyed by purpose.",
-          "x-haven": {
-            "keypath": "person.conference.consentRecords",
-            "sourceLine": 432,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferencePublicProfileCell",
-            "derived": false
-          }
-        },
-        "visibilityPolicies": {
-          "type": "object",
-          "title": "Conference visibility policies",
-          "description": "Field-level visibility policy for conference publication.",
-          "x-haven": {
-            "keypath": "person.conference.visibilityPolicies",
-            "sourceLine": 433,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferencePublicProfileCell",
-            "derived": false
-          }
-        },
-        "publicProfiles": {
-          "type": "object",
-          "title": "Conference public profiles",
-          "description": "Explicitly published conference profile read models.",
-          "x-haven": {
-            "keypath": "person.conference.publicProfiles",
-            "sourceLine": 434,
-            "status": "registry-described",
-            "visibilityClass": "public",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferencePublicProfileCell",
-            "derived": false
-          }
-        },
-        "defaultPublicProfileId": {
-          "type": "string",
-          "title": "Default public profile id",
-          "description": "Pointer to the active public profile.",
-          "x-haven": {
-            "keypath": "person.conference.defaultPublicProfileId",
-            "sourceLine": 435,
-            "status": "registry-described",
-            "visibilityClass": "public",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferencePublicProfileCell",
-            "derived": false
-          }
-        },
-        "agenda": {
-          "type": "object",
-          "title": "Conference agenda",
-          "description": "Participant-owned agenda preferences.",
-          "x-haven": {
-            "keypath": "person.conference.agenda",
-            "sourceLine": 436,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceAgendaCell",
-            "derived": false
-          }
-        },
-        "recommendationPreferences": {
-          "type": "object",
-          "title": "Recommendation preferences",
-          "description": "Tracks, search and meeting-intent preferences.",
-          "x-haven": {
-            "keypath": "person.conference.recommendationPreferences",
-            "sourceLine": 437,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceRecommendationCell",
-            "derived": false
-          }
-        },
-        "availability": {
-          "type": "object",
-          "title": "Meeting availability",
-          "description": "Participant-owned meeting slots.",
-          "x-haven": {
-            "keypath": "person.conference.availability",
-            "sourceLine": 438,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceSchedulingCell",
-            "derived": false
-          }
-        },
-        "scheduling": {
-          "type": "object",
-          "title": "Scheduling state",
-          "description": "Meeting export and scheduling state.",
-          "x-haven": {
-            "keypath": "person.conference.scheduling",
-            "sourceLine": 439,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceSchedulingCell",
-            "derived": false
-          }
-        },
-        "updatedAt": {
-          "type": "string",
-          "title": "Conference update timestamp",
-          "description": "Last updated timestamp for the conference slice.",
-          "x-haven": {
-            "keypath": "person.conference.updatedAt",
-            "sourceLine": 440,
-            "status": "registry-described",
-            "visibilityClass": "private",
-            "storageDomain": "entity-anchor",
-            "mutability": "read-write",
-            "sourceOfTruthLabel": "ConferenceParticipantEntityContract",
-            "derived": false
+        "properties": {
+          "registration": {
+            "type": "object",
+            "title": "Conference registration",
+            "description": "Participant registration binding and display metadata.",
+            "x-haven": {
+              "keypath": "person.conference.registration",
+              "sourceLine": 429,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceRegistrationCell",
+              "derived": false
+            }
+          },
+          "profile": {
+            "type": "object",
+            "title": "Conference profile draft",
+            "description": "Participant-owned profile data before public publication.",
+            "x-haven": {
+              "keypath": "person.conference.profile",
+              "sourceLine": 430,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceOnboardingCell",
+              "derived": false
+            }
+          },
+          "purposeSnapshot": {
+            "type": "object",
+            "title": "Conference purpose snapshot",
+            "description": "Purpose/interests snapshot used for conference matching.",
+            "x-haven": {
+              "keypath": "person.conference.purposeSnapshot",
+              "sourceLine": 431,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceOnboardingCell",
+              "derived": false
+            }
+          },
+          "consentRecords": {
+            "type": "object",
+            "title": "Conference consent records",
+            "description": "Consent records keyed by purpose.",
+            "x-haven": {
+              "keypath": "person.conference.consentRecords",
+              "sourceLine": 432,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferencePublicProfileCell",
+              "derived": false
+            }
+          },
+          "visibilityPolicies": {
+            "type": "object",
+            "title": "Conference visibility policies",
+            "description": "Field-level visibility policy for conference publication.",
+            "x-haven": {
+              "keypath": "person.conference.visibilityPolicies",
+              "sourceLine": 433,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferencePublicProfileCell",
+              "derived": false
+            }
+          },
+          "publicProfiles": {
+            "type": "object",
+            "title": "Conference public profiles",
+            "description": "Explicitly published conference profile read models.",
+            "x-haven": {
+              "keypath": "person.conference.publicProfiles",
+              "sourceLine": 434,
+              "status": "registry-described",
+              "visibilityClass": "public",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferencePublicProfileCell",
+              "derived": false
+            }
+          },
+          "defaultPublicProfileId": {
+            "type": "string",
+            "title": "Default public profile id",
+            "description": "Pointer to the active public profile.",
+            "x-haven": {
+              "keypath": "person.conference.defaultPublicProfileId",
+              "sourceLine": 435,
+              "status": "registry-described",
+              "visibilityClass": "public",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferencePublicProfileCell",
+              "derived": false
+            }
+          },
+          "agenda": {
+            "type": "object",
+            "title": "Conference agenda",
+            "description": "Participant-owned agenda preferences.",
+            "x-haven": {
+              "keypath": "person.conference.agenda",
+              "sourceLine": 436,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceAgendaCell",
+              "derived": false
+            }
+          },
+          "recommendationPreferences": {
+            "type": "object",
+            "title": "Recommendation preferences",
+            "description": "Tracks, search and meeting-intent preferences.",
+            "x-haven": {
+              "keypath": "person.conference.recommendationPreferences",
+              "sourceLine": 437,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceRecommendationCell",
+              "derived": false
+            }
+          },
+          "availability": {
+            "type": "object",
+            "title": "Meeting availability",
+            "description": "Participant-owned meeting slots.",
+            "x-haven": {
+              "keypath": "person.conference.availability",
+              "sourceLine": 438,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceSchedulingCell",
+              "derived": false
+            }
+          },
+          "scheduling": {
+            "type": "object",
+            "title": "Scheduling state",
+            "description": "Meeting export and scheduling state.",
+            "x-haven": {
+              "keypath": "person.conference.scheduling",
+              "sourceLine": 439,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceSchedulingCell",
+              "derived": false
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "title": "Conference update timestamp",
+            "description": "Last updated timestamp for the conference slice.",
+            "x-haven": {
+              "keypath": "person.conference.updatedAt",
+              "sourceLine": 440,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ConferenceParticipantEntityContract",
+              "derived": false
+            }
           }
         }
       }
@@ -1446,27 +1385,22 @@
       "propertyNames": {
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
       },
-      "description": "Grupper nøkles på gruppe-uuid og har uvektede medlemslister over entiteter. Undergrupper peker oppover med partOf; barnelisten persisteres ikke, men bygges ved dekoding som alle andre bakveier i modellen. Hvilke grupper en entitet tilhører bygges også ved dekoding. Relasjoner bærer den vektede perspektivgrafen. JSON Schema kan ikke oppdage sykler i partOf; dekoderen må avvise dem. Referansenes type og eksistens må kontrolleres separat. Målkrav, ikke implementert i Swift.",
+      "description": "Medlemskap og hierarki for grupper. Nøkkelen er gruppens entitets-uuid, og gruppen selv står i entities med kind = group; navnet ligger i entityRepresentation.name der, ikke her. members er en uvektet liste over entitets-uuid-er; partOf peker til foreldregruppen. Barnelister og hvilke grupper en entitet tilhører bygges ved dekoding. JSON Schema kan ikke oppdage sykler eller kontrollere referansetyper; dekoderen må gjøre det. Besluttet 18.11.2026, ikke implementert i Swift.",
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "name",
           "members"
         ],
         "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1
-          },
           "members": {
             "type": "array",
             "items": {
               "type": "string",
               "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-              "description": "Entitets-uuid til relations.entities. En gruppe-uuid eller relasjons-uuid skal avvises ved referansekontroll; JSON Schema kontrollerer bare UUID-syntaks."
+              "description": "Entitets-uuid i entities, ikke en gruppe. JSON Schema kontrollerer bare UUID-syntaks."
             },
-            "description": "Flat liste med bare entitets-uuid-er til relations.entities, uten vekter eller kopier. Samme entitet kan stå i flere grupper. Gruppe-uuid-er i members skal avvises; gruppemedlemskap og undergrupper blandes ikke i samme felt. Undergrupper bruker partOf. UUID-syntaks skiller ikke referansetypene; dekoderen må kontrollere type og eksistens."
+            "description": "Flat liste med entitets-uuid-er i entities, uten vekter eller kopier. Samme entitet kan stå i flere grupper. En entitet med kind = group skal avvises her; undergrupper bruker partOf."
           },
           "partOf": {
             "type": "string",
@@ -1476,17 +1410,111 @@
           }
         }
       }
+    },
+    "entities": {
+      "type": "object",
+      "title": "Entity register",
+      "description": "Registeret over alle entiteter eieren kjenner, nøklet på entitets-uuid. Et oppslag på uuid trenger ikke vite om det gjelder et individ, en organisasjon, en gruppe eller en konferanse. relations.records, groups, conference, proofs.credentials.supports og Perspective peker hit. Logisk sannhet er eierens EntityData; registeret er der entiteten bor. Fysisk plassering er ikke en enhet: eieren bruker iPhone, iPad, Mac og sky, og det mest tilgjengelige stedet er ikke nødvendigvis telefonen eller den lokale Mac-en. Registeret skal derfor kunne ha replikaer på flere enheter og i sky, og oppslag går til den replikaen som er tilgjengelig. Valg av replika, synk og konflikthåndtering er en egen lagringskontrakt som ikke er skrevet. Indeks (B-tre eller database) for store registre er lagringsimplementasjon og står ikke i skjemaet. Perspective er en avledet visning bygget fra registeret, ikke et eget lager. Besluttet 18.11.2026, ikke implementert i Swift.",
+      "x-haven": {
+        "keypath": "entities",
+        "sourceLine": 473,
+        "status": "decided-target",
+        "visibilityClass": "private",
+        "storageDomain": "entity-anchor",
+        "mutability": "read-write",
+        "sourceOfTruthLabel": "EntityData/EntityAnchorCell",
+        "derived": false,
+        "movedFrom": "relations.entities"
+      },
+      "propertyNames": {
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        "maxLength": 36
+      },
+      "additionalProperties": {
+        "type": "object",
+        "title": "Entity register record",
+        "description": "Én post per entitet, nøklet på entitets-uuid: person, organisasjon, gruppe eller arrangement. Posten bærer hele entityRepresentation og er det ene stedet entiteten bor. relationRefs persisteres ikke; de bygges fra relasjonenes subject.entityRef ved dekoding, i minnet. Besluttet 18.11.2026, ikke implementert i Swift.",
+        "x-haven": {
+          "keypath": "entities.<entityID>",
+          "sourceLine": 474,
+          "status": "decided-target",
+          "visibilityClass": "private",
+          "storageDomain": "entity-anchor",
+          "mutability": "read-write",
+          "sourceOfTruthLabel": "EntityData/EntityAnchorCell",
+          "derived": false
+        },
+        "properties": {
+          "identityRefs": {
+            "type": "array",
+            "title": "Entity identity refs",
+            "description": "Referanser til relations.identities, lagret bare fra entitet til identitet. Motsatt retning, fra identitet til entiteter, bygges ved dekoding, i minnet.",
+            "x-haven": {
+              "keypath": "entities.<entityID>.identityRefs",
+              "sourceLine": 475,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "EntityAnchorCell/SproutResolverAdapter",
+              "derived": false
+            }
+          },
+          "contactEndpointRefs": {
+            "type": "array",
+            "title": "Entity contact endpoint refs",
+            "description": "References to public-safe contact endpoint descriptors associated with an entity record.",
+            "x-haven": {
+              "keypath": "entities.<entityID>.contactEndpointRefs",
+              "sourceLine": 477,
+              "status": "registry-described",
+              "visibilityClass": "private",
+              "storageDomain": "entity-anchor",
+              "mutability": "read-write",
+              "sourceOfTruthLabel": "ContactEndpointCell/EntityAnchorCell",
+              "derived": false
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "person",
+              "organization",
+              "group",
+              "event"
+            ],
+            "description": "Hva slags entitet uuid-en er. Et oppslag trenger ikke vite dette på forhånd; det står i posten. group brukes for grupper i groups, event for konferanser og andre arrangementer. Listen er et forslag og kan utvides ved beslutning."
+          },
+          "entityRepresentation": {
+            "$ref": "#/$defs/EntityRepresentation",
+            "description": "Hele representasjonen av entiteten, sett fra eieren. Relasjonsposter, grupper, konferanseskiver, bevis og Perspective refererer hit med uuid i stedet for å bære egne kopier."
+          }
+        },
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "relationRefs"
+              ]
+            }
+          }
+        ],
+        "required": [
+          "kind",
+          "entityRepresentation"
+        ]
+      }
     }
   },
   "x-keypath_aliases": {
     "identity.person": "person",
     "identity.proofs": "proofs"
   },
-  "$comment": "Bygges av apply_decisions_2026_09_25_skills.py etter 16.09-, 22.09-, 23.09- og undergruppestegene. Skills er bare formål. Runtime-grunnlaget er urørt; se beslutningsdokumentet for åpen sperre om bevis til formålsnoder.",
+  "$comment": "Bygges av apply_decisions_2026_11_18_entity_register.py etter 16.09-, 22.09-, 23.09-, undergruppe- og skills-stegene. Entitetsregisteret er besluttet, ikke implementert; runtime-grunnlaget er urørt.",
   "x-haven": {
     "status": "decision-target-draft",
     "asOf": "2026-09-25",
-    "decisionsAsOf": "2026-09-25",
+    "decisionsAsOf": "2026-11-18",
     "reviewSource": "GJENNOMGANG_KJETIL_2026-09-16.md",
     "reviewSourceSHA256": "9e9fd80698156642e8db5419e7650c29c0e4f9b8eafde4e98a998edf5ea452e4",
     "runtimeBaseline": "EntityData.review.schema.json",
@@ -1511,10 +1539,17 @@
     "latestDecisionSource": "BESLUTNING-UUID-OG-GRUPPER-2026-09-22.md",
     "latestDecisionSourceSHA256": "c4f5357f2892ee81c8b1a48a92d9a14935812cefbcbf24180df06a75fb67da26",
     "deferredDecisions": {
-      "skills.proofNodeAddressing": "person.skills[].evidenceRefs er fjernet sammen med listen. proofs.credentials og supports.keypaths er uendret. keypaths tillater en ikke-tom streng, men en stabil sti til en Purpose-node gjennom WeightOfPurpose-lister og value/reference er ikke kontraktfestet eller verifisert. Dagens fixture-oppløser støtter bare objektstier. Åpen sperre: bevis kan ikke hevdes koblet til en bestemt skill-node før nodeadressering og referanseoppløsning er avklart. Ingen nye bevisfelt innføres."
+      "skills.proofNodeAddressing": "person.skills[].evidenceRefs er fjernet sammen med listen. proofs.credentials og supports.keypaths er uendret. keypaths tillater en ikke-tom streng, men en stabil sti til en Purpose-node gjennom WeightOfPurpose-lister og value/reference er ikke kontraktfestet eller verifisert. Dagens fixture-oppløser støtter bare objektstier. Åpen sperre: bevis kan ikke hevdes koblet til en bestemt skill-node før nodeadressering og referanseoppløsning er avklart. Ingen nye bevisfelt innføres.",
+      "conference.cells": "Forslag 24.09: conference.<uuid>.cells[] for celler konferansen har utstedt. Må avklares mot scaffoldPresence.mounts/bindings. Ikke besluttet.",
+      "conference.matchConsent": "Forslag 24.09: conference.<uuid>.matchConsent, egne identiteter og formål eieren lar seg matche på. Ikke besluttet.",
+      "agreements.membershipProofCondition": "Forslag 24.09: grant-betingelse «gyldig medlemskapsbevis i proofs.credentials med supports.entityRef = X». Ikke besluttet.",
+      "relations.records.perspectiveEdges": "Relasjonsspesifikke kanter og vekter når entityRepresentation ligger i entities. Ingen kontrakt er skrevet.",
+      "entities.storageContract": "Replikaer på iPhone, iPad, Mac og sky; valg av replika, synk og konflikt. Ikke skrevet."
     },
     "proofPatternImplementation": "supports og dekodingsbygget byKeypath er kontraktfestet i målskjemaet, ikke implementert i Swift. Skjemaet dokumenterer oppslagsformen; x-haven.persisted=false er metadata, ikke et lagringsforbud håndhevet av JSON Schema.",
-    "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår."
+    "groupHierarchyImplementation": "partOf og avvikling av relations.bokprosjekt er besluttet i målskjemaet, ikke implementert i Swift. Dekoderen må kontrollere entitetsmedlemmer, gruppeforeldre og sykler, og bygge barnelisten i minnet. Migrering av eksisterende bokprosjektdata gjenstår.",
+    "entityRegisterImplementation": "Ett register entities.<uuid> med hele entityRepresentation og kind. relations.entities, entityRepresentation i relasjonsposten og name i groups er tatt ut. Besluttet 18.11.2026, ikke implementert i Swift. Dekoderen må kontrollere at alle entitetsreferanser finnes og har riktig kind. Migrering av eksisterende relations.entities og relations.records gjenstår.",
+    "entityRegisterStorage": "Logisk sannhet er eierens EntityData; registeret er der entiteten bor. Fysisk plassering er ikke en enhet: eieren bruker iPhone, iPad, Mac og sky, og det mest tilgjengelige stedet er ikke nødvendigvis telefonen eller den lokale Mac-en. Registeret skal derfor kunne ha replikaer på flere enheter og i sky, og oppslag går til den replikaen som er tilgjengelig. Valg av replika, synk og konflikthåndtering er en egen lagringskontrakt som ikke er skrevet. Indeks (B-tre eller database) for store registre er lagringsimplementasjon og står ikke i skjemaet. Perspective er en avledet visning bygget fra registeret, ikke et eget lager."
   },
   "$defs": {
     "WeightOfEntityRepresentation": {
@@ -2544,15 +2579,10 @@
           ]
         },
         "entityRef": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Referanse til entitets-uuid i relations.entities, lagret bare fra relasjon til entitet. Motsatt retning, fra entitet til relasjoner, bygges ved dekoding, i minnet."
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+          "maxLength": 36,
+          "description": "Påkrevd entitets-uuid i entities, lagret bare fra relasjon til entitet. Motsatt retning bygges ved dekoding, i minnet. Besluttet 18.11.2026, ikke implementert i Swift."
         },
         "perspectiveRef": {
           "anyOf": [
@@ -2576,7 +2606,8 @@
         }
       },
       "required": [
-        "displayName"
+        "displayName",
+        "entityRef"
       ],
       "x-haven": {
         "status": "runtime-model",
@@ -2638,9 +2669,6 @@
         "revision": {
           "type": "integer",
           "minimum": 1
-        },
-        "entityRepresentation": {
-          "$ref": "#/$defs/EntityRepresentation"
         }
       },
       "required": [
@@ -2653,8 +2681,7 @@
         "tags",
         "createdAt",
         "updatedAt",
-        "revision",
-        "entityRepresentation"
+        "revision"
       ],
       "x-haven": {
         "status": "decided-target-with-open-migration",
@@ -2691,9 +2718,16 @@
               }
             ]
           }
+        },
+        {
+          "not": {
+            "required": [
+              "entityRepresentation"
+            ]
+          }
         }
       ],
-      "description": "Metadata rundt kontaktens EntityRepresentation. Interest/Purpose bæres av grafen; kontaktkanaler ligger i person.contact.endpoints; bevis indekseres under proofs. Formålsoppfyllelse må måles, og er ikke bevist av kantvekten alene. Blokkering, invitasjoner og kilde/proveniens krever en bevart, eksplisitt kontrakt før migrering."
+      "description": "Metadata rundt kontaktens EntityRepresentation. Interest/Purpose bæres av grafen; kontaktkanaler ligger i person.contact.endpoints; bevis indekseres under proofs. Formålsoppfyllelse må måles, og er ikke bevist av kantvekten alene. Blokkering, invitasjoner og kilde/proveniens krever en bevart, eksplisitt kontrakt før migrering. Relasjonsposten bærer ikke entityRepresentation; den ligger i entities.<entityRef>. Relasjonsspesifikke kanter og vekter er en åpen kontrakt. Besluttet 18.11.2026, ikke implementert i Swift."
     },
     "EntityRelationInteractionEvent": {
       "type": "object",
