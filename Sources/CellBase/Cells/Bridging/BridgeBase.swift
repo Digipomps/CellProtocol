@@ -2400,3 +2400,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
     
 }
+
+// Loopback helper (D239), kept on main as a building block: it starts work only
+// after receive(subscriber:) returned, closing the initial-frame gap without
+// buffering. Main's BridgeBase.flow() keeps its eager start contract.
+struct BridgeFeedSubscriptionPublisher: Publisher {
+    typealias Output = FlowElement
+    typealias Failure = Error
+    let source: AnyPublisher<FlowElement, Error>
+    let start: () -> Void
+    func receive<S: Subscriber>(subscriber: S) where S.Input == FlowElement, S.Failure == Error {
+        source.receive(subscriber: subscriber)
+        start()
+    }
+}
