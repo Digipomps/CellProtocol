@@ -1520,7 +1520,7 @@ public class CellResolver: CellResolverProtocol {
         guard let endpointURL = URL(string: endpoint) else {
             throw TransportError.InvalidURL
         }
-        if endpointURL.scheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if endpointURL.scheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: endpointURL.host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: endpoint)
         }
         let principal = try await proveRemoteBridgePrincipal(
@@ -1808,7 +1808,7 @@ public class CellResolver: CellResolverProtocol {
             resolvedScheme = "wss"
         }
 
-        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: cellEndpointURL.absoluteString)
         }
 
@@ -1900,14 +1900,14 @@ public class CellResolver: CellResolverProtocol {
             resolvedScheme = "wss"
         }
 
-        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSockets {
+        if resolvedScheme == "ws" && !CellBase.allowsInsecureWebSocket(toHost: host) {
             throw CellResolverError.insecureWebSocketNotAllowed(endpoint: endpoint)
         }
         return resolvedScheme
     }
 
     private func allowsAutomaticInsecureWebSocket(for host: String) -> Bool {
-        guard CellBase.allowsInsecureWebSockets else { return false }
+        guard CellBase.allowsInsecureWebSocket(toHost: host) else { return false }
         let normalizedHost = normalizedHostKey(host)
         return normalizedHost == "127.0.0.1"
             || normalizedHost == "::1"
@@ -2447,7 +2447,7 @@ public class CellResolver: CellResolverProtocol {
         endpointUrl.appendPathComponent(bridgeID)
         let transport = try BridgeChannelTransport(underlying: physicalTransport,
             endpoint: .init(url: endpointUrl, domain: "bridge",
-                allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
+                allowInsecureLoopback: CellBase.allowsInsecureChannelLoopback))
         // TODO: Consider refactoring 
         let bridgeConfig = BridgeBase.Config(owner: identity, contractTemplate: await Agreement(), uuid: bridgeID, transport: transport, connection: .outbound, identityProofScopes: identityProofScopes)
         let cellBridge = try await BridgeBase(bridgeConfig)
@@ -2507,7 +2507,7 @@ public class CellResolver: CellResolverProtocol {
             )
             transport = try BridgeChannelTransport(underlying: physicalTransport,
                 endpoint: .init(url: finalizedConnectionURL, domain: "bridge",
-                    allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
+                    allowInsecureLoopback: CellBase.allowsInsecureChannelLoopback))
         case .multiplexedV2:
             guard let transportType = withStateLock({ transports[transportScheme] }) else {
                 throw TransportError.TransportNotFound
@@ -2529,7 +2529,7 @@ public class CellResolver: CellResolverProtocol {
                 physicalTransportFactory: {
                     try BridgeChannelTransport(underlying: transportType.new(),
                         endpoint: .init(url: finalizedConnectionURL, domain: "bridge",
-                            allowInsecureLoopback: CellBase.webSocketSecurityPolicy == .developmentOnlyInsecureAllowed))
+                            allowInsecureLoopback: CellBase.allowsInsecureChannelLoopback))
                 }
             )
         }

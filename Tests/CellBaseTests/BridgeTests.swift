@@ -1334,6 +1334,110 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(setupURLs.first(where: { $0.host == loopbackHost })?.scheme, "ws")
     }
 
+    func testLoopbackPolicyAllowsCleartextOnlyToThisMachine() {
+        let previousWebSocketSecurityPolicy = CellBase.webSocketSecurityPolicy
+        CellBase.webSocketSecurityPolicy = .loopbackInsecureAllowed
+        defer { CellBase.webSocketSecurityPolicy = previousWebSocketSecurityPolicy }
+
+        // The policy never opens cleartext to «any host».
+        XCTAssertFalse(CellBase.allowsInsecureWebSockets)
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost", "LOCALHOST"] {
+            XCTAssertTrue(CellBase.allowsInsecureWebSocket(toHost: host), host)
+        }
+        for host in ["127.0.0.2", "0.0.0.0", "192.168.1.10", "example.com", "mac.local",
+                     "localhost.example.com", "127.0.0.1.example.com", ""] {
+            XCTAssertFalse(CellBase.allowsInsecureWebSocket(toHost: host), host)
+        }
+        XCTAssertFalse(CellBase.allowsInsecureWebSocket(toHost: nil))
+
+        CellBase.webSocketSecurityPolicy = .requireTLS
+        XCTAssertFalse(CellBase.allowsInsecureWebSocket(toHost: "127.0.0.1"))
+    }
+
+    func testLoopbackPolicyRefusesDirectCleartextEndpointsOffThisMachine() async throws {
+        let previousWebSocketSecurityPolicy = CellBase.webSocketSecurityPolicy
+        CellBase.webSocketSecurityPolicy = .loopbackInsecureAllowed
+        defer { CellBase.webSocketSecurityPolicy = previousWebSocketSecurityPolicy }
+
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "ws")
+        let requesterValue = await vault.identity(for: "loopback-policy-owner", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterValue)
+
+        for endpoint in ["ws://192.168.1.10:43110/bridgehead/correspondence",
+                         "ws://mac.local:43110/bridgehead/correspondence",
+                         "ws://example.com/bridgehead/correspondence"] {
+            do {
+                _ = try await resolver.cellAtEndpoint(endpoint: endpoint, requester: requester)
+                XCTFail("cleartext to \(endpoint) must be refused")
+            } catch CellResolverError.insecureWebSocketNotAllowed {
+                // expected
+            }
+        }
+        XCTAssertTrue(RecordingBridgeTransport.recordedSetupURLs().isEmpty,
+                      "a refused endpoint must never reach the transport")
+
+        _ = try await resolver.cellAtEndpoint(
+            endpoint: "ws://127.0.0.1:43110/bridgehead/loopback-\(UUID().uuidString.lowercased())",
+            requester: requester
+        )
+        let setupURLs = RecordingBridgeTransport.recordedSetupURLs()
+        XCTAssertEqual(setupURLs.count, 1)
+        XCTAssertEqual(setupURLs.first?.scheme, "ws")
+        XCTAssertEqual(setupURLs.first?.host, "127.0.0.1")
+    }
+
+    func testLoopbackPolicyKeepsRemoteRoutesOnTLSExceptThisMachine() async throws {
+        let previousWebSocketSecurityPolicy = CellBase.webSocketSecurityPolicy
+        CellBase.webSocketSecurityPolicy = .loopbackInsecureAllowed
+        defer { CellBase.webSocketSecurityPolicy = previousWebSocketSecurityPolicy }
+
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "ws")
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+
+        let localNameHost = "loopback-policy-\(UUID().uuidString.lowercased()).local"
+        let cleartextHost = "loopback-policy-\(UUID().uuidString.lowercased()).example"
+        // `cell://localhost/…` is resolved in this process, so the routed loopback case uses the address.
+        let loopbackHost = "127.0.0.1"
+        let automatic = RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .automatic)
+        resolver.registerRemoteCellHost(localNameHost, route: automatic)
+        resolver.registerRemoteCellHost(loopbackHost, route: automatic)
+        resolver.registerRemoteCellHost(
+            cleartextHost,
+            route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .ws)
+        )
+        defer {
+            resolver.unregisterRemoteCellHost(localNameHost)
+            resolver.unregisterRemoteCellHost(loopbackHost)
+            resolver.unregisterRemoteCellHost(cleartextHost)
+        }
+        let requesterValue = await vault.identity(for: "loopback-policy-route-owner", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterValue)
+
+        _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(localNameHost)/Surface", requester: requester)
+        _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(loopbackHost)/Surface", requester: requester)
+        do {
+            _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(cleartextHost)/Surface", requester: requester)
+            XCTFail("a route that asks for cleartext off this machine must be refused")
+        } catch CellResolverError.insecureWebSocketNotAllowed {
+            // expected
+        }
+
+        let setupURLs = RecordingBridgeTransport.recordedSetupURLs()
+        XCTAssertEqual(setupURLs.first(where: { $0.host == localNameHost })?.scheme, "wss")
+        XCTAssertEqual(setupURLs.first(where: { $0.host == loopbackHost })?.scheme, "ws")
+        XCTAssertNil(setupURLs.first(where: { $0.host == cleartextHost }))
+    }
+
     func testCellResolverRouteReplacementInvalidatesCachedRemoteBridge() async throws {
         let resolver = CellResolver.sharedInstance
         let vault = EphemeralIdentityVault()

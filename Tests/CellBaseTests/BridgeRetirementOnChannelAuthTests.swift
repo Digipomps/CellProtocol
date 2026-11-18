@@ -348,6 +348,24 @@ final class BridgeRetirementOnChannelAuthTests: XCTestCase {
         XCTAssertEqual(try JSONEncoder().encode(value), legacy, "default restores main's encoding")
     }
 
+    // 3087abb on main: the opt-in loopback policy also reaches the channel
+    // endpoint the resolver builds; other hosts still require TLS.
+    func testLoopbackPolicyReachesChannelEndpointOnlyForLoopbackHosts() throws {
+        let previous = CellBase.webSocketSecurityPolicy
+        defer { CellBase.webSocketSecurityPolicy = previous }
+        CellBase.webSocketSecurityPolicy = .requireTLS
+        XCTAssertFalse(CellBase.allowsInsecureChannelLoopback)
+        CellBase.webSocketSecurityPolicy = .loopbackInsecureAllowed
+        XCTAssertTrue(CellBase.allowsInsecureChannelLoopback)
+        let local = try XCTUnwrap(URL(string: "ws://127.0.0.1:8899/bridge/x"))
+        XCTAssertNoThrow(try BridgeChannelAuthentication.Endpoint(url: local, domain: "bridge",
+            allowInsecureLoopback: CellBase.allowsInsecureChannelLoopback))
+        let remote = try XCTUnwrap(URL(string: "ws://haven.local:8899/bridge/x"))
+        XCTAssertThrowsError(try BridgeChannelAuthentication.Endpoint(url: remote, domain: "bridge",
+            allowInsecureLoopback: CellBase.allowsInsecureChannelLoopback))
+        XCTAssertFalse(CellBase.allowsInsecureWebSocket(toHost: "haven.local"))
+    }
+
     private final class BridgeBox: @unchecked Sendable {
         private let lock = NSLock(); private var values: [BridgeBase] = []
         func add(_ b: BridgeBase) { lock.withLock { values.append(b) } }
