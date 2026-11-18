@@ -191,6 +191,76 @@ final class OrganizationVaultTests: XCTestCase {
         XCTAssertEqual(try OrganizationRoleCredential.payloadHash(of: decoded), proposal.payloadHash)
     }
 
+    // MARK: test.ge.condition-interop (shared table, Swift column)
+
+    private struct AccessScenario: Decodable {
+        let id: String
+        let credential: String
+        let issuerTrusted: Bool
+        let status: String
+        let expectedRole: String
+        let decision: String
+        let reason: String
+    }
+
+    private struct AccessMatrix: Decodable {
+        let scenarios: [AccessScenario]
+    }
+
+    /// fixtures/interop/v1/org.access-matrix.json: Python and Go check the same
+    /// table with their ports. Here every scenario runs the real path:
+    /// ProvedClaimCondition for the decision, TrustedIssuerCell for the reason.
+    func testAccessMatrixMatchesSharedTable() async throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/interop/v1/org.access-matrix.json")
+        let matrix = try JSONDecoder().decode(AccessMatrix.self, from: Data(contentsOf: url))
+        XCTAssertEqual(matrix.scenarios.count, 7)
+        for scenario in matrix.scenarios {
+            await CredentialStatusRegistry.shared.clear()
+            let org = try await makeVault()
+            let issuerDID = try await org.issuerDID()
+            let (proposal, unsigned) = try await org.proposeRole(subject: try d(student), role: "researcher",
+                cohort: "MasterHAVEN26", validUntil: scenario.credential == "expired" ? "2020-01-01" : "2099-06-30",
+                proposer: try d(kjetil), now: Date())
+            var credential = try await org.issueRole(credential: unsigned, bundle: try await approve(proposal, by: [kjetil]), now: Date())
+            if scenario.credential == "tampered" {
+                credential.credentialSubject[OrganizationRoleCredential.Field.role] = .string(scenario.expectedRole)
+            }
+            let firstListOptional = await org.statusList
+            let firstList = try XCTUnwrap(firstListOptional)
+            switch scenario.status {
+            case "fresh":
+                try await CredentialStatusRegistry.shared.accept(firstList)
+            case "stale":
+                try await CredentialStatusRegistry.shared.accept(firstList, now: Date().addingTimeInterval(-601))
+            case "revoked":
+                let (rp, list) = try await org.proposeRevocation(credentialIDs: [credential.id], proposer: try d(kjetil), now: Date())
+                try await CredentialStatusRegistry.shared.accept(try await org.revoke(list: list, bundle: try await approve(rp, by: [kjetil]), now: Date()))
+            default:
+                XCTFail("\(scenario.id): unknown status \(scenario.status)")
+            }
+
+            let rig = try await conditionRig(issuerDID: issuerDID, credential: credential,
+                                             registerIssuer: scenario.issuerTrusted, expectedRole: scenario.expectedRole)
+            let state = await rig.condition.isMet(context: ConnectContext(source: nil, target: rig.target, identity: student))
+            XCTAssertEqual(state == .met ? "met" : "unresolved", scenario.decision, scenario.id)
+
+            let resolved = try await CellBase.defaultCellResolver?.cellAtEndpoint(endpoint: "cell:///TrustedIssuers", requester: student)
+            let trusted = try XCTUnwrap(resolved as? Meddle)
+            let response = try await trusted.set(keypath: "trustedIssuers.evaluate", value: .object([
+                "issuerId": .string(issuerDID), "contextId": .string(rig.contextID),
+                "requesterId": .string(try student.did()),
+                "candidateVc": .object(try JSONDecoder().decode(Object.self, from: try JSONEncoder().encode(credential))),
+            ]), requester: student)
+            guard case .object(let body)? = response, case .list(let reasons)? = body["reasons"] else {
+                XCTFail("\(scenario.id): no reasons in \(String(describing: response))")
+                continue
+            }
+            XCTAssertTrue(reasons.contains(.string(scenario.reason)), "\(scenario.id): \(reasons) lacks \(scenario.reason)")
+        }
+    }
+
     // MARK: Helpers
 
     private struct ConditionRig {
@@ -199,7 +269,8 @@ final class OrganizationVaultTests: XCTestCase {
         let contextID: String
     }
 
-    private func conditionRig(issuerDID: String, credential: VCClaim, registerIssuer: Bool = true) async throws -> ConditionRig {
+    private func conditionRig(issuerDID: String, credential: VCClaim, registerIssuer: Bool = true,
+                              expectedRole: String = "researcher") async throws -> ConditionRig {
         CellBase.debugValidateAccessForEverything = false
         let resolver = MockCellResolver()
         CellBase.defaultCellResolver = resolver
@@ -226,7 +297,7 @@ final class OrganizationVaultTests: XCTestCase {
                 "credentialType": .string(credentialType),
                 "subjectPath": .string("credentialSubject.role"),
                 "operator": .string("=="),
-                "expectedValue": .string("researcher"),
+                "expectedValue": .string(expectedRole),
             ]),
         ]), requester: registryOwner)
         if registerIssuer {
@@ -241,7 +312,7 @@ final class OrganizationVaultTests: XCTestCase {
         let target = await GeneralCell(owner: targetOwner)
         let condition = ProvedClaimCondition(
             name: contextID,
-            statement: "identity.claims.informasjonssystemer_researcher = \"researcher\"",
+            statement: "identity.claims.informasjonssystemer_researcher = \"\(expectedRole)\"",
             requiredCredentialType: credentialType,
             subjectClaimPath: OrganizationRoleCredential.Field.role)
         return ConditionRig(target: target, condition: condition, contextID: contextID)

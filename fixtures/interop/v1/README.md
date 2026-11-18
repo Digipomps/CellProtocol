@@ -96,6 +96,13 @@ The evaluator rules a port must copy exactly:
 - A clause's role counts are filled with distinct people, trying people in sorted uuid order.
 - When no candidate rule holds, the error is the first gate failure (exclusion, limit, fresh auth) if any rule had one, otherwise the first `clauseNotSatisfied`.
 
+`org.access-matrix.json` is not a signed case but a shared table: seven
+scenarios (valid, wrong role, revoked, expired, tampered, issuer not trusted,
+stale status mirror) with the decision (`met` or `unresolved`) and the
+TrustedIssuer reason every implementation must reach. Swift checks it in
+`OrganizationVaultTests.testAccessMatrixMatchesSharedTable` through
+`ProvedClaimCondition` and `TrustedIssuerCell`.
+
 ## Regenerating
 
 On Linux, where swift-crypto's Ed25519 is deterministic, through the Linux gate
