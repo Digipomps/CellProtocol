@@ -2557,6 +2557,16 @@ private struct CellVisualizationView: View {
                         activateNode: actionHandler(for: "node")
                     )
                 }
+            case ArgumentMapVisualizationSpec.kind:
+                if let argumentMap = ArgumentMapVisualizationSpec.decode(from: currentSpec), argumentMap.nodes.isEmpty == false {
+                    VisualizationArgumentMapView(
+                        spec: argumentMap,
+                        selection: selectionState,
+                        activateNode: actionHandler(for: "node")
+                    )
+                } else {
+                    visualizationFallback(message: "Ingen påstander ennå.")
+                }
             case "map":
                 if let mapSpec = MapVisualizationSpec.decode(from: currentSpec) {
                     VisualizationMapView(
