@@ -79,6 +79,24 @@ public struct CellBase {
         set { runtimeEnvironment.debugValidateAccessForEverything = newValue }
     }
 
+    /// How ValueType Objects are written and how strictly present fields are read.
+    public enum ObjectWireFormat: Sendable, Equatable {
+        /// Default (main): JSON inference for Objects; malformed optional fields
+        /// fall back to their legacy defaults. Byte-compatible with existing peers.
+        case legacyInference
+        /// Opt-in (loopback D252E/D256): Objects whose variants JSON inference
+        /// would lose use the explicit `&objectEntries` form, and malformed
+        /// present fields throw. Requires a coordinated peer rollout before use
+        /// on a shared wire.
+        case explicitEntries
+    }
+
+    public static var objectWireFormat: ObjectWireFormat {
+        get { runtimeEnvironment.objectWireFormat }
+        set { runtimeEnvironment.objectWireFormat = newValue }
+    }
+    static var usesExplicitObjectWire: Bool { objectWireFormat == .explicitEntries }
+
     public static var webSocketSecurityPolicy: WebSocketSecurityPolicy {
         get { runtimeEnvironment.webSocketSecurityPolicy }
         set { runtimeEnvironment.webSocketSecurityPolicy = newValue }

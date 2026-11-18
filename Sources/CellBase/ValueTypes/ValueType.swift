@@ -36,18 +36,30 @@ public indirect enum ValueType: Codable {
     case null
 
     public init(from decoder: Decoder) throws {
-        self = try ValueTypeCodec.decode(from: decoder)
+        self = CellBase.usesExplicitObjectWire
+            ? try ValueTypeCodec.decode(from: decoder)
+            : try LegacyValueTypeCodec.decode(from: decoder)
     }
     
     public func encode(to encoder: Encoder) throws {
-        try ValueTypeCodec.encode(self, to: encoder)
+        if CellBase.usesExplicitObjectWire { try ValueTypeCodec.encode(self, to: encoder) }
+        else { try LegacyValueTypeCodec.encode(self, to: encoder) }
     }
 }
 
-private enum ValueTypeCodec {
+/// Explicit Object wire codec (opt-in `.explicitEntries`, loopback D252E/D256).
+enum ValueTypeCodec {
     private typealias WrappedDecoder = (SingleValueDecodingContainer) throws -> ValueType
 
     private static let wrappedDecoders: [String: WrappedDecoder] = [
+        "&string": { .string(try $0.decode(String.self)) },
+        "&number": { .number(try $0.decode(Int.self)) },
+        "&list": { .list(try $0.decode(ValueTypeList.self)) },
+        "&object": { .object(try $0.decode(WireObject.self).value) },
+        "bool": { .bool(try $0.decode(Bool.self)) },
+        "integer": { .integer(try $0.decode(Int.self)) },
+        "float": { .float(try $0.decode(Double.self)) },
+        "data": { .data(try $0.decode(Data.self)) },
         "&flowElement": { .flowElement(try $0.decode(FlowElement.self)) },
         "&connectContext": { .connectContext(try $0.decode(ConnectContext.self)) },
         "&connectState": { .connectState(try $0.decode(ConnectState.self)) },
@@ -66,10 +78,6 @@ private enum ValueTypeCodec {
     ]
 
     static func decode(from decoder: Decoder) throws -> ValueType {
-        if let wrappedValue = try decodeWrappedValue(from: decoder) {
-            return wrappedValue
-        }
-
         if let primitiveValue = try decodePrimitiveValue(from: decoder) {
             return primitiveValue
         }
@@ -103,7 +111,7 @@ private enum ValueTypeCodec {
         case let .data(value):
             try container.encode(value)
         case let .object(value):
-            try container.encode(value)
+            try container.encode(WireObject(value))
         case let .list(value):
             try container.encode(value)
         case let .identity(value):
@@ -141,15 +149,16 @@ private enum ValueTypeCodec {
         }
     }
 
-    private static func decodeWrappedValue(from decoder: Decoder) throws -> ValueType? {
-        guard
-            let key = decoder.codingPath.last?.stringValue,
-            let wrappedDecoder = wrappedDecoders[key]
-        else {
-            return nil
+    // Only callers owning a wire-marker container may select a typed decoder.
+    // An ordinary property's codingPath is never a type declaration.
+    static func decodeWireValue(from decoder: Decoder, marker: String) throws -> ValueType {
+        guard let wrappedDecoder = wrappedDecoders[marker] else {
+            return try decode(from: decoder)
         }
 
-        return try wrappedDecoder(try decoder.singleValueContainer())
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { return .null }
+        return try wrappedDecoder(container)
     }
 
     private static func decodePrimitiveValue(from decoder: Decoder) throws -> ValueType? {
@@ -177,11 +186,12 @@ private enum ValueTypeCodec {
             return nil
         }
 
+        if keyedContainer.contains(DynamicCodingKey(stringValue: "&objectEntries")) {
+            return .object(try WireObject(from: decoder).value)
+        }
         var object = Object(propertyValues: [String: ValueType]())
         for key in keyedContainer.allKeys {
-            guard let decodedObject = try? keyedContainer.decode(ValueType.self, forKey: key) else {
-                continue
-            }
+            let decodedObject = try decodeWireValue(from: keyedContainer.superDecoder(forKey: key), marker: key.stringValue)
             object[key.stringValue] = decodedObject
         }
         return .object(object)
@@ -194,9 +204,7 @@ private enum ValueTypeCodec {
 
         var list = ValueTypeList()
         while !unkeyedContainer.isAtEnd {
-            guard let decodedObject = try? unkeyedContainer.decode(ValueType.self) else {
-                continue
-            }
+            let decodedObject = try unkeyedContainer.decode(ValueType.self)
             list.append(decodedObject)
         }
         return .list(list)
@@ -502,5 +510,165 @@ extension SetValueResponse {
         case .double(let d): return String(d)
         case .string(let s): return "\"\(s)\""
         }
+    }
+}
+
+/// main's codec, byte for byte: the default `.legacyInference` wire format.
+private enum LegacyValueTypeCodec {
+    private typealias WrappedDecoder = (SingleValueDecodingContainer) throws -> ValueType
+
+    private static let wrappedDecoders: [String: WrappedDecoder] = [
+        "&flowElement": { .flowElement(try $0.decode(FlowElement.self)) },
+        "&connectContext": { .connectContext(try $0.decode(ConnectContext.self)) },
+        "&connectState": { .connectState(try $0.decode(ConnectState.self)) },
+        "&agreementState": { .contractState(try $0.decode(AgreementState.self)) },
+        "&agreementPayload": { .agreementPayload(try $0.decode(Agreement.self)) },
+        "&description": { .description(try $0.decode(AnyCell.self)) },
+        "&keyValue": { .keyValue(try $0.decode(KeyValue.self)) },
+        "&setValueState": { .setValueState(try $0.decode(SetValueState.self)) },
+        "&setValueResponse": { .setValueResponse(try $0.decode(SetValueResponse.self)) },
+        "&cellConfiguration": { .cellConfiguration(try $0.decode(CellConfiguration.self)) },
+        "&cellReference": { .cellReference(try $0.decode(CellReference.self)) },
+        "&verifiableCredential": { .verifiableCredential(try $0.decode(VCClaim.self)) },
+        "sign": { .signData(try $0.decode(Data.self)) },
+        "&signature": { .signature(try $0.decode(Data.self)) },
+        "&cell": { .cell(try $0.decode(AnyCell.self)) }
+    ]
+
+    static func decode(from decoder: Decoder) throws -> ValueType {
+        if let wrappedValue = try decodeWrappedValue(from: decoder) {
+            return wrappedValue
+        }
+
+        if let primitiveValue = try decodePrimitiveValue(from: decoder) {
+            return primitiveValue
+        }
+
+        if let objectValue = try decodeObject(from: decoder) {
+            return objectValue
+        }
+
+        if let listValue = try decodeList(from: decoder) {
+            return listValue
+        }
+
+        throw DecodingPDSError.corruptedData
+    }
+
+    static func encode(_ value: ValueType, to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let .flowElement(value):
+            try container.encode(value)
+        case let .string(value):
+            try container.encode(value)
+        case let .bool(value):
+            try container.encode(value)
+        case let .number(value):
+            try container.encode(value)
+        case let .integer(value):
+            try container.encode(value)
+        case let .float(value):
+            try container.encode(value)
+        case let .data(value):
+            try container.encode(value)
+        case let .object(value):
+            try container.encode(value)
+        case let .list(value):
+            try container.encode(value)
+        case let .identity(value):
+            try container.encode(value)
+        case let .connectContext(value):
+            try container.encode(value)
+        case let .connectState(value):
+            try container.encode(value)
+        case let .contractState(value):
+            try container.encode(value)
+        case let .agreementPayload(value):
+            try container.encode(value)
+        case let .description(value):
+            try container.encode(value)
+        case let .keyValue(value):
+            try container.encode(value)
+        case let .setValueState(value):
+            try container.encode(value)
+        case let .setValueResponse(value):
+            try container.encode(value)
+        case let .cellConfiguration(value):
+            try container.encode(value)
+        case let .cellReference(value):
+            try container.encode(value)
+        case let .verifiableCredential(value):
+            try container.encode(value)
+        case let .signData(value):
+            try container.encode(value)
+        case let .signature(value):
+            try container.encode(value)
+        case .cell:
+            try container.encode("value.announce(for: Identity())")
+        case .null:
+            try container.encodeNil()
+        }
+    }
+
+    private static func decodeWrappedValue(from decoder: Decoder) throws -> ValueType? {
+        guard
+            let key = decoder.codingPath.last?.stringValue,
+            let wrappedDecoder = wrappedDecoders[key]
+        else {
+            return nil
+        }
+
+        return try wrappedDecoder(try decoder.singleValueContainer())
+    }
+
+    private static func decodePrimitiveValue(from decoder: Decoder) throws -> ValueType? {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            return .null
+        }
+        if let value = try? container.decode(Bool.self) {
+            return .bool(value)
+        }
+        if let value = try? container.decode(Int.self) {
+            return .integer(value)
+        }
+        if let value = try? container.decode(Double.self) {
+            return .float(value)
+        }
+        if let value = try? container.decode(String.self) {
+            return .string(value)
+        }
+        return nil
+    }
+
+    private static func decodeObject(from decoder: Decoder) throws -> ValueType? {
+        guard let keyedContainer = try? decoder.container(keyedBy: DynamicCodingKey.self) else {
+            return nil
+        }
+
+        var object = Object(propertyValues: [String: ValueType]())
+        for key in keyedContainer.allKeys {
+            guard let decodedObject = try? keyedContainer.decode(ValueType.self, forKey: key) else {
+                continue
+            }
+            object[key.stringValue] = decodedObject
+        }
+        return .object(object)
+    }
+
+    private static func decodeList(from decoder: Decoder) throws -> ValueType? {
+        guard var unkeyedContainer = try? decoder.unkeyedContainer() else {
+            return nil
+        }
+
+        var list = ValueTypeList()
+        while !unkeyedContainer.isAtEnd {
+            guard let decodedObject = try? unkeyedContainer.decode(ValueType.self) else {
+                continue
+            }
+            list.append(decodedObject)
+        }
+        return .list(list)
     }
 }

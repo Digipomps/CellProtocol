@@ -1181,11 +1181,6 @@ final class BridgeTests: XCTestCase {
 
         let firstPublisher = try await bridge.flow(requester: owner)
         let secondPublisher = try await bridge.flow(requester: owner)
-        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
-        let feedCommand = try XCTUnwrap(sentCommands.first)
-        XCTAssertEqual(feedCommand.command, .feed)
-        XCTAssertEqual(sentCommands.filter { $0.command == .feed }.count, 1)
-
         let firstReceived = expectation(description: "first subscriber receives remote flow")
         let secondReceived = expectation(description: "second subscriber receives remote flow")
         let secondSurvivesFirstCancellation = expectation(description: "second subscriber stays active")
@@ -1210,6 +1205,11 @@ final class BridgeTests: XCTestCase {
                 }
             }
         )
+
+        let sentCommands = try await waitUntilTransportHasSent(1, transport: transport)
+        let feedCommand = try XCTUnwrap(sentCommands.first)
+        XCTAssertEqual(feedCommand.command, .feed)
+        XCTAssertEqual(sentCommands.filter { $0.command == .feed }.count, 1)
 
         try await bridge.consumeResponse(command: BridgeCommand(
             cmd: Command.response.rawValue,

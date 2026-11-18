@@ -32,10 +32,24 @@ public struct KeyValue: Codable, Hashable {
         key = try values.decode(String.self, forKey: .key)
         target = try values.decodeIfPresent(String.self, forKey: .target)
 
-        for key in Self.typedValueDecodePriority {
-            if let typedValue = try? values.decodeIfPresent(ValueType.self, forKey: key) {
-                value = typedValue
+        if CellBase.usesExplicitObjectWire {
+            // Validate every known typed field before applying the legacy priority.
+            let string = try values.decodeIfPresent(String.self, forKey: .string).map(ValueType.string)
+            let number = try values.decodeIfPresent(Int.self, forKey: .number).map(ValueType.number)
+            let float = try values.decodeIfPresent(Double.self, forKey: .float).map(ValueType.float)
+            let integer = try values.decodeIfPresent(Int.self, forKey: .integer).map(ValueType.integer)
+            let object = try values.decodeIfPresent(WireObject.self, forKey: .object).map { ValueType.object($0.value) }
+            let list = try values.decodeIfPresent(ValueTypeList.self, forKey: .list).map(ValueType.list)
+            if let selected = [string, number, float, integer, object, list].compactMap({ $0 }).first {
+                value = selected
                 return
+            }
+        } else {
+            for key in Self.typedValueDecodePriority {
+                if let typedValue = try? values.decodeIfPresent(ValueType.self, forKey: key) {
+                    value = typedValue
+                    return
+                }
             }
         }
 
@@ -59,7 +73,8 @@ public struct KeyValue: Codable, Hashable {
         try container.encodeIfPresent(target, forKey: .target)
         switch value {
         case let .object(value):
-            try container.encode(value, forKey: .object)
+            if CellBase.usesExplicitObjectWire { try container.encode(WireObject(value), forKey: .object) }
+            else { try container.encode(value, forKey: .object) }
         
         case let .list(value):
             try container.encode(value, forKey: .list)

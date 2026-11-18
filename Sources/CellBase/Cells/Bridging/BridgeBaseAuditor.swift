@@ -17,11 +17,17 @@ final class BridgeBaseAuditor: @unchecked Sendable {
     private struct RegisteredCommand {
         var command: BridgeCommand
         var storedAt: Date
+        var bytes: Int
     }
 
     private var commandRegistry = [Int: RegisteredCommand]()
     private var commandId = 0
     private let maximumPendingCommands: Int
+    // Loopback lifecycle: a retired auditor admits nothing, and the registry is
+    // bounded by encoded size as well as by count.
+    private var retired = false
+    private let maximumCommandBytes = 1024 * 1024
+    private let maximumBytes = 4 * 1024 * 1024
     private let commandRetentionSeconds: TimeInterval
 
     init(commandRetentionSeconds: TimeInterval = 300, maximumPendingCommands: Int = 256, lock: NSRecursiveLock = NSRecursiveLock()) {
@@ -44,11 +50,26 @@ final class BridgeBaseAuditor: @unchecked Sendable {
             commandRegistry[commandId] = nil
             return true
         }
-        guard commandRegistry[commandId] != nil || commandRegistry.count < maximumPendingCommands else { return false }
-        commandRegistry[commandId] = RegisteredCommand(command: command, storedAt: now)
+        guard !retired, let data = try? JSONEncoder().encode(command), data.count <= maximumCommandBytes else { return false }
+        let old = commandRegistry[commandId]
+        let count = commandRegistry.count - (old == nil ? 0 : 1)
+        let bytes = commandRegistry.values.reduce(0) { $0 + $1.bytes } - (old?.bytes ?? 0)
+        guard count < maximumPendingCommands, data.count <= maximumBytes - bytes else { return false }
+        commandRegistry[commandId] = RegisteredCommand(command: command, storedAt: now, bytes: data.count)
         return true
     }
-    
+
+    /// Retirement is one synchronous decision under the shared lifecycle lock:
+    /// later stores are refused and every pending reference is released.
+    func retire() {
+        lock.withLock {
+            retired = true
+            commandRegistry.removeAll()
+        }
+    }
+
+    var isRetired: Bool { lock.withLock { retired } }
+
     func loadBridgeCommandForCommandId(_ commandId: Int, now: Date = Date()) -> BridgeCommand? {
         lock.lock(); defer { lock.unlock() }
         purgeExpired(now: now)
