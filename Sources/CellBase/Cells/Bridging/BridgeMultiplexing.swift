@@ -293,6 +293,12 @@ public final class BridgeConnectionPool: @unchecked Sendable {
 
 /// Client side of protocol v2 multiplexing. It owns exactly one physical
 /// transport and dispatches frames to weak per-channel bridge delegates.
+/// Marks work running on behalf of one logical channel (client or server), so
+/// a close requested from inside that work starts without joining itself.
+enum BridgeMultiplexWorkContext {
+    @TaskLocal static var channel: String?
+}
+
 public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Sendable {
     private final class WeakDelegate {
         weak var value: BridgeDelegateProtocol?
@@ -322,6 +328,16 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     private let continuityTracker = BridgeFlowContinuityTracker()
     private var retiredFromPool = false
     private var physicalTransportClosed = false
+    // G3: every direct call on a channel (setup, open send, sends, consumed
+    // frames) is owned work of that channel; close joins it and the channel's
+    // capacity is held until it has returned. Session control sends are owned
+    // by the session and joined when the physical transport closes.
+    private var channelWork: [String: BridgeOwnedTasks] = [:]
+    private var closingChannelIDs: Set<String> = []
+    private let sessionWork = BridgeOwnedTasks(maximumTasks: 128, maximumBytes: 4 * 1024 * 1024)
+    // G4: open timeouts are separate, weakly held and cancelled on completion.
+    private var openTimeouts: [String: Task<Void, Never>] = [:]
+    private var physicalCloseTask: Task<Void, Never>?
 
     static let maximumStreamIDBytes = 256
 
@@ -333,8 +349,51 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     /// True once physical close has actually returned.
     var isFullyClosed: Bool { stateLock.withLock { physicallyClosed } }
     private func closePhysicalTransport() async {
-        await physicalTransport.close()
-        stateLock.withLock { physicallyClosed = true }
+        await closePhysical().value
+    }
+
+    /// Shared physical close: refuses new work, fails pending opens, closes I/O
+    /// first (held sends may only return then), then joins session work.
+    private func closePhysical() -> Task<Void, Never> {
+        stateLock.withLock {
+            if let physicalCloseTask { return physicalCloseTask }
+            physicalTransportClosed = true
+            let pending = Array(openContinuations.values)
+            openContinuations.removeAll()
+            let timeouts = Array(openTimeouts.values)
+            openTimeouts.removeAll()
+            let task = Task { [self] in
+                timeouts.forEach { $0.cancel() }
+                pending.forEach { $0.resume(throwing: BridgeMultiplexError.sessionClosed) }
+                sessionWork.requestStop()
+                await physicalTransport.close()
+                await sessionWork.finishStop()
+                stateLock.withLock { physicallyClosed = true }
+            }
+            physicalCloseTask = task
+            return task
+        }
+    }
+
+    /// Runs `operation` as owned work of `channelID`. Throws if the channel is
+    /// closing or its work budget is exhausted; the slot is held until return.
+    fileprivate func runChannelWork<T>(_ channelID: String, bytes: Int = 0,
+                                       _ operation: @escaping () async throws -> T) async throws -> T {
+        let context = uuid + channelID
+        let task = try stateLock.withLock { () throws -> Task<T, Error> in
+            guard physicalTransportClosed == false, issuedChannelIDs.contains(channelID),
+                  closingChannelIDs.contains(channelID) == false,
+                  let work = channelWork[channelID] else { throw BridgeMultiplexError.channelNotFound }
+            guard let task = work.submit(bytes: bytes, {
+                try await BridgeMultiplexWorkContext.$channel.withValue(context) { try await operation() }
+            }) else { throw BridgeMultiplexError.resourceLimitExceeded }
+            return task
+        }
+        return try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+    }
+
+    fileprivate func isInsideWork(of channelID: String) -> Bool {
+        BridgeMultiplexWorkContext.channel == uuid + channelID
     }
 
     public init(
@@ -377,6 +436,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
                 return false
             }
             issuedChannelIDs.insert(channelID)
+            channelWork[channelID] = BridgeOwnedTasks(maximumTasks: 128, maximumBytes: 4 * 1024 * 1024)
             return true
         }
         guard reserved else {
@@ -399,14 +459,10 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     fileprivate func retireFromPool() {
         let shouldClose = stateLock.withLock { () -> Bool in
             retiredFromPool = true
-            guard issuedChannelIDs.isEmpty, physicalTransportClosed == false else {
-                return false
-            }
-            physicalTransportClosed = true
-            return true
+            return issuedChannelIDs.isEmpty && physicalTransportClosed == false
         }
         guard shouldClose else { return }
-        Task { [self] in await closePhysicalTransport() }
+        _ = closePhysical()
     }
 
     fileprivate func register(_ delegate: BridgeDelegateProtocol?, channelID: String) {
@@ -447,7 +503,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         }
         do { try await task.value }
         catch {
-            stateLock.withLock { physicalTransportClosed = true; retiredFromPool = true }
+            stateLock.withLock { retiredFromPool = true }
             await closePhysicalTransport()
             throw error
         }
@@ -476,40 +532,41 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             targetEndpoint: targetEndpoint
         )
 
-        try await withCheckedThrowingContinuation { continuation in
+        let data = try JSONEncoder().encode(open)
+        let timeoutNanoseconds = channelOpenTimeoutNanoseconds
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let inserted = stateLock.withLock { () -> Bool in
                 guard physicalTransportClosed == false,
                       issuedChannelIDs.contains(channelID),
+                      closingChannelIDs.contains(channelID) == false,
                       activeChannelIDs.contains(channelID) == false,
                       openContinuations[channelID] == nil,
-                      openContinuations.count < maximumPendingChannelOpens else {
+                      openContinuations.count < maximumPendingChannelOpens,
+                      let work = channelWork[channelID] else {
                     return false
                 }
+                // The open send is owned channel work (joined by close).
+                let context = uuid + channelID
+                guard work.submit(bytes: data.count, { [weak self] in
+                    try await BridgeMultiplexWorkContext.$channel.withValue(context) {
+                        guard let transport = self?.physicalTransport else { return }
+                        do { try await transport.sendData(data) }
+                        catch { self?.finishOpening(channelID: channelID, result: .failure(error)) }
+                    }
+                }) != nil else { return false }
                 openContinuations[channelID] = continuation
+                // G4: the timeout holds the session weakly and is cancelled
+                // as soon as the open completes, so a finished open does not
+                // retain the session (or its physical transport) for 5 s.
+                openTimeouts[channelID] = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: timeoutNanoseconds) } catch { return }
+                    self?.finishOpening(channelID: channelID, result: .failure(BridgeMultiplexError.channelOpenTimedOut))
+                }
                 return true
             }
             guard inserted else {
                 continuation.resume(throwing: BridgeMultiplexError.resourceLimitExceeded)
                 return
-            }
-
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await self.physicalTransport.sendData(JSONEncoder().encode(open))
-                } catch {
-                    self.finishOpening(channelID: channelID, result: .failure(error))
-                    return
-                }
-                do {
-                    try await Task.sleep(nanoseconds: self.channelOpenTimeoutNanoseconds)
-                    self.finishOpening(
-                        channelID: channelID,
-                        result: .failure(BridgeMultiplexError.channelOpenTimedOut)
-                    )
-                } catch {
-                    return
-                }
             }
         }
     }
@@ -518,44 +575,48 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         let releaseState = stateLock.withLock { () -> (
             continuation: CheckedContinuation<Void, Error>?,
             sendClose: Bool,
-            closePhysical: Bool
+            closePhysical: Bool,
+            work: BridgeOwnedTasks?
         ) in
             delegates[channelID] = nil
             activeChannelIDs.remove(channelID)
-            issuedChannelIDs.remove(channelID)
+            closingChannelIDs.insert(channelID)
+            openTimeouts.removeValue(forKey: channelID)?.cancel()
             let continuation = openContinuations.removeValue(forKey: channelID)
             let sendClose = configuredEndpoint != nil && physicalTransportClosed == false
-            let closePhysical = (retiredFromPool || closesWhenIdle) && issuedChannelIDs.isEmpty && physicalTransportClosed == false
-            if closePhysical {
-                physicalTransportClosed = true
-            }
-            return (continuation, sendClose, closePhysical)
+            let closePhysical = (retiredFromPool || closesWhenIdle)
+                && issuedChannelIDs.isSubset(of: closingChannelIDs) && physicalTransportClosed == false
+            return (continuation, sendClose, closePhysical, channelWork[channelID])
         }
+        // New direct calls are refused from here; admitted ones are cancelled
+        // but keep their slot (and this channel's capacity) until they return.
+        releaseState.work?.requestStop()
         continuityTracker.removeStreams(withPrefix: "\(channelID)|")
         releaseState.continuation?.resume(throwing: BridgeMultiplexError.channelNotFound)
-        guard releaseState.sendClose else {
-            if releaseState.closePhysical {
-                await closePhysicalTransport()
+        if releaseState.sendClose {
+            let cid = stateLock.withLock { () -> Int in
+                commandID += 1
+                return commandID
             }
-            return
+            let close = BridgeCommand(
+                cmd: Command.closeChannel.rawValue,
+                identity: identity?.publicIdentitySnapshot(),
+                payload: nil,
+                cid: cid,
+                protocolVersion: protocolVersion,
+                channelID: channelID
+            )
+            if let data = try? JSONEncoder().encode(close) {
+                try? await physicalTransport.sendData(data)
+            }
         }
-        let cid = stateLock.withLock { () -> Int in
-            commandID += 1
-            return commandID
-        }
-        let close = BridgeCommand(
-            cmd: Command.closeChannel.rawValue,
-            identity: identity?.publicIdentitySnapshot(),
-            payload: nil,
-            cid: cid,
-            protocolVersion: protocolVersion,
-            channelID: channelID
-        )
-        if let data = try? JSONEncoder().encode(close) {
-            try? await physicalTransport.sendData(data)
-        }
-        if releaseState.closePhysical {
-            await closePhysicalTransport()
+        // Close I/O before joining tails that may need it in order to return.
+        if releaseState.closePhysical { await closePhysicalTransport() }
+        await releaseState.work?.finishStop()
+        stateLock.withLock {
+            closingChannelIDs.remove(channelID)
+            channelWork[channelID] = nil
+            issuedChannelIDs.remove(channelID)
         }
     }
 
@@ -563,6 +624,12 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         guard stateLock.withLock({ activeChannelIDs.contains(channelID) && physicalTransportClosed == false }) else {
             throw BridgeMultiplexError.channelNotFound
         }
+        try await runChannelWork(channelID, bytes: data.count) { [self] in
+            try await sendAdmitted(data, channelID: channelID)
+        }
+    }
+
+    private func sendAdmitted(_ data: Data, channelID: String) async throws {
         guard var command = try? JSONDecoder().decode(BridgeCommand.self, from: data) else {
             throw BridgeMultiplexError.invalidFrame
         }
@@ -585,6 +652,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             guard let continuation = openContinuations.removeValue(forKey: channelID) else {
                 return nil
             }
+            openTimeouts.removeValue(forKey: channelID)?.cancel()
             if case .success = result {
                 activeChannelIDs.insert(channelID)
             }
@@ -616,7 +684,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
               let delegate = delegate(for: channelID) else {
             throw BridgeMultiplexError.channelNotFound
         }
-        try await delegate.consumeCommand(command: command)
+        try await runChannelWork(channelID) { try await delegate.consumeCommand(command: command) }
     }
 
     func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
@@ -625,9 +693,11 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
               let channelID = command.channelID, let target = delegate(for: channelID) else { return nil }
         return BridgeInboundDispatch(laneID: ObjectIdentifier(target)) { [self, target] in
             guard delegate(for: channelID) === target else { return }
-            if command.command == .response {
-                try await deliverResponse(command, channelID: channelID, delegate: target)
-            } else { try await target.consumeCommand(command: command) }
+            try await runChannelWork(channelID) { [self] in
+                if command.command == .response {
+                    try await deliverResponse(command, channelID: channelID, delegate: target)
+                } else { try await target.consumeCommand(command: command) }
+            }
         }
     }
 
@@ -645,7 +715,9 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
               let delegate = delegate(for: channelID) else {
             throw BridgeMultiplexError.channelNotFound
         }
-        try await deliverResponse(command, channelID: channelID, delegate: delegate)
+        try await runChannelWork(channelID) { [self] in
+            try await deliverResponse(command, channelID: channelID, delegate: delegate)
+        }
     }
 
     private func deliverResponse(_ command: BridgeCommand, channelID: String,
@@ -708,7 +780,12 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         }
         let frame = BridgeCommand(cmd: command.rawValue, identity: identity.publicIdentitySnapshot(), payload: payload, cid: cid)
         if let data = try? JSONEncoder().encode(frame) {
-            try? await physicalTransport.sendData(data)
+            // Session control send: owned by the session, joined at physical close.
+            let task = stateLock.withLock { () -> Task<Void, Error>? in
+                guard physicalTransportClosed == false else { return nil }
+                return sessionWork.submit(bytes: data.count) { [physicalTransport] in try await physicalTransport.sendData(data) }
+            }
+            _ = try? await task?.value
         }
     }
 
@@ -759,6 +836,7 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
     public let targetEndpoint: String
     private var identity: Identity?
     private var closed = false
+    private var closeTask: Task<Void, Never>?
 
     fileprivate init(
         session: BridgeMultiplexSession,
@@ -792,28 +870,33 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
             throw BridgeMultiplexError.transportNotConfigured
         }
         self.identity = identity
-        do {
-            try await session.setupPhysical(endpointURL: endpointURL, identity: identity)
-            try await session.openChannel(
-                channelID: channelID,
-                targetEndpoint: targetEndpoint,
-                identity: identity
-            )
-            if channelSession != nil, let bridge = delegate as? BridgeBase {
-                try bridge.activateAuthenticatedChannel()
-            } else {
-            try await delegate?.consumeCommand(command: BridgeCommand(
-                cmd: Command.ready.rawValue,
-                identity: identity,
-                payload: nil,
-                cid: 0,
-                protocolVersion: session.protocolVersion,
-                channelID: channelID
-            ))
+        // G3: setup is owned work of this channel; a concurrent close waits
+        // for it to return and the channel's capacity is held until then.
+        try await session.runChannelWork(channelID, bytes: endpointURL.absoluteString.utf8.count) { [self] in
+            do {
+                try await session.setupPhysical(endpointURL: endpointURL, identity: identity)
+                try await session.openChannel(
+                    channelID: channelID,
+                    targetEndpoint: targetEndpoint,
+                    identity: identity
+                )
+                guard stateLock.withLock({ !closed }) else { throw BridgeMultiplexError.sessionClosed }
+                if channelSession != nil, let bridge = delegate as? BridgeBase {
+                    try bridge.activateAuthenticatedChannel()
+                } else {
+                try await delegate?.consumeCommand(command: BridgeCommand(
+                    cmd: Command.ready.rawValue,
+                    identity: identity,
+                    payload: nil,
+                    cid: 0,
+                    protocolVersion: session.protocolVersion,
+                    channelID: channelID
+                ))
+                }
+            } catch {
+                await close()
+                throw error
             }
-        } catch {
-            await close()
-            throw error
         }
     }
 
@@ -825,13 +908,26 @@ public final class BridgeMultiplexChannelTransport: BridgeTransportProtocol, @un
         try await session.send(data, channelID: channelID)
     }
 
+    /// G3: every external caller joins the same close, which ends only after
+    /// all admitted work on this channel has returned. Work running on behalf
+    /// of this channel (its delegate closing itself) starts it without joining.
     public func close() async {
-        guard let closeState = takeCloseState() else { return }
-        if let bridge = closeState.delegate as? BridgeBase { await bridge.retireLogicalChannel() }
-        await closeState.session.releaseChannelTransport(
-            channelID: channelID,
-            identity: closeState.identity
-        )
+        let task = stateLock.withLock { () -> Task<Void, Never>? in
+            if let closeTask { return closeTask }
+            guard closed == false, let session else { return nil }
+            closed = true
+            let previousDelegate = delegate
+            delegate = nil
+            let identity = self.identity, channelID = self.channelID
+            let task = Task {
+                if let bridge = previousDelegate as? BridgeBase { await bridge.retireLogicalChannel() }
+                await session.releaseChannelTransport(channelID: channelID, identity: identity)
+            }
+            closeTask = task
+            return task
+        }
+        if let session, session.isInsideWork(of: channelID) { return }
+        await task?.value
     }
 
     public func identityVault(for identity: Identity?) async -> IdentityVaultProtocol {
@@ -1009,15 +1105,26 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     private var outboundStreamInsertionID: UInt64 = 0
     private var commandID = 0
     private var closed = false
+    /// G6 (opt-in, loopback D245/D248): a channel close, including the peer's
+    /// closeChannel, is joined by every closer until the delegate is fully
+    /// retired, every admitted dispatch has returned and every send on the
+    /// channel has returned. The wire ID and its capacity stay reserved until
+    /// then. Default false keeps main's non-blocking close and immediate reuse.
+    public let closeJoinsChannelWork: Bool
+    private var joiningChannels: [String: Task<Void, Never>] = [:]
+    private let controlWork = BridgeOwnedTasks(maximumTasks: 128, maximumBytes: 4 * 1024 * 1024)
+    private var sendDrainWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
     public init(
         physicalTransport: BridgeTransportProtocol,
         maximumChannels: Int = 128,
         maximumPendingChannelOpens: Int = 32,
         maximumTrackedOutboundStreams: Int = 4_096,
+        closeJoinsChannelWork: Bool = false,
         beforeChannelSend: (@Sendable () async -> Void)? = nil,
         channelFactory: @escaping ChannelFactory
     ) {
+        self.closeJoinsChannelWork = closeJoinsChannelWork
         self.physicalTransport = physicalTransport
         self.beforeChannelSend = beforeChannelSend
         self.maximumChannels = max(1, maximumChannels)
@@ -1104,19 +1211,53 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     private func closeChannel(_ channelID: String, expected: ChannelRecord? = nil) async {
-        let removed = stateLock.withLock { () -> ChannelRecord? in
+        let (removed, join) = stateLock.withLock { () -> (ChannelRecord?, Task<Void, Never>?) in
             if pendingChannelIDs.contains(channelID) { cancelledPendingChannelIDs.insert(channelID) }
-            if let expected, channels[channelID] !== expected { return nil }
-            let removed = channels.removeValue(forKey: channelID)
-            if let removed, removed.hasInFlightWork { retiringChannels[ObjectIdentifier(removed)] = removed }
+            if let expected, channels[channelID] !== expected { return (nil, joiningChannels[channelID]) }
+            guard let removed = channels.removeValue(forKey: channelID) else { return (nil, joiningChannels[channelID]) }
             outboundStreamSequences = outboundStreamSequences.filter { !$0.key.hasPrefix("\(channelID)|") }
             compactOutboundStreamInsertionOrderIfNeeded()
-            return removed
+            guard closeJoinsChannelWork else {
+                if removed.hasInFlightWork { retiringChannels[ObjectIdentifier(removed)] = removed }
+                return (removed, nil)
+            }
+            // G6: the ID stays reserved by the join itself; every closer of
+            // this ID awaits the same task.
+            retiringChannels[ObjectIdentifier(removed)] = removed
+            let key = ObjectIdentifier(removed)
+            let task = Task { [self] in
+                await removed.retire()
+                await removed.retirementTask().value
+                await waitForSendsToDrain(channelID)
+                stateLock.withLock {
+                    _ = retiringChannels.removeValue(forKey: key)
+                    joiningChannels[channelID] = nil
+                }
+                withExtendedLifetime(removed) {}
+            }
+            joiningChannels[channelID] = task
+            return (removed, task)
         }
         defer { withExtendedLifetime(removed) {} }
+        if let join {
+            guard closeJoinsChannelWork else { return }
+            await join.value
+            return
+        }
         guard let removed else { return }
         await removed.retire()
         if stateLock.withLock({ retiringChannels[ObjectIdentifier(removed)] != nil }) { trackRetirement(removed) }
+    }
+
+    private func waitForSendsToDrain(_ channelID: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let immediate = stateLock.withLock { () -> Bool in
+                guard sendingChannelIDs[channelID] != nil else { return true }
+                sendDrainWaiters[channelID, default: []].append(continuation)
+                return false
+            }
+            if immediate { continuation.resume() }
+        }
     }
 
     /// Starts a retirement that may be held by non-cooperative work; the record
@@ -1143,9 +1284,13 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     /// actually returned. close() keeps main's non-blocking contract.
     public func closeAndJoin() async {
         await close()
-        let (records, pending) = stateLock.withLock { (Array(retiringChannels.values), Array(pendingCompletions.values)) }
+        let (records, pending, joins) = stateLock.withLock {
+            (Array(retiringChannels.values), Array(pendingCompletions.values), Array(joiningChannels.values))
+        }
         for record in records { await record.retirementTask().value }
         for completion in pending { await completion.wait() }
+        for join in joins { await join.value }
+        await controlWork.finishStop()
     }
 
     func prepareInboundDispatch(_ command: BridgeCommand) -> BridgeInboundDispatch? {
@@ -1218,12 +1363,13 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
         let reservation = stateLock.withLock { () -> ChannelReservation in
             guard closed == false else { return .closed }
             guard channels[channelID] == nil,
+                  joiningChannels[channelID] == nil,
                   pendingChannelIDs.contains(channelID) == false,
                   previousSends == 0 else {
                 return .conflict
             }
             let retainedIDs = Set(channels.keys).union(pendingChannelIDs)
-                .union(sendingChannelIDs.keys).subtracting([channelID])
+                .union(sendingChannelIDs.keys).union(joiningChannels.keys).subtracting([channelID])
             guard retainedIDs.count < maximumChannels,
                   pendingChannelIDs.count < maximumPendingChannelOpens else {
                 return .capacityExceeded
@@ -1356,11 +1502,16 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
     }
 
     private func releaseSendReservation(_ channelID: String) {
-        stateLock.withLock {
-            guard let count = sendingChannelIDs[channelID] else { return }
-            if count == 1 { sendingChannelIDs[channelID] = nil }
-            else { sendingChannelIDs[channelID] = count - 1 }
+        let waiters = stateLock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard let count = sendingChannelIDs[channelID] else { return [] }
+            if count == 1 {
+                sendingChannelIDs[channelID] = nil
+                return sendDrainWaiters.removeValue(forKey: channelID) ?? []
+            }
+            sendingChannelIDs[channelID] = count - 1
+            return []
         }
+        waiters.forEach { $0.resume() }
     }
 
     fileprivate func vault(for identity: Identity?) async -> IdentityVaultProtocol {
@@ -1478,13 +1629,17 @@ public final class BridgeMultiplexServerSession: BridgeDelegateProtocol, @unchec
             commandID += 1
             return commandID
         }
-        try? await sendSessionFrame(BridgeCommand(
+        let frame = BridgeCommand(
             cmd: command.rawValue,
             identity: identity,
             payload: payload,
             cid: cid,
             protocolVersion: protocolVersion
-        ))
+        )
+        // G6: a session control send is owned by the session, so closeAndJoin
+        // waits until it has returned from the physical transport.
+        guard let task = controlWork.submit({ [self] in try await sendSessionFrame(frame) }) else { return }
+        _ = try? await task.value
     }
 
     public func sendSetValueState(for requestedKey: String, setValueState: SetValueState) async {
