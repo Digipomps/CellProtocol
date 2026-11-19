@@ -7,6 +7,8 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+import Musl
 #endif
 
 /// Fail-closed file I/O shared by the Apple and Vapor persisted-Cell stores.
@@ -41,6 +43,8 @@ public enum PersistedCellFileIO {
             return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
 #elseif canImport(Glibc)
             return Glibc.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+#elseif canImport(Musl)
+            return Musl.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
 #else
             return -1
 #endif
@@ -60,6 +64,8 @@ public enum PersistedCellFileIO {
         let status = Darwin.fstat(descriptor, &info)
 #elseif canImport(Glibc)
         let status = Glibc.fstat(descriptor, &info)
+#elseif canImport(Musl)
+        let status = Musl.fstat(descriptor, &info)
 #else
         let status = -1
 #endif
