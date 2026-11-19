@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "research.pii-rules.v1",
+  "rulesVersion": "1.0.0",
+  "status": "forslag",
+  "owner": "entity:informasjonssystemer",
+  "changePolicy": "Endres bare av en eier av Informasjonssystemer. Hver endring får nytt rulesVersion. En godkjent forespørsel beholder rulesVersion den ble godkjent under.",
+  "note": "Tallene er utgangsverdier (forslag fra PDD_forskningsdata-verktoy, WP1). Kategoriene for særlige opplysninger er hentet fra hukommelsen om personvernforordningen artikkel 9 og er ikke kontrollert mot lovteksten i denne økten.",
+  "degrees": [
+    { "id": "none", "rank": 0, "label": "Ingen persondata", "description": "Tall om noden eller programvaren, ikke om personer. Eksempel: antall celletyper, svartid." },
+    { "id": "aggregate", "rank": 1, "label": "Aggregert", "description": "Tellinger eller summer over flere personer, uten noe per person. Eksempel: identiteter med en delt samtale per uke." },
+    { "id": "quasi", "rank": 2, "label": "Indirekte identifiserende", "description": "Felt som sammen med annen kunnskap kan peke ut en person. Eksempel: gruppe, kull, organisasjon, eksakt tidspunkt, sted." },
+    { "id": "direct", "rank": 3, "label": "Direkte identifiserende", "description": "Felt som peker ut en person alene. Eksempel: identitets-uuid, visningsnavn, e-post, fritekst skrevet av personen." },
+    { "id": "special", "rank": 4, "label": "Særlig kategori", "description": "Helse, etnisk opprinnelse, politisk syn, religion eller livssyn, fagforening, seksuell legning eller liv, genetiske eller biometriske data." }
+  ],
+  "fieldKinds": {
+    "nodeMetric": "none",
+    "count": "aggregate",
+    "sum": "aggregate",
+    "distribution": "aggregate",
+    "cohort": "quasi",
+    "group": "quasi",
+    "organization": "quasi",
+    "exactTimestamp": "quasi",
+    "location": "quasi",
+    "deviceInfo": "quasi",
+    "identityUUID": "direct",
+    "cellUUID": "direct",
+    "displayName": "direct",
+    "email": "direct",
+    "freeText": "direct",
+    "health": "special",
+    "ethnicity": "special",
+    "politicalOpinion": "special",
+    "religion": "special",
+    "tradeUnion": "special",
+    "sexualOrientation": "special",
+    "genetic": "special",
+    "biometric": "special"
+  },
+  "rules": {
+    "none":      { "answerForms": ["aggregate", "rows"],             "minGroupSize": 1,  "finestBucket": "day",  "maxRetentionDays": null, "export": "full",          "requiresJustificationForRows": false, "requiresInstitutionalApproval": false, "allowed": true },
+    "aggregate": { "answerForms": ["aggregate"],                     "minGroupSize": 5,  "finestBucket": "day",  "maxRetentionDays": 730,  "export": "full",          "requiresJustificationForRows": true,  "requiresInstitutionalApproval": false, "allowed": true },
+    "quasi":     { "answerForms": ["aggregate", "pseudonymousRows"], "minGroupSize": 10, "finestBucket": "week", "maxRetentionDays": 365,  "export": "aggregateOnly", "requiresJustificationForRows": true,  "requiresInstitutionalApproval": true,  "allowed": true },
+    "direct":    { "answerForms": ["pseudonymousRows"],              "minGroupSize": 10, "finestBucket": "week", "maxRetentionDays": 365,  "export": "none",          "requiresJustificationForRows": true,  "requiresInstitutionalApproval": true,  "allowed": true },
+    "special":   { "answerForms": [],                                "minGroupSize": 0,  "finestBucket": null,   "maxRetentionDays": 0,    "export": "none",          "requiresJustificationForRows": true,  "requiresInstitutionalApproval": true,  "allowed": false }
+  },
+  "escalations": [
+    { "id": "two-quasi-identifiers", "when": { "quasiFieldCountAtLeast": 2 }, "effect": { "raiseDegreeTo": "direct" }, "reason": "To eller flere indirekte identifiserende felt i samme mal kan sammen peke ut en person." },
+    { "id": "small-population", "when": { "populationBelowMultipleOfMinGroupSize": 4 }, "effect": { "multiplyMinGroupSize": 2, "coarsenBucketTo": "week" }, "reason": "I en liten populasjon gir selv tellinger over k lett innsikt i enkeltpersoner." },
+    { "id": "repeated-measures", "when": { "researchQuestion.longitudinal": true }, "effect": { "coarsenBucketTo": "week" }, "reason": "Gjentatte målinger av de samme personene gjør differanser mellom bøtter mer avslørende." }
+  ],
+  "bucketOrder": ["day", "week", "month"],
+  "answerFormOrder": ["aggregate", "pseudonymousRows", "rows"]
+}
