@@ -90,8 +90,23 @@ public actor IdentityLinkRegistry {
     }
     private var contactOperationsByOwner: [String: [String: [ObjectIdentifier: ContactRegistration]]] = [:]
     private var contactRegistrationCount = 0
+    // purpose://candidate.informasjonssystemer-gruppeentitet.genesis:
+    // owners that are organization entities, with the machine identities
+    // (vault, server) that may act as them. A person never becomes the same
+    // entity as an organization; people act through approvals and mandates.
+    private var organizationMachineIdentitiesByOwner: [String: Set<String>] = [:]
 
     public init() {}
+
+    /// Marks `ownerUUID` as an organization. From now on `sameEntityLink`
+    /// returns only links to the listed machine identities for this owner.
+    public func markOrganization(ownerUUID: String, machineIdentityUUIDs: Set<String>) {
+        organizationMachineIdentitiesByOwner[ownerUUID] = machineIdentityUUIDs
+    }
+
+    public func isOrganization(ownerUUID: String) -> Bool {
+        organizationMachineIdentitiesByOwner[ownerUUID] != nil
+    }
 
     public func register(ownerUUID: String, completion: IdentityLinkCompletionResult) {
         retireContactOperations(ownerUUID: ownerUUID, linkID: completion.record.linkID)
@@ -131,6 +146,7 @@ public actor IdentityLinkRegistry {
         retireContactOperations(ownerUUID: ownerUUID)
         linksByOwner[ownerUUID] = nil
         verifiedGenesisByOwner[ownerUUID] = nil
+        organizationMachineIdentitiesByOwner[ownerUUID] = nil
     }
 
     /// Match the COMPLETE record already selected by the authenticated caller,
@@ -253,6 +269,9 @@ public actor IdentityLinkRegistry {
         domain: String
     ) -> IdentityLinkRecord? {
         guard let links = linksByOwner[ownerUUID], let signingKey = requesterSigningKey, !signingKey.isEmpty else {
+            return nil
+        }
+        if let machines = organizationMachineIdentitiesByOwner[ownerUUID], machines.contains(requesterUUID) == false {
             return nil
         }
         for record in links.values where record.status == .active {

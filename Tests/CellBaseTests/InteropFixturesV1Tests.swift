@@ -555,6 +555,7 @@ final class InteropFixturesV1Tests: XCTestCase {
         // presentation and the envelope EntityAnchor's identityLinks.completeEnrollment takes.
         cases.append(contentsOf: try await extendCompletionCases(request: request, approval: approval))
         cases.append(contentsOf: try genesisCases())
+        cases.append(contentsOf: try await organizationCases())
 
         return cases
     }
@@ -915,7 +916,7 @@ final class InteropFixturesV1Tests: XCTestCase {
             "generator": "Tests/CellBaseTests/InteropFixturesV1Tests.swift",
             "canonicalRule": "JSONEncoder() default strategies, then JSONSerialization.data(withJSONObject:options:[.sortedKeys]) after removing excludedTopLevelKeys. IdentitySigningChallenge signs JSONEncoder(.sortedKeys) output directly.",
             "signature": "Ed25519 (RFC 8032) over the canonical bytes. Keys are derived from SHA-256(\"haven-interop-v1/<name>\") and are public test keys.",
-            "parties": try [alice, bob, mallory].map { party -> [String: Any] in
+            "parties": try [alice, bob, mallory, custodian].map { party -> [String: Any] in
                 ["name": party.name, "seedHex": party.key.rawRepresentation.map { String(format: "%02x", $0) }.joined(), "descriptor": try descriptorObject(party.descriptor)]
             },
             "cases": cases.map { ["id": $0.id, "file": "\($0.id).json", "flow": $0.flow, "type": $0.type] },
@@ -1039,6 +1040,12 @@ final class InteropFixturesV1Tests: XCTestCase {
         case "VCPresentation": return try decoder.decode(VCPresentation.self, from: encoded).canonicalPayloadData()
         case "EntityGenesisSeal": return try decoder.decode(EntityGenesisSeal.self, from: encoded).canonicalPayloadData()
         case "IdentityLinkCompletionEnvelope": return try decoder.decode(IdentityLinkCompletionEnvelope.self, from: encoded).presentation.canonicalPayloadData()
+        case "GovernancePolicy": return try decoder.decode(GovernancePolicy.self, from: encoded).canonicalPayloadData()
+        case "OrganizationGenesisSeal": return try decoder.decode(OrganizationGenesisSeal.self, from: encoded).canonicalPayloadData()
+        case "OrganizationActionProposal": return try decoder.decode(OrganizationActionProposal.self, from: encoded).canonicalPayloadData()
+        case "OrganizationApproval": return try decoder.decode(OrganizationApproval.self, from: encoded).canonicalPayloadData()
+        case "ApprovalBundle": return try CanonicalPayloadEncoder.data(for: try decoder.decode(ApprovalBundle.self, from: encoded))
+        case "OrganizationRoleStatusList": return try decoder.decode(OrganizationRoleStatusList.self, from: encoded).canonicalPayloadData()
         case "BridgeChannelAuthV1": return try BridgeChannelAuthentication.signingData(try BridgeChannelAuthentication.decode(BridgeChannelAuthentication.Transcript.self, from: encoded))
         default: throw NSError(domain: "InteropFixturesV1", code: 1, userInfo: [NSLocalizedDescriptionKey: "Unknown type \(type)"])
         }
