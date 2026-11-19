@@ -44,6 +44,8 @@ final class SkeletonVisualizationSuppressedTests: XCTestCase {
 
     func testLineBreaksAtSuppressedBucket() {
         let points = visualizationChartPoints(from: weeks)
+        XCTAssertEqual(points.count, 5)
+        guard points.count == 5 else { return }
         let positions = points.indices.map { CGPoint(x: Double($0) * 10, y: 0) }
         let segments = visualizationLineSegments(points: points, positions: positions)
         XCTAssertEqual(segments.map(\.count), [2, 2])
@@ -55,6 +57,11 @@ final class SkeletonVisualizationSuppressedTests: XCTestCase {
         XCTAssertEqual(points.filter(\.suppressed).count, 0)
         let positions = points.indices.map { CGPoint(x: Double($0), y: 0) }
         XCTAssertEqual(visualizationLineSegments(points: points, positions: positions).map(\.count), [3])
+    }
+
+    func testRowsKeyStillWorks() {
+        let points = visualizationChartPoints(from: .object(["rows": .list([row("a", 1), suppressed("b")])]))
+        XCTAssertEqual(points.map(\.suppressed), [false, true])
     }
 
     func testRowWithNullValueAndNoFlagIsStillDropped() {

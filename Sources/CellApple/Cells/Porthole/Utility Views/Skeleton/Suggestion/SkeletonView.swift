@@ -2151,7 +2151,9 @@ private func visualizationRows(from spec: ValueType?) -> [ValueType] {
     guard let object = visualizationObject(spec) else {
         return []
     }
-    for key in ["rows", "items", "data", "values"] {
+    // "points" is the key the admin cells use for charts (AdminMetricsSupport);
+    // the web runtime reads it too.
+    for key in ["rows", "items", "data", "values", "points"] {
         if case let .list(list)? = object[key] {
             return Array(list)
         }
