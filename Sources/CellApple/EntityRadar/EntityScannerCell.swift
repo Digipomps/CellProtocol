@@ -155,8 +155,8 @@ class EntityScannerCell: GeneralCell, ConnectServiceDelegate {
     private func setupKeys(owner: Identity) async {
         emitScannerEvent = await makeCellOwnedFlowEmitterForRuntimeBinding(requester: owner)
         await registerContracts(requester: owner)
-        for key in ["meetingOffers"] { agreementTemplate.ensureGrant("r---", for: key) }
-        for key in ["inviteToMeeting", "acceptMeeting"] { agreementTemplate.ensureGrant("-w--", for: key) }
+        // Meeting actions are owner-only (isAdvertisementOwner below), so they are
+        // deliberately not offered to admitted counterparties in agreementTemplate.
         await addInterceptForGet(requester: owner, key: "meetingOffers", getValueIntercept: { @MainActor [weak self] _, requester in
             guard let self, self.isAdvertisementOwner(requester), await self.validateAccess("r---", at: "meetingOffers", for: requester) else { return .string("denied") }
             return MeetingNearbyAppRuntime.shared.pending(identity: requester)
