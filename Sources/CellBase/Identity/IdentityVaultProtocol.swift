@@ -17,10 +17,32 @@ public protocol IdentityVaultProtocol: Sendable {
     func verifySignature(signature: Data, messageData: Data, for identity: Identity) async throws -> Bool
     func randomBytes64() async -> Data?
     func aquireKeyForTag(tag: String) async throws -> (key: String, iv: String) // TODO: This should probably be elsewhere
+    /// Removes the identity's private keys and stored identity for good
+    /// (account erasure, keyChoice `destroy`). Vaults that cannot do this
+    /// must throw `IdentityVaultLifecycleError.notSupported`, never pretend.
+    func destroyIdentity(_ identity: Identity) async throws
+    /// Makes the identity unusable for signing until `until` (keyChoice
+    /// `lock30`). Same rule: throw `notSupported` rather than pretend.
+    func lockIdentity(_ identity: Identity, until: Date) async throws
 //    func setPostAuthenticationInitializer(initializer: @escaping () -> ()) async
 }
 
+public enum IdentityVaultLifecycleError: Error, Equatable, Sendable {
+    /// The vault does not implement destroy or lock. Nothing was removed.
+    case notSupported
+}
+
 public extension IdentityVaultProtocol {
+    /// Default: refuse. A vault only deletes when it really implements it.
+    func destroyIdentity(_ identity: Identity) async throws {
+        throw IdentityVaultLifecycleError.notSupported
+    }
+
+    /// Default: refuse. A vault only locks when it really implements it.
+    func lockIdentity(_ identity: Identity, until: Date) async throws {
+        throw IdentityVaultLifecycleError.notSupported
+    }
+
     /// Source compatibility for ordinary vaults. Strict holder vaults override this
     /// requirement and perform live one-shot admission at their private signer.
     func signMessageForIdentity(messageData: Data, identity: Identity, bridgeConnectContext: BridgeConnectSigningContext) async throws -> Data {
