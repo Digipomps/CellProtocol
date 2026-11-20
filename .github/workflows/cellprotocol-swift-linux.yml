@@ -101,7 +101,7 @@ jobs:
             BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
-            SkeletonDataBindingTests InteropFixturesV1Tests FlowPlacementTests FlowPlacementRunnerTests IdentityLinkClientTests; do
+            SkeletonDataBindingTests SkeletonEditingTests InteropFixturesV1Tests FlowPlacementTests FlowPlacementRunnerTests IdentityLinkClientTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
