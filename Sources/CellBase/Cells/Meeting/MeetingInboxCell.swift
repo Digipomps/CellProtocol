@@ -13,6 +13,20 @@ public final class MeetingInboxCell: GeneralCell, @unchecked Sendable {
                 returns: ExploreContract.schema(type: "object"), permissions: ["r---"], required: false,
                 description: .string("Owner-only locally committed encrypted transcript packages; reading does not acknowledge a remote delivery."))
         }
+        await registerExploreContract(requester: owner, key: "delete", method: .set,
+            input: ExploreContract.schema(type: "object"), returns: ExploreContract.schema(type: "object"), permissions: ["-w--"], required: false,
+            description: .string("Owner-only: removes one received transcript package from this device. Other participants keep theirs."))
+    }
+    public override func set(keypath: String, value: ValueType, requester: Identity) async throws -> ValueType? {
+        guard keypath == "delete" else { return try await super.set(keypath: keypath, value: value, requester: requester) }
+        guard requester.referencesSameSigningIdentity(as: owner), await checkIdentityOrigin(requester, against: owner) else { throw MeetingSessionError.forbidden }
+        guard case let .object(object) = value, case let .string(packetID)? = object["packetID"], !packetID.isEmpty, packetID.utf8.count <= 256 else {
+            return .object(["status": .string("invalid")])
+        }
+        for (inbox, _) in sourceLock.withLock({ Array(sources.values) }) {
+            if try await inbox.removeReceived(packetID: packetID) { return .object(["status": .string("deleted")]) }
+        }
+        return .object(["status": .string("not_found")])
     }
     public func add(cellID: String, inbox: MeetingDeliveryService, sender: Identity) {
         sourceLock.withLock { sources[cellID] = (inbox, sender.publicIdentitySnapshot()) }
@@ -35,7 +49,8 @@ public final class MeetingInboxCell: GeneralCell, @unchecked Sendable {
                     "transcript": .string(package.transcript.isEmpty ? "Ingen tale kunne transkriberes." : package.transcript),
                     "notice": .string(package.incomplete ? "Delvis transkript · ikke godkjent referat" : "Automatisk transkript · ikke godkjent referat"),
                     "trust": .string("Tillitspakke · plan \(ref.revision) · \(package.consents.count) signerte ja\nSHA-256: \(packet.packageHash)\n\(package.segment.plan.processingRoute) · \(package.segment.plan.locale)\n" + package.uncertainties.joined(separator: "\n")),
-                    "retention": .string("Lagret på denne enheten. Slettes senest " + ISO8601DateFormatter().string(from: packet.recipientExpiresAt))
+                    "retention": .string("Lagret på denne enheten. Slettes senest " + ISO8601DateFormatter().string(from: packet.recipientExpiresAt)),
+                    "deletePayload": .object(["packetID": .string(packet.id)])
                 ]))
             }
         }
@@ -55,7 +70,8 @@ public final class MeetingInboxCell: GeneralCell, @unchecked Sendable {
         {"Text":{"keypath":"notice","modifiers":{"fontSize":14,"foregroundColor":"#98382F"}}},
         {"Text":{"keypath":"transcript","modifiers":{"fontSize":16,"foregroundColor":"#292D29"}}},
         {"Text":{"keypath":"trust","modifiers":{"fontSize":14,"foregroundColor":"#626B60"}}},
-        {"Text":{"keypath":"retention","modifiers":{"fontSize":14,"foregroundColor":"#626B60"}}}
+        {"Text":{"keypath":"retention","modifiers":{"fontSize":14,"foregroundColor":"#626B60"}}},
+        {"Button":{"keypath":"inbox.delete","label":"Slett fra denne enheten","payloadKeypath":"deletePayload","modifiers":{"foregroundColor":"#98382F"}}}
       ]}}}}
     ]}}
     """#

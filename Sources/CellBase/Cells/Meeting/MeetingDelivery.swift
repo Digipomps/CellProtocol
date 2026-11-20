@@ -272,6 +272,16 @@ public actor MeetingDeliveryService {
 
     /// Host schedules on launch/resume and periodically; access also enforces
     /// expiry. Removal is local unlink, not a promise about exported copies/backups.
+    /// Removes one received package and its receipts from this device only.
+    /// The sender's copy and other participants' copies are not touched.
+    @discardableResult
+    public func removeReceived(packetID: String) throws -> Bool {
+        let key = packetKey(packetID, inbox: true)
+        guard let packet = try decode(MeetingDeliveryPacket.self, key: key) else { return false }
+        for recipient in packet.recipients { try store.remove(receiptKey(packet, recipient: recipient, inbox: true)) }
+        try store.remove(key)
+        return true
+    }
     public func purgeExpired(now: Date = Date()) throws {
         for key in try store.keys() where key.hasPrefix("out-") || key.hasPrefix("in-") {
             guard let packet = try decode(MeetingDeliveryPacket.self, key: key) else { continue }
