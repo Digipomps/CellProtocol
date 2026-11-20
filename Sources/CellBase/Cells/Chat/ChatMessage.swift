@@ -11,6 +11,15 @@ public struct ChatMessage: Codable {
     public let topic: String
     public let createdAt: String
     public let ownerDisplayNameSnapshot: String?
+    /// Who wrote the message: "person" (default, also for older messages) or "model".
+    public let authorKind: String?
+    /// For a model message: the member who asked, the model that answered,
+    /// whether the route was local or external, and how many messages it read.
+    public let askedByUUID: String?
+    public let askedByDisplayName: String?
+    public let model: String?
+    public let routeClass: String?
+    public let contextCount: Int?
 
     public init(
         id: String = UUID().uuidString,
@@ -19,7 +28,13 @@ public struct ChatMessage: Codable {
         contentType: String = "text/plain",
         topic: String = "chat",
         createdAt: String? = nil,
-        ownerDisplayNameSnapshot: String? = nil
+        ownerDisplayNameSnapshot: String? = nil,
+        authorKind: String? = nil,
+        askedByUUID: String? = nil,
+        askedByDisplayName: String? = nil,
+        model: String? = nil,
+        routeClass: String? = nil,
+        contextCount: Int? = nil
     ) {
         self.id = id
         self.owner = owner
@@ -28,7 +43,16 @@ public struct ChatMessage: Codable {
         self.topic = topic
         self.createdAt = createdAt ?? Self.timestampString()
         self.ownerDisplayNameSnapshot = ownerDisplayNameSnapshot ?? owner.displayName
+        self.authorKind = authorKind
+        self.askedByUUID = askedByUUID
+        self.askedByDisplayName = askedByDisplayName
+        self.model = model
+        self.routeClass = routeClass
+        self.contextCount = contextCount
     }
+
+    /// "person" unless the message was written by the chat's model participant.
+    public var resolvedAuthorKind: String { authorKind ?? "person" }
 
     public func messageObject() -> Object {
         messageObject(presentationScopeID: nil)
@@ -58,6 +82,14 @@ public struct ChatMessage: Codable {
         messageObject["createdAt"] = .string(createdAt)
         messageObject["displayTimestamp"] = .string(ChatPresentation.absoluteTimestamp(from: createdAt))
         messageObject["relativeTimestamp"] = .string(ChatPresentation.relativeTimestamp(from: createdAt))
+        messageObject["authorKind"] = .string(resolvedAuthorKind)
+        if resolvedAuthorKind == "model" {
+            messageObject["askedByUUID"] = askedByUUID.map(ValueType.string) ?? .null
+            messageObject["askedByDisplayName"] = askedByDisplayName.map(ValueType.string) ?? .null
+            messageObject["model"] = model.map(ValueType.string) ?? .null
+            messageObject["routeClass"] = routeClass.map(ValueType.string) ?? .null
+            messageObject["contextCount"] = contextCount.map { .integer($0) } ?? .null
+        }
         return messageObject
     }
 

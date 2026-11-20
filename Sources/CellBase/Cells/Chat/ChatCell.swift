@@ -404,6 +404,11 @@ public final class ChatCell: GeneralCell {
     private var lastMembershipChangeReason: String?
     private var lastRekeyCheckpoint: ChatRekeyCheckpointRecord?
     private var messagesLimit = 200
+    /// The model participant (PDD_modell-i-felles-chat_2026-11-15).
+    private var modelLedger = ChatModelConsentLedger()
+    private var modelIdentity: Identity?
+    private var modelAsksByID = [String: ChatModelAsk]()
+    private var modelNoticesByUUID = [String: ChatModelNotice]()
     private var topic = "chat"
     private var running = false
     private var emitterTask: Task<Void, Never>?
@@ -428,6 +433,10 @@ public final class ChatCell: GeneralCell {
         case lastMembershipChangeReason
         case lastRekeyCheckpoint
         case messagesLimit
+        case modelLedger
+        case modelIdentity
+        case modelAsksByID
+        case modelNoticesByUUID
         case topic
         case running
         case generalCell
@@ -472,6 +481,10 @@ public final class ChatCell: GeneralCell {
             ?? self.lastRekeyCheckpoint?.envelopeGeneration
             ?? 1
         self.messagesLimit = try container.decodeIfPresent(Int.self, forKey: .messagesLimit) ?? 200
+        self.modelLedger = try container.decodeIfPresent(ChatModelConsentLedger.self, forKey: .modelLedger) ?? ChatModelConsentLedger()
+        self.modelIdentity = try container.decodeIfPresent(Identity.self, forKey: .modelIdentity)
+        self.modelAsksByID = try container.decodeIfPresent([String: ChatModelAsk].self, forKey: .modelAsksByID) ?? [:]
+        self.modelNoticesByUUID = try container.decodeIfPresent([String: ChatModelNotice].self, forKey: .modelNoticesByUUID) ?? [:]
         self.topic = try container.decodeIfPresent(String.self, forKey: .topic) ?? "chat"
         self.running = try container.decodeIfPresent(Bool.self, forKey: .running) ?? false
         try super.init(from: decoder)
@@ -510,6 +523,10 @@ public final class ChatCell: GeneralCell {
         try container.encode(lastMembershipChangeReason, forKey: .lastMembershipChangeReason)
         try container.encode(lastRekeyCheckpoint, forKey: .lastRekeyCheckpoint)
         try container.encode(messagesLimit, forKey: .messagesLimit)
+        try container.encode(modelLedger, forKey: .modelLedger)
+        try container.encodeIfPresent(modelIdentity, forKey: .modelIdentity)
+        try container.encode(modelAsksByID, forKey: .modelAsksByID)
+        try container.encode(modelNoticesByUUID, forKey: .modelNoticesByUUID)
         try container.encode(topic, forKey: .topic)
         try container.encode(running, forKey: .running)
     }
@@ -578,6 +595,9 @@ public final class ChatCell: GeneralCell {
         agreementTemplate.addGrant("rw--", for: "addMessage")
         agreementTemplate.addGrant("rw--", for: "start")
         agreementTemplate.addGrant("rw--", for: "stop")
+        for key in Self.modelMemberKeys + Self.modelParticipantKeys {
+            agreementTemplate.addGrant("rw--", for: key)
+        }
     }
 
     private func setupKeys(owner: Identity) async throws {
@@ -739,6 +759,8 @@ public final class ChatCell: GeneralCell {
                 return .bool(self.admissionConditionHolds(condition, for: requester))
             }
         }
+
+        await registerModelParticipantKeys(owner: owner)
 
         await registerGet(key: "audience.admissionConditions", owner: owner) { [weak self] requester in
             guard let self else { return .string("failure") }
@@ -1051,7 +1073,12 @@ public final class ChatCell: GeneralCell {
     }
 
     private func participantsPayload() -> ValueType {
-        .list(sortedParticipants().map { .object($0.objectValue(presentationScopeID: uuid)) })
+        let modelUUID = modelIdentity?.uuid
+        return .list(sortedParticipants().map { record in
+            var object = record.objectValue(presentationScopeID: uuid)
+            object["kind"] = .string(record.id == modelUUID ? "model" : "person")
+            return .object(object)
+        })
     }
 
     private func statePayload(for requester: Identity) -> Object {
@@ -1177,6 +1204,7 @@ public final class ChatCell: GeneralCell {
     }
 
     private func noteAudienceMembershipMutation(reason: String) {
+        modelLedger.membersChanged(members: humanMemberUUIDs(), at: Self.timestampString())
         initializeMembershipTrackingIfNeeded(reason: reason)
         let nextFingerprint = currentMembershipFingerprintValue()
         guard nextFingerprint != currentMembershipFingerprint else { return }
@@ -1930,6 +1958,11 @@ public final class ChatCell: GeneralCell {
     }
 
     private func admissionConditionHolds(_ condition: ChatAdmissionCondition, for requester: Identity) -> Bool {
+        // The model participant is admitted by the members' consent, under
+        // whichever condition the chat uses (FORMAALSSPEC: modelConsent).
+        if isModelIdentity(requester) {
+            return modelConsentHolds()
+        }
         guard let record = invitationRecordsByIdentityUUID[requester.uuid],
               record.status == .accepted,
               requester.referencesSameSigningIdentity(as: record.identity) else {
@@ -1956,10 +1989,22 @@ public final class ChatCell: GeneralCell {
     /// whoever delivers it.
     private static let keysOpenBeforeAdmission: [String: String] = Dictionary(
         uniqueKeysWithValues: ChatAdmissionCondition.allCases.map { ($0.keypath, "r---") } + [
+            ("audience.admission.modelConsent", "r---"),
             ("audience.acceptInvitationArtifact", "-w--"),
             ("audience.inspectInvitationArtifact", "-w--")
         ]
     )
+
+    /// The model participant may use only its own keys and read its own
+    /// admission answer, whatever grants the shared Agreement template lists.
+    public override func validateAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
+        if isModelIdentity(identity), identity.referencesSameSigningIdentity(as: owner) == false {
+            guard Self.modelParticipantKeys.contains(keypath) || Self.keysOpenBeforeAdmission[keypath] != nil else {
+                return false
+            }
+        }
+        return await super.validateAccess(requestedAccess, at: keypath, for: identity)
+    }
 
     public override func validateCellSpecificAccess(_ requestedAccess: String, at keypath: String, for identity: Identity) async -> Bool {
         Self.keysOpenBeforeAdmission[keypath] == requestedAccess
@@ -4678,5 +4723,349 @@ public final class ChatCell: GeneralCell {
             "senderVerified": record.lastSenderVerified.map(ValueType.bool) ?? .null,
             "lastOpenError": record.lastOpenError.map(ValueType.string) ?? .null
         ]
+    }
+}
+
+// MARK: - Model participant (PDD_modell-i-felles-chat_2026-11-15)
+
+extension ChatCell {
+    /// Keys a human member uses to manage and ask the model.
+    static let modelMemberKeys = [
+        "model.state", "model.propose", "model.consent", "model.decline",
+        "model.remove", "model.ask", "model.dismissNotice"
+    ]
+    /// Keys only the admitted model identity may use.
+    static let modelParticipantKeys = ["model.state", "model.context", "model.answer", "model.fail"]
+    static let modelConsentKeypath = "audience.admission.modelConsent"
+
+    fileprivate var modelNow: String { Self.timestampString() }
+
+    /// The people in the chat: the owner and everyone with an accepted invitation.
+    fileprivate func humanMemberUUIDs() -> [String] {
+        var members = [owner.uuid]
+        let modelUUID = modelIdentity?.uuid
+        for (uuid, record) in invitationRecordsByIdentityUUID where record.status == .accepted && uuid != modelUUID && uuid != owner.uuid {
+            members.append(uuid)
+        }
+        return members.sorted()
+    }
+
+    fileprivate func isHumanMember(_ requester: Identity) -> Bool {
+        if requester.referencesSameSigningIdentity(as: owner) { return true }
+        guard isModelIdentity(requester) == false,
+              let record = invitationRecordsByIdentityUUID[requester.uuid],
+              record.status == .accepted else {
+            return false
+        }
+        return requester.referencesSameSigningIdentity(as: record.identity)
+    }
+
+    fileprivate func isModelIdentity(_ identity: Identity) -> Bool {
+        guard let modelIdentity, identity.uuid == modelIdentity.uuid else { return false }
+        return identity.referencesSameSigningIdentity(as: modelIdentity)
+    }
+
+    fileprivate func modelConsentHolds() -> Bool {
+        modelLedger.modelConsentHolds(members: humanMemberUUIDs())
+    }
+
+    fileprivate func displayName(forMember uuid: String) -> String {
+        if uuid == owner.uuid { return owner.displayName }
+        if let record = invitationRecordsByIdentityUUID[uuid] { return record.identity.displayName }
+        return participantRecords[uuid]?.displayName ?? uuid
+    }
+
+    fileprivate func modelStateObject(for requester: Identity) -> Object {
+        let members = humanMemberUUIDs()
+        let consented = modelLedger.consentedMembers(members)
+        let isMember = isHumanMember(requester)
+        var object: Object = [
+            "status": .string(modelLedger.status.rawValue),
+            "hasProposal": .bool(modelLedger.status == .proposed),
+            "isActive": .bool(modelConsentHolds()),
+            "canPropose": .bool(isMember && (modelLedger.status == .none || modelLedger.status == .removed)),
+            "awaitingMe": .bool(modelLedger.awaitingAnswer(from: requester.uuid, members: members)),
+            "externalAllowed": .bool(modelLedger.externalAllowed(members: members)),
+            "consentedCount": .integer(consented.count),
+            "memberCount": .integer(members.count),
+            "consentedNames": .list(consented.map { .string(displayName(forMember: $0)) }),
+            "declinedNames": .list(members.filter { modelLedger.declined[$0] != nil }.map { .string(displayName(forMember: $0)) }),
+            "externalConsentedCount": .integer(members.filter { modelLedger.consents[$0]?.external == true }.count),
+            "modelUUID": modelLedger.modelUUID.map(ValueType.string) ?? .null,
+            "modelDisplayName": modelLedger.modelDisplayName.map(ValueType.string) ?? .null,
+            "proposedByName": modelLedger.proposedByUUID.map { .string(displayName(forMember: $0)) } ?? .null,
+            "proposedAt": modelLedger.proposedAt.map(ValueType.string) ?? .null,
+            "activatedAt": modelLedger.activatedAt.map(ValueType.string) ?? .null,
+            "myConsent": modelLedger.consents[requester.uuid].map { .object(["external": .bool($0.external), "at": .string($0.at)]) } ?? .null,
+            "contextLimit": .integer(ChatModelRules.contextLimit)
+        ]
+        object["notice"] = modelNoticesByUUID[requester.uuid].map { .object($0.objectValue()) } ?? .null
+        if isModelIdentity(requester) {
+            object["openAsks"] = .list(modelAsksByID.values.filter { $0.status == "open" }
+                .sorted { $0.createdAt < $1.createdAt }.map { .object($0.objectValue()) })
+        }
+        return object
+    }
+
+    fileprivate func modelRefusal(_ code: String, _ message: String) -> ValueType {
+        .object(["status": .string("refused"), "code": .string(code), "message": .string(message)])
+    }
+
+    fileprivate func modelLedgerResult(for requester: Identity, _ body: () throws -> Void) -> ValueType {
+        do {
+            try body()
+            failAsksIfModelLostAccess()
+            return .object(["status": .string("ok"), "model": .object(modelStateObject(for: requester))])
+        } catch let refusal as ChatModelConsentLedger.Refusal {
+            return modelRefusal(refusal.rawValue, "\(refusal)")
+        } catch {
+            return modelRefusal("error", "\(error)")
+        }
+    }
+
+    /// When the model loses access, its open asks end and each asker is told.
+    fileprivate func failAsksIfModelLostAccess() {
+        guard modelConsentHolds() == false else { return }
+        for (id, ask) in modelAsksByID where ask.status == "open" {
+            modelAsksByID[id]?.status = "failed"
+            modelNoticesByUUID[ask.askedByUUID] = ChatModelNotice(
+                askID: id, code: "model_removed",
+                message: "Modellen er ikke lenger med i samtalen, så spørsmålet ble ikke besvart.",
+                routeClass: ask.routeClass, at: modelNow)
+        }
+    }
+
+    fileprivate func expireOldAsks() {
+        let cutoff = Self.timestampString(Date().addingTimeInterval(-ChatModelRules.askLifetimeSeconds))
+        for (id, ask) in modelAsksByID where ask.status == "open" && ask.createdAt < cutoff {
+            modelAsksByID[id]?.status = "expired"
+            modelNoticesByUUID[ask.askedByUUID] = ChatModelNotice(
+                askID: id, code: "ask_expired",
+                message: "Modellen svarte ikke i tide. Prøv igjen.",
+                routeClass: ask.routeClass, at: modelNow)
+        }
+    }
+
+    fileprivate func boolField(_ object: Object, _ key: String) -> Bool {
+        if case let .bool(value)? = object[key] { return value }
+        return false
+    }
+
+    fileprivate func registerModelParticipantKeys(owner: Identity) async {
+        let objectSchema = ExploreContract.schema(type: "object")
+        let stringSchema = ExploreContract.schema(type: "string")
+        let returns = ExploreContract.oneOfSchema(options: [objectSchema, stringSchema], description: "Result object, or a denial string.")
+
+        await registerGet(key: Self.modelConsentKeypath, owner: owner,
+                          returns: ExploreContract.schema(type: "bool", description: "Whether the requester is the chat's model and every member has said yes."),
+                          description: .string("Answers only for the requester. True for the model identity while the members' consent holds; that is what admits it under the chat's member or invitationAccepted condition.")) { [weak self] requester in
+            guard let self else { return .bool(false) }
+            return .bool(self.isModelIdentity(requester) && self.modelConsentHolds())
+        }
+
+        await registerGet(key: "model.state", owner: owner, returns: returns, permissions: ["r---"],
+                          description: .string("The model participant as this requester sees it: proposal, who said yes, whether it is active, whether external models are allowed, and the requester's own notice.")) { [weak self] requester in
+            guard let self else { return .string("failure") }
+            guard await self.canRead(requester, keypath: "model.state"),
+                  self.isHumanMember(requester) || (self.isModelIdentity(requester) && self.modelConsentHolds()) else { return .string("denied") }
+            self.expireOldAsks()
+            return .object(self.modelStateObject(for: requester))
+        }
+
+        await registerSet(key: "model.propose", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("A member proposes a model participant: {identity, displayName, external}. The proposer's yes is counted.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.propose"), self.isHumanMember(requester) else { return .string("denied") }
+            let object = self.objectValue(payload) ?? [:]
+            guard case let .identity(model)? = object["identity"] else {
+                return self.modelRefusal("invalid_payload", "model.propose needs {identity}")
+            }
+            guard model.uuid != requester.uuid, self.humanMemberUUIDs().contains(model.uuid) == false else {
+                return self.modelRefusal("invalid_model", "A member cannot be the model participant.")
+            }
+            let name = self.stringValue(object["displayName"]) ?? "Språkmodell"
+            let external = self.boolField(object, "external")
+            return self.modelLedgerResult(for: requester) {
+                try self.modelLedger.propose(modelUUID: model.uuid, displayName: name, by: requester.uuid, external: external, at: self.modelNow, members: self.humanMemberUUIDs())
+                self.modelIdentity = model
+                self.modelAsksByID = [:]
+            }
+        }
+
+        await registerSet(key: "model.consent", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("A member says yes to the model: {external: Bool} also allows external routes.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.consent"), self.isHumanMember(requester) else { return .string("denied") }
+            let external = self.boolField(self.objectValue(payload) ?? [:], "external")
+            return self.modelLedgerResult(for: requester) {
+                try self.modelLedger.consent(by: requester.uuid, external: external, at: self.modelNow, members: self.humanMemberUUIDs())
+            }
+        }
+
+        await registerSet(key: "model.decline", owner: owner, input: .null, returns: returns, permissions: ["-w--"],
+                          description: .string("A member says no, or takes back a yes. The model loses access at once.")) { [weak self] requester, _ in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.decline"), self.isHumanMember(requester) else { return .string("denied") }
+            return self.modelLedgerResult(for: requester) {
+                try self.modelLedger.decline(by: requester.uuid, at: self.modelNow, members: self.humanMemberUUIDs())
+            }
+        }
+
+        await registerSet(key: "model.remove", owner: owner, input: .null, returns: returns, permissions: ["-w--"],
+                          description: .string("Any member removes the model. It must be proposed again to come back.")) { [weak self] requester, _ in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.remove"), self.isHumanMember(requester) else { return .string("denied") }
+            return self.modelLedgerResult(for: requester) {
+                try self.modelLedger.remove(by: requester.uuid, at: self.modelNow, members: self.humanMemberUUIDs())
+            }
+        }
+
+        await registerSet(key: "model.dismissNotice", owner: owner, input: .null, returns: returns, permissions: ["-w--"],
+                          description: .string("Clears the requester's own notice.")) { [weak self] requester, _ in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.dismissNotice"), self.isHumanMember(requester) else { return .string("denied") }
+            self.modelNoticesByUUID[requester.uuid] = nil
+            return .object(["status": .string("ok"), "model": .object(self.modelStateObject(for: requester))])
+        }
+
+        await registerSet(key: "model.ask", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("A member asks the model about their own message: {messageID, route: local|external}. Opens one ask; the model may read only for an open ask.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.ask"), self.isHumanMember(requester) else { return .string("denied") }
+            return self.openModelAsk(payload: payload, requester: requester)
+        }
+
+        await registerSet(key: "model.context", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("The model reads one open ask: {askID}. Returns the question and at most 20 messages written after the model came in.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.context"), self.isModelIdentity(requester), self.modelConsentHolds() else { return .string("denied") }
+            return self.modelContext(payload: payload)
+        }
+
+        await registerSet(key: "model.answer", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("The model answers one open ask: {askID, text, model}. Stored as plain text, at most 4000 Unicode scalars, marked as a model message.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.answer"), self.isModelIdentity(requester), self.modelConsentHolds() else { return .string("denied") }
+            return self.answerModelAsk(payload: payload, requester: requester)
+        }
+
+        await registerSet(key: "model.fail", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("The model's host reports that an ask could not be answered: {askID, code, message}. Only the asker sees the notice; nothing is posted in the chat.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.canWrite(requester, keypath: "model.fail"), self.isModelIdentity(requester) else { return .string("denied") }
+            let object = self.objectValue(payload) ?? [:]
+            guard let askID = self.stringValue(object["askID"]), let ask = self.modelAsksByID[askID], ask.status == "open" else {
+                return self.modelRefusal("no_open_ask", "No open ask with that id.")
+            }
+            self.modelAsksByID[askID]?.status = "failed"
+            self.modelNoticesByUUID[ask.askedByUUID] = ChatModelNotice(
+                askID: askID,
+                code: self.stringValue(object["code"]) ?? "model_unavailable",
+                message: ChatModelRules.sanitizeAnswer(self.stringValue(object["message"]) ?? "Modellen svarte ikke."),
+                routeClass: ask.routeClass, at: self.modelNow)
+            return .object(["status": .string("ok"), "askID": .string(askID)])
+        }
+    }
+
+    fileprivate func openModelAsk(payload: ValueType, requester: Identity) -> ValueType {
+        expireOldAsks()
+        guard modelConsentHolds(), let activatedAt = modelLedger.activatedAt else {
+            return modelRefusal("model_not_active", "Modellen er ikke med i samtalen.")
+        }
+        let object = objectValue(payload) ?? [:]
+        let route = stringValue(object["route"]) ?? "local"
+        guard route == "local" || route == "external" else {
+            return modelRefusal("invalid_route", "route must be local or external")
+        }
+        if route == "external" && modelLedger.externalAllowed(members: humanMemberUUIDs()) == false {
+            return modelRefusal("external_not_allowed", "Alle i samtalen må si ja til ekstern modell først.")
+        }
+        guard let messageID = stringValue(object["messageID"]),
+              let question = chatMessageHistory.first(where: { $0.id == messageID }) else {
+            return modelRefusal("no_question", "Fant ikke spørsmålet.")
+        }
+        guard question.owner.uuid == requester.uuid, question.resolvedAuthorKind == "person" else {
+            return modelRefusal("not_your_message", "Du kan bare spørre modellen om din egen melding.")
+        }
+        let context = ChatModelRules.contextMessageIDs(
+            messages: chatMessageHistory.map { ChatModelRules.MessageStamp(id: $0.id, createdAt: $0.createdAt) },
+            activatedAt: activatedAt,
+            questionID: messageID
+        )
+        guard context.contains(messageID) else {
+            return modelRefusal("question_before_model", "Spørsmålet ble skrevet før modellen kom inn.")
+        }
+        let ask = ChatModelAsk(
+            id: "ask-\(UUID().uuidString)",
+            askedByUUID: requester.uuid,
+            askedByDisplayName: requester.displayName,
+            questionMessageID: messageID,
+            routeClass: route,
+            createdAt: modelNow,
+            contextMessageIDs: context,
+            status: "open"
+        )
+        modelAsksByID[ask.id] = ask
+        modelNoticesByUUID[requester.uuid] = nil
+        return .object(["status": .string("open"), "ask": .object(ask.objectValue())])
+    }
+
+    fileprivate func modelContext(payload: ValueType) -> ValueType {
+        expireOldAsks()
+        let object = objectValue(payload) ?? [:]
+        guard let askID = stringValue(object["askID"]), let ask = modelAsksByID[askID], ask.status == "open" else {
+            return modelRefusal("no_open_ask", "No open ask with that id.")
+        }
+        let byID = Dictionary(chatMessageHistory.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let messages: [ValueType] = ask.contextMessageIDs.compactMap { id in
+            guard let message = byID[id] else { return nil }
+            return .object([
+                "id": .string(message.id),
+                "authorDisplayName": .string(message.ownerDisplayNameSnapshot ?? message.owner.displayName),
+                "authorKind": .string(message.resolvedAuthorKind),
+                "content": .string(message.content),
+                "createdAt": .string(message.createdAt)
+            ])
+        }
+        return .object([
+            "status": .string("ok"),
+            "ask": .object(ask.objectValue()),
+            "question": .string(byID[ask.questionMessageID]?.content ?? ""),
+            "messages": .list(messages)
+        ])
+    }
+
+    fileprivate func answerModelAsk(payload: ValueType, requester: Identity) -> ValueType {
+        let object = objectValue(payload) ?? [:]
+        guard let askID = stringValue(object["askID"]), let ask = modelAsksByID[askID], ask.status == "open" else {
+            return modelRefusal("no_open_ask", "No open ask with that id.")
+        }
+        if ask.routeClass == "external" && modelLedger.externalAllowed(members: humanMemberUUIDs()) == false {
+            modelAsksByID[askID]?.status = "failed"
+            modelNoticesByUUID[ask.askedByUUID] = ChatModelNotice(
+                askID: askID, code: "external_not_allowed",
+                message: "Noen har trukket ja til ekstern modell, så svaret ble ikke vist.",
+                routeClass: ask.routeClass, at: modelNow)
+            return modelRefusal("external_not_allowed", "External routes are no longer allowed in this chat.")
+        }
+        let text = ChatModelRules.sanitizeAnswer(stringValue(object["text"]) ?? "")
+        guard text.isEmpty == false else {
+            return modelRefusal("empty_answer", "The answer is empty.")
+        }
+        let message = ChatMessage(
+            owner: requester,
+            content: text,
+            contentType: Self.defaultContentType,
+            topic: topic,
+            ownerDisplayNameSnapshot: modelLedger.modelDisplayName ?? requester.displayName,
+            authorKind: "model",
+            askedByUUID: ask.askedByUUID,
+            askedByDisplayName: ask.askedByDisplayName,
+            model: stringValue(object["model"]),
+            routeClass: ask.routeClass,
+            contextCount: ask.contextMessageIDs.count
+        )
+        modelAsksByID[askID]?.status = "answered"
+        return storeMessage(message, requester: requester)
     }
 }
