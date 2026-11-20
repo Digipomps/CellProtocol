@@ -451,7 +451,8 @@ public enum SkeletonReachabilityAudit {
         }
     }
 
-    private static func modifiers(of element: SkeletonElement) -> SkeletonModifiers? {
+    /// Shared with SkeletonEditing (purpose per element without a JSON round trip).
+    static func modifiers(of element: SkeletonElement) -> SkeletonModifiers? {
         switch element {
         case .List(let value): return value.modifiers
         case .Tree(let value): return value.modifiers

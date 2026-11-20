@@ -225,14 +225,26 @@ public enum SkeletonEditing {
     /// Every element in depth-first order with its path.
     public static func allPaths(in root: SkeletonElement) -> [SkeletonEditPath] {
         var result: [SkeletonEditPath] = []
-        func walk(_ element: SkeletonElement, _ path: SkeletonEditPath) {
-            result.append(path)
+        forEachElement(in: root) { path, _, _ in result.append(path) }
+        return result
+    }
+
+    /// Visits every element once in tree order with its path and whether it
+    /// is a fixed slot. One pass; use it instead of `element(in:at:)` per path
+    /// on large pages.
+    public static func forEachElement(
+        in root: SkeletonElement,
+        _ visit: (SkeletonEditPath, SkeletonElement, Bool) -> Void
+    ) {
+        func walk(_ element: SkeletonElement, _ path: SkeletonEditPath, _ fixed: Bool) {
+            visit(path, element, fixed)
+            var isList = false
+            if case .List = element { isList = true }
             for (index, child) in children(of: element).enumerated() {
-                walk(child, path.appending(index))
+                walk(child, path.appending(index), isList)
             }
         }
-        walk(root, .root)
-        return result
+        walk(root, .root, false)
     }
 
     // MARK: Primitive mutations
@@ -307,11 +319,8 @@ public enum SkeletonEditing {
         else { return [] }
 
         var targets: [SkeletonMoveTarget] = []
-        for path in allPaths(in: root) {
-            guard source.contains(path) == false,
-                  let container = element(in: root, at: path),
-                  acceptsChildren(container)
-            else { continue }
+        forEachElement(in: root) { path, container, _ in
+            guard source.contains(path) == false, acceptsChildren(container) else { return }
             let count = children(of: container).count
             for index in 0...count {
                 if path == sourceParent && (index == sourceIndex || index == sourceIndex + 1) { continue }
@@ -370,9 +379,7 @@ public enum SkeletonEditing {
 
     /// The element's own `purposeRef` (modifiers), if any.
     public static func purposeRef(of element: SkeletonElement) -> String? {
-        guard let (_, body) = try? jsonBody(of: element),
-              let modifiers = body["modifiers"] as? [String: Any],
-              let ref = modifiers["purposeRef"] as? String,
+        guard let ref = SkeletonReachabilityAudit.modifiers(of: element)?.purposeRef,
               ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         else { return nil }
         return ref
@@ -404,8 +411,8 @@ public enum SkeletonEditing {
     public static func purposeGroups(in root: SkeletonElement) -> [(purposeRef: String?, paths: [SkeletonEditPath])] {
         var order: [String?] = []
         var groups: [String?: [SkeletonEditPath]] = [:]
-        for path in allPaths(in: root) {
-            guard isFixedSlot(path, in: root) == false, let element = element(in: root, at: path) else { continue }
+        forEachElement(in: root) { path, element, fixed in
+            guard fixed == false else { return }
             let ref = purposeRef(of: element)
             if groups[ref] == nil { order.append(ref) }
             groups[ref, default: []].append(path)
