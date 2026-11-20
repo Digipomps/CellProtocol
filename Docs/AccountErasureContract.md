@@ -1,7 +1,7 @@
 # Account erasure contract (CellBase)
 
-Status: contract only (PDD_kontosletting_2026-11-20, AP1). No holder in CellBase
-implements `PersonalDataHolder` yet, and no vault implements destroy or lock.
+Status: contract (AP1) plus CellApple vault destroy/lock (AP4). No holder in CellBase
+implements `PersonalDataHolder` yet.
 
 Source: `Sources/CellBase/PersonalData/PersonalDataHolder.swift`,
 `Sources/CellBase/Identity/IdentityVaultProtocol.swift`.
@@ -34,6 +34,15 @@ Fields: `domain` (`haven.account.erasure.receipt.v1`), `holder`, `requestID`, `o
 
 ## Vault
 
-`IdentityVaultProtocol.destroyIdentity(_:)` and `lockIdentity(_:until:)`. The default
-implementation throws `IdentityVaultLifecycleError.notSupported`, so no vault pretends to
-delete or lock. Real implementations are AP4.
+`IdentityVaultProtocol.destroyIdentity(_:)`, `lockIdentity(_:until:)` and `unlockIdentity(_:)`.
+The default implementation throws `IdentityVaultLifecycleError.notSupported`, so no vault
+pretends to delete or lock.
+
+CellApple `IdentityVault` implements all three. The caller must present the stored signing key.
+- destroy: `SecItemDelete` of the signing key (`kSecClassKey` by application tag) and the
+  key-agreement key (generic password, this vault's service and the tag as account), then
+  removes the entry from `Identities.crypt`. The vault-wide main secret stays, since other
+  identities need it.
+- lock: stores `signingLockedUntil` in `Identities.crypt`, so it survives restart. Signing
+  throws `IdentityVaultLifecycleError.locked(until:)` until the date. unlock clears it.
+  The lock covers signing only. `privateKeyData(for:role:)` is not blocked.

@@ -24,12 +24,16 @@ public protocol IdentityVaultProtocol: Sendable {
     /// Makes the identity unusable for signing until `until` (keyChoice
     /// `lock30`). Same rule: throw `notSupported` rather than pretend.
     func lockIdentity(_ identity: Identity, until: Date) async throws
+    /// Undoes `lockIdentity` (the person regrets within the lock period).
+    func unlockIdentity(_ identity: Identity) async throws
 //    func setPostAuthenticationInitializer(initializer: @escaping () -> ()) async
 }
 
 public enum IdentityVaultLifecycleError: Error, Equatable, Sendable {
     /// The vault does not implement destroy or lock. Nothing was removed.
     case notSupported
+    /// Signing is refused until the date (keyChoice `lock30`).
+    case locked(until: Date)
 }
 
 public extension IdentityVaultProtocol {
@@ -40,6 +44,10 @@ public extension IdentityVaultProtocol {
 
     /// Default: refuse. A vault only locks when it really implements it.
     func lockIdentity(_ identity: Identity, until: Date) async throws {
+        throw IdentityVaultLifecycleError.notSupported
+    }
+
+    func unlockIdentity(_ identity: Identity) async throws {
         throw IdentityVaultLifecycleError.notSupported
     }
 

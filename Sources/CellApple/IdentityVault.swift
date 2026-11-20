@@ -1129,8 +1129,75 @@ public actor IdentityVault: IdentityVaultProtocol, ScopedSecretProviderProtocol,
         guard signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity) else {
             throw IdentityVaultError.signingFailed
         }
+        if let lockedUntil = vaultIdentity.signingLockedUntil, Date() < lockedUntil {
+            throw IdentityVaultLifecycleError.locked(until: lockedUntil)
+        }
         let signatureData = try self.signMessageForVaultIdentity(messageData: messageData, vaultIdentity: vaultIdentity)
         return signatureData
+    }
+
+    // MARK: - Account erasure (PDD_kontosletting_2026-11-20, AP4)
+
+    /// Removes the identity's keychain items (signing key by application tag,
+    /// key-agreement key stored as generic password under this vault's service)
+    /// and its entry in Identities.crypt. The vault-wide main secret is kept:
+    /// other identities in the same vault still need it.
+    public func destroyIdentity(_ identity: Identity) async throws {
+        let vaultIdentity = try ownedVaultIdentity(identity)
+        let tags = [vaultIdentity.privateKeyApplicationTag, vaultIdentity.keyAgreementPrivateKeyApplicationTag]
+            .compactMap { normalizedApplicationTag($0) }
+        for tag in Set(tags) {
+            try deleteKeychainItems(forApplicationTag: tag)
+        }
+        identitiesUUIDDictionary.removeValue(forKey: vaultIdentity.uuid)
+        identitiesDictionary = identitiesDictionary.filter { $0.value != vaultIdentity.uuid }
+        try await persistIdentities()
+    }
+
+    public func lockIdentity(_ identity: Identity, until: Date) async throws {
+        var vaultIdentity = try ownedVaultIdentity(identity)
+        guard until.timeIntervalSince1970.isFinite else { throw IdentityVaultError.signingFailed }
+        vaultIdentity.signingLockedUntil = until
+        identitiesUUIDDictionary[vaultIdentity.uuid] = vaultIdentity
+        try await persistIdentities()
+    }
+
+    public func unlockIdentity(_ identity: Identity) async throws {
+        var vaultIdentity = try ownedVaultIdentity(identity)
+        vaultIdentity.signingLockedUntil = nil
+        identitiesUUIDDictionary[vaultIdentity.uuid] = vaultIdentity
+        try await persistIdentities()
+    }
+
+    /// The caller must present the same signing key the vault stores.
+    private func ownedVaultIdentity(_ identity: Identity) throws -> VaultIdentity {
+        guard let vaultIdentity = vaultIdentityWithUUID(identity.uuid) else {
+            throw IdentityVaultError.noVaultIdentity
+        }
+        guard signingPublicKeyMatches(requested: identity, stored: vaultIdentity.identity) else {
+            throw IdentityVaultError.signingFailed
+        }
+        return vaultIdentity
+    }
+
+    private func persistIdentities() async throws {
+        let serialized = try JSONEncoder().encode(Array(identitiesUUIDDictionary.values))
+        try await saveIdentities(jsonData: serialized)
+    }
+
+    private func deleteKeychainItems(forApplicationTag applicationTag: String) throws {
+        testHostKeychainFallbackData.removeValue(forKey: applicationTag)
+        let queries: [[String: Any]] = [
+            [kSecClass as String: kSecClassKey,
+             kSecAttrApplicationTag as String: Data(applicationTag.utf8)],
+            genericPasswordBaseQuery(for: applicationTag),
+        ]
+        for query in queries {
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound || shouldUseTestHostKeychainFallback(for: status) else {
+                throw KeychainError.unhandledError(status: status)
+            }
+        }
     }
 
     private func signingPublicKeyMatches(requested: Identity, stored: Identity) -> Bool {
@@ -1486,6 +1553,10 @@ struct VaultIdentity: Codable {
     var privateProperties: [String: ValueType]?
     
     var entityAnchorReference: String
+
+    /// Signing refuses until this date (account erasure keyChoice `lock30`).
+    /// Persisted in Identities.crypt, so the lock survives restart.
+    var signingLockedUntil: Date?
     
     var identity: Identity {
         get {
@@ -1528,6 +1599,7 @@ struct VaultIdentity: Codable {
         case publicKeyAgreementSecureKey
         case privateKeyAgreementSecureKey
         case entityAnchorReference
+        case signingLockedUntil
     }
     
     init() {
@@ -1576,6 +1648,7 @@ struct VaultIdentity: Codable {
     
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.signingLockedUntil = try values.decodeIfPresent(Date.self, forKey: .signingLockedUntil)
         //        print("Decoder.userinfo: \(decoder.userInfo)")
         if values.contains(.uuid) {
             if let suppliedUuid = try? values.decode(String.self, forKey: .uuid) {
@@ -1676,6 +1749,7 @@ struct VaultIdentity: Codable {
         try container.encodeIfPresent(publicKeyAgreementSecureKey, forKey: .publicKeyAgreementSecureKey)
         try container.encodeIfPresent(privateKeyAgreementSecureKey, forKey: .privateKeyAgreementSecureKey)
         try container.encodeIfPresent(entityAnchorReference, forKey: .entityAnchorReference)
+        try container.encodeIfPresent(signingLockedUntil, forKey: .signingLockedUntil)
         // then ecode other aspects of Identity
     }
     
