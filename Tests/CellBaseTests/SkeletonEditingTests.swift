@@ -50,6 +50,19 @@ final class SkeletonEditingTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(SkeletonEditPath.self, from: data), path("root.2.1"))
     }
 
+    func testForEachElementVisitsOnceInTreeOrderAndMarksTheListSlot() throws {
+        let root = try page()
+        var visited: [String] = []
+        var fixed: [String] = []
+        SkeletonEditing.forEachElement(in: root) { path, _, isFixed in
+            visited.append(path.description)
+            if isFixed { fixed.append(path.description) }
+        }
+        XCTAssertEqual(visited, SkeletonEditing.allPaths(in: root).map(\.description))
+        XCTAssertEqual(visited.count, 10)
+        XCTAssertEqual(fixed, ["root.3.0"])
+    }
+
     func testElementLookupIncludesListTemplate() throws {
         let root = try page()
         XCTAssertEqual(shape(SkeletonEditing.element(in: root, at: path("root.2.1"))!), "book")
