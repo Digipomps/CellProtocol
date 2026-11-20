@@ -344,6 +344,10 @@ final class BridgeMultiplexingTests: XCTestCase {
             stateLock.withLock { closeInvocations += 1 }
         }
 
+        func sessionFullyClosed() -> Bool {
+            (delegate as? BridgeMultiplexSession)?.isFullyClosed == true
+        }
+
         func snapshot() -> (setupInvocations: Int, closeInvocations: Int, commands: [BridgeCommand]) {
             stateLock.withLock { (setupInvocations, closeInvocations, commands) }
         }
@@ -477,6 +481,52 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(transports[2].snapshot().closeInvocations, 1)
     }
 
+    // Loopback lifecycle, opt-in pool/session policy (main's default is tested by the original).
+    func testConnectionPoolRetainsLiveSessionChargeUntilPhysicalClose() async throws {
+        let vault = EphemeralIdentityVault()
+        let pool = BridgeConnectionPool(maximumSessions: 2, capacityPolicy: .rejectUntilPhysicallyClosed)
+        let sessionURL = try XCTUnwrap(URL(string: "wss://bridge.example/session"))
+        var transports: [MultiplexPhysicalTransport] = []
+        var channels: [BridgeTransportProtocol] = []
+
+        for index in 0..<3 {
+            let identityValue = await vault.identity(for: "pool-owner-\(index)", makeNewIfNotFound: true)
+            let identity = try XCTUnwrap(identityValue)
+            let physical = MultiplexPhysicalTransport(vault: vault)
+            transports.append(physical)
+            let key = BridgeConnectionPoolKey(
+                sessionEndpoint: sessionURL,
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint),
+                homeVaultReference: try XCTUnwrap(identity.homeVaultReference)
+            )
+            if index == 2 {
+                XCTAssertThrowsError(try pool.channelTransport(for: key, targetEndpoint: "ThirdCell", physicalTransportFactory: { physical })) {
+                    XCTAssertEqual($0 as? BridgeMultiplexError, .resourceLimitExceeded)
+                }
+                XCTAssertEqual(transports[0].snapshot().closeInvocations, 0)
+                await channels[0].close()
+                XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
+            }
+            channels.append(try pool.channelTransport(
+                for: key,
+                targetEndpoint: "Cell-\(index)",
+                physicalTransportFactory: { physical }
+            ))
+        }
+
+        XCTAssertEqual(pool.sessionCount(), 2)
+        XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
+        await channels[0].close()
+        XCTAssertEqual(transports[0].snapshot().closeInvocations, 1)
+
+        pool.reset()
+        await channels[1].close()
+        await channels[2].close()
+        XCTAssertEqual(transports[1].snapshot().closeInvocations, 1)
+        XCTAssertEqual(transports[2].snapshot().closeInvocations, 1)
+    }
+
     func testClientSessionBoundsIssuedChannelsAndReleasesReservationOnClose() async throws {
         let physical = ServerRecordingTransport()
         let session = BridgeMultiplexSession(
@@ -492,6 +542,30 @@ final class BridgeMultiplexingTests: XCTestCase {
 
         await first.close()
         let replacement = try session.channelTransport(targetEndpoint: "SecondCell")
+        await replacement.close()
+    }
+
+    // Loopback lifecycle, opt-in pool/session policy (main's default is tested by the original).
+    func testClientSessionClosingWhenIdleRefusesReuseAfterLastChannel() async throws {
+        let physical = ServerRecordingTransport()
+        let session = BridgeMultiplexSession(
+            physicalTransport: physical,
+            maximumChannels: 1,
+            maximumPendingChannelOpens: 1,
+            closesWhenIdle: true
+        )
+        let first = try session.channelTransport(targetEndpoint: "FirstCell")
+
+        XCTAssertThrowsError(try session.channelTransport(targetEndpoint: "SecondCell")) { error in
+            XCTAssertEqual(error as? BridgeMultiplexError, .resourceLimitExceeded)
+        }
+
+        await first.close()
+        XCTAssertThrowsError(try session.channelTransport(targetEndpoint: "SecondCell")) {
+            XCTAssertEqual($0 as? BridgeMultiplexError, .sessionClosed)
+        }
+        let next = BridgeMultiplexSession(physicalTransport: ServerRecordingTransport())
+        let replacement = try next.channelTransport(targetEndpoint: "SecondCell")
         await replacement.close()
     }
 
@@ -830,6 +904,150 @@ final class BridgeMultiplexingTests: XCTestCase {
         XCTAssertEqual(physicalFactoryInvocations, 2)
     }
 
+    // Loopback lifecycle, opt-in pool/session policy (main's default is tested by the original).
+    func testRejectPolicyPoolDoesNotSharePhysicalSessionAcrossSecurityIdentities() async throws {
+        let firstVault = EphemeralIdentityVault()
+        let secondVault = EphemeralIdentityVault()
+        let firstValue = await firstVault.identity(for: "first", makeNewIfNotFound: true)
+        let secondValue = await secondVault.identity(for: "second", makeNewIfNotFound: true)
+        let first = try XCTUnwrap(firstValue)
+        let second = try XCTUnwrap(secondValue)
+        let sessionURL = try XCTUnwrap(URL(string: "wss://bridge.example/bridgehead/session"))
+        let pool = BridgeConnectionPool(capacityPolicy: .rejectUntilPhysicallyClosed)
+        var physicalFactoryInvocations = 0
+        let firstPhysical = MultiplexPhysicalTransport(vault: firstVault)
+        let secondPhysical = MultiplexPhysicalTransport(vault: secondVault)
+
+        func key(for identity: Identity) throws -> BridgeConnectionPoolKey {
+            BridgeConnectionPoolKey(
+                sessionEndpoint: sessionURL,
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint),
+                homeVaultReference: try XCTUnwrap(identity.homeVaultReference)
+            )
+        }
+
+        let firstChannel = try pool.channelTransport(
+            for: try key(for: first),
+            targetEndpoint: "Cell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return firstPhysical
+            }
+        )
+        let secondChannel = try pool.channelTransport(
+            for: try key(for: second),
+            targetEndpoint: "Cell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return secondPhysical
+            }
+        )
+
+        // Retain both channels through admission and observation. Discarding them
+        // starts asynchronous last-channel retirement before the pool is counted.
+        withExtendedLifetime((firstChannel, secondChannel)) {
+            XCTAssertEqual(pool.sessionCount(), 2)
+            XCTAssertEqual(physicalFactoryInvocations, 2)
+            XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 0)
+            XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+        }
+        try await firstChannel.setup(sessionURL, identity: first)
+        try await secondChannel.setup(sessionURL, identity: second)
+        XCTAssertEqual(firstPhysical.snapshot().setupInvocations, 1)
+        XCTAssertEqual(secondPhysical.snapshot().setupInvocations, 1)
+        XCTAssertEqual(firstPhysical.snapshot().commands.filter { $0.command == .openChannel }.map { $0.identity?.uuid }, [first.uuid])
+        XCTAssertEqual(secondPhysical.snapshot().commands.filter { $0.command == .openChannel }.map { $0.identity?.uuid }, [second.uuid])
+        await firstChannel.close()
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 1)
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+        await secondChannel.close()
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 1)
+    }
+
+    func testPoolSeparatesEverySecurityKeyComponent() async throws {
+        let endpoint = try XCTUnwrap(URL(string: "wss://bridge.example/bridgehead/session"))
+        func key(_ uuid: String = "fixture-owner", _ fingerprint: String = "fixture-key", _ vault: String = "fixture-vault") -> BridgeConnectionPoolKey {
+            BridgeConnectionPoolKey(sessionEndpoint: endpoint, identityUUID: uuid,
+                                    signingKeyFingerprint: fingerprint, homeVaultReference: vault)
+        }
+        let baseline = key()
+        let variants = [key("fixture-other"), key("fixture-owner", "fixture-other-key"),
+                        key("fixture-owner", "fixture-key", "fixture-other-vault")]
+        for (index, variant) in variants.enumerated() {
+            XCTAssertNotEqual(baseline, variant, "security component \(index)")
+            let pool = BridgeConnectionPool()
+            var factoryCalls = 0
+            let first = try pool.channelTransport(for: baseline, targetEndpoint: "Cell") {
+                factoryCalls += 1
+                return MultiplexPhysicalTransport(vault: EphemeralIdentityVault())
+            }
+            let second = try pool.channelTransport(for: variant, targetEndpoint: "Cell") {
+                factoryCalls += 1
+                return MultiplexPhysicalTransport(vault: EphemeralIdentityVault())
+            }
+            withExtendedLifetime((first, second)) {
+                XCTAssertEqual(pool.sessionCount(), 2, "security component \(index)")
+                XCTAssertEqual(factoryCalls, 2, "security component \(index)")
+            }
+            await first.close()
+            await second.close()
+        }
+    }
+
+    // Loopback lifecycle, opt-in pool/session policy (main's default is tested by the original).
+    func testPoolRemovesFullyClosedDiscardedChannelBeforeNextAdmission() async throws {
+        let firstVault = EphemeralIdentityVault()
+        let secondVault = EphemeralIdentityVault()
+        let firstValue = await firstVault.identity(for: "first", makeNewIfNotFound: true)
+        let secondValue = await secondVault.identity(for: "second", makeNewIfNotFound: true)
+        let first = try XCTUnwrap(firstValue)
+        let second = try XCTUnwrap(secondValue)
+        let sessionURL = try XCTUnwrap(URL(string: "wss://bridge.example/bridgehead/session"))
+        let pool = BridgeConnectionPool(capacityPolicy: .rejectUntilPhysicallyClosed)
+        var physicalFactoryInvocations = 0
+        let firstPhysical = MultiplexPhysicalTransport(vault: firstVault)
+
+        func key(for identity: Identity) throws -> BridgeConnectionPoolKey {
+            BridgeConnectionPoolKey(
+                sessionEndpoint: sessionURL,
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: try XCTUnwrap(identity.signingPublicKeyFingerprint),
+                homeVaultReference: try XCTUnwrap(identity.homeVaultReference)
+            )
+        }
+
+        _ = try pool.channelTransport(
+            for: try key(for: first),
+            targetEndpoint: "Cell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return firstPhysical
+            }
+        )
+        // Observe the actual completion of last-channel retirement before admission.
+        let deadline = Date().addingTimeInterval(2)
+        while !firstPhysical.sessionFullyClosed(), Date() < deadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(firstPhysical.sessionFullyClosed(), "FIXTURE-PAYLOAD close witness")
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 1)
+        let secondChannel = try pool.channelTransport(
+            for: try key(for: second),
+            targetEndpoint: "Cell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return MultiplexPhysicalTransport(vault: secondVault)
+            }
+        )
+
+        withExtendedLifetime(secondChannel) {
+            XCTAssertEqual(pool.sessionCount(), 1)
+            XCTAssertEqual(physicalFactoryInvocations, 2)
+        }
+        await secondChannel.close()
+    }
+
     func testPoolResetForHostRetiresOnlyMatchingRemoteSessions() async throws {
         let vault = EphemeralIdentityVault()
         let identityValue = await vault.identity(for: "host-reset-owner", makeNewIfNotFound: true)
@@ -900,6 +1118,83 @@ final class BridgeMultiplexingTests: XCTestCase {
         await secondChannel.close()
         await secondChannelAgain.close()
         XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+
+        pool.reset()
+        await firstChannelAgain.close()
+        XCTAssertEqual(replacementPhysical.snapshot().closeInvocations, 1)
+    }
+
+    // Loopback lifecycle, opt-in pool/session policy (main's default is tested by the original).
+    func testRejectPolicyPoolResetForHostRetiresOnlyMatchingRemoteSessions() async throws {
+        let vault = EphemeralIdentityVault()
+        let identityValue = await vault.identity(for: "host-reset-owner", makeNewIfNotFound: true)
+        let identity = try XCTUnwrap(identityValue)
+        let fingerprint = try XCTUnwrap(identity.signingPublicKeyFingerprint)
+        let homeVaultReference = try XCTUnwrap(identity.homeVaultReference)
+        let pool = BridgeConnectionPool(capacityPolicy: .rejectUntilPhysicallyClosed)
+        var physicalFactoryInvocations = 0
+        let firstPhysical = MultiplexPhysicalTransport(vault: vault)
+        let secondPhysical = MultiplexPhysicalTransport(vault: vault)
+        let replacementPhysical = MultiplexPhysicalTransport(vault: vault)
+
+        func key(host: String, routeGeneration: UInt64 = 7) throws -> BridgeConnectionPoolKey {
+            BridgeConnectionPoolKey(
+                sessionEndpoint: try XCTUnwrap(URL(string: "wss://\(host)/bridgehead/session")),
+                identityUUID: identity.uuid,
+                signingKeyFingerprint: fingerprint,
+                homeVaultReference: homeVaultReference,
+                routeGeneration: routeGeneration
+            )
+        }
+
+        let firstKey = try key(host: "first.example")
+        let secondKey = try key(host: "second.example")
+        let firstChannel = try pool.channelTransport(
+            for: firstKey,
+            targetEndpoint: "FirstCell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return firstPhysical
+            }
+        )
+        let secondChannel = try pool.channelTransport(
+            for: secondKey,
+            targetEndpoint: "SecondCell",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return secondPhysical
+            }
+        )
+
+        pool.reset(host: " FIRST.EXAMPLE ", routeGeneration: 7)
+        XCTAssertEqual(pool.sessionCount(), 1)
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 0)
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 0)
+        await firstChannel.close()
+        XCTAssertEqual(firstPhysical.snapshot().closeInvocations, 1)
+
+        let secondChannelAgain = try pool.channelTransport(
+            for: secondKey,
+            targetEndpoint: "SecondCellAgain",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return MultiplexPhysicalTransport(vault: vault)
+            }
+        )
+        let firstChannelAgain = try pool.channelTransport(
+            for: firstKey,
+            targetEndpoint: "FirstCellAgain",
+            physicalTransportFactory: {
+                physicalFactoryInvocations += 1
+                return replacementPhysical
+            }
+        )
+
+        XCTAssertEqual(pool.sessionCount(), 2)
+        XCTAssertEqual(physicalFactoryInvocations, 3)
+        await secondChannel.close()
+        await secondChannelAgain.close()
+        XCTAssertEqual(secondPhysical.snapshot().closeInvocations, 1)
 
         pool.reset()
         await firstChannelAgain.close()

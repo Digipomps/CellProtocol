@@ -1,0 +1,106 @@
+{
+  "status": "SOURCE_CHECKS_ONLY_NOT_COMPILED_NOT_RUN",
+  "checks": [
+    {
+      "check": "exact separate base",
+      "pass": true
+    },
+    {
+      "check": "proxy refusal before source cast",
+      "pass": true
+    },
+    {
+      "check": "final sync effect inside original lease",
+      "pass": true
+    },
+    {
+      "check": "returned proof requires context consumption",
+      "pass": true
+    },
+    {
+      "check": "public holder has no generic signing entry",
+      "pass": true
+    },
+    {
+      "check": "source issuance helper remains internal",
+      "pass": true
+    },
+    {
+      "check": "explicit endpoint port",
+      "pass": true
+    },
+    {
+      "check": "lease and receiver share numeric expiry",
+      "pass": true
+    },
+    {
+      "check": "positive barriers bounded",
+      "pass": true
+    },
+    {
+      "check": "preserved Tests/CellBaseTests/ContactInboxCellTests.swift",
+      "pass": true
+    },
+    {
+      "check": "preserved Tests/CellBaseTests/VaultContractsTests.swift",
+      "pass": true
+    },
+    {
+      "check": "preserved Package.swift",
+      "pass": true
+    },
+    {
+      "check": "preserved Package.resolved",
+      "pass": true
+    },
+    {
+      "check": "adopted AnyObject protocol and explicit signing name",
+      "pass": true
+    },
+    {
+      "check": "exact source object at final boundary",
+      "pass": true
+    },
+    {
+      "check": "no awaited work inside final effect method",
+      "pass": true
+    },
+    {
+      "check": "no permissive extension",
+      "pass": true
+    },
+    {
+      "check": "no old API spelling",
+      "pass": true
+    },
+    {
+      "check": "17 authored unique methods",
+      "pass": true
+    },
+    {
+      "check": "CS interface three pins verified",
+      "pass": true
+    }
+  ],
+  "newTestMethods": [
+    "testLocalHolderUsesExplicitFinalSignerAndPreservesOriginalHome",
+    "testRetirementInsideVaultAwaitPreventsPrivateSigningAndSiblingStillSucceeds",
+    "testCancellationInsideVaultAwaitPreventsPrivateSigning",
+    "testCallerMutationCannotReplaceCapturedPrincipalDuringVaultAwait",
+    "testNilHomeSnapshotCannotMintHolder",
+    "testSameUUIDWithAnotherKeyCannotMintHolder",
+    "testLegacyVaultIsNotAnImplicitContactSigner",
+    "testValidSignatureWithoutContextConsumptionIsRejected",
+    "testFinalContextRejectsChangedBytesHomeAndKeyBeforeEffect",
+    "testFailedSigningConsumesContextAndRetirementDoesNotUndoPriorEffect",
+    "testDifferentConcreteVaultCannotUseContextWithOriginalDescriptor",
+    "testInvalidatedContextAndFailedLiveScopePerformNoSigning",
+    "testReferenceEndpointRequiresCanonicalCellAndExplicitPort",
+    "testRetainedRequestRoundTripPreservesIntegralExpiryAndDigest",
+    "testReferenceRejectsWrongOwnerSubjectRouteAndChangedSignedFields",
+    "testCanonicalReferenceRejectsDuplicateUnknownAndNoncanonicalJSON",
+    "testActualContactCellAcceptsIntegralAndFractionalJSONExpiry"
+  ],
+  "swiftCommandsExecuted": 0,
+  "csInterfaceSHA256": "774de2a4df438425fd582c9dcc01b1bfa0055b992b5f9c2c96b83606bdfdbf03"
+}

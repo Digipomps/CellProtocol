@@ -128,7 +128,9 @@ public struct VCClaim: Codable {
         } else {
             uuid = UUID().uuidString
         }
-        context = try? values.decodeIfPresent([String].self, forKey: .context)
+        context = CellBase.usesExplicitObjectWire
+            ? try values.decodeIfPresent([String].self, forKey: .context)
+            : try? values.decodeIfPresent([String].self, forKey: .context)
         id = try values.decode(String.self, forKey: .id)
         type = try values.decode([String].self, forKey: .type)
         issuer = try values.decode(IssuerType.self, forKey: .issuer)

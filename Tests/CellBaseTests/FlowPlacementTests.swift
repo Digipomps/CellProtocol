@@ -7,6 +7,7 @@ import XCTest
 // PDD_flow-plassering_2026-11-07, WP1.
 //   T1 kilde-post   testLinkCompletionBecomesQualifiedSources …
 //   T3 valg         testPlacementTable, testEachSourceAndPurposeHasOneDecision, negatives
+//   T4 flytting     testLapsedAgentHandsOverToHomeAndWithdrawalStopsEverywhere
 final class FlowPlacementTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -212,5 +213,36 @@ final class FlowPlacementTests: XCTestCase {
         let restored = try FlowPlacementLedger.load(try FlowPlacementLedger.encode(book))
         XCTAssertEqual(restored, book)
         XCTAssertEqual(try FlowPlacementLedger.load(nil), FlowPlacementBook())
+    }
+
+    // MARK: - T4: moving and stopping (WP6)
+
+    func testLapsedAgentHandsOverToHomeAndWithdrawalStopsEverywhere() throws {
+        var book = FlowPlacementBook()
+        let add: ValueType = .object([
+            "linkCompletion": linkCompletion([cell("PalazzoEntity", "abc")]),
+            "host": .string("palazzo.digipomps.org"),
+            "purposes": .list([.string("notify"), .string("store")])
+        ])
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.sourcesAdd, value: add, to: book, now: now)
+        let agent = try venue("mac-agent", .agent, reportedSecondsAgo: 0, ttl: 600)
+        let home = try venue("home", .homeScaffold, reportedSecondsAgo: 0, ttl: 3600)
+        for v in [agent, home] {
+            (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.venuesReport,
+                value: try FlowPlacementLedger.encode(v), to: book, now: now)
+        }
+        XCTAssertEqual(Set(book.decisions(at: now).map(\.venueID)), ["mac-agent"], "the agent first while it is on")
+
+        // The agent stops reporting. Once its TTL has passed, the same book places at home.
+        let later = now.addingTimeInterval(601)
+        let afterLapse = book.decisions(at: later)
+        XCTAssertEqual(afterLapse.count, 2)
+        XCTAssertEqual(Set(afterLapse.map(\.venueID)), ["home"], "the home scaffold takes over every purpose")
+
+        // Access withdrawn: no venue holds the source any longer, not even home.
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.sourcesRemove,
+            value: .object(["sourceID": .string("cell://palazzo.digipomps.org/abc")]), to: book, now: later)
+        XCTAssertTrue(book.decisions(at: later).isEmpty)
+        XCTAssertTrue(book.decisions(at: now).isEmpty, "withdrawal holds whichever venue would have been chosen")
     }
 }

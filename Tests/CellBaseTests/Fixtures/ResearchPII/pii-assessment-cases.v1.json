@@ -1,0 +1,391 @@
+{
+  "schemaVersion": "research.pii-assessment-cases.v1",
+  "rulesVersion": "1.0.0",
+  "note": "Forventet svar er satt for hånd ut fra regeltabellen, ikke kopiert fra referanseimplementasjonen. Swift (WP2), Python og Go skal gi samme degree, violations, applied og de oppgitte rules-feltene.",
+  "cases": [
+    {
+      "id": "node-metric",
+      "description": "Tall om noden selv",
+      "request": {
+        "fields": [
+          {
+            "name": "nodeMetric",
+            "kind": "nodeMetric"
+          }
+        ],
+        "answerForm": "aggregate",
+        "bucket": "day"
+      },
+      "expect": {
+        "degree": "none",
+        "violations": []
+      }
+    },
+    {
+      "id": "dashboard-tile",
+      "description": "Flis i dashbordet: identiteter med delt samtale, 38 i populasjonen",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 38,
+        "bucket": "day"
+      },
+      "expect": {
+        "degree": "aggregate",
+        "violations": [],
+        "rules": {
+          "minGroupSize": 5,
+          "finestBucket": "day"
+        }
+      }
+    },
+    {
+      "id": "small-population-coarsens",
+      "description": "Liten populasjon (12): k dobles og dagsbøtter blir for fine",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 12,
+        "bucket": "day"
+      },
+      "expect": {
+        "degree": "aggregate",
+        "violations": [
+          "bucket_too_fine"
+        ],
+        "applied": [
+          "small-population"
+        ],
+        "rules": {
+          "minGroupSize": 10,
+          "finestBucket": "week"
+        }
+      }
+    },
+    {
+      "id": "population-below-k",
+      "description": "Tre personer kan ikke gi et samletall",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 3,
+        "bucket": "week"
+      },
+      "expect": {
+        "degree": "aggregate",
+        "violations": [
+          "population_below_min_group_size"
+        ],
+        "applied": [
+          "small-population"
+        ],
+        "rules": {
+          "minGroupSize": 10
+        }
+      }
+    },
+    {
+      "id": "group-messages-9-members",
+      "description": "Meldinger per uke i en gruppe med 9 medlemmer, ekte deltakere uten UiO-godkjenning",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          },
+          {
+            "name": "group",
+            "kind": "group"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 9,
+        "bucket": "week",
+        "realParticipants": true
+      },
+      "expect": {
+        "degree": "quasi",
+        "violations": [
+          "population_below_min_group_size",
+          "institutional_approval_required"
+        ],
+        "applied": [
+          "small-population"
+        ],
+        "rules": {
+          "minGroupSize": 20
+        }
+      }
+    },
+    {
+      "id": "group-messages-swarm",
+      "description": "Samme mal mot en sverm på 200: ingen ekte deltakere, ingen godkjenning trengs",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          },
+          {
+            "name": "group",
+            "kind": "group"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 200,
+        "bucket": "week",
+        "realParticipants": false
+      },
+      "expect": {
+        "degree": "quasi",
+        "violations": [],
+        "rules": {
+          "minGroupSize": 10
+        }
+      }
+    },
+    {
+      "id": "two-quasi-raises",
+      "description": "Gruppe + eksakt tidspunkt: løftes til direkte identifiserende, samlet svar ikke tillatt",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          },
+          {
+            "name": "group",
+            "kind": "group"
+          },
+          {
+            "name": "exactTimestamp",
+            "kind": "exactTimestamp"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 200,
+        "bucket": "week"
+      },
+      "expect": {
+        "degree": "direct",
+        "violations": [
+          "answer_form_not_allowed"
+        ],
+        "applied": [
+          "two-quasi-identifiers"
+        ]
+      }
+    },
+    {
+      "id": "freetext-rows-ok",
+      "description": "Fritekstsvar per person med pseudonym, begrunnelse og UiO-godkjenning",
+      "request": {
+        "fields": [
+          {
+            "name": "freeText",
+            "kind": "freeText"
+          }
+        ],
+        "answerForm": "pseudonymousRows",
+        "justification": "Tematisk analyse av svar krever teksten.",
+        "populationSize": 30,
+        "bucket": "week",
+        "retentionDays": 200,
+        "realParticipants": true,
+        "institutionalApproval": true
+      },
+      "expect": {
+        "degree": "direct",
+        "violations": [],
+        "applied": [
+          "small-population"
+        ],
+        "rules": {
+          "minGroupSize": 20,
+          "export": "none"
+        }
+      }
+    },
+    {
+      "id": "freetext-rows-missing",
+      "description": "Samme uten begrunnelse og uten godkjenning",
+      "request": {
+        "fields": [
+          {
+            "name": "freeText",
+            "kind": "freeText"
+          }
+        ],
+        "answerForm": "pseudonymousRows",
+        "populationSize": 30,
+        "bucket": "week",
+        "realParticipants": true
+      },
+      "expect": {
+        "degree": "direct",
+        "violations": [
+          "rows_require_justification",
+          "institutional_approval_required"
+        ],
+        "applied": [
+          "small-population"
+        ]
+      }
+    },
+    {
+      "id": "special-category-blocked",
+      "description": "Helseopplysninger er sperret i v1",
+      "request": {
+        "fields": [
+          {
+            "name": "health",
+            "kind": "health"
+          },
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 500,
+        "bucket": "month"
+      },
+      "expect": {
+        "degree": "special",
+        "violations": [
+          "degree_not_allowed",
+          "answer_form_not_allowed"
+        ]
+      }
+    },
+    {
+      "id": "quasi-rows-export",
+      "description": "Rader per person med kull kan ikke eksporteres",
+      "request": {
+        "fields": [
+          {
+            "name": "cohort",
+            "kind": "cohort"
+          }
+        ],
+        "answerForm": "pseudonymousRows",
+        "justification": "Sammenligne kull.",
+        "populationSize": 100,
+        "bucket": "week",
+        "export": true,
+        "realParticipants": true,
+        "institutionalApproval": true
+      },
+      "expect": {
+        "degree": "quasi",
+        "violations": [
+          "export_not_allowed"
+        ]
+      }
+    },
+    {
+      "id": "retention-too-long",
+      "description": "Lagring i 1000 dager er for lenge for aggregater",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 100,
+        "bucket": "day",
+        "retentionDays": 1000
+      },
+      "expect": {
+        "degree": "aggregate",
+        "violations": [
+          "retention_too_long"
+        ]
+      }
+    },
+    {
+      "id": "longitudinal-coarsens",
+      "description": "Gjentatte målinger: dagsbøtter blir for fine",
+      "request": {
+        "fields": [
+          {
+            "name": "count",
+            "kind": "count"
+          }
+        ],
+        "answerForm": "aggregate",
+        "populationSize": 100,
+        "bucket": "day",
+        "researchQuestion": {
+          "longitudinal": true
+        }
+      },
+      "expect": {
+        "degree": "aggregate",
+        "violations": [
+          "bucket_too_fine"
+        ],
+        "applied": [
+          "repeated-measures"
+        ],
+        "rules": {
+          "finestBucket": "week"
+        }
+      }
+    },
+    {
+      "id": "unknown-field-kind",
+      "description": "Ukjent felttype avvises (fail closed)",
+      "request": {
+        "fields": [
+          {
+            "name": "skostorrelse",
+            "kind": "shoeSize"
+          }
+        ],
+        "answerForm": "aggregate"
+      },
+      "expect": {
+        "degree": null,
+        "violations": [
+          "unknown_field_kind"
+        ]
+      }
+    },
+    {
+      "id": "node-metric-rows",
+      "description": "Rader om noden trenger ingen begrunnelse",
+      "request": {
+        "fields": [
+          {
+            "name": "nodeMetric",
+            "kind": "nodeMetric"
+          }
+        ],
+        "answerForm": "rows",
+        "bucket": "day"
+      },
+      "expect": {
+        "degree": "none",
+        "violations": []
+      }
+    }
+  ]
+}
