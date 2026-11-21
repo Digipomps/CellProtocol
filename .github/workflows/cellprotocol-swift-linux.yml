@@ -101,7 +101,8 @@ jobs:
             BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
-            SkeletonDataBindingTests InteropFixturesV1Tests InteropFixturesV1OrganizationCases FlowPlacementTests \
+            SkeletonDataBindingTests SkeletonEditingTests InteropFixturesV1Tests InteropFixturesV1OrganizationCases FlowPlacementTests \
+            FlowPlacementRunnerTests IdentityLinkClientTests \
             GovernancePolicyEvaluatorTests OrganizationGenesisTests OrganizationVaultTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
@@ -162,4 +163,60 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git diff --exit-code -- Package.swift Package.resolved Sources Tests
+
+  cellbase-static-linux-musl:
+    # Downstream static Linux artifacts (Sprout's `sprout-linux-x86_64`) link
+    # CellBase with the Swift Static Linux SDK. Keep the toolchain image and
+    # SDK checksum identical to Sprout's release step so a musl regression in
+    # CellBase is caught here, not in a downstream release build.
+    name: CellBase static Linux (musl)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    container:
+      image: swift:6.2.4-noble@sha256:9bea530093ffff8cf6c259991715ee843fe4d0f932e612f7f4b79cca6e00db87
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Install checksum-pinned static Linux SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift --version
+          swift sdk install https://download.swift.org/swift-6.2.4-release/static-sdk/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz --checksum 24bdf84495dd31a6de2eb679647c1982b747bfbfe1a2060c779d84dcecd902a4
+          swift sdk list | grep -qx 'swift-6.2.4-RELEASE_static-linux-0.1.0'
+
+      - name: Build CellBase for x86_64-swift-linux-musl
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build \
+            --swift-sdk x86_64-swift-linux-musl \
+            --target CellBase \
+            --disable-automatic-resolution \
+            --jobs 4
+
+      - name: Link a static CellBase executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift build \
+            --swift-sdk x86_64-swift-linux-musl \
+            --product ReferenceLoadBenchmark \
+            --disable-automatic-resolution \
+            --jobs 4
+          binary="$(swift build --swift-sdk x86_64-swift-linux-musl --show-bin-path)/ReferenceLoadBenchmark"
+          test -x "$binary"
+          # A static musl binary has no ELF interpreter (no dynamic loader).
+          if readelf -l "$binary" | grep -q 'Requesting program interpreter'; then
+            echo "ReferenceLoadBenchmark is not statically linked" >&2
+            exit 1
+          fi
+
+      - name: Verify source and dependency lock remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git diff --exit-code -- Package.swift Package.resolved Sources Tests

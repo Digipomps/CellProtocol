@@ -94,6 +94,20 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     private var inboundFeedCommandID: Int?
     private var inboundFeedRequester: Identity?
     private var localFeedSubscriberCount = 0
+    // G5: cids of description requests that ended unanswered (bounded FIFO).
+    private var retiredDescriptionCIDs: Set<Int> = []
+    private var retiredDescriptionOrder: [Int] = []
+    private func retireDescriptionCID(_ cid: Int) {
+        guard retiredDescriptionCIDs.insert(cid).inserted else { return }
+        retiredDescriptionOrder.append(cid)
+        if retiredDescriptionOrder.count > 256 { retiredDescriptionCIDs.remove(retiredDescriptionOrder.removeFirst()) }
+    }
+    // G1: elements of an outbound feed that arrive before the first local
+    // subscriber has attached (for example inline inside the .feed send).
+    private var feedAwaitingFirstSubscriber = false
+    private var pendingFeedElements: [FlowElement] = []
+    private var pendingFeedOverflow = false
+    static let maximumPendingFeedElements = 64
     private var connectPublisher: PassthroughSubject<ConnectState, Error>?
     private var feedPublisher2 = PassthroughSubject<FlowElement, Error>()
     
@@ -587,6 +601,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             ready = false
             readyPublisher = CurrentValueSubject<Bool, Error>(false)
             feedPublisher2 = PassthroughSubject<FlowElement, Error>()
+            feedAwaitingFirstSubscriber = false; pendingFeedElements.removeAll(); pendingFeedOverflow = false
             flowElementCallbackDataPublisher = PassthroughSubject<FlowElement, Error>()
         
             switch connection {
@@ -621,7 +636,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             try generation.check()
             return (generation, feedPublisher2)
         }
-        return publisher
+        let source = publisher
             .handleEvents(
                 receiveSubscription: { [weak self] _ in
                     self?.retainLocalFeedSubscriber(generation: generation)
@@ -634,7 +649,48 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 }
             )
             .eraseToAnyPublisher()
+        // G1: the start hook runs after the subscriber is attached, so
+        // elements held since the .feed send are delivered, in order.
+        return BridgeFeedSubscriptionPublisher(source: source) { [weak self] in
+            self?.flushPendingFeedElements(generation: generation)
+        }.eraseToAnyPublisher()
     }
+
+    private func forwardOutboundFeedElement(_ element: FlowElement, generation: BridgeChannelSession,
+                                            destination: PassthroughSubject<FlowElement, Error>) {
+        let held = withCallbackStateLock { () -> Bool in
+            guard feedAwaitingFirstSubscriber, generation === channelSessionValue else { return false }
+            if pendingFeedElements.count < Self.maximumPendingFeedElements { pendingFeedElements.append(element) }
+            else { pendingFeedOverflow = true }
+            return true
+        }
+        if !held { destination.send(element) }
+    }
+
+    private func flushPendingFeedElements(generation: BridgeChannelSession) {
+        while true {
+            let next = withCallbackStateLock { () -> (batch: [FlowElement], overflow: Bool, destination: PassthroughSubject<FlowElement, Error>)? in
+                guard feedAwaitingFirstSubscriber, generation === channelSessionValue else { return nil }
+                if pendingFeedElements.isEmpty {
+                    feedAwaitingFirstSubscriber = false
+                    let overflow = pendingFeedOverflow
+                    pendingFeedOverflow = false
+                    return overflow ? ([], true, feedPublisher2) : nil
+                }
+                let batch = pendingFeedElements
+                pendingFeedElements.removeAll()
+                return (batch, false, feedPublisher2)
+            }
+            guard let next else { return }
+            // Never call into Combine subscribers with the bridge lock held.
+            next.batch.forEach { next.destination.send($0) }
+            if next.overflow {
+                next.destination.send(completion: .failure(BridgeChannelAuthentication.Failure.capacity))
+                return
+            }
+        }
+    }
+
 
     private func ensureOutboundFeed(requester: Identity) async throws {
         let generation = channelSession
@@ -642,11 +698,23 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             if let outboundFeedStartTask {
                 return outboundFeedStartTask
             }
-            let newTask = Task { [weak self] in
-                guard let self else {
-                    throw BridgeError.transportUnavailable
+            // G2: the start (its .feed send) is owned bridge work and counts
+            // against the owned-work quota. A refused admission is terminal:
+            // retirement starts the physical finalizer instead of hanging.
+            let box = RetainedFirstResult<Void>()
+            let owned = retirementWork.submit { [weak self] in
+                guard let self else { box.resolve(.failure(BridgeError.transportUnavailable)); return }
+                do { try await self.startOutboundFeed(requester: requester); box.resolve(.success(())) }
+                catch { box.resolve(.failure(error)) }
+            }
+            let newTask = Task<Void, Error> {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    box.attach { continuation.resume(with: $0) }
                 }
-                try await self.startOutboundFeed(requester: requester)
+            }
+            if owned == nil {
+                box.resolve(.failure(BridgeChannelAuthentication.Failure.capacity))
+                if !retired { beginRetirement() }
             }
             outboundFeedStartTask = newTask
             return newTask
@@ -677,10 +745,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             guard generation === channelSessionValue else { throw BridgeChannelAuthentication.Failure.staleGeneration }
             try generation.check()
             let destination = feedPublisher2
+            if localFeedSubscriberCount == 0 {
+                feedAwaitingFirstSubscriber = true
+                pendingFeedElements.removeAll(); pendingFeedOverflow = false
+            }
             flowElementCallbackCancellable = flowElementCallbackDataPublisher
                 .sink(receiveCompletion: { [weak self] _ in
                     self?.markOutboundFeedInactive(commandID: commandID)
-                }, receiveValue: { flowElement in destination.send(flowElement) })
+                }, receiveValue: { [weak self] flowElement in
+                    guard let self else { destination.send(flowElement); return }
+                    self.forwardOutboundFeedElement(flowElement, generation: generation, destination: destination)
+                })
         }
 
         do {
@@ -892,6 +967,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             if first || !retirementFinished {
                 failPendingChannelWork()
                 feedPublisher2.send(completion: .failure(BridgeError.transportUnavailable))
+                feedAwaitingFirstSubscriber = false; pendingFeedElements.removeAll(); pendingFeedOverflow = false
                 localFeedSubscriberCount = 0
                 outboundFeedStartTask = nil; outboundFeedCommandID = nil; outboundFeedRequester = nil
                 feedAdmissionPending = false
@@ -1003,7 +1079,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         }
         defer {
             withCallbackStateLock {
-                descriptionReplies.removeValue(forKey: commandID)
+                if descriptionReplies.removeValue(forKey: commandID) != nil { retireDescriptionCID(commandID) }
                 auditor.removeBridgeCommand(for: commandID)
                 identityProofAuthorization.complete(commandID)
             }
@@ -1248,6 +1324,10 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
         let payload: Object = ["label": .string(label), "publisher": .description(advertisedEmitter)]
         let commandID = auditor.getNewCommandId()
         let callbackPublisher = PassthroughSubject<ConnectState, Error>()
+        // G1: subscribe before the send. A response delivered inside sendData
+        // (inline or loopback transport) must not hit a subscriber-less subject.
+        let (result, subscription) = retainedFirstResult(callbackPublisher)
+        defer { subscription.cancel() }
         guard storeConnectPublisher(callbackPublisher, for: commandID) else { throw BridgeError.transportUnavailable }
 
         do {
@@ -1257,7 +1337,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                 payload: .object(payload),
                 commandId: commandID
             )
-            let connectState = try await callbackPublisher.getOneWithTimeout()
+            let connectState = try await result.getOneWithTimeout()
             clearConnectPublisher(for: commandID)
             return connectState
         } catch {
@@ -1267,6 +1347,17 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
     }
 
     
+    /// Subscribes to `source` now and replays its first value (or failure) to
+    /// the later awaiting caller. Used where a reply may arrive inside the send.
+    private func retainedFirstResult<T>(_ source: PassthroughSubject<T, Error>) -> (Future<T, Error>, AnyCancellable) {
+        let box = RetainedFirstResult<T>()
+        let subscription = source.first().sink(receiveCompletion: { completion in
+            if case .failure(let error) = completion { box.resolve(.failure(error)) }
+            else { box.resolve(.failure(BridgeError.transportUnavailable)) }
+        }, receiveValue: { box.resolve(.success($0)) })
+        return (Future<T, Error> { promise in box.attach(promise) }, subscription)
+    }
+
     public func absorbFlow(label: String, requester: Identity) {
         bridgeLog("Absorb flow requested")
         retirementWork.submit { [self] in
@@ -2004,6 +2095,8 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     guard self.queuedFeedDeliveries < 32 else { throw BridgeChannelAuthentication.Failure.capacity }
                     try generation.check()
                     let data = try JSONEncoder().encode(BridgeCommand(cmd: "response", payload: .flowElement(element), cid: commandCid))
+                    // G2: never send a frame the peer's inbound limit (1 MiB) refuses.
+                    guard data.count <= 1024 * 1024 else { throw BridgeChannelAuthentication.Failure.capacity }
                     try generation.acquire(.operation)
                     do { try generation.acquireSend(bytes: data.count) }
                     catch { generation.release(.operation); throw error }
@@ -2012,6 +2105,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
                     self.queuedFeedDeliveries += 1
                     delivery.queue.append(data)
                     self.startFeedDrain(delivery)
+                } catch BridgeChannelAuthentication.Failure.capacity {
+                    // G2: a feed quota refusal (count, bytes or frame size) is
+                    // terminal for the bridge instead of leaving it half-open.
+                    // Retirement owns the single physical close and joins the
+                    // held drain; no second close is started here.
+                    bridgeLog("Feed delivery refused cid=\(delivery.commandID) code=capacity")
+                    if self.feedDelivery === delivery { self.retireFeedDelivery() }
+                    self.beginRetirement()
                 } catch {
                     self.failFeedDelivery(delivery)
                 }
@@ -2146,6 +2247,14 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             if !retainCommandForStream { identityProofAuthorization.complete(command.cid) }
             switch commandRequest.command {
             case .description:
+                // G5: a description request that ended without its reply
+                // (timed out or replaced) leaves a tombstone; a late response
+                // for that cid never configures the bridge, even if the cid is
+                // audited again. Other audited cids keep main's behavior.
+                guard !retiredDescriptionCIDs.contains(command.cid) else {
+                    bridgeLog("Unmatched response code=stale_description \(command.diagnosticMetadata)")
+                    return
+                }
                 let reply = descriptionReplies.removeValue(forKey: command.cid)
                 guard reply == nil || reply?.session === channelSession else { return }
                 if case let .description(value) = command.payload {
@@ -2364,6 +2473,7 @@ public class BridgeBase: BridgeProtocol, Emit, BridgeDelegateProtocol {
             }
             failPending.forEach { $0() }
             readyPublisher.send(completion: .failure(BridgeChannelAuthentication.Failure.closed))
+            feedAwaitingFirstSubscriber = false; pendingFeedElements.removeAll(); pendingFeedOverflow = false
             feedPublisher2.send(completion: .failure(BridgeChannelAuthentication.Failure.closed))
             auditor.clear()
         }
@@ -2412,5 +2522,27 @@ struct BridgeFeedSubscriptionPublisher: Publisher {
     func receive<S: Subscriber>(subscriber: S) where S.Input == FlowElement, S.Failure == Error {
         source.receive(subscriber: subscriber)
         start()
+    }
+}
+
+/// One-shot result that may resolve before or after its promise is attached.
+final class RetainedFirstResult<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<T, Error>?
+    private var promise: ((Result<T, Error>) -> Void)?
+    func resolve(_ value: Result<T, Error>) {
+        let deliver = lock.withLock { () -> ((Result<T, Error>) -> Void)? in
+            guard result == nil else { return nil }
+            result = value
+            let p = promise; promise = nil; return p
+        }
+        deliver?(value)
+    }
+    func attach(_ promise: @escaping (Result<T, Error>) -> Void) {
+        let ready = lock.withLock { () -> Result<T, Error>? in
+            if let result { return result }
+            self.promise = promise; return nil
+        }
+        if let ready { promise(ready) }
     }
 }

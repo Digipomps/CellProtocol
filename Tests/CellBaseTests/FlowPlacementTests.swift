@@ -7,6 +7,8 @@ import XCTest
 // PDD_flow-plassering_2026-11-07, WP1.
 //   T1 kilde-post   testLinkCompletionBecomesQualifiedSources …
 //   T3 valg         testPlacementTable, testEachSourceAndPurposeHasOneDecision, negatives
+//   T4 flytting     testLapsedAgentHandsOverToHomeAndWithdrawalStopsEverywhere
+//   mange inn       testSubscribedVenuesFollowASourceBesideTheDefault, testSubscriptionLedgerAddsRemovesAndFollowsTheSource
 final class FlowPlacementTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -212,5 +214,99 @@ final class FlowPlacementTests: XCTestCase {
         let restored = try FlowPlacementLedger.load(try FlowPlacementLedger.encode(book))
         XCTAssertEqual(restored, book)
         XCTAssertEqual(try FlowPlacementLedger.load(nil), FlowPlacementBook())
+    }
+
+    // MARK: - T4: moving and stopping (WP6)
+
+    func testLapsedAgentHandsOverToHomeAndWithdrawalStopsEverywhere() throws {
+        var book = FlowPlacementBook()
+        let add: ValueType = .object([
+            "linkCompletion": linkCompletion([cell("PalazzoEntity", "abc")]),
+            "host": .string("palazzo.digipomps.org"),
+            "purposes": .list([.string("notify"), .string("store")])
+        ])
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.sourcesAdd, value: add, to: book, now: now)
+        let agent = try venue("mac-agent", .agent, reportedSecondsAgo: 0, ttl: 600)
+        let home = try venue("home", .homeScaffold, reportedSecondsAgo: 0, ttl: 3600)
+        for v in [agent, home] {
+            (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.venuesReport,
+                value: try FlowPlacementLedger.encode(v), to: book, now: now)
+        }
+        XCTAssertEqual(Set(book.decisions(at: now).map(\.venueID)), ["mac-agent"], "the agent first while it is on")
+
+        // The agent stops reporting. Once its TTL has passed, the same book places at home.
+        let later = now.addingTimeInterval(601)
+        let afterLapse = book.decisions(at: later)
+        XCTAssertEqual(afterLapse.count, 2)
+        XCTAssertEqual(Set(afterLapse.map(\.venueID)), ["home"], "the home scaffold takes over every purpose")
+
+        // Access withdrawn: no venue holds the source any longer, not even home.
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.sourcesRemove,
+            value: .object(["sourceID": .string("cell://palazzo.digipomps.org/abc")]), to: book, now: later)
+        XCTAssertTrue(book.decisions(at: later).isEmpty)
+        XCTAssertTrue(book.decisions(at: now).isEmpty, "withdrawal holds whichever venue would have been chosen")
+    }
+    // MARK: - Many in (Kjetil 2026-11-20: one out, as many in as you want)
+
+    func testSubscribedVenuesFollowASourceBesideTheDefault() throws {
+        let s = try source("abc", [.notify, .store])
+        let agent = try venue("mac-agent", .agent)
+        let home = try venue("home", .homeScaffold)
+        let ipad = try venue("ipad", .app)
+        let offline = try venue("old-phone", .app, reportedSecondsAgo: 700, ttl: 600)
+        let subscriptions = [
+            try FlowSubscription(sourceID: s.sourceID, venueID: "home", purposes: [.notify, .store], createdAt: now),
+            try FlowSubscription(sourceID: s.sourceID, venueID: "ipad", purposes: [.notify], createdAt: now),
+            try FlowSubscription(sourceID: s.sourceID, venueID: "mac-agent", purposes: [.notify], createdAt: now),
+            try FlowSubscription(sourceID: s.sourceID, venueID: "old-phone", purposes: [.notify], createdAt: now)
+        ]
+        let decisions = FlowPlacementPolicy.decide(sources: [s], venues: [agent, home, ipad, offline],
+            subscriptions: subscriptions, now: now)
+        let notify = decisions.filter { $0.purpose == .notify }.compactMap(\.venueID)
+        XCTAssertEqual(notify.first, "mac-agent", "the default placement comes first and is unchanged")
+        XCTAssertEqual(Set(notify), ["mac-agent", "home", "ipad"], "every online subscriber follows the source")
+        XCTAssertEqual(notify.count, Set(notify).count, "a venue never gets the same (source, purpose) twice")
+        XCTAssertEqual(decisions.filter { $0.purpose == .store }.compactMap(\.venueID), ["mac-agent", "home"])
+        XCTAssertFalse(notify.contains("old-phone"), "an offline subscriber gets nothing until it reports again")
+
+        let expired = try source("abc", [.notify], expiresAt: now.addingTimeInterval(-1))
+        XCTAssertTrue(FlowPlacementPolicy.decide(sources: [expired], venues: [agent, home],
+            subscriptions: subscriptions, now: now).allSatisfy { $0.venueID == nil },
+            "a subscription never outlives access to the source")
+    }
+
+    func testSubscriptionLedgerAddsRemovesAndFollowsTheSource() throws {
+        let s = try source("abc", [.notify])
+        var book = FlowPlacementBook(sources: [s.sourceID: s])
+        for v in [try venue("mac-agent", .agent), try venue("home", .homeScaffold)] {
+            (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.venuesReport,
+                value: try FlowPlacementLedger.encode(v), to: book, now: now)
+        }
+        let subscribe: ValueType = .object(["sourceID": .string(s.sourceID), "venueID": .string("home"),
+                                            "purposes": .list([.string("notify")])])
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.subscriptionsAdd, value: subscribe, to: book, now: now)
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.subscriptionsAdd, value: subscribe, to: book, now: now)
+        XCTAssertEqual(book.subscriptions.count, 1, "adding again replaces, it does not duplicate")
+        XCTAssertEqual(Set(book.decisions(at: now).compactMap(\.venueID)), ["mac-agent", "home"])
+
+        XCTAssertThrowsError(try FlowPlacementLedger.apply(action: FlowPlacementLedger.subscriptionsAdd,
+            value: .object(["sourceID": .string("cell://palazzo.digipomps.org/unknown"), "venueID": .string("home"),
+                            "purposes": .list([.string("notify")])]), to: book, now: now),
+            "a subscription only names a source the entity has")
+
+        let roundTripped = try FlowPlacementLedger.decode(try FlowPlacementLedger.encode(book), as: FlowPlacementBook.self)
+        XCTAssertEqual(roundTripped, book)
+        let legacy: ValueType = .object(["sources": .object([:]), "venues": .object([:])])
+        XCTAssertEqual(try FlowPlacementLedger.decode(legacy, as: FlowPlacementBook.self).subscriptions, [:],
+            "a book stored before subscriptions still loads")
+
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.subscriptionsRemove,
+            value: .object(["sourceID": .string(s.sourceID), "venueID": .string("home")]), to: book, now: now)
+        XCTAssertEqual(book.decisions(at: now).compactMap(\.venueID), ["mac-agent"])
+
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.subscriptionsAdd, value: subscribe, to: book, now: now)
+        (book, _) = try FlowPlacementLedger.apply(action: FlowPlacementLedger.sourcesRemove,
+            value: .object(["sourceID": .string(s.sourceID)]), to: book, now: now)
+        XCTAssertTrue(book.subscriptions.isEmpty, "removing the source removes who follows it")
     }
 }

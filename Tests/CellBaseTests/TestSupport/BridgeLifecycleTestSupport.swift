@@ -29,7 +29,13 @@ final class BridgeLifecycleClock: @unchecked Sendable {
 
 final class BridgeLifecycleWire: BridgeTransportProtocol, @unchecked Sendable {
     var channelSession: BridgeChannelSession?
-    weak var delegate: BridgeDelegateProtocol?
+    /// Two closers may run at once (a failing upstream and the owner), so the
+    /// delegate is only touched under the lock.
+    var delegate: BridgeDelegateProtocol? {
+        get { lock.withLock { storedDelegate } }
+        set { lock.withLock { storedDelegate = newValue } }
+    }
+    private weak var storedDelegate: BridgeDelegateProtocol?
     var beforeAccept: (@Sendable (BridgeCommand) async throws -> Void)?
     var accepted: (@Sendable (BridgeCommand) -> Void)?
     private let lock = NSLock()

@@ -2013,12 +2013,36 @@ private struct VisualizationTableColumn: Identifiable {
     var alignment: String = "leading"
 }
 
-private struct VisualizationChartPoint: Identifiable {
+struct VisualizationChartPoint: Identifiable {
     var id: String
     var label: String
     var value: Double
     var color: Color?
     var raw: ValueType
+    /// A bucket the cell held back (research.dataset: fewer than k). It keeps
+    /// its place on the axis, has no height, and shows `suppressedLabel`.
+    /// Same contract as the web runtime: { value: null, suppressed: true, suppressedLabel }.
+    var suppressed: Bool = false
+    var suppressedLabel: String = ""
+}
+
+let visualizationDefaultSuppressedLabel = "skjult"
+
+/// Runs of consecutive visible buckets. A suppressed bucket ends a run, so a
+/// line chart draws one segment per run and breaks where data was held back.
+func visualizationLineSegments(points: [VisualizationChartPoint], positions: [CGPoint]) -> [[CGPoint]] {
+    var segments: [[CGPoint]] = []
+    var current: [CGPoint] = []
+    for (point, location) in zip(points, positions) {
+        if point.suppressed {
+            if !current.isEmpty { segments.append(current) }
+            current = []
+        } else {
+            current.append(location)
+        }
+    }
+    if !current.isEmpty { segments.append(current) }
+    return segments
 }
 
 private struct VisualizationGraphNode: Identifiable {
@@ -2127,7 +2151,9 @@ private func visualizationRows(from spec: ValueType?) -> [ValueType] {
     guard let object = visualizationObject(spec) else {
         return []
     }
-    for key in ["rows", "items", "data", "values"] {
+    // "points" is the key the admin cells use for charts (AdminMetricsSupport);
+    // the web runtime reads it too.
+    for key in ["rows", "items", "data", "values", "points"] {
         if case let .list(list)? = object[key] {
             return Array(list)
         }
@@ -2300,7 +2326,7 @@ private func visualizationChartStyle(from spec: ValueType?) -> String {
         "bar").lowercased()
 }
 
-private func visualizationChartPoints(from spec: ValueType?) -> [VisualizationChartPoint] {
+func visualizationChartPoints(from spec: ValueType?) -> [VisualizationChartPoint] {
     let rows = visualizationRows(from: spec)
     return rows.enumerated().compactMap { index, row in
         if let value = visualizationDouble(row) {
@@ -2310,6 +2336,23 @@ private func visualizationChartPoints(from spec: ValueType?) -> [VisualizationCh
                 value: value,
                 color: nil,
                 raw: row
+            )
+        }
+        if let object = visualizationObject(row), case .bool(true)? = object["suppressed"] {
+            let id = visualizationString(object["id"]) ?? visualizationString(object["label"]) ?? "point-\(index)"
+            return VisualizationChartPoint(
+                id: id,
+                label: visualizationString(object["label"]) ??
+                    visualizationString(object["title"]) ??
+                    visualizationString(object["name"]) ??
+                    id,
+                value: 0,
+                color: nil,
+                raw: row,
+                suppressed: true,
+                suppressedLabel: visualizationString(object["suppressedLabel"]) ??
+                    visualizationString(visualizationObject(spec)?["suppressedLabel"]) ??
+                    visualizationDefaultSuppressedLabel
             )
         }
         guard let object = visualizationObject(row),
@@ -2443,8 +2486,9 @@ private func visualizationPointPositions(
     guard points.isEmpty == false else {
         return []
     }
-    let maxValue = max(points.map(\.value).max() ?? 1, 1)
+    let maxValue = max(points.filter { !$0.suppressed }.map(\.value).max() ?? 1, 1)
     let usableHeight = max(size.height - 28, 1)
+    // A suppressed bucket has value 0, so it sits on the baseline.
     if points.count == 1 {
         let y = usableHeight - CGFloat(points[0].value / maxValue) * usableHeight + 8
         return [CGPoint(x: size.width / 2, y: y)]
@@ -2556,6 +2600,16 @@ private struct CellVisualizationView: View {
                         selection: selectionState,
                         activateNode: actionHandler(for: "node")
                     )
+                }
+            case ArgumentMapVisualizationSpec.kind:
+                if let argumentMap = ArgumentMapVisualizationSpec.decode(from: currentSpec), argumentMap.nodes.isEmpty == false {
+                    VisualizationArgumentMapView(
+                        spec: argumentMap,
+                        selection: selectionState,
+                        activateNode: actionHandler(for: "node")
+                    )
+                } else {
+                    visualizationFallback(message: "Ingen påstander ennå.")
                 }
             case "map":
                 if let mapSpec = MapVisualizationSpec.decode(from: currentSpec) {
@@ -2775,15 +2829,31 @@ private struct VisualizationChartView: View {
 
     private var barChart: some View {
         GeometryReader { geometry in
-            let maxValue = max(points.map(\.value).max() ?? 1, 1)
+            let maxValue = max(points.filter { !$0.suppressed }.map(\.value).max() ?? 1, 1)
             HStack(alignment: .bottom, spacing: 12) {
                 ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
                     let isSelected = selection.contains(id: point.id, index: index)
                     VStack(spacing: 8) {
                         Spacer(minLength: 0)
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(point.color ?? (isSelected ? Color.accentColor : Color.accentColor.opacity(0.72)))
-                            .frame(height: max(10, CGFloat(point.value / maxValue) * max(geometry.size.height - 36, 1)))
+                        if point.suppressed {
+                            // No height from data: a dashed mark and the reason instead of a number.
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.secondary.opacity(0.12))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color.secondary.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                                )
+                                .frame(height: 24)
+                            Text(point.suppressedLabel)
+                                .font(.caption2.italic())
+                                .foregroundColor(.red)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                        } else {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(point.color ?? (isSelected ? Color.accentColor : Color.accentColor.opacity(0.72)))
+                                .frame(height: max(10, CGFloat(point.value / maxValue) * max(geometry.size.height - 36, 1)))
+                        }
                         Text(point.label)
                             .font(.caption2)
                             .lineLimit(2)
@@ -2806,12 +2876,13 @@ private struct VisualizationChartView: View {
             let positions = visualizationPointPositions(for: points, in: geometry.size)
             ZStack {
                 Path { path in
-                    guard let first = positions.first else {
-                        return
-                    }
-                    path.move(to: first)
-                    for point in positions.dropFirst() {
-                        path.addLine(to: point)
+                    // The line breaks at a suppressed bucket.
+                    for segment in visualizationLineSegments(points: points, positions: positions) {
+                        guard let first = segment.first else { continue }
+                        path.move(to: first)
+                        for location in segment.dropFirst() {
+                            path.addLine(to: location)
+                        }
                     }
                 }
                 .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
@@ -2819,15 +2890,28 @@ private struct VisualizationChartView: View {
                 ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
                     let location = positions[index]
                     let isSelected = selection.contains(id: point.id, index: index)
-                    Circle()
-                        .fill(point.color ?? (isSelected ? Color.accentColor : Color.white))
-                        .frame(width: isSelected ? 14 : 10, height: isSelected ? 14 : 10)
-                        .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
-                        .position(location)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            activatePoint?(point.raw, index, point.id, point.label)
-                        }
+                    if point.suppressed {
+                        Circle()
+                            .fill(Color.white)
+                            .frame(width: 10, height: 10)
+                            .overlay(Circle().stroke(Color.secondary, style: StrokeStyle(lineWidth: 2, dash: [2, 2])))
+                            .position(location)
+                            .accessibilityLabel("\(point.label) \(point.suppressedLabel)")
+                        Text(point.suppressedLabel)
+                            .font(.caption2.italic())
+                            .foregroundColor(.red)
+                            .position(x: location.x, y: max(8, location.y - 18))
+                    } else {
+                        Circle()
+                            .fill(point.color ?? (isSelected ? Color.accentColor : Color.white))
+                            .frame(width: isSelected ? 14 : 10, height: isSelected ? 14 : 10)
+                            .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                            .position(location)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                activatePoint?(point.raw, index, point.id, point.label)
+                            }
+                    }
 
                     Text(point.label)
                         .font(.caption2)

@@ -211,14 +211,49 @@ public struct FlowPlacementDecision: Codable, Equatable, Sendable {
     }
 }
 
+/// A flow the person set up: one more of their runtimes follows a source, on
+/// top of the default placement (Kjetil 2026-11-20: a cell may subscribe to as
+/// many Flow sources as it wants). It grants no access; it only says where.
+public struct FlowSubscription: Codable, Equatable, Sendable {
+    public var subscriptionID: String
+    public var sourceID: String
+    public var venueID: String
+    public var purposes: [FlowPlacementPurpose]
+    public var createdAt: Date
+
+    public init(sourceID: String, venueID: String, purposes: [FlowPlacementPurpose], createdAt: Date = Date()) throws {
+        guard !sourceID.isEmpty, sourceID.count <= 1_000 else { throw FlowPlacementError.invalidPayload("sourceID") }
+        guard !venueID.isEmpty, venueID.count <= 200 else { throw FlowPlacementError.invalidVenueID }
+        var unique = [FlowPlacementPurpose]()
+        for purpose in purposes where !unique.contains(purpose) { unique.append(purpose) }
+        guard !unique.isEmpty else { throw FlowPlacementError.noPurpose }
+        self.subscriptionID = FlowSubscription.id(sourceID: sourceID, venueID: venueID)
+        self.sourceID = sourceID
+        self.venueID = venueID
+        self.purposes = unique
+        self.createdAt = createdAt
+    }
+
+    /// One subscription per (source, venue); adding again replaces its purposes.
+    public static func id(sourceID: String, venueID: String) -> String { "\(venueID)|\(sourceID)" }
+}
+
 /// The first placement rule (G1 S3, 2026-11-08):
 /// - `present` goes to the device that shows the source's surface now.
 /// - `notify`, `store` and `agentJob` go to an online agent, otherwise to the
 ///   home scaffold.
 /// Ties go to the venue that reported most recently, then the lowest venue id,
-/// so each (source, purpose) has at most one venue.
+/// so each (source, purpose) has one default venue.
+/// Then every subscription the person set up adds its venue, when that venue
+/// is online and is not already the default. A venue never gets the same
+/// (source, purpose) twice; many venues may follow one source (2026-11-20).
 public enum FlowPlacementPolicy {
-    public static func decide(sources: [FlowSource], venues: [FlowVenue], now: Date) -> [FlowPlacementDecision] {
+    public static func decide(
+        sources: [FlowSource],
+        venues: [FlowVenue],
+        subscriptions: [FlowSubscription] = [],
+        now: Date
+    ) -> [FlowPlacementDecision] {
         let online = venues.filter { $0.isOnline(at: now) }
         var decisions = [FlowPlacementDecision]()
         for source in sources.sorted(by: { $0.sourceID < $1.sourceID }) {
@@ -231,6 +266,13 @@ public enum FlowPlacementPolicy {
                 let (venue, reason) = choose(purpose: purpose, source: source, online: online)
                 decisions.append(.init(sourceID: source.sourceID, endpoint: source.endpoint, purpose: purpose,
                     venueID: venue?.venueID, reason: reason, decidedAt: now))
+                let followers = subscriptions
+                    .filter { $0.sourceID == source.sourceID && $0.purposes.contains(purpose) && $0.venueID != venue?.venueID }
+                    .map(\.venueID)
+                for venueID in Set(followers).sorted() where online.contains(where: { $0.venueID == venueID }) {
+                    decisions.append(.init(sourceID: source.sourceID, endpoint: source.endpoint, purpose: purpose,
+                        venueID: venueID, reason: "Du har satt opp at dette stedet også følger kilden.", decidedAt: now))
+                }
             }
         }
         return decisions
@@ -276,6 +318,8 @@ public enum FlowPlacementError: Error, Equatable, Sendable {
     case invalidPayload(String)
     case tooManySources
     case tooManyVenues
+    case tooManySubscriptions
+    case unknownSubscription(String)
 }
 
 /// The entity's placement state: what it has access to, where it can run, and
@@ -284,16 +328,31 @@ public struct FlowPlacementBook: Codable, Equatable, Sendable {
     public static let maximumSources = 500
     public static let maximumVenues = 50
 
+    public static let maximumSubscriptions = 500
+
     public var sources: [String: FlowSource]
     public var venues: [String: FlowVenue]
+    public var subscriptions: [String: FlowSubscription]
 
-    public init(sources: [String: FlowSource] = [:], venues: [String: FlowVenue] = [:]) {
+    public init(sources: [String: FlowSource] = [:], venues: [String: FlowVenue] = [:], subscriptions: [String: FlowSubscription] = [:]) {
         self.sources = sources
         self.venues = venues
+        self.subscriptions = subscriptions
+    }
+
+    private enum CodingKeys: String, CodingKey { case sources, venues, subscriptions }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sources = try container.decode([String: FlowSource].self, forKey: .sources)
+        venues = try container.decode([String: FlowVenue].self, forKey: .venues)
+        // Books stored before 2026-11-20 have no subscriptions.
+        subscriptions = try container.decodeIfPresent([String: FlowSubscription].self, forKey: .subscriptions) ?? [:]
     }
 
     public func decisions(at now: Date) -> [FlowPlacementDecision] {
-        FlowPlacementPolicy.decide(sources: Array(sources.values), venues: Array(venues.values), now: now)
+        FlowPlacementPolicy.decide(sources: Array(sources.values), venues: Array(venues.values),
+            subscriptions: Array(subscriptions.values), now: now)
     }
 }
 
@@ -307,9 +366,11 @@ public enum FlowPlacementLedger {
     public static let sourcesRemove = "flowPlacement.sources.remove"
     public static let venuesReport = "flowPlacement.venues.report"
     public static let venuesWithdraw = "flowPlacement.venues.withdraw"
+    public static let subscriptionsAdd = "flowPlacement.subscriptions.add"
+    public static let subscriptionsRemove = "flowPlacement.subscriptions.remove"
     public static let state = "flowPlacement.state"
 
-    public static let setActions = [sourcesAdd, sourcesRemove, venuesReport, venuesWithdraw]
+    public static let setActions = [sourcesAdd, sourcesRemove, venuesReport, venuesWithdraw, subscriptionsAdd, subscriptionsRemove]
 
     /// Applies one set action. Returns the new book and the response value.
     /// `sources.add` takes a FlowSource, a list of them, or
@@ -330,6 +391,7 @@ public enum FlowPlacementLedger {
         case sourcesRemove:
             let sourceID = try requiredString(value, key: "sourceID")
             guard book.sources.removeValue(forKey: sourceID) != nil else { throw FlowPlacementError.unknownSource(sourceID) }
+            book.subscriptions = book.subscriptions.filter { $0.value.sourceID != sourceID }
             return (book, try stateValue(book, now: now, status: "removed"))
         case venuesReport:
             let venue = try decode(value, as: FlowVenue.self)
@@ -345,6 +407,29 @@ public enum FlowPlacementLedger {
             let venueID = try requiredString(value, key: "venueID")
             book.venues.removeValue(forKey: venueID)
             return (book, try stateValue(book, now: now, status: "withdrawn"))
+        case subscriptionsAdd:
+            // `{sourceID, venueID, purposes}`; the source must be one the entity has.
+            let sourceID = try requiredString(value, key: "sourceID")
+            guard book.sources[sourceID] != nil else { throw FlowPlacementError.unknownSource(sourceID) }
+            guard case let .object(object) = value, case let .list(rawPurposes)? = object["purposes"] else {
+                throw FlowPlacementError.noPurpose
+            }
+            let subscription = try FlowSubscription(
+                sourceID: sourceID,
+                venueID: try requiredString(value, key: "venueID"),
+                purposes: try rawPurposes.map { try decode($0, as: FlowPlacementPurpose.self) },
+                createdAt: now)
+            book.subscriptions[subscription.subscriptionID] = subscription
+            guard book.subscriptions.count <= FlowPlacementBook.maximumSubscriptions else {
+                throw FlowPlacementError.tooManySubscriptions
+            }
+            return (book, try stateValue(book, now: now, status: "subscribed",
+                extra: ["subscriptionID": .string(subscription.subscriptionID)]))
+        case subscriptionsRemove:
+            let id = FlowSubscription.id(sourceID: try requiredString(value, key: "sourceID"),
+                venueID: try requiredString(value, key: "venueID"))
+            guard book.subscriptions.removeValue(forKey: id) != nil else { throw FlowPlacementError.unknownSubscription(id) }
+            return (book, try stateValue(book, now: now, status: "unsubscribed"))
         default:
             throw FlowPlacementError.unknownAction(action)
         }
@@ -355,6 +440,7 @@ public enum FlowPlacementLedger {
             "status": .string(status),
             "sources": try encode(book.sources.values.sorted { $0.sourceID < $1.sourceID }),
             "venues": try encode(book.venues.values.sorted { $0.venueID < $1.venueID }),
+            "subscriptions": try encode(book.subscriptions.values.sorted { $0.subscriptionID < $1.subscriptionID }),
             "decisions": try encode(book.decisions(at: now))
         ]
         for (key, value) in extra { object[key] = value }

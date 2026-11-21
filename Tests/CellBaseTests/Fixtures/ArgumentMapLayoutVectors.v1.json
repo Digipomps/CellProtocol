@@ -1,0 +1,345 @@
+{
+ "schema": "haven.visualization.argumentmap.layout-vectors.v1",
+ "note": "Expected placements [id,row,order,rowCount]; edges point from source to the claim it acts on. Shared by CellBase and the CellScaffold web renderer.",
+ "vectors": [
+  {
+   "name": "mobilforbud",
+   "spec": {
+    "nodes": [
+     {
+      "id": "P1",
+      "role": "premise",
+      "title": "P1"
+     },
+     {
+      "id": "P2",
+      "role": "premise",
+      "title": "P2"
+     },
+     {
+      "id": "P3",
+      "role": "premise",
+      "title": "P3"
+     },
+     {
+      "id": "P4",
+      "role": "premise",
+      "title": "P4"
+     },
+     {
+      "id": "P5",
+      "role": "counter",
+      "title": "P5"
+     },
+     {
+      "id": "P6",
+      "role": "rebuttal",
+      "title": "P6"
+     },
+     {
+      "id": "P7",
+      "role": "conclusion",
+      "title": "P7"
+     }
+    ],
+    "edges": [
+     {
+      "source": "P2",
+      "target": "P7",
+      "relation": "supports"
+     },
+     {
+      "source": "P4",
+      "target": "P7",
+      "relation": "supports"
+     },
+     {
+      "source": "P1",
+      "target": "P7",
+      "relation": "supports"
+     },
+     {
+      "source": "P3",
+      "target": "P2",
+      "relation": "supports",
+      "inferred": true
+     },
+     {
+      "source": "P5",
+      "target": "P7",
+      "relation": "attacks"
+     },
+     {
+      "source": "P6",
+      "target": "P5",
+      "relation": "rebuts"
+     }
+    ]
+   },
+   "expected": [
+    [
+     "P7",
+     0,
+     0,
+     1
+    ],
+    [
+     "P1",
+     1,
+     0,
+     4
+    ],
+    [
+     "P2",
+     1,
+     1,
+     4
+    ],
+    [
+     "P4",
+     1,
+     2,
+     4
+    ],
+    [
+     "P5",
+     1,
+     3,
+     4
+    ],
+    [
+     "P3",
+     2,
+     0,
+     2
+    ],
+    [
+     "P6",
+     2,
+     1,
+     2
+    ]
+   ]
+  },
+  {
+   "name": "cycle",
+   "spec": {
+    "nodes": [
+     {
+      "id": "A",
+      "role": "conclusion",
+      "title": "A"
+     },
+     {
+      "id": "B",
+      "role": "premise",
+      "title": "B"
+     },
+     {
+      "id": "C",
+      "role": "premise",
+      "title": "C"
+     }
+    ],
+    "edges": [
+     {
+      "source": "B",
+      "target": "A",
+      "relation": "supports"
+     },
+     {
+      "source": "C",
+      "target": "B",
+      "relation": "supports"
+     },
+     {
+      "source": "A",
+      "target": "C",
+      "relation": "attacks"
+     }
+    ]
+   },
+   "expected": [
+    [
+     "B",
+     0,
+     0,
+     1
+    ],
+    [
+     "C",
+     1,
+     0,
+     1
+    ],
+    [
+     "A",
+     2,
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "name": "no-edges-keeps-input-order",
+   "spec": {
+    "nodes": [
+     {
+      "id": "X",
+      "role": "premise",
+      "title": "X"
+     },
+     {
+      "id": "Y",
+      "role": "premise",
+      "title": "Y"
+     },
+     {
+      "id": "Z",
+      "role": "premise",
+      "title": "Z"
+     }
+    ],
+    "edges": []
+   },
+   "expected": [
+    [
+     "X",
+     0,
+     0,
+     3
+    ],
+    [
+     "Y",
+     0,
+     1,
+     3
+    ],
+    [
+     "Z",
+     0,
+     2,
+     3
+    ]
+   ]
+  },
+  {
+   "name": "dangling-and-self-edges-dropped",
+   "spec": {
+    "nodes": [
+     {
+      "id": "A",
+      "role": "conclusion",
+      "title": "A"
+     },
+     {
+      "id": "B",
+      "role": "premise",
+      "title": "B"
+     },
+     {
+      "id": "B",
+      "role": "premise",
+      "title": "B"
+     }
+    ],
+    "edges": [
+     {
+      "source": "B",
+      "target": "A",
+      "relation": "supports"
+     },
+     {
+      "source": "B",
+      "target": "missing",
+      "relation": "supports"
+     },
+     {
+      "source": "A",
+      "target": "A",
+      "relation": "supports"
+     }
+    ]
+   },
+   "expected": [
+    [
+     "A",
+     0,
+     0,
+     1
+    ],
+    [
+     "B",
+     1,
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "name": "barycenter-orders-lower-row",
+   "spec": {
+    "nodes": [
+     {
+      "id": "C1",
+      "role": "conclusion",
+      "title": "C1"
+     },
+     {
+      "id": "C2",
+      "role": "conclusion",
+      "title": "C2"
+     },
+     {
+      "id": "p2",
+      "role": "premise",
+      "title": "p2"
+     },
+     {
+      "id": "p1",
+      "role": "premise",
+      "title": "p1"
+     }
+    ],
+    "edges": [
+     {
+      "source": "p2",
+      "target": "C2",
+      "relation": "supports"
+     },
+     {
+      "source": "p1",
+      "target": "C1",
+      "relation": "supports"
+     }
+    ]
+   },
+   "expected": [
+    [
+     "C1",
+     0,
+     0,
+     2
+    ],
+    [
+     "C2",
+     0,
+     1,
+     2
+    ],
+    [
+     "p1",
+     1,
+     0,
+     2
+    ],
+    [
+     "p2",
+     1,
+     1,
+     2
+    ]
+   ]
+  }
+ ]
+}
