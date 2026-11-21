@@ -750,6 +750,7 @@ public struct SkeletonView: View {
     @Environment(\.skeletonNativeActionScope) private var actionScope
     @Environment(\.skeletonNativeDragContext) private var inheritedDrag
     @Environment(\.skeletonNativeElementID) private var elementPath
+    @Environment(\.skeletonAudioQueuePlayer) private var audioQueuePlayer
 
     private var dataContext: SkeletonRenderDataContext {
         if let explicitData { return explicitData }
@@ -766,10 +767,17 @@ public struct SkeletonView: View {
     }
     
     public var body: some View {
-        render(element)
+        let content = render(element)
             .environment(\.skeletonRenderData, dataContext)
             .environment(\.skeletonNativeDragContext, inheritedDrag ?? viewModel.skeletonDragContext)
             .applySkeletonKeyboardToolbar(enabled: showsKeyboardToolbar)
+        // H: the outermost SkeletonView owns the surface's queue player, so the
+        // AudioQueue element and queue buttons anywhere below share it.
+        if audioQueuePlayer == nil {
+            content.modifier(SkeletonAudioQueueSurfaceHost())
+        } else {
+            content
+        }
     }
 
     /// D: an element-wide link (`modifiers.linkURL`/`linkURLKeypath`) makes the
@@ -905,6 +913,13 @@ public struct SkeletonView: View {
                 userInfoValue: userInfoValue,
                 transform: buttonResolutionTransform
             )
+            if resolvedButton.startsAudioQueue {
+                // H: a queue button starts the surface's player and sends nothing.
+                return AnyView(
+                    SkeletonAudioQueueButtonView(button: resolvedButton, data: dataContext, player: audioQueuePlayer)
+                        .environmentObject(viewModel)
+                )
+            }
             return AnyView(
                 CellActionButtonView(skeletonButton: resolvedButton, userInfoValue: userInfoValue)
                     .environmentObject(viewModel)
@@ -1000,10 +1015,14 @@ public struct SkeletonView: View {
                 CellAudioView(skeletonAudio: audio, userInfoValue: userInfoValue)
                     .applySkeletonModifiers(audio.modifiers, userInfoValue: userInfoValue)
             )
-        case .AudioQueue:
-            // H/I: the queue player is web-only for now. Native shows nothing
-            // rather than a player that cannot reach the surface's root data.
-            return AnyView(EmptyView())
+        case .AudioQueue(let queue):
+            // H/I: the surface's queue player bar. Modifiers go on the visible
+            // bar inside the view, so a hidden bar leaves no padding behind.
+            guard let audioQueuePlayer else { return AnyView(EmptyView()) }
+            return AnyView(
+                SkeletonAudioQueueBarView(spec: queue, data: dataContext, player: audioQueuePlayer)
+                    .environmentObject(viewModel)
+            )
         case .TextField(let tf):
             return AnyView(
                 CellTextFieldView(skeletonTextField: tf, userInfoValue: userInfoValue)

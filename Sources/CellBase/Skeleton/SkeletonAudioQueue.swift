@@ -139,14 +139,32 @@ public extension SkeletonButton {
 
     /// The tracks this button would play, read from the row (or root) value.
     func audioQueue(item: ValueType?) -> [SkeletonAudioQueueTrack] {
+        audioQueue(resolve: { SkeletonDataBinding.value(at: $0, in: item) })
+    }
+
+    /// The tracks this button would play, with keypaths looked up by `resolve`.
+    /// Renderers that look in the row first and then in the surface's root data
+    /// pass that lookup here, so web and native read the same values.
+    func audioQueue(resolve: (String) -> ValueType?) -> [SkeletonAudioQueueTrack] {
         guard let keypath = SkeletonDataBinding.normalized(playQueueKeypath) else { return [] }
-        return SkeletonAudioQueueTrack.queue(from: SkeletonDataBinding.value(at: keypath, in: item))
+        return SkeletonAudioQueueTrack.queue(from: resolve(keypath))
+    }
+
+    /// The id of the button's own track (`playQueueStartKeypath`), if any.
+    func audioQueueStartID(resolve: (String) -> ValueType?) -> String? {
+        guard let keypath = SkeletonDataBinding.normalized(playQueueStartKeypath),
+              case let .string(value)? = resolve(keypath) else { return nil }
+        return SkeletonDataBinding.normalized(value)
     }
 
     /// Index to start at: the button's own track when `playQueueStartKeypath`
     /// names one that is in the queue, otherwise the top.
     func audioQueueStartIndex(item: ValueType?, queue: [SkeletonAudioQueueTrack]) -> Int {
-        guard let startID = SkeletonDataBinding.string(at: playQueueStartKeypath, in: item),
+        audioQueueStartIndex(resolve: { SkeletonDataBinding.value(at: $0, in: item) }, queue: queue)
+    }
+
+    func audioQueueStartIndex(resolve: (String) -> ValueType?, queue: [SkeletonAudioQueueTrack]) -> Int {
+        guard let startID = audioQueueStartID(resolve: resolve),
               let index = queue.firstIndex(where: { $0.id == startID }) else { return 0 }
         return index
     }
@@ -155,11 +173,16 @@ public extension SkeletonButton {
     /// without a start track, the player plays exactly this button's list.
     /// A button without `playingLabel` never shows a playing state.
     func isPlaying(item: ValueType?, playingTrackID: String?, playingQueueIDs: [String]) -> Bool {
+        isPlaying(resolve: { SkeletonDataBinding.value(at: $0, in: item) },
+                  playingTrackID: playingTrackID, playingQueueIDs: playingQueueIDs)
+    }
+
+    func isPlaying(resolve: (String) -> ValueType?, playingTrackID: String?, playingQueueIDs: [String]) -> Bool {
         guard startsAudioQueue, SkeletonDataBinding.normalized(playingLabel) != nil, let playingTrackID else { return false }
-        if let startID = SkeletonDataBinding.string(at: playQueueStartKeypath, in: item) {
+        if let startID = audioQueueStartID(resolve: resolve) {
             return startID == playingTrackID
         }
-        let ids = audioQueue(item: item).map(\.id)
+        let ids = audioQueue(resolve: resolve).map(\.id)
         return !ids.isEmpty && ids == playingQueueIDs
     }
 }
