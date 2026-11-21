@@ -55,5 +55,5 @@ Når en bruker ber om en mer avansert UI:
 Eksempel på riktig responsmønster:
 
 - `Supported now:` `VStack`, `Text`, `Button`, `List`, `Grid`, `Toggle`
-- `Not supported in current skeleton:` filopplasting, innebygd video, ny custom chart
-- `Needs Kjetil approval before implementation:` nytt `FileUpload`-element
+- `Not supported in current skeleton:` innebygd video, kart, ny custom chart
+- `Needs approval from Digipomps before implementation:` nytt `Video`-element
