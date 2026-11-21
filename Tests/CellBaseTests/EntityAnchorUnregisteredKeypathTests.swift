@@ -8,7 +8,13 @@ import XCTest
 // PDD konferanse-mal-eierskap, WP1 (CellProtocolDocuments
 // Deliverables/PDD_konferanse-mal-eierskap_2026-11-21).
 //
-//   test.kme.lagring-rundtur   testWriteEitherReadsBackOrFailsLoudly
+//   test.kme.lagring-rundtur   testWriteEitherReadsBackOrFailsLoudly,
+//                              testTemplateRootsAreStoredAndSurviveRestart,
+//                              testTemplateRootsRefuseAnotherEntity,
+//                              testTemplateRootsDoNotReopenAnchorRoots
+//
+// WP4 (Kjetil 2026-11-21, «Malen åpner røtter i EntityAnchor»): the roots in
+// EntityTemplateRoots are opened in both anchors.
 //
 // Purpose: a keypath that is not registered is either stored and read back, or
 // refused with an error. Never accepted and then gone. The lesson
@@ -58,6 +64,14 @@ final class EntityAnchorUnregisteredKeypathTests: XCTestCase {
             switch self {
             case .local: return await AppleEntityAnchorCell(owner: owner)
             case .cloud: return await VaporEntityAnchorCell(owner: owner)
+            }
+        }
+
+        func restart(_ anchor: GeneralCell) throws -> GeneralCell {
+            let snapshot = try JSONEncoder().encode(anchor)
+            switch self {
+            case .local: return try JSONDecoder().decode(AppleEntityAnchorCell.self, from: snapshot)
+            case .cloud: return try JSONDecoder().decode(VaporEntityAnchorCell.self, from: snapshot)
             }
         }
     }
@@ -116,6 +130,59 @@ final class EntityAnchorUnregisteredKeypathTests: XCTestCase {
             }
         }
         XCTAssertTrue(silentLosses.isEmpty, "Stille tap: \(silentLosses.joined(separator: "; "))")
+    }
+    func testTemplateRootsAreStoredAndSurviveRestart() async throws {
+        for scaffold in Scaffold.allCases {
+            let entity = await SimulatedEntity.make("kme-root-\(scaffold.rawValue)")
+            let owner = entity.owner
+            let anchor = await scaffold.anchor(owner: owner)
+            _ = try await anchor.set(keypath: "identityLinks.genesis", value: .string("onboarding"), requester: owner)
+
+            let organizer = ValueType.string("11111111-1111-4111-8111-000000000001")
+            _ = try await anchor.set(keypath: "event.ownedBy", value: organizer, requester: owner)
+            _ = try await anchor.set(keypath: "template.version", value: .string(EntityTemplateRoots.conferenceV0.version), requester: owner)
+            let got = try await anchor.get(keypath: "event.ownedBy", requester: owner)
+            XCTAssertEqual(got, organizer, scaffold.rawValue)
+
+            let restarted = try scaffold.restart(anchor)
+            let afterRestart = try await restarted.get(keypath: "event.ownedBy", requester: owner)
+            XCTAssertEqual(afterRestart, organizer, "\(scaffold.rawValue) after restart")
+            let version = try await restarted.get(keypath: "template.version", requester: owner)
+            XCTAssertEqual(version, .string("0.1.0"), scaffold.rawValue)
+        }
+    }
+
+    func testTemplateRootsRefuseAnotherEntity() async throws {
+        for scaffold in Scaffold.allCases {
+            let a = await SimulatedEntity.make("kme-a-\(scaffold.rawValue)")
+            let b = await SimulatedEntity.make("kme-b-\(scaffold.rawValue)")
+            let anchor = await scaffold.anchor(owner: a.owner)
+            _ = try await anchor.set(keypath: "identityLinks.genesis", value: .string("onboarding"), requester: a.owner)
+
+            var refused = false
+            do {
+                let result = try await anchor.set(keypath: "event.ownedBy", value: .string("mallory"), requester: b.owner)
+                if case let .object(object)? = result, object["status"] == .string("error") { refused = true }
+            } catch {
+                refused = true
+            }
+            XCTAssertTrue(refused, "\(scaffold.rawValue): B wrote event.ownedBy")
+            do {
+                _ = try await anchor.get(keypath: "event", requester: b.owner)
+                XCTFail("\(scaffold.rawValue): B read event")
+            } catch {
+                // refused
+            }
+            let ownerView = try? await anchor.get(keypath: "event.ownedBy", requester: a.owner)
+            XCTAssertNotEqual(ownerView, .string("mallory"), scaffold.rawValue)
+        }
+    }
+
+    func testTemplateRootsDoNotReopenAnchorRoots() {
+        let opened = Set(EntityTemplateRoots.openedRoots)
+        XCTAssertEqual(opened.count, EntityTemplateRoots.openedRoots.count, "duplicate roots")
+        XCTAssertTrue(opened.isDisjoint(with: EntityTemplateRoots.anchorOwnedRoots),
+                      "a template reopens an anchor root: \(opened.intersection(EntityTemplateRoots.anchorOwnedRoots))")
     }
 }
 #endif
