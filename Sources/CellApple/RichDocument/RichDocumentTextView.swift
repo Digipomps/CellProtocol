@@ -60,7 +60,7 @@ final class RichDocumentLayoutManager: NSLayoutManager {
                 let font = (storage.attribute(.font, at: paragraph.location, effectiveRange: nil) as? RichDocumentFont) ?? RichDocumentTextCodec.font(bold: false, italic: false, size: 15)
                 let markerText = NSAttributedString(string: marker, attributes: [.font: font, .foregroundColor: markerColor])
                 let width = markerText.size().width
-                let baselineY = lineRect.minY + (lineRect.height - font.lineHeight) / 2
+                let baselineY = lineRect.minY + (lineRect.height - (font.ascender - font.descender + font.leading)) / 2
                 markerText.draw(at: CGPoint(x: origin.x + lineRect.minX + indent - width - 6, y: origin.y + baselineY))
             }
             if storage.attribute(.havenBlockquote, at: paragraph.location, effectiveRange: nil) != nil {
@@ -78,7 +78,7 @@ final class RichDocumentLayoutManager: NSLayoutManager {
             guard NSLocationInRange(index, characters) || index == NSMaxRange(characters) else { continue }
             let glyph = glyphIndexForCharacter(at: index)
             let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-            let x = location(forGlyphAt: glyph).x + line.minX
+            let x = self.location(forGlyphAt: glyph).x + line.minX
             let color = Self.peerColors[caret.colorIndex % Self.peerColors.count]
             context.setFillColor(color.cgColor)
             context.fill(CGRect(x: origin.x + x, y: origin.y + line.minY + 2, width: 2, height: line.height - 4))

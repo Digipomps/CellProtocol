@@ -356,6 +356,12 @@ extension RichTextDelta {
         public var codeUnit: UInt16
         public var embed: [String: RichTextValue]?
         public var attributes: RichTextAttributes
+
+        public init(codeUnit: UInt16, embed: [String: RichTextValue]? = nil, attributes: RichTextAttributes = [:]) {
+            self.codeUnit = codeUnit
+            self.embed = embed
+            self.attributes = attributes
+        }
     }
 
     public static let objectReplacementCharacter: UInt16 = 0xFFFC
