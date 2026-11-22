@@ -39,30 +39,24 @@ Støttede toppfelter er:
 
 ## Supported Skeleton Elements
 
-Dette er de faktiske `SkeletonElement`-casene som finnes i koden nå:
+Dette er de faktiske `SkeletonElement`-casene som finnes i koden nå
+(`decodeKnownElement` i `SkeletonDescription.swift`, sjekket 2026-11-21):
 
-- `Text`
-- `TextField`
-- `TextArea`
-- `Image`
-- `Spacer`
-- `HStack`
-- `VStack`
-- `ZStack`
-- `List`
-- `Object`
-- `Reference`
-- `Button`
-- `Divider`
-- `ScrollView`
-- `Section`
-- `Grid`
-- `Toggle`
-- `Picker`
-- `FileUpload`
-- `AttachmentField` (legacy alias for upload/attachment surfaces)
+- Oppsett: `VStack`, `HStack`, `ZStack`, `Grid`, `ScrollView`, `Section`,
+  `Tabs`, `NavigationBar`, `Spacer`, `Divider`
+- Tekst og bilde: `Text`, `Image`
+- Inndata: `TextField`, `TextArea`, `Toggle`, `Picker`, `Button`, `FileUpload`
+- Data: `List`, `Tree`, `Object`, `Reference`, `Visualization`
+- Annet: `Audio`, `AudioQueue`, `ComponentSurface`
+- `AttachmentField` (eldre alias for opplasting; bruk `FileUpload`)
 
-Alt annet skal behandles som ikke støttet før det er verifisert i kode.
+Alt annet blir `Unsupported` ved dekoding og vises ikke. `skeleton-check`
+rapporterer det.
+
+### `List`-radmal
+
+`flowElementSkeleton` må være en `VStack`, også når raden bare er én `Text`.
+Web-rendereren avviser hele flaten ellers, og Swift-dekoderen dropper malen.
 
 ### `FileUpload`
 
@@ -363,6 +357,8 @@ Modellen skal alltid kunne forklare:
 - `Section`/`ScrollView`: struktur og scroll
 - `Grid`: kort- eller matrisevisning
 - `Toggle`/`Picker`: enkel kontrollflate mot tilstand eller valg
+- `Tabs`: flere paneler i samme flate (`activeTabStateKeypath`, `panels`)
+- `FileUpload`: alt som tar imot en fil
 
 ## Known Limits And Gaps
 
@@ -371,12 +367,11 @@ Dette skal rapporteres tydelig til brukeren hvis det etterspørres:
 - ingen generisk CSS-/class-style engine i SwiftUI-rendereren
 - `Text` er ikke en redigerbar editor-node
 - `TextArea` har ikke full meta/ctrl-enter-paritet dokumentert i Swift
-- filopplasting er beskrevet som plan, ikke som aktivt skeleton-element
 - ikke støttede elementer skal ikke improviseres
 
 ## Hard Stop Conditions
 
-Stopp og si fra til Kjetil før implementering hvis ønsket krever:
+Stopp og si fra til Digipomps før implementering hvis ønsket krever:
 
 - ny skeleton-elementtype
 - ny renderer-semantikk
