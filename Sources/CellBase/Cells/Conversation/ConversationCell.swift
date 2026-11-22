@@ -143,6 +143,23 @@ public final class ConversationCell: GeneralCell, MeddleOperationAuthorizationRe
         return try await engine.applyMembership(title: title, members: members, pending: pendingInviteeUUIDs, blocked: blockedUUIDs)
     }
 
+    /// Host-side migration of a message from before this cell existed. See
+    /// `ConversationEngine.importMessage`.
+    @_spi(HAVENRuntime)
+    public func importMessage(clientMessageID: String, authorUUID: String, authorDisplayName: String,
+                              content: String, createdAt: String) async -> ConversationSendResult {
+        guard let engine else { return .failure(.storageFailed) }
+        return await engine.importMessage(clientMessageID: clientMessageID, authorUUID: authorUUID,
+                                          authorDisplayName: authorDisplayName, content: content, createdAt: createdAt)
+    }
+
+    /// Host-side read of every committed message after `afterSeq`.
+    @_spi(HAVENRuntime)
+    public func hostMessages(afterSeq: Int) async throws -> [ConversationMessage] {
+        guard let engine else { throw ConversationStoreError.backend("conversation not provisioned") }
+        return try await engine.allMessages(afterSeq: afterSeq)
+    }
+
     /// Current membership as last applied (synchronous snapshot).
     public var membership: ConversationMeta { engineLock.withLock { membershipSnapshot } }
 

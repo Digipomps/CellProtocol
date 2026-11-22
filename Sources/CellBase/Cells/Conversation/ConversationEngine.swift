@@ -239,6 +239,48 @@ actor ConversationEngine {
         return .stored(message, duplicate: false)
     }
 
+    /// Migration: stores a message written before this conversation had its own
+    /// cell, with its original author, time and id (as clientMessageID). Not
+    /// published and not pushed. Idempotent on clientMessageID.
+    func importMessage(clientMessageID: String, authorUUID: String, authorDisplayName: String,
+                       content: String, createdAt: String) async -> ConversationSendResult {
+        do { try await loadIfNeeded() } catch { return .failure(.storageFailed) }
+        return await exclusive {
+            do {
+                if let known = try await index.message(conversationID: conversationID, clientMessageID: clientMessageID),
+                   let data = try await store.read(ConversationStorageLayout.sentKey(seq: known.seq, messageID: known.messageID)) {
+                    return .stored(try JSONDecoder().decode(ConversationMessage.self, from: data), duplicate: true)
+                }
+                let message = ConversationMessage(
+                    conversationID: conversationID, seq: lastSeq + 1, messageID: UUID().uuidString,
+                    clientMessageID: clientMessageID, authorUUID: authorUUID, authorDisplayName: authorDisplayName,
+                    content: content, createdAt: createdAt)
+                let data = try ConversationCodec.objectData(message)
+                for member in meta.members.map(\.uuid) where member != authorUUID {
+                    try await store.create(data, at: ConversationStorageLayout.inboxKey(memberUUID: member, seq: message.seq, messageID: message.messageID))
+                }
+                try await store.create(data, at: ConversationStorageLayout.sentKey(seq: message.seq, messageID: message.messageID))
+                lastSeq = message.seq
+                try await index.record(message)
+                return .stored(message, duplicate: false)
+            } catch {
+                return .failure(.storageFailed)
+            }
+        }
+    }
+
+    /// Every committed message after `afterSeq`, for the hosting scaffold.
+    func allMessages(afterSeq: Int) async throws -> [ConversationMessage] {
+        var result = [ConversationMessage]()
+        var cursor = afterSeq
+        while true {
+            let page = try await since(afterSeq: cursor, limit: Self.maximumPageSize)
+            result += page.messages
+            guard page.hasMore, let last = page.messages.last?.seq else { return result }
+            cursor = last
+        }
+    }
+
     func since(afterSeq: Int, limit: Int) async throws -> ConversationMessagePage {
         try await loadIfNeeded()
         let size = min(max(1, limit), Self.maximumPageSize)

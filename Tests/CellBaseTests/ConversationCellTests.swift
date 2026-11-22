@@ -359,6 +359,32 @@ final class ConversationCellTests: XCTestCase {
         XCTAssertEqual(try snapshot(f.root).0.keys.filter { $0.hasPrefix("sent/") }.count, 24)
     }
 
+    // MARK: test.chat.migration (cell part)
+
+    func testImportKeepsOrderAuthorAndTimeIsIdempotentAndPublishesNothing() async throws {
+        let f = try await fixture(members: 2)
+        let events = Recorder()
+        let subscription = try await f.cell.flow(requester: f.people[1]).sink(receiveCompletion: { _ in }, receiveValue: events.add)
+        defer { subscription.cancel() }
+        let legacy = [("msg-1", "gammel 1", "2026-10-21T15:14:15Z"), ("msg-2", "gammel 2", "2026-10-21T15:20:00Z")]
+        for _ in 0..<2 {
+            for (id, text, time) in legacy {
+                let result = await f.cell.importMessage(clientMessageID: id, authorUUID: f.people[0].uuid,
+                    authorDisplayName: "Anna", content: text, createdAt: time)
+                XCTAssertTrue(result.ok)
+            }
+        }
+        let all = try await f.cell.hostMessages(afterSeq: 0)
+        XCTAssertEqual(all.map(\.content), ["gammel 1", "gammel 2"])
+        XCTAssertEqual(all.map(\.seq), [1, 2])
+        XCTAssertEqual(all.map(\.createdAt), ["2026-10-21T15:14:15Z", "2026-10-21T15:20:00Z"])
+        XCTAssertEqual(all.map(\.clientMessageID), ["msg-1", "msg-2"])
+        let next = try await send(f.cell, from: f.people[1], "ny")
+        XCTAssertEqual(next.seq, 3)
+        try await waitFor { events.titles.contains("message.appended") }
+        XCTAssertEqual(events.messages.map(\.content), ["ny"], "imported messages are not published")
+    }
+
     // MARK: Fixtures and helpers
 
     private struct Fixture {
