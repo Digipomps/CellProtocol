@@ -513,6 +513,63 @@ private func setValueType(_ value: ValueType, at keypath: String, requester: Ide
     return true
 }
 
+/// Like `setValueType`, but keeps the cell's answer (`{status, current}` for
+/// a document change) and throws when the cell cannot be reached, so the
+/// document session keeps the change and retries.
+private func setValueTypeReturning(_ value: ValueType, at keypath: String, requester: Identity?) async throws -> ValueType? {
+    guard let requester, let (url, child) = resolveCellTarget(for: keypath) else { throw URLError(.userAuthenticationRequired) }
+    guard let target = try await CellResolver.sharedInstance.emitCellAtEndpoint(
+        endpointUrl: url, endpoint: url.absoluteString, requester: requester) as? Meddle else { throw URLError(.cannotFindHost) }
+    return try await target.set(keypath: child, value: value, requester: requester)
+}
+
+private func getValueTypeThrowing(at keypath: String, requester: Identity?) async throws -> ValueType? {
+    guard let requester, let (url, child) = resolveCellTarget(for: keypath) else { throw URLError(.userAuthenticationRequired) }
+    guard let target = try await CellResolver.sharedInstance.emitCellAtEndpoint(
+        endpointUrl: url, endpoint: url.absoluteString, requester: requester) as? Meddle else { throw URLError(.cannotFindHost) }
+    return try await target.get(keypath: child, requester: requester)
+}
+
+/// Hosts the native document editor for the `richDocument` visualization and
+/// the two legacy kinds (`documentHelp`, `documentChat`). The keypath is read
+/// as `document.current`, the action keypath written as `document.change`.
+private struct RichDocumentHostView: View {
+    let skeletonVisualization: SkeletonVisualization
+    @EnvironmentObject var viewModel: PortholeViewModel
+
+    static func handles(_ kind: String) -> Bool {
+        ["richdocument", "documenthelp", "documentchat"].contains(kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    private var kind: String { skeletonVisualization.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+    var body: some View {
+        #if os(iOS) || os(macOS)
+        let make = { @MainActor () -> RichDocumentEditorModel in
+            let viewModel = self.viewModel
+            let readKeypath = skeletonVisualization.keypath ?? "document.current"
+            let writeKeypath = skeletonVisualization.actionKeypath ?? "document.change"
+            let transport = RichDocumentClosureTransport(
+                current: { try await getValueTypeThrowing(at: readKeypath, requester: await viewModel.executionRequesterIdentity()) },
+                send: { try await setValueTypeReturning($0, at: writeKeypath, requester: await viewModel.executionRequesterIdentity()) })
+            let directory = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory).appendingPathComponent("HAVEN/DocumentDrafts", isDirectory: true)
+            let session = RichDocumentSession(transport: transport, drafts: RichDocumentFileDraftStore(directory: directory))
+            let model = RichDocumentEditorModel(session: session)
+            model.start(flow: viewModel.$flowElements.compactMap(\.first).setFailureType(to: Error.self).eraseToAnyPublisher())
+            return model
+        }
+        switch kind {
+        case "documenthelp": RichDocumentConversationView(model: make(), help: true)
+        case "documentchat": RichDocumentConversationView(model: make(), help: false)
+        default: RichDocumentEditorView(model: make())
+        }
+        #else
+        Text("Dokumentet kan leses på web.").font(.callout)
+        #endif
+    }
+}
+
 #if canImport(UniformTypeIdentifiers)
 private func attachmentUTTypes(from identifiers: [String]?) -> [UTType] {
     let identifiers = (identifiers ?? []).filter { $0.isEmpty == false }
@@ -989,6 +1046,12 @@ public struct SkeletonView: View {
             )
         case .NavigationBar(let navigationBar):
             return renderNavigationBar(navigationBar)
+        case .Visualization(let visualization) where RichDocumentHostView.handles(visualization.kind):
+            return AnyView(
+                RichDocumentHostView(skeletonVisualization: visualization)
+                    .applySkeletonModifiers(visualization.modifiers, userInfoValue: userInfoValue)
+                    .environmentObject(viewModel)
+            )
         case .Visualization(let visualization):
             return AnyView(
                 CellVisualizationView(skeletonVisualization: visualization, userInfoValue: userInfoValue)

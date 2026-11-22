@@ -1,0 +1,12818 @@
+{
+ "schema": "haven.richtext.delta.vectors.v1",
+ "source": "Quill bundle in CellScaffold Public/vendor/quill/quill.js, Quill.import('delta')",
+ "cases": [
+  {
+   "name": "compose insert into empty",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "insert": "Hei"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Hei\n"
+    }
+   ]
+  },
+  {
+   "name": "compose typing after text",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Hei\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 3
+    },
+    {
+     "insert": " du"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Hei du\n"
+    }
+   ]
+  },
+  {
+   "name": "compose bold over range",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Hei du\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Hei "
+    },
+    {
+     "insert": "du",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "compose remove bold with null",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Hei\n"
+    }
+   ]
+  },
+  {
+   "name": "compose header on line",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Tittel\nTekst\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 6
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "header": 1
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Tittel"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 1
+     }
+    },
+    {
+     "insert": "Tekst\n"
+    }
+   ]
+  },
+  {
+   "name": "compose delete across attribute runs",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "ab"
+    },
+    {
+     "insert": "cd",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "ef\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 4
+    }
+   ],
+   "expected": [
+    {
+     "insert": "af\n"
+    }
+   ]
+  },
+  {
+   "name": "compose insert embed",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Før\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,iVBORw0KGgo="
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Før\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,iVBORw0KGgo="
+     }
+    }
+   ]
+  },
+  {
+   "name": "compose delete embed",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "a"
+    },
+    {
+     "insert": {
+      "visualization": {
+       "kind": "chart",
+       "spec": {
+        "title": "T",
+        "rows": [
+         {
+          "id": "0",
+          "label": "x",
+          "value": 1
+         }
+        ]
+       }
+      }
+     }
+    },
+    {
+     "insert": "b\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "insert": "ab\n"
+    }
+   ]
+  },
+  {
+   "name": "compose emoji",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Hei 😀 du\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 2
+    },
+    {
+     "insert": "🎉"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Hei 🎉 du\n"
+    }
+   ]
+  },
+  {
+   "name": "compose insert then delete",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "abc"
+    }
+   ],
+   "b": [
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "x"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "bxc"
+    }
+   ]
+  },
+  {
+   "name": "compose list and link",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "en\nto\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "list": "bullet"
+     }
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "link": "https://uio.no"
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": "en"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "bullet"
+     }
+    },
+    {
+     "insert": "to",
+     "attributes": {
+      "link": "https://uio.no"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "transform both insert same place, priority",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "A"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "B"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 3
+    },
+    {
+     "insert": "B"
+    }
+   ]
+  },
+  {
+   "name": "transform both insert same place, no priority",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "A"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "B"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "B"
+    }
+   ]
+  },
+  {
+   "name": "transform insert vs delete",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "X"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "X"
+    }
+   ]
+  },
+  {
+   "name": "transform delete vs delete overlap",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ]
+  },
+  {
+   "name": "transform attributes conflict, priority",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": false,
+      "underline": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 3,
+     "attributes": {
+      "underline": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "transform attributes conflict, no priority",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": false
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": false
+     }
+    }
+   ]
+  },
+  {
+   "name": "transform emoji delete vs insert",
+   "kind": "transform",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 6
+    },
+    {
+     "insert": "!"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "!"
+    }
+   ]
+  },
+  {
+   "name": "position after insert before",
+   "kind": "position",
+   "a": [
+    {
+     "insert": "ab"
+    }
+   ],
+   "index": 0,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "position after insert before, priority",
+   "kind": "position",
+   "a": [
+    {
+     "insert": "ab"
+    }
+   ],
+   "index": 0,
+   "priority": true,
+   "expected": 0
+  },
+  {
+   "name": "position inside delete",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 5
+    }
+   ],
+   "index": 4,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "position after delete",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 5
+    }
+   ],
+   "index": 9,
+   "priority": false,
+   "expected": 4
+  },
+  {
+   "name": "position before change",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "xyz"
+    }
+   ],
+   "index": 3,
+   "priority": false,
+   "expected": 3
+  },
+  {
+   "name": "random 0 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "uden",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "ter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 0 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "b": [
+    {
+     "retain": 13
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 15
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "uden"
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "t",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "er",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 0 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "index": 1,
+   "priority": false,
+   "expected": 1
+  },
+  {
+   "name": "random 1 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 1 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    }
+   ],
+   "priority": false,
+   "expected": [],
+   "converged": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 1 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "index": 2,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "random 2 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 12
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": " og",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 2 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 12
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 17
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 17
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " og"
+    },
+    {
+     "attributes": {
+      "italic": true,
+      "underline": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "persvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "stu",
+     "attributes": {
+      "bold": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "dente",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "r",
+     "attributes": {
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 2 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 12
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "index": 11,
+   "priority": false,
+   "expected": 11
+  },
+  {
+   "name": "random 3 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "personvern"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "æø",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "å",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 3 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "personvern"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 18
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "æø"
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "å"
+    },
+    {
+     "insert": "personvern\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 3 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "personvern"
+    }
+   ],
+   "index": 8,
+   "priority": true,
+   "expected": 21
+  },
+  {
+   "name": "random 4 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    }
+   ],
+   "expected": [
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 4 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 5
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "converged": [
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 4 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    }
+   ],
+   "index": 11,
+   "priority": true,
+   "expected": 11
+  },
+  {
+   "name": "random 5 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "personver",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 5 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "personv",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 5 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 4,
+   "priority": false,
+   "expected": 4
+  },
+  {
+   "name": "random 6 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 6 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "b": [
+    {
+     "retain": 3
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "i",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": " \n"
+    }
+   ]
+  },
+  {
+   "name": "random 6 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "index": 7,
+   "priority": true,
+   "expected": 9
+  },
+  {
+   "name": "random 7 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "😀"
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "dat",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "a",
+     "attributes": {
+      "italic": true,
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 7 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "😀"
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "at",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "a",
+     "attributes": {
+      "italic": true,
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 7 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "index": 0,
+   "priority": false,
+   "expected": 0
+  },
+  {
+   "name": "random 8 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 8 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 8 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "index": 11,
+   "priority": true,
+   "expected": 11
+  },
+  {
+   "name": "random 9 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 9 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": " "
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 9 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 4,
+   "priority": true,
+   "expected": 4
+  },
+  {
+   "name": "random 10 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 9
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 9
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "underline": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "😀stuter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøådatapersonvern",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 10 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 9
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 9
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "underline": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 14
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 11
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "insert": " og 😀stute",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "r",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøådatapersonvern",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 10 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 9
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 9
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "underline": true
+     }
+    }
+   ],
+   "index": 7,
+   "priority": true,
+   "expected": 7
+  },
+  {
+   "name": "random 11 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "personvern"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 11 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    }
+   ],
+   "b": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "converged": [
+    {
+     "insert": " personve",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "rn",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 11 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 5
+  },
+  {
+   "name": "random 12 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 12 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "retain": 2
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "retain": 2
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "insert": "æ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "øå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 12 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 3,
+   "priority": false,
+   "expected": 3
+  },
+  {
+   "name": "random 13 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": " og "
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 13 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "insert": " o",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "g H",
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "e",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "i",
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true,
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 13 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "index": 11,
+   "priority": false,
+   "expected": 8
+  },
+  {
+   "name": "random 14 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "da",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 14 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "insert": "d",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "ata",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "da",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 14 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 6
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 0,
+   "priority": true,
+   "expected": 0
+  },
+  {
+   "name": "random 15 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 13
+    }
+   ],
+   "expected": [
+    {
+     "insert": "d",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "at",
+     "attributes": {
+      "bold": true,
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "a",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "H",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "ei😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n🎉🎉Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 15 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 13
+    }
+   ],
+   "b": [
+    {
+     "retain": 18
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 20
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "d"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true,
+      "link": "https://example.org"
+     },
+     "insert": "at"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "a"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "H"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "ei😀"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "\n🎉🎉Hei"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "🎉🎉\n"
+    }
+   ]
+  },
+  {
+   "name": "random 15 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 13
+    }
+   ],
+   "index": 6,
+   "priority": false,
+   "expected": 8
+  },
+  {
+   "name": "random 16 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "personve",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "rn",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 16 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "b": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 4
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 15
+    },
+    {
+     "delete": 4
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "personve"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "rn"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 16 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 5
+  },
+  {
+   "name": "random 17 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " og "
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "æ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 17 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "insert": " o",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "g",
+     "attributes": {
+      "bold": true,
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "æ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 17 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 4
+    }
+   ],
+   "index": 2,
+   "priority": true,
+   "expected": 2
+  },
+  {
+   "name": "random 18 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "H",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "e",
+     "attributes": {
+      "bold": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "i"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 18 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "H"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "link": "https://example.org"
+     },
+     "insert": "e"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "i"
+    },
+    {
+     "insert": "\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 18 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "index": 1,
+   "priority": true,
+   "expected": 1
+  },
+  {
+   "name": "random 19 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "ta",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 19 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 6
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "ta",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 19 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 5,
+   "priority": true,
+   "expected": 4
+  },
+  {
+   "name": "random 20 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei🎉🎉"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 20 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 29
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 29
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": "Hei🎉🎉"
+    },
+    {
+     "insert": "dat",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 20 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "index": 7,
+   "priority": true,
+   "expected": 7
+  },
+  {
+   "name": "random 21 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 15
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 6
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "p",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "ersonv",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 21 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 15
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 6
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": " o"
+    },
+    {
+     "insert": "g ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     },
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "p",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "ersonv",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 21 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 15
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 6
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "index": 1,
+   "priority": true,
+   "expected": 1
+  },
+  {
+   "name": "random 22 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 22 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "da",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "ta",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 22 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 7,
+   "priority": false,
+   "expected": 7
+  },
+  {
+   "name": "random 23 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "æøåHe",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "og "
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 23 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "converged": [
+    {
+     "insert": "æøåH",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "e",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "og "
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 23 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "index": 4,
+   "priority": false,
+   "expected": 4
+  },
+  {
+   "name": "random 24 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 14
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "dent",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "er ",
+     "attributes": {
+      "italic": true,
+      "bold": true
+     }
+    },
+    {
+     "insert": "og \n",
+     "attributes": {
+      "bold": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 24 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 14
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 24
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 21
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "dent"
+    },
+    {
+     "attributes": {
+      "italic": true,
+      "bold": true
+     },
+     "insert": "er "
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 24 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 14
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 5
+  },
+  {
+   "name": "random 25 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "æø",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 25 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 3
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 3
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "æø",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "å",
+     "attributes": {
+      "bold": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     },
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æø",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 25 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 0,
+   "priority": false,
+   "expected": 0
+  },
+  {
+   "name": "random 26 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 27
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": "Heipersorn",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 26 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA6"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 27
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "dat",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "a",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "studenter"
+    },
+    {
+     "insert": "Heipersorn",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 26 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 27
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 3,
+   "priority": true,
+   "expected": 3
+  },
+  {
+   "name": "random 27 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 27 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 27 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 5,
+   "priority": true,
+   "expected": 4
+  },
+  {
+   "name": "random 28 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 28 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "converged": [
+    {
+     "insert": "🎉\n",
+     "attributes": {
+      "bold": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 28 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "index": 9,
+   "priority": false,
+   "expected": 9
+  },
+  {
+   "name": "random 29 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 12
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": "dat",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 29 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 12
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 9
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 5
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "æø",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "å",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": "dat",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 29 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 12
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 8,
+   "priority": true,
+   "expected": 8
+  },
+  {
+   "name": "random 30 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\næøå"
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 30 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 30 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 8
+  },
+  {
+   "name": "random 31 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "expected": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "æøå\n"
+    }
+   ]
+  },
+  {
+   "name": "random 31 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "converged": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "æøå🎉🎉\n"
+    }
+   ]
+  },
+  {
+   "name": "random 31 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "æøå"
+    }
+   ],
+   "index": 1,
+   "priority": false,
+   "expected": 1
+  },
+  {
+   "name": "random 32 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "expected": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 32 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 5
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 5
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "converged": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": " "
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenterHei"
+    },
+    {
+     "insert": "og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 32 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "index": 9,
+   "priority": true,
+   "expected": 9
+  },
+  {
+   "name": "random 33 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "d",
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "at",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 33 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     },
+     "insert": "d"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "at"
+    },
+    {
+     "insert": "\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 33 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 2
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 7,
+   "priority": true,
+   "expected": 7
+  },
+  {
+   "name": "random 34 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": " "
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 11
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "expected": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "🎉🎉 \n"
+    }
+   ]
+  },
+  {
+   "name": "random 34 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": " "
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 11
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "insert": " o ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "🎉🎉 \n"
+    }
+   ]
+  },
+  {
+   "name": "random 34 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 11
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "index": 2,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "random 35 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 35 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": false,
+   "expected": [],
+   "converged": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 35 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 3,
+   "priority": false,
+   "expected": 3
+  },
+  {
+   "name": "random 36 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "student",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 36 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 13
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "student",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 36 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 1,
+   "priority": false,
+   "expected": 1
+  },
+  {
+   "name": "random 37 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "personv",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "ern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 37 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 3
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 7
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "perv",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "ern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     },
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 37 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "index": 10,
+   "priority": false,
+   "expected": 14
+  },
+  {
+   "name": "random 38 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "personvr",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 38 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 11
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 10
+    },
+    {
+     "insert": "😀"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "personvr",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀\n"
+    }
+   ]
+  },
+  {
+   "name": "random 38 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 5
+  },
+  {
+   "name": "random 39 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 16
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "student",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "er og",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 39 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 16
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 22
+    }
+   ],
+   "priority": false,
+   "expected": [],
+   "converged": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " og "
+    },
+    {
+     "insert": "student",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "er og",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 39 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 16
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "index": 6,
+   "priority": true,
+   "expected": 6
+  },
+  {
+   "name": "random 40 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 40 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 7
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "HeiHei"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "🎉🎉\n"
+    }
+   ]
+  },
+  {
+   "name": "random 40 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "index": 8,
+   "priority": true,
+   "expected": 8
+  },
+  {
+   "name": "random 41 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "i",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 41 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 15
+    },
+    {
+     "insert": "Hei"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "He"
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "i"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "Hei\n"
+    }
+   ]
+  },
+  {
+   "name": "random 41 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": " og "
+    }
+   ],
+   "index": 2,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "random 42 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 19
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "retain": 9
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "personvern"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "per",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "sonvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 42 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 19
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "retain": 9
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "retain": 18
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 9
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "retain": 22
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "converged": [
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA0"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": " "
+    },
+    {
+     "insert": "personv",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "ern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "per",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "sonvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "H",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "e",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 42 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 19
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "retain": 9
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 2,
+   "priority": true,
+   "expected": 2
+  },
+  {
+   "name": "random 43 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 15
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "data\n"
+    }
+   ]
+  },
+  {
+   "name": "random 43 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 15
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 4
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 13
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "\nda\n"
+    }
+   ]
+  },
+  {
+   "name": "random 43 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 15
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 4,
+   "priority": true,
+   "expected": 4
+  },
+  {
+   "name": "random 44 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 22
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "personvern"
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studeter",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data\n"
+    }
+   ]
+  },
+  {
+   "name": "random 44 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 22
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 11
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 11
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 10
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "insert": "æøåpersonve",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "og "
+    },
+    {
+     "insert": "studete",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data\n"
+    }
+   ]
+  },
+  {
+   "name": "random 44 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 22
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "data"
+    }
+   ],
+   "index": 7,
+   "priority": false,
+   "expected": 7
+  },
+  {
+   "name": "random 45 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 45 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "b": [
+    {
+     "retain": 19
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 23
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "link": "https://example.org"
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "i",
+     "attributes": {
+      "link": "https://example.org",
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 45 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "index": 2,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "random 46 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "stu",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "denter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 46 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 2,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [],
+   "converged": [
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "stu",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "denter",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 46 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 10
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 3,
+   "priority": true,
+   "expected": 3
+  },
+  {
+   "name": "random 47 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 17
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 16
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "personvern"
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 47 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 17
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 16
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "b": [
+    {
+     "retain": 20
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 20
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "retain": 8
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "personvern"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "personvern"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "insert": "data g ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 47 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 17
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": null
+     }
+    },
+    {
+     "retain": 16
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "index": 5,
+   "priority": false,
+   "expected": 5
+  },
+  {
+   "name": "random 48 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 48 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "data",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 7
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "priority": true,
+   "expected": [],
+   "converged": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": "data"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA3"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 48 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "bold": null
+     }
+    }
+   ],
+   "index": 7,
+   "priority": false,
+   "expected": 7
+  },
+  {
+   "name": "random 49 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 49 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "retain": 3
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "data"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "🎉"
+    },
+    {
+     "insert": "😀\n"
+    },
+    {
+     "insert": "🎉",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA5"
+     }
+    },
+    {
+     "insert": "\n\n"
+    }
+   ]
+  },
+  {
+   "name": "random 49 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 10
+    },
+    {
+     "insert": "😀"
+    },
+    {
+     "retain": 3
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "index": 10,
+   "priority": true,
+   "expected": 10
+  },
+  {
+   "name": "random 50 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": " "
+    },
+    {
+     "insert": "He",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": " \n"
+    }
+   ]
+  },
+  {
+   "name": "random 50 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 2
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "header": 2
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": " \n"
+    }
+   ]
+  },
+  {
+   "name": "random 50 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 5
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": " "
+    }
+   ],
+   "index": 6,
+   "priority": true,
+   "expected": 5
+  },
+  {
+   "name": "random 51 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "pe",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": "rsonvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 51 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "personvern",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "b": [
+    {
+     "retain": 27
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 36
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "bold": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "pe"
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "rsonvern"
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": "studenter"
+    },
+    {
+     "attributes": {
+      "underline": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 51 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "studenter"
+    }
+   ],
+   "index": 6,
+   "priority": false,
+   "expected": 15
+  },
+  {
+   "name": "random 52 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "expected": [
+    {
+     "insert": "dat",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "ersonvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "tudenr",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 52 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": " ",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "b": [
+    {
+     "retain": 19
+    },
+    {
+     "delete": 2
+    },
+    {
+     "retain": 6
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 16
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 4
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "dat"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "ersonvern"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "uden",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 52 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 3
+    },
+    {
+     "delete": 3
+    },
+    {
+     "retain": 13
+    },
+    {
+     "delete": 1
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "index": 2,
+   "priority": false,
+   "expected": 2
+  },
+  {
+   "name": "random 53 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "expected": [
+    {
+     "insert": "Heistud",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "enter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 53 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "Hei",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "studenter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "converged": [
+    {
+     "insert": "H",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "eistud",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "enter",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 53 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 7
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "index": 10,
+   "priority": false,
+   "expected": 11
+  },
+  {
+   "name": "random 54 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": " og",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "  o",
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "g ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 54 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "æøå",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": " og ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "b": [
+    {
+     "retain": 21
+    }
+   ],
+   "priority": false,
+   "expected": [],
+   "converged": [
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "æøå"
+    },
+    {
+     "insert": " og",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "  o",
+     "attributes": {
+      "italic": true,
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": "g ",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "🎉🎉",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 54 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "retain": 3,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "index": 8,
+   "priority": true,
+   "expected": 8
+  },
+  {
+   "name": "random 55 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 11
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": " "
+    },
+    {
+     "attributes": {
+      "bold": true,
+      "italic": true
+     },
+     "insert": "Hei"
+    },
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "data\n"
+    }
+   ]
+  },
+  {
+   "name": "random 55 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": " ",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "Hei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "link": "https://example.org"
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "data"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 11
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 1
+    },
+    {
+     "delete": 1
+    }
+   ],
+   "converged": [
+    {
+     "insert": " ei",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "attributes": {
+      "link": "https://example.org"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "data\n"
+    }
+   ]
+  },
+  {
+   "name": "random 55 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 11
+    }
+   ],
+   "index": 3,
+   "priority": true,
+   "expected": 3
+  },
+  {
+   "name": "random 56 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "expected": [
+    {
+     "insert": "da",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 56 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "data",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA1"
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": "😀",
+     "attributes": {
+      "bold": true
+     }
+    },
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 10
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 7
+    },
+    {
+     "delete": 2
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "da"
+    },
+    {
+     "attributes": {
+      "italic": true
+     },
+     "insert": "😀"
+    },
+    {
+     "attributes": {
+      "bold": true
+     },
+     "insert": "😀"
+    },
+    {
+     "insert": "æ\n"
+    }
+   ]
+  },
+  {
+   "name": "random 56 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 2
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "index": 10,
+   "priority": false,
+   "expected": 7
+  },
+  {
+   "name": "random 57 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "expected": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 57 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "\n",
+     "attributes": {
+      "blockquote": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "insert": "Hei"
+    },
+    {
+     "retain": 1
+    },
+    {
+     "insert": "🎉🎉"
+    }
+   ],
+   "converged": [
+    {
+     "attributes": {
+      "blockquote": true
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\nHei"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "header": 2
+     }
+    },
+    {
+     "insert": "🎉🎉\n"
+    }
+   ]
+  },
+  {
+   "name": "random 57 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 1
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "index": 2,
+   "priority": true,
+   "expected": 3
+  },
+  {
+   "name": "random 58 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    }
+   ],
+   "expected": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "attributes": {
+      "list": "ordered"
+     },
+     "insert": "\n"
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 58 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "æøå"
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 4
+    }
+   ],
+   "b": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "priority": false,
+   "expected": [
+    {
+     "retain": 2
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "retain": 1
+    },
+    {
+     "retain": 1,
+     "attributes": {
+      "italic": true
+     }
+    }
+   ],
+   "converged": [
+    {
+     "insert": "æø"
+    },
+    {
+     "insert": "å",
+     "attributes": {
+      "underline": true
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "list": "ordered"
+     }
+    },
+    {
+     "insert": "\n",
+     "attributes": {
+      "italic": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "random 58 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 4
+    }
+   ],
+   "index": 9,
+   "priority": true,
+   "expected": 9
+  },
+  {
+   "name": "random 59 compose",
+   "kind": "compose",
+   "a": [
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "b": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "expected": [
+    {
+     "insert": "studente",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "r",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "persern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 59 transform",
+   "kind": "transform",
+   "base": [
+    {
+     "insert": "studenter",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ],
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "b": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "personvern"
+    }
+   ],
+   "priority": true,
+   "expected": [
+    {
+     "retain": 4
+    },
+    {
+     "insert": "personvern"
+    }
+   ],
+   "converged": [
+    {
+     "insert": "stud",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "personvern"
+    },
+    {
+     "insert": "ente",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "insert": "r",
+     "attributes": {
+      "bold": true,
+      "italic": true
+     }
+    },
+    {
+     "insert": "persern",
+     "attributes": {
+      "italic": true
+     }
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA2"
+     }
+    },
+    {
+     "insert": " og "
+    },
+    {
+     "insert": {
+      "image": "data:image/png;base64,AAAA4"
+     }
+    },
+    {
+     "insert": "\n"
+    }
+   ]
+  },
+  {
+   "name": "random 59 position",
+   "kind": "position",
+   "a": [
+    {
+     "retain": 8
+    },
+    {
+     "insert": "🎉🎉"
+    },
+    {
+     "retain": 5
+    },
+    {
+     "delete": 3
+    }
+   ],
+   "index": 2,
+   "priority": true,
+   "expected": 2
+  }
+ ]
+}
