@@ -88,6 +88,17 @@ final class SkeletonConfigurationCheckTests: XCTestCase {
         XCTAssertEqual(report.findings[0].lostActionKeypaths, ["todo.addTodo"])
     }
 
+    /// Hosts that hold a decoded configuration (Studio after setDraftConfiguration)
+    /// must still hear about an element the format does not have.
+    func testTheDecodedEntryPointStillReportsAnUnknownElement() throws {
+        let json = """
+        { "name": "Notat", "skeleton": { "VStack": [ { "Text": { "text": "Hei" } }, { "Markdown": { "text": "# Hei" } } ] } }
+        """
+        let configuration = try JSONDecoder().decode(CellConfiguration.self, from: Data(json.utf8))
+        let report = SkeletonConfigurationCheck.check(configuration: configuration)
+        XCTAssertEqual(kinds(report), [.unsupportedElement], "\(report.findings)")
+    }
+
     func testAKnownElementWithBrokenFieldsIsReported() {
         let report = check("""
         { "name": "Notat", "skeleton": { "VStack": [ { "Text": { "text": "Hei" } }, { "Text": "bare en streng" } ] } }
