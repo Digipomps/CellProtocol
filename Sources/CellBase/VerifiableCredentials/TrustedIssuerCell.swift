@@ -1011,11 +1011,31 @@ public class TrustedIssuerCell: GeneralCell {
             reasons.append("vc_time_window_invalid")
         }
 
+        // purpose://candidate.informasjonssystemer-gruppeentitet.condition:
+        // a validUntil inside credentialSubject is covered by the proof, so it
+        // is enforced; an unreadable one fails closed.
+        if let subjectValidity = subjectValidUntil(vcObject) {
+            if let until = subjectValidity, until >= Date() {
+                reasons.append("vc_subject_validity_ok")
+            } else {
+                reasons.append("vc_subject_validity_expired")
+            }
+        }
+
         if policy.requireRevocationCheck {
             // Embedded status is issuer-authored metadata, not a live status
-            // resolver. Until a status-list/resolver contract is configured,
-            // revocation-required policy must fail closed.
-            reasons.append("revocation_check_unsupported")
+            // resolver. Only an issuer whose signed status list the node
+            // mirrors (CredentialStatusRegistry) can pass; the check is local.
+            let registry = CredentialStatusRegistry.shared
+            if await registry.hasMirror(issuerDID: vcIssuer), case .string(let credentialID)? = vcObject["id"] {
+                switch await registry.status(issuerDID: vcIssuer, credentialID: credentialID) {
+                case .valid: reasons.append("revocation_status_valid")
+                case .revoked: reasons.append("revocation_check_failed")
+                case .unknown: reasons.append("revocation_status_unknown")
+                }
+            } else {
+                reasons.append("revocation_check_unsupported")
+            }
         }
 
         if let schema = policy.claimSchema {
@@ -1060,6 +1080,8 @@ public class TrustedIssuerCell: GeneralCell {
             "vc_time_window_invalid",
             "revocation_check_failed",
             "revocation_check_unsupported",
+            "revocation_status_unknown",
+            "vc_subject_validity_expired",
             "claim_subject_path_missing",
             "claim_predicate_not_met",
             "subject_binding_missing",
@@ -1404,6 +1426,24 @@ public class TrustedIssuerCell: GeneralCell {
             return false
         }
         return true
+    }
+
+    /// nil: the credential has no subject validUntil. .some(nil): it has one
+    /// that cannot be read (fails closed). .some(date): the signed end.
+    private func subjectValidUntil(_ vcObject: Object) -> Date?? {
+        guard case .object(let subject)? = vcObject["credentialSubject"],
+              let raw = subject[OrganizationRoleCredential.Field.validUntil] else {
+            return nil
+        }
+        guard case .string(let text) = raw else { return .some(nil) }
+        if let date = ISO8601DateFormatter().date(from: text) { return .some(date) }
+        // A plain date means the end of that day in UTC.
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.timeZone = TimeZone(secondsFromGMT: 0)
+        day.dateFormat = "yyyy-MM-dd"
+        if let date = day.date(from: text) { return .some(date.addingTimeInterval(86_399)) }
+        return .some(nil)
     }
 
     private func credentialTimeWindowValid(

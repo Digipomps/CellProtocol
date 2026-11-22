@@ -318,7 +318,7 @@ public struct VCClaim: Codable {
         return true
     }
 
-    private func canonicalUnsignedClaimData() throws -> Data {
+    func canonicalUnsignedClaimData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes, .sortedKeys]
         guard let userInfoKey = CodingUserInfoKey(rawValue: "skipProof") else {
