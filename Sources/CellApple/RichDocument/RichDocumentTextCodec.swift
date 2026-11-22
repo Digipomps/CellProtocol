@@ -356,7 +356,7 @@ public enum RichDocumentTextCodec {
         }
     }
 
-    static func drawImage(size: CGSize, _ draw: (CGContext) -> Void) -> RichDocumentImage {
+    static func drawImage(size: CGSize, _ draw: @escaping (CGContext) -> Void) -> RichDocumentImage {
         #if os(macOS)
         let image = NSImage(size: size, flipped: true) { _ in
             if let context = NSGraphicsContext.current?.cgContext { draw(context) }
