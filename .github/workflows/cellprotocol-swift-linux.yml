@@ -101,7 +101,9 @@ jobs:
             BridgeDiagnosticPrivacyTests BridgeSigningBackpressureTests BridgeSigningBackpressureCodecTests IdentityLinkGenesisClassificationTests \
             FlowElementPusherSecurityTests EntityRelationRecordV1Tests \
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
-            SkeletonDataBindingTests SkeletonEditingTests InteropFixturesV1Tests FlowPlacementTests FlowPlacementRunnerTests IdentityLinkClientTests; do
+            SkeletonDataBindingTests SkeletonEditingTests SkeletonReachabilityAuditTests SkeletonConfigurationCheckTests InteropFixturesV1Tests InteropFixturesV1OrganizationCases FlowPlacementTests \
+            FlowPlacementRunnerTests IdentityLinkClientTests \
+            GovernancePolicyEvaluatorTests OrganizationGenesisTests OrganizationVaultTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \
@@ -115,6 +117,7 @@ jobs:
           # Golden interop fixtures; the test finds them three levels above itself.
           mkdir -p "${gate_root}/fixtures"
           cp -R fixtures/interop "${gate_root}/fixtures/"
+          cp -R fixtures/skeleton-wp-r1 "${gate_root}/fixtures/"
           cp Tests/Linux/DeviceIngressPublicAPINegative.swift \
             "${gate_root}/Tests/DeviceIngressTransportProbe/"
           cp Tests/Linux/DeviceIngressCompositionRootPositive.swift \

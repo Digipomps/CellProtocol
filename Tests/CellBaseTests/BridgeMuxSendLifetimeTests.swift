@@ -54,6 +54,10 @@ func exerciseMuxSubmissionLifetime(owner: Identity, hold: BridgeLifecycleBarrier
     await hold.release(); _ = try? await old.value
     // The old bytes may be handed over now, but the reused ID has no new owner.
     XCTAssertEqual(frames.frames.last?.payload, .string("old"))
+    // The closer never joins a held send. The mux forgets the retired record
+    // from its own tracking task once the send has returned, so the release
+    // follows `old` and is not ordered before it.
+    await waitForDeinitialized(stats, count: 1)
     XCTAssertEqual(stats.snapshot.deinitialized, 1)
     try await submit(lifecycleMuxCommand("openChannel", owner, "reused", target: "fresh", cid: 7))
     XCTAssertEqual(frames.frames.last?.cmd, "channelOpened")
@@ -63,4 +67,13 @@ func exerciseMuxSubmissionLifetime(owner: Identity, hold: BridgeLifecycleBarrier
     XCTAssertEqual(frames.frames.last?.channelID, "reused")
     try await submit(lifecycleMuxCommand("get", owner, "sibling", cid: 1))
     XCTAssertEqual(frames.frames.last?.payload, .string("healthy"))
+}
+
+/// Waits until the mux's background retirement tracking has dropped the record.
+/// Bounded, so a record that is never released still fails the assertion after it.
+func waitForDeinitialized(_ stats: BridgeFactoryLifetimeStats, count: Int, timeoutSeconds: Double = 30) async {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while stats.snapshot.deinitialized < count, Date() < deadline {
+        try? await Task.sleep(nanoseconds: 2_000_000)
+    }
 }

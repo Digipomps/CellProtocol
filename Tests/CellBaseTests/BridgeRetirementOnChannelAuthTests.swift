@@ -336,16 +336,20 @@ final class BridgeRetirementOnChannelAuthTests: XCTestCase {
         defer { CellBase.objectWireFormat = previous }
         XCTAssertEqual(previous, .legacyInference)
         let value = ValueType.object(["blob": .data(Data([0xCA, 0xFE])), "name": .string("n")])
-        let legacy = try JSONEncoder().encode(value)
+        // Sorted keys: a Swift dictionary may iterate in a different order
+        // for each encode, and this test compares bytes.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let legacy = try encoder.encode(value)
         XCTAssertFalse(String(decoding: legacy, as: UTF8.self).contains("&objectEntries"))
         CellBase.objectWireFormat = .explicitEntries
-        let explicit = try JSONEncoder().encode(value)
+        let explicit = try encoder.encode(value)
         XCTAssertTrue(String(decoding: explicit, as: UTF8.self).contains("&objectEntries"))
         guard case let .object(decoded) = try JSONDecoder().decode(ValueType.self, from: explicit),
               case .data(let data)? = decoded["blob"] else { return XCTFail("explicit roundtrip keeps .data") }
         XCTAssertEqual(data, Data([0xCA, 0xFE]))
         CellBase.objectWireFormat = .legacyInference
-        XCTAssertEqual(try JSONEncoder().encode(value), legacy, "default restores main's encoding")
+        XCTAssertEqual(try encoder.encode(value), legacy, "default restores main's encoding")
     }
 
     // 3087abb on main: the opt-in loopback policy also reaches the channel

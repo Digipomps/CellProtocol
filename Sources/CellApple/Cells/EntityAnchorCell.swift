@@ -70,6 +70,9 @@ public class EntityAnchorCell: GeneralCell {
     
     private func setupPermissions(owner: Identity) async  {
         self.agreementTemplate.ensureGrant("rw--", for: "person")
+        for root in EntityTemplateRoots.openedRoots {
+            self.agreementTemplate.ensureGrant("rw--", for: root)
+        }
         self.agreementTemplate.ensureGrant("rw--", for: "purposes") // I think this is the one that should hold realations and Interests too?
         self.agreementTemplate.ensureGrant("rw--", for: "relations")
         self.agreementTemplate.ensureGrant("rw--", for: "agreements")
@@ -88,6 +91,34 @@ public class EntityAnchorCell: GeneralCell {
         
     }
     
+    /// Opens the roots declared by entity templates (EntityTemplateRoots). Unlike the
+    /// `person` intercept, a refused write throws instead of answering nil.
+    private func registerTemplateRootIntercepts(owner: Identity) async {
+        for root in EntityTemplateRoots.openedRoots {
+            await addInterceptForGet(requester: owner, key: root, getValueIntercept: { [weak self] keypath, requester in
+                guard let self else { throw KeypathStorageErrors.denied }
+                guard await self.validateAccess("r---", at: root, for: requester) else {
+                    throw KeypathStorageErrors.denied
+                }
+                return try self.storage.get(keypath: keypath)
+            })
+            await addInterceptForSet(requester: owner, key: root, setValueIntercept: { [weak self] keypath, value, requester in
+                guard let self else { throw KeypathStorageErrors.denied }
+                guard await self.validateAccess("-w--", at: root, for: requester) else {
+                    throw KeypathStorageErrors.denied
+                }
+                try self.storage.set(keypath: keypath, setValue: value)
+                try await self.saveKeypathStorage(entity: self.storage)
+                let payloadObject: Object = ["keypath": .string(keypath), "data": value]
+                var flowElement = FlowElement(title: "PDS update", content: .object(payloadObject), properties: FlowElement.Properties(type: .content, contentType: .object))
+                flowElement.origin = self.uuid
+                flowElement.topic = "entity"
+                self.pushFlowElement(flowElement, requester: requester)
+                return nil
+            })
+        }
+    }
+
     private func setupKeys(owner: Identity) async  {
         await registerContracts(requester: owner)
         
@@ -95,6 +126,8 @@ public class EntityAnchorCell: GeneralCell {
 //                print("Incoming flowElement to Keypath storage (PDS)") ...hmmm?
             return nil
         })
+
+    await registerTemplateRootIntercepts(owner: owner)
 
     await addInterceptForGet(requester: owner, key: "person", getValueIntercept: {
         keypath, requester in
@@ -504,6 +537,10 @@ public class EntityAnchorCell: GeneralCell {
 
         await registerExploreContract(requester: requester, key: "person", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity person data."))
         await registerExploreContract(requester: requester, key: "person", method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity person data."))
+        for root in EntityTemplateRoots.openedRoots {
+            await registerExploreContract(requester: requester, key: root, method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity data under a root opened by an entity template (EntityTemplateRoots)."))
+            await registerExploreContract(requester: requester, key: root, method: .get, input: .null, returns: storedValue, permissions: ["r---"], required: false, description: .string("Reads owner entity data under a root opened by an entity template (EntityTemplateRoots)."))
+        }
         await registerExploreContract(requester: requester, key: "proofs", method: .set, input: storedValue, returns: .null, permissions: [], required: false, description: .string("Stores owner-only proof data."))
         await registerExploreContract(requester: requester, key: "proofs", method: .get, input: .null, returns: storedValue, permissions: [], required: false, description: .string("Reads owner-only proof data."))
         await registerExploreContract(requester: requester, key: "relations", method: .set, input: storedValue, returns: .null, permissions: ["-w--"], required: false, description: .string("Stores owner entity relation data."))

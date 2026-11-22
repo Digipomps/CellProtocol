@@ -24,6 +24,7 @@ let package = Package(
         .library(name: "TaxonomyResolver", targets: ["TaxonomyResolver"]),
         .library(name: "KeyPathResolver", targets: ["KeyPathResolver"]),
         .executable(name: "haven-commons", targets: ["HavenCommonsCLI"]),
+        .executable(name: "skeleton-check", targets: ["SkeletonCheckCLI"]),
         .executable(name: "CellRuntimeBenchmarks", targets: ["CellRuntimeBenchmarks"]),
     ],
     dependencies: [
@@ -124,6 +125,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "ReferenceLoadBenchmark",
+            dependencies: [
+                .target(name: "CellBase"),
+            ]
+        ),
+        .executableTarget(
+            name: "SkeletonCheckCLI",
             dependencies: [
                 .target(name: "CellBase"),
             ]
