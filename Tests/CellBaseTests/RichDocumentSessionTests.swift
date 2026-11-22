@@ -189,6 +189,7 @@ final class RichDocumentSessionTests: XCTestCase {
         XCTAssertNotNil(drafts.load(documentId: documentId), "kept on the device")
 
         // The app is closed; later the network is back and the document opens again.
+        await first.close()
         await cell.setOffline(false)
         let (second, reopened) = await open(cell, drafts: drafts)
         XCTAssertEqual(reopened.text, "Skrevet uten nett\n", "the editor shows the draft at once")
@@ -196,7 +197,6 @@ final class RichDocumentSessionTests: XCTestCase {
         let server = await cell.document.plainText
         XCTAssertEqual(server, "Skrevet uten nett\n")
         XCTAssertNil(drafts.load(documentId: documentId), "removed once confirmed")
-        _ = first
     }
 
     func testDeniedMakesTheSessionReadOnly() async throws {

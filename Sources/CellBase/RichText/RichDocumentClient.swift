@@ -405,6 +405,14 @@ public final class RichDocumentSession {
         if !queue.isEmpty, !stopped { await pump() }
     }
 
+    /// Stops sending and retrying, as when the app closes. Unsent changes stay
+    /// in the draft store; `refresh()` opens the session again.
+    public func close() {
+        stopped = true
+        retryTask?.cancel()
+        retryTask = nil
+    }
+
     private func scheduleRetry() {
         retryTask?.cancel()
         let delay = retryDelay

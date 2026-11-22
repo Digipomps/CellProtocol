@@ -162,7 +162,9 @@ final class RichDocumentTextCodecTests: XCTestCase {
     }
 
     func testChartFormBuildsTheWebShape() async {
-        let (model, _) = await openModel()
+        // The model holds its surface weakly, as the view owns it; keep it alive.
+        let (model, surface) = await openModel()
+        defer { withExtendedLifetime(surface) {} }
         XCTAssertFalse(model.insertChart(title: "T", type: "bar", data: "uten kolon"))
         XCTAssertTrue(model.insertChart(title: "T", type: "bar", data: "Jan: 10\nFeb: 2,5"))
         guard case .insertEmbed(let embed)? = model.shown.ops.first(where: { if case .insertEmbed = $0.kind { return true }; return false })?.kind,
