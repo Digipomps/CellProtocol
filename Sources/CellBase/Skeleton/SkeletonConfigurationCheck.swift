@@ -101,7 +101,7 @@ public enum SkeletonConfigurationCheck {
             return SkeletonConfigurationCheckReport(configurationName: configuration.name, findings: findings, reachableActionKeypaths: [])
         }
         return check(skeleton: skeleton, configurationName: configuration.name,
-                     requiredActionKeypaths: requiredActionKeypaths, rawFindings: findings)
+                     requiredActionKeypaths: requiredActionKeypaths, rawFindings: findings, rawScanned: true)
     }
 
     /// Checks an already decoded configuration. Row templates that were not a
@@ -114,21 +114,26 @@ public enum SkeletonConfigurationCheck {
             ], reachableActionKeypaths: [])
         }
         return check(skeleton: skeleton, configurationName: configuration.name,
-                     requiredActionKeypaths: requiredActionKeypaths, rawFindings: [])
+                     requiredActionKeypaths: requiredActionKeypaths, rawFindings: [], rawScanned: false)
     }
 
     private static func check(skeleton: SkeletonElement, configurationName: String?,
                               requiredActionKeypaths: Set<String>,
-                              rawFindings: [SkeletonConfigurationCheckFinding]) -> SkeletonConfigurationCheckReport {
+                              rawFindings: [SkeletonConfigurationCheckFinding],
+                              rawScanned: Bool) -> SkeletonConfigurationCheckReport {
         var findings = rawFindings
         for finding in SkeletonReachabilityAudit.audit(skeleton, requiredActionKeypaths: requiredActionKeypaths) {
             let path = "skeleton" + (finding.path.isEmpty ? "" : ".\(finding.path)")
             if finding.kind == .unsupportedElement {
-                // Unknown names are reported from the raw file, where the name is
-                // the author's own. Decode failures of known elements stay.
-                if finding.detail == unknownElementReason { continue }
+                // With the raw file, unknown names are reported from it, where the
+                // name is the author's own. Without it, the decoded tree is all
+                // there is. Decode failures of known elements always stay.
+                let unknown = finding.detail == unknownElementReason
+                if unknown && rawScanned { continue }
                 findings.append(.init(kind: .unsupportedElement, path: path,
-                                      message: "Elementet kan ikke vises: \(finding.detail)",
+                                      message: unknown
+                                        ? "Et element formatet ikke har, kan ikke vises."
+                                        : "Elementet kan ikke vises: \(finding.detail)",
                                       lostActionKeypaths: finding.lostActionKeypaths))
                 continue
             }
