@@ -371,6 +371,32 @@ final class ChatModelParticipantTests: XCTestCase {
         XCTAssertEqual(state["externalAllowed"], .bool(true))
     }
 
+    /// A node-hosted chat: the owner is the node, so only the invited people count and answer.
+    func testANodeHostedChatCountsOnlyItsPeople() async throws {
+        let room = try await makeRoom()
+        let hosted = try object(try await room.cell.set(keypath: "model.ownerIsMember", value: .bool(false), requester: room.owner))
+        XCTAssertEqual(hosted["ownerIsMember"], .bool(false))
+        let saraDenied = await isDenied { try await room.cell.set(keypath: "model.ownerIsMember", value: .bool(true), requester: room.sara) }
+        XCTAssertTrue(saraDenied)
+
+        _ = try await propose(room, by: room.ola)
+        let state = try await consent(room, by: room.sara)
+        let model = try object(state["model"])
+        XCTAssertEqual(model["isActive"], .bool(true), "two people said yes; the node does not count")
+        XCTAssertEqual(model["memberCount"], .integer(2))
+        let admitted = try await admitModel(room)
+        XCTAssertEqual(admitted, .signed)
+        // The node cannot answer for the people.
+        let ownerDenied = await isDenied { try await room.cell.set(keypath: "model.decline", value: .null, requester: room.owner) }
+        XCTAssertTrue(ownerDenied)
+        let holds = try await room.cell.get(keypath: "audience.admission.modelConsent", requester: room.model)
+        XCTAssertEqual(holds, .bool(true))
+        // The node cannot be proposed as the model either.
+        _ = try await room.cell.set(keypath: "model.remove", value: .null, requester: room.sara)
+        let ownerAsModel = try object(try await room.cell.set(keypath: "model.propose", value: .object(["identity": .identity(room.owner.publicIdentitySnapshot())]), requester: room.sara))
+        XCTAssertEqual(ownerAsModel["code"], .string("invalid_model"))
+    }
+
     // MARK: Pure rules (same as the scenario fixtures)
 
     func testMentionDetection() {

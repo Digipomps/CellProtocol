@@ -409,6 +409,9 @@ public final class ChatCell: GeneralCell {
     private var modelIdentity: Identity?
     private var modelAsksByID = [String: ChatModelAsk]()
     private var modelNoticesByUUID = [String: ChatModelNotice]()
+    /// False for a chat hosted by a node: the owner is the node, not one of
+    /// the people, so it neither counts nor answers for the model.
+    private var modelOwnerIsMember = true
     private var topic = "chat"
     private var running = false
     private var emitterTask: Task<Void, Never>?
@@ -437,6 +440,7 @@ public final class ChatCell: GeneralCell {
         case modelIdentity
         case modelAsksByID
         case modelNoticesByUUID
+        case modelOwnerIsMember
         case topic
         case running
         case generalCell
@@ -485,6 +489,7 @@ public final class ChatCell: GeneralCell {
         self.modelIdentity = try container.decodeIfPresent(Identity.self, forKey: .modelIdentity)
         self.modelAsksByID = try container.decodeIfPresent([String: ChatModelAsk].self, forKey: .modelAsksByID) ?? [:]
         self.modelNoticesByUUID = try container.decodeIfPresent([String: ChatModelNotice].self, forKey: .modelNoticesByUUID) ?? [:]
+        self.modelOwnerIsMember = try container.decodeIfPresent(Bool.self, forKey: .modelOwnerIsMember) ?? true
         self.topic = try container.decodeIfPresent(String.self, forKey: .topic) ?? "chat"
         self.running = try container.decodeIfPresent(Bool.self, forKey: .running) ?? false
         try super.init(from: decoder)
@@ -527,6 +532,7 @@ public final class ChatCell: GeneralCell {
         try container.encodeIfPresent(modelIdentity, forKey: .modelIdentity)
         try container.encode(modelAsksByID, forKey: .modelAsksByID)
         try container.encode(modelNoticesByUUID, forKey: .modelNoticesByUUID)
+        try container.encode(modelOwnerIsMember, forKey: .modelOwnerIsMember)
         try container.encode(topic, forKey: .topic)
         try container.encode(running, forKey: .running)
     }
@@ -4740,9 +4746,10 @@ extension ChatCell {
 
     fileprivate var modelNow: String { Self.timestampString() }
 
-    /// The people in the chat: the owner and everyone with an accepted invitation.
+    /// The people in the chat: the owner (unless the chat is node-hosted) and
+    /// everyone with an accepted invitation.
     fileprivate func humanMemberUUIDs() -> [String] {
-        var members = [owner.uuid]
+        var members = modelOwnerIsMember ? [owner.uuid] : []
         let modelUUID = modelIdentity?.uuid
         for (uuid, record) in invitationRecordsByIdentityUUID where record.status == .accepted && uuid != modelUUID && uuid != owner.uuid {
             members.append(uuid)
@@ -4751,7 +4758,7 @@ extension ChatCell {
     }
 
     fileprivate func isHumanMember(_ requester: Identity) -> Bool {
-        if requester.referencesSameSigningIdentity(as: owner) { return true }
+        if requester.referencesSameSigningIdentity(as: owner) { return modelOwnerIsMember }
         guard isModelIdentity(requester) == false,
               let record = invitationRecordsByIdentityUUID[requester.uuid],
               record.status == .accepted else {
@@ -4797,7 +4804,8 @@ extension ChatCell {
             "proposedAt": modelLedger.proposedAt.map(ValueType.string) ?? .null,
             "activatedAt": modelLedger.activatedAt.map(ValueType.string) ?? .null,
             "myConsent": modelLedger.consents[requester.uuid].map { .object(["external": .bool($0.external), "at": .string($0.at)]) } ?? .null,
-            "contextLimit": .integer(ChatModelRules.contextLimit)
+            "contextLimit": .integer(ChatModelRules.contextLimit),
+            "ownerIsMember": .bool(modelOwnerIsMember)
         ]
         object["notice"] = modelNoticesByUUID[requester.uuid].map { .object($0.objectValue()) } ?? .null
         if isModelIdentity(requester) {
@@ -4880,7 +4888,7 @@ extension ChatCell {
             guard case let .identity(model)? = object["identity"] else {
                 return self.modelRefusal("invalid_payload", "model.propose needs {identity}")
             }
-            guard model.uuid != requester.uuid, self.humanMemberUUIDs().contains(model.uuid) == false else {
+            guard model.uuid != requester.uuid, model.uuid != self.owner.uuid, self.humanMemberUUIDs().contains(model.uuid) == false else {
                 return self.modelRefusal("invalid_model", "A member cannot be the model participant.")
             }
             let name = self.stringValue(object["displayName"]) ?? "Språkmodell"
@@ -4890,6 +4898,22 @@ extension ChatCell {
                 self.modelIdentity = model
                 self.modelAsksByID = [:]
             }
+        }
+
+        await registerSet(key: "model.ownerIsMember", owner: owner, input: ExploreContract.schema(type: "bool"), returns: returns, permissions: ["-w--"],
+                          description: .string("Owner only. False when a node hosts the chat for its people: the owner then neither counts nor answers for the model.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard requester.referencesSameSigningIdentity(as: self.owner),
+                  await self.checkIdentityOrigin(requester, against: self.owner) else {
+                return .string("denied")
+            }
+            guard case let .bool(value) = payload else {
+                return self.modelRefusal("invalid_payload", "model.ownerIsMember needs a bool")
+            }
+            self.modelOwnerIsMember = value
+            self.modelLedger.membersChanged(members: self.humanMemberUUIDs(), at: self.modelNow)
+            self.failAsksIfModelLostAccess()
+            return .object(["status": .string("ok"), "ownerIsMember": .bool(value)])
         }
 
         await registerSet(key: "model.consent", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],

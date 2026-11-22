@@ -573,10 +573,10 @@ final class ChatCellTests: XCTestCase {
         let cell = await ChatCell(owner: owner)
 
         let operations = try await cell.operationContracts(requester: owner)
-        // 60 + 11 model-participant operations (audience.admission.modelConsent, model.*).
-        XCTAssertEqual(operations.count, 71)
+        // 60 + 12 model-participant operations (audience.admission.modelConsent, model.*, model.ownerIsMember).
+        XCTAssertEqual(operations.count, 72)
         let keys = try await cell.keys(requester: owner)
-        XCTAssertEqual(keys.count, 64)
+        XCTAssertEqual(keys.count, 65)
         for key in ["audience.mode", "crypto.persistenceMode", "compose.body", "compose.contentType", "start", "stop"] {
             _ = try await cell.contract(for: key, method: .get, requester: owner)
             _ = try await cell.contract(for: key, method: .set, requester: owner)
@@ -597,15 +597,15 @@ final class ChatCellTests: XCTestCase {
         XCTAssertEqual(persistencePermissions, [.string("-w--")])
 
         let catalog = try await cell.exploreContractCatalog(requester: owner)
-        XCTAssertEqual(catalog.records.count, 71)
-        XCTAssertEqual(Set(catalog.records.map(\.key)).count, 64)
+        XCTAssertEqual(catalog.records.count, 72)
+        XCTAssertEqual(Set(catalog.records.map(\.key)).count, 65)
         XCTAssertEqual(catalog.records.filter { $0.key == "compose.body" }.map(\.method).sorted(), ["get", "set"])
         XCTAssertTrue(catalog.records.contains { $0.id == "ChatCell#compose.body" && $0.method == "set" })
         XCTAssertTrue(catalog.records.contains { $0.id == "ChatCell#compose.body#get" && $0.method == "get" })
 
         let restored = try await roundTrip(cell)
         let restoredOperations = try await restored.operationContracts(requester: owner)
-        XCTAssertEqual(restoredOperations.count, 71)
+        XCTAssertEqual(restoredOperations.count, 72)
         func operationSnapshot(_ contracts: [ValueType]) -> [String: ValueType] {
             Dictionary(uniqueKeysWithValues: contracts.compactMap { contract in
                 guard let object = ExploreContract.object(from: contract),
@@ -629,7 +629,7 @@ final class ChatCellTests: XCTestCase {
             )
         }
         let restoredCatalog = try await restored.exploreContractCatalog(requester: owner)
-        XCTAssertEqual(restoredCatalog.records.count, 71)
+        XCTAssertEqual(restoredCatalog.records.count, 72)
         let catalogIdentity = catalog.records.map { "\($0.id)|\($0.key)|\($0.method)" }.sorted()
         let restoredCatalogIdentity = restoredCatalog.records.map { "\($0.id)|\($0.key)|\($0.method)" }.sorted()
         XCTAssertEqual(restoredCatalogIdentity, catalogIdentity)
