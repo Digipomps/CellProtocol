@@ -767,6 +767,7 @@ public final class ChatCell: GeneralCell {
         }
 
         await registerModelParticipantKeys(owner: owner)
+        await registerHistoryKeys(owner: owner)
 
         await registerGet(key: "audience.admissionConditions", owner: owner) { [weak self] requester in
             guard let self else { return .string("failure") }
@@ -5091,5 +5092,98 @@ extension ChatCell {
         )
         modelAsksByID[askID]?.status = "answered"
         return storeMessage(message, requester: requester)
+    }
+}
+
+// MARK: - History moved in from an earlier store (PDD_modell-i-felles-chat, WP8)
+
+extension ChatCell {
+    static let historyLimitMaximum = 100_000
+
+    /// Owner only. A host that moves an existing conversation into a chat
+    /// keeps its messages, authors, times and order (`history.import`), and
+    /// can keep more than the default 200 (`history.limit`).
+    fileprivate func registerHistoryKeys(owner: Identity) async {
+        let objectSchema = ExploreContract.schema(type: "object")
+        let stringSchema = ExploreContract.schema(type: "string")
+        let returns = ExploreContract.oneOfSchema(options: [objectSchema, stringSchema], description: "Result object, or a denial string.")
+
+        await registerSet(key: "history.limit", owner: owner, input: ExploreContract.schema(type: "integer"), returns: returns, permissions: ["-w--"],
+                          description: .string("Owner only. How many messages the chat keeps, 1 to 100000. Older messages beyond it are dropped.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.requesterIsOwner(requester) else { return .string("denied") }
+            guard case let .integer(limit) = payload, limit >= 1, limit <= Self.historyLimitMaximum else {
+                return self.modelRefusal("invalid_payload", "history.limit needs an integer from 1 to \(Self.historyLimitMaximum)")
+            }
+            self.messagesLimit = limit
+            if self.chatMessageHistory.count > limit {
+                self.chatMessageHistory.removeFirst(self.chatMessageHistory.count - limit)
+            }
+            return .object(["status": .string("ok"), "messagesLimit": .integer(limit)])
+        }
+
+        await registerSet(key: "history.import", owner: owner, input: objectSchema, returns: returns, permissions: ["-w--"],
+                          description: .string("Owner only. {messages: [{id, authorUUID, authorDisplayName, content, createdAt, contentType?}]} in order. Only into a chat that holds nothing but these messages, so running it again changes nothing.")) { [weak self] requester, payload in
+            guard let self else { return .string("failure") }
+            guard await self.requesterIsOwner(requester) else { return .string("denied") }
+            return self.importHistory(payload)
+        }
+    }
+
+    fileprivate func requesterIsOwner(_ requester: Identity) async -> Bool {
+        guard requester.referencesSameSigningIdentity(as: owner) else { return false }
+        return await checkIdentityOrigin(requester, against: owner)
+    }
+
+    fileprivate func importHistory(_ payload: ValueType) -> ValueType {
+        guard case let .list(items)? = objectValue(payload)?["messages"] else {
+            return modelRefusal("invalid_payload", "history.import needs {messages: [...]}")
+        }
+        var imported = [ChatMessage]()
+        var seen = Set<String>()
+        for item in items {
+            guard let object = objectValue(item),
+                  let id = stringValue(object["id"]), id.isEmpty == false,
+                  let authorUUID = stringValue(object["authorUUID"]), authorUUID.isEmpty == false,
+                  let content = stringValue(object["content"]),
+                  let createdAt = Self.normalizedHistoryTimestamp(stringValue(object["createdAt"])) else {
+                return modelRefusal("invalid_message", "Every message needs id, authorUUID, content and an ISO 8601 createdAt.")
+            }
+            guard seen.insert(id).inserted else {
+                return modelRefusal("duplicate_id", "The message id \(id) appears twice.")
+            }
+            let displayName = stringValue(object["authorDisplayName"]) ?? ""
+            imported.append(ChatMessage(
+                id: id,
+                owner: Identity(authorUUID, displayName: displayName, identityVault: nil),
+                content: content,
+                contentType: normalizedContentType(from: stringValue(object["contentType"]) ?? Self.defaultContentType),
+                topic: topic,
+                createdAt: createdAt,
+                ownerDisplayNameSnapshot: displayName
+            ))
+        }
+        let existingIDs = chatMessageHistory.map(\.id)
+        if existingIDs.isEmpty == false {
+            guard existingIDs == imported.map(\.id) else {
+                return modelRefusal("history_not_empty", "The chat already has other messages.")
+            }
+            return .object(["status": .string("ok"), "imported": .integer(0), "messageCount": .integer(chatMessageHistory.count)])
+        }
+        guard imported.count <= messagesLimit else {
+            return modelRefusal("over_limit", "Raise history.limit to at least \(imported.count) first.")
+        }
+        chatMessageHistory = imported
+        return .object(["status": .string("ok"), "imported": .integer(imported.count), "messageCount": .integer(chatMessageHistory.count)])
+    }
+
+    /// ISO 8601 with or without fractional seconds, written the way the chat writes its own times.
+    static func normalizedHistoryTimestamp(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        guard let date = withFraction.date(from: raw) ?? plain.date(from: raw) else { return nil }
+        return withFraction.string(from: date)
     }
 }
