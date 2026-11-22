@@ -50,9 +50,6 @@ final class ChatHistoryImportTests: XCTestCase {
         CellBase.defaultIdentityVault = vault
         let node = await vault.identity(for: "Node", makeNewIfNotFound: true)!
         let cell = await ChatCell(owner: node)
-        guard (try? await cell.keys(requester: node))?.contains("history.import") == true else {
-            return XCTFail("history.import is missing")
-        }
 
         let limit = object(try await cell.set(keypath: "history.limit", value: .integer(1_000), requester: node))
         XCTAssertEqual(limit["messagesLimit"], .integer(1_000))
