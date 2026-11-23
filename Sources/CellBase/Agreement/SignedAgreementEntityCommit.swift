@@ -8,6 +8,8 @@ public enum SignedAgreementEntityCommitError: Error {
     case invalidContract
     case invalidCredentialReceipt
     case immutableRecordConflict
+    /// The revision chain in `signedAgreementEntity.records` does not hold.
+    case recordChainBroken(String)
     case readAfterWriteMismatch
     case signingFailed
 }
@@ -194,6 +196,102 @@ public enum SignedAgreementEntitySupport {
         try JSONDecoder().decode(Contract.self, from: canonicalData(object))
     }
 
+    // MARK: Revision chain (Kjetil 2026-11-23)
+    //
+    // Records stay keyed by contract uuid (`signedAgreementEntity.records.<uuid>`).
+    // Order and history come from a chain inside the records: each new record
+    // gets `sequence` (1, 2, 3, ...) and `previousRecordHash`, the `recordHash`
+    // of the record with the sequence before it. Records written before the chain
+    // have neither field; they are left out of the chain and not rewritten.
+
+    public static let recordsKeypath = "signedAgreementEntity.records"
+
+    public struct ChainLink: Equatable, Sendable {
+        public let sequence: Int
+        public let previousRecordHash: String?
+    }
+
+    /// Chained records in order, after checking every link.
+    /// Throws `recordChainBroken` on a gap, a duplicate sequence or a wrong hash.
+    @discardableResult
+    public static func verifyChain(_ records: Object) throws -> [(id: String, record: Object)] {
+        var chained: [(id: String, sequence: Int, record: Object)] = []
+        for (id, value) in records {
+            guard case let .object(record) = value else { continue }
+            switch record["sequence"] {
+            case nil: continue   // legacy record from before the chain
+            case let .integer(sequence)?, let .number(sequence)?:
+                chained.append((id, sequence, record))
+            default:
+                throw SignedAgreementEntityCommitError.recordChainBroken("\(id): sequence is not an integer")
+            }
+        }
+        chained.sort { $0.sequence < $1.sequence }
+        var previousHash: String?
+        for (index, entry) in chained.enumerated() {
+            guard entry.sequence == index + 1 else {
+                throw SignedAgreementEntityCommitError.recordChainBroken("expected sequence \(index + 1), found \(entry.sequence) at \(entry.id)")
+            }
+            let link: String?
+            switch entry.record["previousRecordHash"] {
+            case nil, .null?: link = nil
+            case let .string(hash)?: link = hash
+            default: throw SignedAgreementEntityCommitError.recordChainBroken("\(entry.id): previousRecordHash is not a string")
+            }
+            guard link == previousHash else {
+                throw SignedAgreementEntityCommitError.recordChainBroken("\(entry.id): previousRecordHash does not match record \(entry.sequence - 1)")
+            }
+            previousHash = try recordHash(entry.record)
+        }
+        return chained.map { ($0.id, $0.record) }
+    }
+
+    /// The link a new record gets, after verifying the existing chain.
+    public static func nextLink(after records: Object) throws -> ChainLink {
+        let chain = try verifyChain(records)
+        return ChainLink(sequence: chain.count + 1, previousRecordHash: try chain.last.map { try recordHash($0.record) })
+    }
+
+    /// Decides what a commit stores. A record that already exists for the
+    /// contract is returned unchanged when its content is identical (idempotent
+    /// retry) and refused when it differs. A new record is linked to the chain.
+    public static func prepareRecord(
+        request: SignedAgreementEntityCommitRequest,
+        contractHash: String,
+        existingRecords: Object,
+        committedAt: Date = Date()
+    ) throws -> (record: Object, isNew: Bool) {
+        let contentHash = try immutableContentHash(request: request, contractHash: contractHash)
+        if case let .object(existing)? = existingRecords[request.contract.uuid] {
+            guard case let .string(existingContentHash)? = existing["immutableContentHash"],
+                  existingContentHash == contentHash else {
+                throw SignedAgreementEntityCommitError.immutableRecordConflict
+            }
+            return (existing, false)
+        }
+        let link = try nextLink(after: existingRecords)
+        var record = try recordObject(request: request, contractHash: contractHash, committedAt: committedAt)
+        record["sequence"] = .integer(link.sequence)
+        if let previous = link.previousRecordHash {
+            record["previousRecordHash"] = .string(previous)
+        }
+        return (record, true)
+    }
+
+    /// `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'`: UTC, always three fractional digits,
+    /// truncated to milliseconds (date rule in Docs/JCS_TRANSITION_PLAN.md).
+    public static func committedAtString(_ date: Date) -> String {
+        let milliseconds = Int64((date.timeIntervalSince1970 * 1000).rounded(.down))
+        let seconds = milliseconds >= 0 ? milliseconds / 1000 : (milliseconds - 999) / 1000
+        let fraction = milliseconds - seconds * 1000
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.formatOptions = [.withInternetDateTime]
+        let whole = formatter.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+        let digits = String(fraction)
+        return String(whole.dropLast()) + "." + String(repeating: "0", count: 3 - digits.count) + digits + "Z"
+    }
+
     public static func recordObject(
         request: SignedAgreementEntityCommitRequest,
         contractHash: String,
@@ -212,7 +310,7 @@ public enum SignedAgreementEntitySupport {
             "contract": .object(try contractObject(request.contract)),
             "metadata": .object(request.metadata),
             "credentialReceipts": .list(request.credentialReceipts.map { .object($0.asObject()) }),
-            "committedAt": .string(ISO8601DateFormatter().string(from: committedAt))
+            "committedAt": .string(committedAtString(committedAt))
         ]
     }
 
