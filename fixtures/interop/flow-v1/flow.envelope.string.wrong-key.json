@@ -1,0 +1,58 @@
+{
+  "canonicalBase64" : "eyJkb21haW4iOiJwcml2YXRlIiwiZW52ZWxvcGVWZXJzaW9uIjoxLCJwYXlsb2FkIjp7ImNvbnRlbnQiOnsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IkhlaVwvaGFsbG8gXCLDhnJsaWdcIiBcXCBzdGk6IGFcL2I\/Yz1kJmU8Zj5cbmxpbmplXHRUYWIgw6bDuMOlIMOGw5jDhSDwn5mCIMOpIn0sImlkIjoiZmUtaW50ZXJvcC0wMDAxIiwib3JpZ2luIjoiY2VsbDpcL1wvXC9Qb3J0aG9sZVwvQ2hhdENlbGwiLCJwcm9wZXJ0aWVzIjp7ImNvbnRlbnRUeXBlIjoic3RyaW5nIiwibWltZXR5cGUiOiJ0ZXh0XC9wbGFpbjsgY2hhcnNldD11dGYtOCIsInR5cGUiOiJjb250ZW50In0sInRpdGxlIjoiTWVsZGluZyBcLyBoaWxzZW4iLCJ0b3BpYyI6ImNoYXQubWVzc2FnZSJ9LCJwYXlsb2FkSGFzaCI6IjQ2NzlkMTYzM2IxMDcxOTQ0ZjMxNDBkNTliYmUzYjhjMzdiZTQwZWQyOWI2ZTUyZmExOWIzMmQ5MjYxNDU0OTkiLCJwcm9kdWNlckNlbGwiOiJjZWxsOlwvXC9cL0NoYXRDZWxsIiwicHJvZHVjZXJJZGVudGl0eSI6IjZGMUMyQjBBLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwRjEwRSIsInNlcXVlbmNlIjoxLCJzaWduYXR1cmVLZXlJZCI6IjZGMUMyQjBBLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwRjEwRSIsInN0cmVhbUlkIjoic3RyZWFtLWludGVyb3AtMDAwMSJ9",
+  "canonicalSHA256Hex" : "d7a2909205887ddf8bf416a57605496d1406a9adcd4a65e26d13c9b084a46c51",
+  "description" : "Signert med en annen nøkkel som påstår å være produsenten.",
+  "envelope" : {
+    "domain" : "private",
+    "envelopeVersion" : 1,
+    "payload" : {
+      "content" : {
+        "$type" : "string",
+        "value" : "Hei\/hallo \"Ærlig\" \\ sti: a\/b?c=d&e<f>\nlinje\tTab æøå ÆØÅ 🙂 é"
+      },
+      "id" : "fe-interop-0001",
+      "origin" : "cell:\/\/\/Porthole\/ChatCell",
+      "properties" : {
+        "contentType" : "string",
+        "mimetype" : "text\/plain; charset=utf-8",
+        "type" : "content"
+      },
+      "title" : "Melding \/ hilsen",
+      "topic" : "chat.message"
+    },
+    "payloadHash" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+    "producerCell" : "cell:\/\/\/ChatCell",
+    "producerIdentity" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+    "provenance" : {
+      "originCell" : "cell:\/\/\/ChatCell",
+      "originIdentity" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+      "originPayloadHash" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+      "originSignature" : "WgiufqJrvLe3Ua67P1kEFavQs29XaQ1rMXpkd0SCgr+1rNl6oTMMvlGMXj4c1I0jMVxQXdvxyuMwjr0WL+A5CQ=="
+    },
+    "sequence" : 1,
+    "signature" : "oM9D2pzizh4mP1c7JhyZ98mzNdXgE8OMJOVKYPKxN+btqnNU4HYUpBXU1uiTyoS0qCSlFWZZGPqb9vJ2NiJeAQ==",
+    "signatureKeyId" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+    "streamId" : "stream-interop-0001"
+  },
+  "envelopeCanonicalBase64" : "eyJkb21haW4iOiJwcml2YXRlIiwiZW52ZWxvcGVWZXJzaW9uIjoxLCJwYXlsb2FkIjp7ImNvbnRlbnQiOnsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IkhlaVwvaGFsbG8gXCLDhnJsaWdcIiBcXCBzdGk6IGFcL2I\/Yz1kJmU8Zj5cbmxpbmplXHRUYWIgw6bDuMOlIMOGw5jDhSDwn5mCIMOpIn0sImlkIjoiZmUtaW50ZXJvcC0wMDAxIiwib3JpZ2luIjoiY2VsbDpcL1wvXC9Qb3J0aG9sZVwvQ2hhdENlbGwiLCJwcm9wZXJ0aWVzIjp7ImNvbnRlbnRUeXBlIjoic3RyaW5nIiwibWltZXR5cGUiOiJ0ZXh0XC9wbGFpbjsgY2hhcnNldD11dGYtOCIsInR5cGUiOiJjb250ZW50In0sInRpdGxlIjoiTWVsZGluZyBcLyBoaWxzZW4iLCJ0b3BpYyI6ImNoYXQubWVzc2FnZSJ9LCJwYXlsb2FkSGFzaCI6IjQ2NzlkMTYzM2IxMDcxOTQ0ZjMxNDBkNTliYmUzYjhjMzdiZTQwZWQyOWI2ZTUyZmExOWIzMmQ5MjYxNDU0OTkiLCJwcm9kdWNlckNlbGwiOiJjZWxsOlwvXC9cL0NoYXRDZWxsIiwicHJvZHVjZXJJZGVudGl0eSI6IjZGMUMyQjBBLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwRjEwRSIsInByb3ZlbmFuY2UiOnsib3JpZ2luQ2VsbCI6ImNlbGw6XC9cL1wvQ2hhdENlbGwiLCJvcmlnaW5JZGVudGl0eSI6IjZGMUMyQjBBLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwRjEwRSIsIm9yaWdpblBheWxvYWRIYXNoIjoiNDY3OWQxNjMzYjEwNzE5NDRmMzE0MGQ1OWJiZTNiOGMzN2JlNDBlZDI5YjZlNTJmYTE5YjMyZDkyNjE0NTQ5OSIsIm9yaWdpblNpZ25hdHVyZSI6IldnaXVmcUpydkxlM1VhNjdQMWtFRmF2UXMyOVhhUTFyTVhwa2QwU0Nncisxck5sNm9UTU12bEdNWGo0YzFJMGpNVnhRWGR2eHl1TXdqcjBXTCtBNUNRPT0ifSwic2VxdWVuY2UiOjEsInNpZ25hdHVyZSI6Im9NOUQycHppemg0bVAxYzdKaHlaOThtek5kWGdFOE9NSk9WS1lQS3hOK2J0cW5OVTRIWVVwQlhVMXVpVHlvUzBxQ1NsRldaWkdQcWI5dkoyTmlKZUFRPT0iLCJzaWduYXR1cmVLZXlJZCI6IjZGMUMyQjBBLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwRjEwRSIsInN0cmVhbUlkIjoic3RyZWFtLWludGVyb3AtMDAwMSJ9",
+  "envelopeHashHex" : "fe8fd81d6f66532775dbfa910507349fe20857f28c32d1c8979550303abc90ff",
+  "expect" : {
+    "signatureValid" : false,
+    "verdict" : "invalidProducerSignature"
+  },
+  "flow" : "flow",
+  "id" : "flow.envelope.string.wrong-key",
+  "payloadCanonicalBase64" : "eyJjb250ZW50Ijp7IiR0eXBlIjoic3RyaW5nIiwidmFsdWUiOiJIZWlcL2hhbGxvIFwiw4ZybGlnXCIgXFwgc3RpOiBhXC9iP2M9ZCZlPGY+XG5saW5qZVx0VGFiIMOmw7jDpSDDhsOYw4Ug8J+ZgiDDqSJ9LCJpZCI6ImZlLWludGVyb3AtMDAwMSIsIm9yaWdpbiI6ImNlbGw6XC9cL1wvUG9ydGhvbGVcL0NoYXRDZWxsIiwicHJvcGVydGllcyI6eyJjb250ZW50VHlwZSI6InN0cmluZyIsIm1pbWV0eXBlIjoidGV4dFwvcGxhaW47IGNoYXJzZXQ9dXRmLTgiLCJ0eXBlIjoiY29udGVudCJ9LCJ0aXRsZSI6Ik1lbGRpbmcgXC8gaGlsc2VuIiwidG9waWMiOiJjaGF0Lm1lc3NhZ2UifQ==",
+  "payloadHashHex" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+  "provenanceCanonicalBase64" : "eyJvcmlnaW5DZWxsIjoiY2VsbDpcL1wvXC9DaGF0Q2VsbCIsIm9yaWdpbklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwicGF5bG9hZEhhc2giOiI0Njc5ZDE2MzNiMTA3MTk0NGYzMTQwZDU5YmJlM2I4YzM3YmU0MGVkMjliNmU1MmZhMTliMzJkOTI2MTQ1NDk5In0=",
+  "provenanceSignatureBase64" : "WgiufqJrvLe3Ua67P1kEFavQs29XaQ1rMXpkd0SCgr+1rNl6oTMMvlGMXj4c1I0jMVxQXdvxyuMwjr0WL+A5CQ==",
+  "signatureBase64" : "oM9D2pzizh4mP1c7JhyZ98mzNdXgE8OMJOVKYPKxN+btqnNU4HYUpBXU1uiTyoS0qCSlFWZZGPqb9vJ2NiJeAQ==",
+  "signer" : {
+    "algorithm" : "EdDSA",
+    "curveType" : "Curve25519",
+    "displayName" : "flow-producer",
+    "publicKey" : "vAv1OlCu+Z9gJEgOIL8PpQ4DwbI3UJ38\/1m8PI2nY3w=",
+    "uuid" : "6F1C2B0A-0000-4000-8000-00000000F10E"
+  },
+  "type" : "FlowEnvelope"
+}

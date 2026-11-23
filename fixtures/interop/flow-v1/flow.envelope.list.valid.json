@@ -1,0 +1,62 @@
+{
+  "canonicalBase64" : "eyJkb21haW4iOiJzY2FmZm9sZCIsImVudmVsb3BlVmVyc2lvbiI6MSwicGF5bG9hZCI6eyJjb250ZW50Ijp7IiR0eXBlIjoibGlzdCIsInZhbHVlIjpbeyIkdHlwZSI6Im51bWJlciIsInZhbHVlIjowfSx7IiR0eXBlIjoiaW50ZWdlciIsInZhbHVlIjotMX0seyIkdHlwZSI6ImZsb2F0IiwidmFsdWUiOi0wLjV9LHsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IsO4In1dfSwiaWQiOiJmZS1pbnRlcm9wLTAwMDQiLCJ0aXRsZSI6Ikxpc3RlIiwidG9waWMiOiJsaXN0Lml0ZW1zIn0sInBheWxvYWRIYXNoIjoiMzZhMmI4ZjkwOGU3MzAwNGEwZDkzMGFkYTIxMzgxYTM5Y2U0MWVhYjI4ZTgzODlmZmRmMDc0NWEwNTVkMDJkYiIsInByZXZpb3VzRW52ZWxvcGVIYXNoIjoiMDcwODBmZWQzNTFmNTQ0YzY4OWExZjhhMDQ1OGY4NmMxODg5YzBjNWFkZTA0NjgwN2Q1Zjc5YjRkM2EyODAyMSIsInByb2R1Y2VyQ2VsbCI6ImNlbGw6XC9cL1wvRmlsZUNlbGwiLCJwcm9kdWNlcklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwic2VxdWVuY2UiOjIsInNpZ25hdHVyZUtleUlkIjoiZmxvdy1wcm9kdWNlciNlZDI1NTE5LTEiLCJzdHJlYW1JZCI6InN0cmVhbS1pbnRlcm9wLTAwMDIifQ==",
+  "canonicalSHA256Hex" : "b4c0691c94e921269d4635b20160cb6314007d37e31ab7fd4b112c8f3783783a",
+  "description" : "Liste uten properties, egen signatureKeyId og previousEnvelopeHash lik envelopeHashHex i flow.envelope.data.valid.",
+  "envelope" : {
+    "domain" : "scaffold",
+    "envelopeVersion" : 1,
+    "payload" : {
+      "content" : {
+        "$type" : "list",
+        "value" : [
+          {
+            "$type" : "number",
+            "value" : 0
+          },
+          {
+            "$type" : "integer",
+            "value" : -1
+          },
+          {
+            "$type" : "float",
+            "value" : -0.5
+          },
+          {
+            "$type" : "string",
+            "value" : "ø"
+          }
+        ]
+      },
+      "id" : "fe-interop-0004",
+      "title" : "Liste",
+      "topic" : "list.items"
+    },
+    "payloadHash" : "36a2b8f908e73004a0d930ada21381a39ce41eab28e8389ffdf0745a055d02db",
+    "previousEnvelopeHash" : "07080fed351f544c689a1f8a0458f86c1889c0c5ade046807d5f79b4d3a28021",
+    "producerCell" : "cell:\/\/\/FileCell",
+    "producerIdentity" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+    "sequence" : 2,
+    "signature" : "z3FdYX9Lvr7dp5rH8jcZJkVzXCcaphHUiQa\/HVlfevXBVWSubLcR+fPNqE8L3ymWye3wYXTz1LPG2Gf9OeqmCA==",
+    "signatureKeyId" : "flow-producer#ed25519-1",
+    "streamId" : "stream-interop-0002"
+  },
+  "envelopeCanonicalBase64" : "eyJkb21haW4iOiJzY2FmZm9sZCIsImVudmVsb3BlVmVyc2lvbiI6MSwicGF5bG9hZCI6eyJjb250ZW50Ijp7IiR0eXBlIjoibGlzdCIsInZhbHVlIjpbeyIkdHlwZSI6Im51bWJlciIsInZhbHVlIjowfSx7IiR0eXBlIjoiaW50ZWdlciIsInZhbHVlIjotMX0seyIkdHlwZSI6ImZsb2F0IiwidmFsdWUiOi0wLjV9LHsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IsO4In1dfSwiaWQiOiJmZS1pbnRlcm9wLTAwMDQiLCJ0aXRsZSI6Ikxpc3RlIiwidG9waWMiOiJsaXN0Lml0ZW1zIn0sInBheWxvYWRIYXNoIjoiMzZhMmI4ZjkwOGU3MzAwNGEwZDkzMGFkYTIxMzgxYTM5Y2U0MWVhYjI4ZTgzODlmZmRmMDc0NWEwNTVkMDJkYiIsInByZXZpb3VzRW52ZWxvcGVIYXNoIjoiMDcwODBmZWQzNTFmNTQ0YzY4OWExZjhhMDQ1OGY4NmMxODg5YzBjNWFkZTA0NjgwN2Q1Zjc5YjRkM2EyODAyMSIsInByb2R1Y2VyQ2VsbCI6ImNlbGw6XC9cL1wvRmlsZUNlbGwiLCJwcm9kdWNlcklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwic2VxdWVuY2UiOjIsInNpZ25hdHVyZSI6InozRmRZWDlMdnI3ZHA1ckg4amNaSmtWelhDY2FwaEhVaVFhXC9IVmxmZXZYQlZXU3ViTGNSK2ZQTnFFOEwzeW1XeWUzd1lYVHoxTFBHMkdmOU9lcW1DQT09Iiwic2lnbmF0dXJlS2V5SWQiOiJmbG93LXByb2R1Y2VyI2VkMjU1MTktMSIsInN0cmVhbUlkIjoic3RyZWFtLWludGVyb3AtMDAwMiJ9",
+  "envelopeHashHex" : "b4c0691c94e921269d4635b20160cb6314007d37e31ab7fd4b112c8f3783783a",
+  "expect" : {
+    "signatureValid" : true,
+    "verdict" : "valid"
+  },
+  "flow" : "flow",
+  "id" : "flow.envelope.list.valid",
+  "payloadCanonicalBase64" : "eyJjb250ZW50Ijp7IiR0eXBlIjoibGlzdCIsInZhbHVlIjpbeyIkdHlwZSI6Im51bWJlciIsInZhbHVlIjowfSx7IiR0eXBlIjoiaW50ZWdlciIsInZhbHVlIjotMX0seyIkdHlwZSI6ImZsb2F0IiwidmFsdWUiOi0wLjV9LHsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IsO4In1dfSwiaWQiOiJmZS1pbnRlcm9wLTAwMDQiLCJ0aXRsZSI6Ikxpc3RlIiwidG9waWMiOiJsaXN0Lml0ZW1zIn0=",
+  "payloadHashHex" : "36a2b8f908e73004a0d930ada21381a39ce41eab28e8389ffdf0745a055d02db",
+  "signatureBase64" : "z3FdYX9Lvr7dp5rH8jcZJkVzXCcaphHUiQa\/HVlfevXBVWSubLcR+fPNqE8L3ymWye3wYXTz1LPG2Gf9OeqmCA==",
+  "signer" : {
+    "algorithm" : "EdDSA",
+    "curveType" : "Curve25519",
+    "displayName" : "flow-producer",
+    "publicKey" : "vAv1OlCu+Z9gJEgOIL8PpQ4DwbI3UJ38\/1m8PI2nY3w=",
+    "uuid" : "6F1C2B0A-0000-4000-8000-00000000F10E"
+  },
+  "type" : "FlowEnvelope"
+}
