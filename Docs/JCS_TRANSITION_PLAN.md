@@ -66,7 +66,7 @@ breaking the signature.
 | `FlowEnvelope` | `envelopeVersion: 2` means JCS (1 = legacy) |
 | `IdentitySigningChallenge` | `version: 2` means JCS |
 | Bridge channel | Profile `org.haven.bridge-channel.v2` (transcript and challenge in JCS) |
-| Hashes used as ids (`MeetingPlanReference.hash`, `relational-weight-v1-…`, `certificateID`) | Open, see "Hash ids" below |
+| Hashes used as ids (`MeetingPlanReference.hash`, `relational-weight-v1-…`, `certificateID`) | No general `-v2` rule; handled one by one, see "Hash ids" below (Besluttet av Kjetil 2026-11-23) |
 
 A verifier reads the marker from the parsed object, then rebuilds the bytes
 with that profile. Unknown marker: refuse.
@@ -93,11 +93,13 @@ with that profile. Unknown marker: refuse.
    2026-11-23). Legacy verification code stays until every stored object of a
    type is re-signed or handled as below.
 
-### Stored objects signed by someone else (proposal to Kjetil, not decided)
+### Re-signing in two tracks (Besluttet av Kjetil 2026-11-23)
 
-The owner can re-sign only what the owner signed. Objects signed by others
-(credential issuers, counterparties, trusted-issuer receipts, replica
-acknowledgements) need another route:
+Track 1: the owner re-signs its own stored objects with JCS.
+
+Track 2: the owner can re-sign only what the owner signed. Objects signed by
+others (credential issuers, counterparties, trusted-issuer receipts, replica
+acknowledgements) go this way:
 
 1. **Ask the original signer to re-sign** in JCS where that is possible: the
    issuer is reachable and still holds the key.
@@ -106,6 +108,7 @@ acknowledgements) need another route:
    `{"canonicalization":"jcs-rfc8785", "type":"org.haven.legacy-verification-attestation.v1",
    "subject":<sha256 of the object's legacy canonical bytes>, "legacyProfile":<profile id>,
    "originalSigner":<public key descriptor>, "verifiedAt":<ISO 8601 date>, "result":"valid"}`.
+   The route is decided; the exact field list above is a proposal.
    The legacy object is kept unchanged next to the attestation, so a third
    party can still check it with the legacy profile if it wants to.
 3. The attestation says "the owner checked this signature at this time". It
@@ -225,21 +228,22 @@ and `SHA256` near `sign`/`verify` catches sites that canonicalize without
   profile by profile as in the table above.
 - Integers above 2^53: refuse, as Swift does, or read them as strings.
 
-## Hash ids (open, analysis 2026-11-23)
+## Hash ids (Besluttet av Kjetil 2026-11-23)
 
-Kjetil has not decided this yet. The analysis (proposal):
+There is no general `-v2` rule. Each hash is handled as below.
 
-| Hash | Why content-addressed | Proposal |
+| Hash | Why content-addressed | Decision |
 |---|---|---|
-| `MeetingPlanReference.hash` (`MeetingConsentSession.swift`) | Binds consent to one plan revision. Compared only inside the same process; the signed consent carries the whole plan and is checked against it | **Random token per revision** (new on every invalidation). No JCS needed |
-| `relational-weight-v1-<sha256>` (`RelationalLearningEngine.swift`) | Replay determinism: the same source event must give the same id, also in another runtime | Must stay deterministic. New id version over JCS bytes (`relational-weight-event-id-v2`). Today's id hashes `JSONEncoder` output of a `ValueType` object, which changes with `CellBase.usesExplicitObjectWire`; v2 must not |
-| `certificateID` (`EntityAuthorityReplication.swift`) | One id per quorum evidence, recomputed by every replica | Keep deterministic; it moves with the marker of its certificate |
-| `requestHash`, organization `policyHash`, replication and inventory hashes, `packageDigest`, `snapshotHash`, `contractDigest` | Bind a signature to exact content, or check integrity. Not ids | Stay content-addressed. They live inside signed objects, so the object's marker covers them: no `-v2` prefix and no parallel field |
+| `MeetingPlanReference.hash` (`MeetingConsentSession.swift`) | Binds consent to one plan revision. Compared only inside the same process; the signed consent carries the whole plan and is checked against it | **Random UUID/token per revision** (new on every invalidation). No JCS needed |
+| `relational-weight-v1-<sha256>` (`RelationalLearningEngine.swift`) | Replay determinism: the same source event must give the same id, also in another runtime | Stays deterministic. New id version `relational-weight-event-id-v2` over JCS bytes. Today's id hashes `JSONEncoder` output of a `ValueType` object, which changes with `CellBase.usesExplicitObjectWire`; that dependency is removed in a separate fix |
+| `certificateID` (`EntityAuthorityReplication.swift`) | One id per quorum evidence, recomputed by every replica | Kept deterministic; it moves with the marker of its certificate |
+| `requestHash`, organization `policyHash`, replication and inventory hashes, `packageDigest`, `snapshotHash`, `contractDigest` | Bind a signature to exact content, or check integrity. Not ids | Binding digests follow the version marker of the object they live in: no `-v2` prefix and no parallel field. `ContactReferenceContract` is listed under A (signing) |
 
 ## Open questions
 
 1. ~~Date format~~: always three fractional digits. Besluttet av Kjetil 2026-11-23.
-2. ~~Stored legacy objects~~: re-signed by the owner. Besluttet av Kjetil
-   2026-11-23. Open: objects signed by others, see the proposal under P3.
-3. Hash ids: open. Proposal in "Hash ids" above.
+2. ~~Stored legacy objects~~: re-signing in two tracks (owner re-signs own
+   objects; others' objects are re-signed by the issuer or counterparty, or
+   covered by an owner attestation). Besluttet av Kjetil 2026-11-23.
+3. ~~Hash ids~~: no general `-v2` rule, one decision per hash (see "Hash ids"). Besluttet av Kjetil 2026-11-23.
 4. ~~`FlowEnvelope.sequence`~~: bounded to 2^53, larger is refused. Besluttet av Kjetil 2026-11-23.
