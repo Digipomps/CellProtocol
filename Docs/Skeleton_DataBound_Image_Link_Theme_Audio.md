@@ -67,6 +67,6 @@ Godkjent av Kjetil 30.10.2026 (G1: «Ja til G1», G, H og I) og 31.10.2026 (G2).
 - `endedActionKeypath` (I): når en sang er spilt ferdig, sendes handlingen med `{"id": <sang>}`. Uten vert, som i en åpen visning, sendes ingenting.
 - `src` åpnes etter samme regler som lenker.
 - `playQueueStartKeypath` og `playingLabel` uten `playQueueKeypath` er en formatfeil. Det samme er en tom `currentKeypath` eller `endedActionKeypath`.
-- Native viser ikke spilleren ennå. Køknapper sender ingenting der. Det tas i en egen Binding-runde.
+- Native (CellApple) har spilleren fra 21.11.2026: én spiller per flate, lagt i miljøet ved ytterste `SkeletonView`. Spillerlinjen har tittel, modus, detalj eller «N av M», omslag, spill/pause, gjenta og lukk, og samme statustekster som web. Spoling finnes ikke native ennå. Køknapper starter spilleren og sender aldri `keypath`. `endedActionKeypath` sendes gjennom samme handlingsvei som andre native elementer. Starter køen, pauses `Audio`-elementer på samme flate, og omvendt. Logikken ligger i `SkeletonNativeAudioQueueModel` og er testet uten ekte lyd. Binding får dette først når den flytter CellProtocol-pinnen.
 
 `SkeletonElement` har fått casen `.AudioQueue`. Kode med uttømmende `switch` over `SkeletonElement` må legge til én linje.

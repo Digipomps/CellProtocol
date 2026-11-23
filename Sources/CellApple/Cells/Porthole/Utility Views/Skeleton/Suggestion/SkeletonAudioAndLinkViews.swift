@@ -40,6 +40,9 @@ struct CellAudioView: View {
     let userInfoValue: ValueType?
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+    /// The surface's queue player: one sound plays at a time.
+    @Environment(\.skeletonAudioQueuePlayer) private var queuePlayer
+    @State private var queueRegistration: UUID?
 
     private var sourceURL: URL? {
         guard let raw = skeletonAudio.resolvedSource(item: userInfoValue) else { return nil }
@@ -69,9 +72,20 @@ struct CellAudioView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .onAppear {
+            guard queueRegistration == nil, let queuePlayer else { return }
+            let player = $player
+            let isPlaying = $isPlaying
+            queueRegistration = queuePlayer.registerOtherAudio {
+                player.wrappedValue?.pause()
+                isPlaying.wrappedValue = false
+            }
+        }
         .onDisappear {
             player?.pause()
             isPlaying = false
+            queuePlayer?.unregisterOtherAudio(queueRegistration)
+            queueRegistration = nil
         }
     }
 
@@ -83,6 +97,7 @@ struct CellAudioView: View {
         if isPlaying {
             player?.pause()
         } else {
+            queuePlayer?.otherAudioWillPlay()
             player?.play()
         }
         isPlaying.toggle()
