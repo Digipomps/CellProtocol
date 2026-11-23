@@ -1794,9 +1794,7 @@ struct VaultIdentity: Codable {
         SecureKey(
             date: Date(),
             privateKey: false,
-            use: .signature,
             algorithm: .ECDSA,
-            size: 256,
             curveType: .P256,
             x: nil,
             y: nil,
@@ -1808,9 +1806,7 @@ struct VaultIdentity: Codable {
         SecureKey(
             date: Date(),
             privateKey: true,
-            use: .signature,
             algorithm: .ECDSA,
-            size: 256,
             curveType: .P256,
             x: nil,
             y: nil,
@@ -1840,9 +1836,7 @@ struct VaultIdentity: Codable {
         SecureKey(
             date: Date(),
             privateKey: false,
-            use: .keyAgreement,
             algorithm: .X25519,
-            size: 256,
             curveType: .Curve25519,
             x: nil,
             y: nil,
@@ -1854,9 +1848,7 @@ struct VaultIdentity: Codable {
         SecureKey(
             date: Date(),
             privateKey: true,
-            use: .keyAgreement,
             algorithm: .X25519,
-            size: 256,
             curveType: .Curve25519,
             x: nil,
             y: nil,
