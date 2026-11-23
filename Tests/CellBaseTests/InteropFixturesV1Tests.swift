@@ -353,10 +353,11 @@ final class InteropFixturesV1Tests: XCTestCase {
             signer: request.newIdentity, signature: request.proof?.signature, verdict: "valid",
             related: [
                 "requestHashBase64": requestHash,
-                // Binding's EntityScaffoldExtensionCell binds its approval to this
-                // instead: the UTF-8 of the hex SHA-256 of the base64 canonical request.
-                "bindingRequestHashBase64": Data(HavenInviteLink.sha256Hex(try request.canonicalPayloadData().base64EncodedString()).utf8).base64EncodedString(),
-                "humanCode": HavenInviteLink.humanCode(from: request.requestID + request.audience)
+                // The code both screens show. It is derived from the request hash, so
+                // a request with another key or other scopes shows another code.
+                "humanCode": HavenInviteLink.humanCode(
+                    from: SHA256.hash(data: try request.canonicalPayloadData()).map { String(format: "%02x", $0) }.joined()
+                )
             ]))
 
         var tamperedRequest = request
