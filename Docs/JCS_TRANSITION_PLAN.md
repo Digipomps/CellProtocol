@@ -37,13 +37,17 @@ these forms exactly and remain the reference for legacy verification.
 - HAVEN profile on top of RFC 8785:
   - Integers whose magnitude can exceed 2^53 travel as **strings**. The
     canonicalizer refuses an integer literal above 2^53 (`unsafeInteger`).
-    Candidates to review: `FlowEnvelope.sequence` (`UInt64`), byte counts,
-    millisecond timestamps are safe (2^53 ms is about 285 000 years).
+    `FlowEnvelope.sequence` (`UInt64`) is **bounded to 2^53**: a larger value
+    is refused, both when signing and when verifying (Besluttet av Kjetil
+    2026-11-23). Still to review: byte counts. Millisecond timestamps are
+    safe (2^53 ms is about 285 000 years).
   - `Data` stays standard base64 with padding.
   - Absent optionals stay absent (never `null`).
   - Dates are ISO 8601 UTC strings (rule below), never numbers.
 
-### Date rule (proposal, to confirm)
+### Date rule
+
+**Besluttet av Kjetil 2026-11-23:** always three fractional digits.
 
 `yyyy-MM-dd'T'HH:mm:ss.SSS'Z'`: UTC, always three fractional digits, `Z`
 suffix. Truncated (not rounded) to milliseconds. One fixed width means no
@@ -62,7 +66,7 @@ breaking the signature.
 | `FlowEnvelope` | `envelopeVersion: 2` means JCS (1 = legacy) |
 | `IdentitySigningChallenge` | `version: 2` means JCS |
 | Bridge channel | Profile `org.haven.bridge-channel.v2` (transcript and challenge in JCS) |
-| Hashes used as ids (`MeetingPlanReference.hash`, `relational-weight-v1-…`, `packageDigest`, `policyHash`, `requestHash`) | A new id prefix or version (`…-v2`), because a hash has no room for a marker |
+| Hashes used as ids (`MeetingPlanReference.hash`, `relational-weight-v1-…`, `certificateID`) | Open, see "Hash ids" below |
 
 A verifier reads the marker from the parsed object, then rebuilds the bytes
 with that profile. Unknown marker: refuse.
@@ -84,9 +88,30 @@ with that profile. Unknown marker: refuse.
 4. **P3, retire legacy for live traffic.** After an announced date, legacy is
    refused for live protocol messages (challenges, bridge admission, flows,
    invitations). **Stored** legacy objects (genesis seals, VC claims,
-   organization records, receipts, journals) keep verifying with the legacy
-   profile, or are re-signed by their owner. Which applies is decided per type
-   before P3; legacy verification code stays until then.
+   organization records, receipts, journals) are **re-signed by their owner**
+   with JCS. Legacy verification is not kept forever (Besluttet av Kjetil
+   2026-11-23). Legacy verification code stays until every stored object of a
+   type is re-signed or handled as below.
+
+### Stored objects signed by someone else (proposal to Kjetil, not decided)
+
+The owner can re-sign only what the owner signed. Objects signed by others
+(credential issuers, counterparties, trusted-issuer receipts, replica
+acknowledgements) need another route:
+
+1. **Ask the original signer to re-sign** in JCS where that is possible: the
+   issuer is reachable and still holds the key.
+2. **Otherwise the owner makes a JCS-signed attestation** that binds to the
+   old object and records the legacy check:
+   `{"canonicalization":"jcs-rfc8785", "type":"org.haven.legacy-verification-attestation.v1",
+   "subject":<sha256 of the object's legacy canonical bytes>, "legacyProfile":<profile id>,
+   "originalSigner":<public key descriptor>, "verifiedAt":<ISO 8601 date>, "result":"valid"}`.
+   The legacy object is kept unchanged next to the attestation, so a third
+   party can still check it with the legacy profile if it wants to.
+3. The attestation says "the owner checked this signature at this time". It
+   is not the issuer's signature. A verifier that needs the issuer's own
+   word (a credential presented to a stranger) treats it as weaker evidence
+   and asks for a re-issued credential.
 
 ### Switch together
 
@@ -134,6 +159,7 @@ listed last, out of scope.
 | `CellBase/Identity/OwnerAttachEntityExtension.swift` | Owner-attach statements |
 | `CellBase/DeviceIngress/DeviceIngressWire.swift` | Device ingress records |
 | `CellApple/EntityRadar/NearbyAccessAgreement.swift` | Nearby access agreement and advertisement proof |
+| `CellBase/Cells/Contact/ContactReferenceContract.swift` | Contact reference (`contractDigest` binds it to the exact contract bytes) |
 
 ### B. Hashes, digests and derived ids
 
@@ -146,7 +172,6 @@ listed last, out of scope.
 | `CellBase/VerifiableCredentials/TrustedIssuerCell.swift` | Normalized evidence and evaluation record ordering and size |
 | `CellBase/PurposeAndInterest/EntityRepresentationDataCodec.swift` | Representation equality in `EntityRelationRecordV1` |
 | `CellBase/Cells/Contact/ContactInboxCell.swift` | Payload equality for idempotent re-delivery |
-| `CellBase/Cells/Contact/ContactReferenceContract.swift` | Contact reference wire |
 | `CellApple/Cells/EntityAnchorCell.swift`, `CellVapor/Cells/EntityAnchorCell.swift` | `canonicalEntityData` equality during journal recovery; keypath storage and journal bytes |
 
 ### C. Authenticated data (AEAD)
@@ -200,11 +225,21 @@ and `SHA256` near `sign`/`verify` catches sites that canonicalize without
   profile by profile as in the table above.
 - Integers above 2^53: refuse, as Swift does, or read them as strings.
 
+## Hash ids (open, analysis 2026-11-23)
+
+Kjetil has not decided this yet. The analysis (proposal):
+
+| Hash | Why content-addressed | Proposal |
+|---|---|---|
+| `MeetingPlanReference.hash` (`MeetingConsentSession.swift`) | Binds consent to one plan revision. Compared only inside the same process; the signed consent carries the whole plan and is checked against it | **Random token per revision** (new on every invalidation). No JCS needed |
+| `relational-weight-v1-<sha256>` (`RelationalLearningEngine.swift`) | Replay determinism: the same source event must give the same id, also in another runtime | Must stay deterministic. New id version over JCS bytes (`relational-weight-event-id-v2`). Today's id hashes `JSONEncoder` output of a `ValueType` object, which changes with `CellBase.usesExplicitObjectWire`; v2 must not |
+| `certificateID` (`EntityAuthorityReplication.swift`) | One id per quorum evidence, recomputed by every replica | Keep deterministic; it moves with the marker of its certificate |
+| `requestHash`, organization `policyHash`, replication and inventory hashes, `packageDigest`, `snapshotHash`, `contractDigest` | Bind a signature to exact content, or check integrity. Not ids | Stay content-addressed. They live inside signed objects, so the object's marker covers them: no `-v2` prefix and no parallel field |
+
 ## Open questions
 
-1. Date format: always three fractional digits (proposal above) or whole
-   seconds when the fraction is zero?
-2. Stored legacy objects at P3: keep legacy verification forever, or re-sign
-   during a migration? Per type.
-3. Hash ids (B): new prefix (`-v2`) or a parallel field during P1–P2?
-4. Should `FlowEnvelope.sequence` become a string in v2, or be bounded to 2^53?
+1. ~~Date format~~: always three fractional digits. Besluttet av Kjetil 2026-11-23.
+2. ~~Stored legacy objects~~: re-signed by the owner. Besluttet av Kjetil
+   2026-11-23. Open: objects signed by others, see the proposal under P3.
+3. Hash ids: open. Proposal in "Hash ids" above.
+4. ~~`FlowEnvelope.sequence`~~: bounded to 2^53, larger is refused. Besluttet av Kjetil 2026-11-23.
