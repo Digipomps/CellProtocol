@@ -31,6 +31,16 @@ public class VCProof : Codable {
         case signatureData
     }
     
+    /// A proof of its own with the same content. VCProof is a class, so a
+    /// copied VCClaim otherwise shares its proof with the original.
+    public init(copying other: VCProof) {
+        self.type = other.type
+        self.created = other.created
+        self.proofPurpose = other.proofPurpose
+        self.verificationMethod = other.verificationMethod
+        self.signatureData = other.signatureData
+    }
+
     public init(proofPurpose: ProofPurpose, issuerIdentity: Identity) {
         self.proofPurpose = proofPurpose
         self.created = Date()

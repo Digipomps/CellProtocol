@@ -58,6 +58,9 @@ public enum OrganizationVaultError: Error, Equatable, Sendable {
     case unknownCredential(String)
     /// The credential id already has a signed credential.
     case credentialAlreadyIssued(String)
+    /// The credential is not of this vault's type, or does not name the
+    /// policy in force.
+    case credentialNotForThisVault
     /// The vault signs one thing at a time. Ask again when the call in
     /// progress has returned.
     case signingInProgress
@@ -75,6 +78,8 @@ public enum OrganizationVaultSnapshotError: Error, Equatable, Sendable {
     case sealNotExpected
     case credentialTypeNotExpected(String)
     case journalBroken
+    /// The entry with this sequence does not carry the custodian's signature.
+    case journalEntryNotSignedByCustodian(sequence: Int)
     case journalDoesNotStartAtGenesis
     /// The entry with this sequence is not what the owners' signed approvals
     /// say was approved, under the policy in force when it was recorded.
@@ -93,17 +98,19 @@ public enum OrganizationVaultSnapshotError: Error, Equatable, Sendable {
 /// key stays with the custodian.
 ///
 /// What restoring checks: the seal is the expected one, the policy chain
-/// verifies from it, the journal is an unbroken chain from genesis, and every
-/// entry after genesis is re-derived from the owners' signed approvals under
-/// the policy in force at the time. The status list and every credential must
-/// verify under the custodian key and be the ones the journal records.
+/// verifies from it, the journal is an unbroken chain from genesis in which
+/// the custodian key has signed every entry, and every entry after genesis is
+/// re-derived from the owners' signed approvals under the policy in force at
+/// the time. The status list and every credential must verify under the
+/// custodian key and be the ones the journal records.
 ///
-/// What it cannot check: the journal is not signed, so whoever controls the
-/// storage can hand back an older complete snapshot, or one where the latest
-/// entries, or a role that was issued, have been removed consistently. A node
-/// that mirrors the status list refuses a lower sequence, which exposes a
-/// rollback of a revocation until the vault signs that sequence again. Keep
-/// the storage with someone the owners trust not to roll it back.
+/// What it cannot check: whoever controls the storage can hand back an older
+/// complete snapshot. Each entry is signed together with the hash of the one
+/// before it, so entries cannot be changed, reordered or taken out of the
+/// middle, but the latest ones can be cut off. A node that mirrors the status
+/// list refuses a lower sequence, which exposes a rollback of a revocation
+/// until the vault signs that sequence again. Keep the storage with someone
+/// the owners trust not to roll it back.
 public struct OrganizationVaultSnapshot: Codable, @unchecked Sendable {
     public static let currentSchema = "haven.organization-vault-snapshot.v1"
 
@@ -113,6 +120,8 @@ public struct OrganizationVaultSnapshot: Codable, @unchecked Sendable {
     public var credentialType: String
     public var amendments: [GovernancePolicyAmendment]
     public var journal: [OrganizationJournalEntry]
+    /// The custodian's signature over each journal entry, in order.
+    public var journalSignatures: [Data]
     /// The approval bundle behind each journal entry after genesis, in order.
     public var bundles: [ApprovalBundle]
     /// Issued credentials, ordered by id.
@@ -126,6 +135,7 @@ public struct OrganizationVaultSnapshot: Codable, @unchecked Sendable {
         credentialType: String,
         amendments: [GovernancePolicyAmendment],
         journal: [OrganizationJournalEntry],
+        journalSignatures: [Data],
         bundles: [ApprovalBundle],
         issued: [VCClaim],
         statusList: OrganizationRoleStatusList?
@@ -136,6 +146,7 @@ public struct OrganizationVaultSnapshot: Codable, @unchecked Sendable {
         self.credentialType = credentialType
         self.amendments = amendments
         self.journal = journal
+        self.journalSignatures = journalSignatures
         self.bundles = bundles
         self.issued = issued
         self.statusList = statusList
@@ -175,13 +186,26 @@ public actor OrganizationVault {
     private let custodian: OrganizationKeyCustodian
     private let initialPolicy: GovernancePolicy
     private let store: OrganizationVaultStore?
-    public private(set) var amendments: [GovernancePolicyAmendment] = []
-    public private(set) var policy: GovernancePolicy
-    public private(set) var journal: [OrganizationJournalEntry] = []
-    public private(set) var issued: [String: VCClaim] = [:]
-    public private(set) var statusList: OrganizationRoleStatusList?
-    private var bundles: [ApprovalBundle] = []
+    /// Everything that changes. A signing call builds the next state, has it
+    /// stored, and only then adopts it, so nothing can be read from the vault
+    /// that the storage does not hold.
+    private struct State {
+        var amendments: [GovernancePolicyAmendment] = []
+        var policy: GovernancePolicy
+        var journal: [OrganizationJournalEntry] = []
+        var journalSignatures: [Data] = []
+        var bundles: [ApprovalBundle] = []
+        var issued: [String: VCClaim] = [:]
+        var statusList: OrganizationRoleStatusList?
+    }
+    private var state: State
     private var usedNonces = Set<Data>()
+
+    public var amendments: [GovernancePolicyAmendment] { state.amendments }
+    public var policy: GovernancePolicy { state.policy }
+    public var journal: [OrganizationJournalEntry] { state.journal }
+    public var issued: [String: VCClaim] { state.issued.mapValues { $0.detached() } }
+    public var statusList: OrganizationRoleStatusList? { state.statusList }
     private var busy = false
     private var storeFailed = false
 
@@ -199,7 +223,6 @@ public actor OrganizationVault {
         self.seal = seal
         self.displayName = seal.displayName
         self.initialPolicy = initialPolicy
-        self.policy = initialPolicy
         self.custodian = custodian
         self.credentialType = credentialType
         self.store = store
@@ -213,15 +236,19 @@ public actor OrganizationVault {
             issuedAt: seal.sealedAt,
             revokedCredentialIDs: [])
         first.signature = try await custodian.sign(try first.canonicalPayloadData())
-        statusList = first
-        journal = [OrganizationJournalEntry(
+        let entry = OrganizationJournalEntry(
             sequence: 1, previousEntryHash: nil, recordedAt: seal.sealedAt,
             actionClass: OrganizationActionClass.roleStatusPublish, proposalHash: try seal.sealHash(),
-            payloadHash: try first.payloadHash(), payloadSummary: "Tom statusliste ved opprettelsen",
+            payloadHash: try first.payloadHash(), payloadSummary: Self.genesisSummary,
             policyVersion: initialPolicy.version, ruleID: Self.genesisRuleID,
             approverUUIDs: seal.founders.map(\.uuid).sorted(),
-            signatureHash: OrganizationHashing.sha256(first.signature ?? Data()))]
-        try await store?(snapshot())
+            signatureHash: OrganizationHashing.sha256(first.signature ?? Data()))
+        let genesis = State(
+            policy: initialPolicy, journal: [entry],
+            journalSignatures: [try await custodian.sign(try Self.journalSigningData(entry))],
+            statusList: first)
+        self.state = genesis
+        try await store?(Self.snapshot(of: genesis, seal: seal, initialPolicy: initialPolicy, credentialType: credentialType))
     }
 
     /// Starts the vault from a stored snapshot instead of from genesis, so
@@ -269,10 +296,31 @@ public actor OrganizationVault {
             }
             previous = try entry.entryHash()
         }
+        // The custodian signed every entry together with the hash of the one
+        // before it. Without the key the chain cannot be rewritten.
+        for (index, entry) in snapshot.journal.enumerated() {
+            guard index < snapshot.journalSignatures.count,
+                  IdentityPublicKeySignatureVerifier.verify(
+                      signature: snapshot.journalSignatures[index],
+                      messageData: try Self.journalSigningData(entry),
+                      descriptor: seal.custodianKey) else {
+                throw refuse(.journalEntryNotSignedByCustodian(sequence: entry.sequence))
+            }
+        }
+        guard snapshot.journalSignatures.count == snapshot.journal.count else {
+            throw refuse(.journalEntryNotSignedByCustodian(sequence: snapshot.journal.count + 1))
+        }
+        let firstList = OrganizationRoleStatusList(
+            organizationAnchorID: seal.anchorID, issuerDID: issuerDID, sequence: 1,
+            issuedAt: seal.sealedAt, revokedCredentialIDs: [])
         guard let first = snapshot.journal.first, first.ruleID == Self.genesisRuleID,
               first.actionClass == OrganizationActionClass.roleStatusPublish,
               first.proposalHash == (try seal.sealHash()),
-              first.policyVersion == snapshot.initialPolicy.version else {
+              first.policyVersion == snapshot.initialPolicy.version,
+              first.recordedAt == seal.sealedAt,
+              first.payloadSummary == Self.genesisSummary,
+              first.approverUUIDs == seal.founders.map(\.uuid).sorted(),
+              first.payloadHash == (try firstList.payloadHash()) else {
             throw refuse(.journalDoesNotStartAtGenesis)
         }
 
@@ -305,7 +353,8 @@ public actor OrganizationVault {
             }
             if entry.actionClass == OrganizationActionClass.policyAmend {
                 guard let amendment = pendingAmendments.popFirst(), amendment.bundle == bundle,
-                      entry.payloadHash == (try amendment.policy.policyHash()) else {
+                      entry.payloadHash == (try amendment.policy.policyHash()),
+                      entry.signatureHash == OrganizationHashing.sha256(Data()) else {
                     throw refuse(.amendmentsDoNotMatchJournal)
                 }
                 inForce = amendment.policy
@@ -335,7 +384,10 @@ public actor OrganizationVault {
         let issuedEntries = snapshot.journal.filter { $0.actionClass == OrganizationActionClass.roleIssue }
         var issued: [String: VCClaim] = [:]
         var accounted = Set<Int>()
-        for claim in snapshot.issued {
+        for stored in snapshot.issued {
+            // A proof object of the vault's own: the caller keeps the one in
+            // the snapshot and could change it later.
+            let claim = stored.detached()
             let payloadHash = try OrganizationRoleCredential.payloadHash(of: claim)
             let signatureHash = OrganizationHashing.sha256(claim.proof.signatureData)
             guard issued[claim.id] == nil,
@@ -360,25 +412,36 @@ public actor OrganizationVault {
         self.seal = seal
         self.displayName = seal.displayName
         self.initialPolicy = snapshot.initialPolicy
-        self.policy = current
         self.custodian = custodian
         self.credentialType = credentialType
         self.store = store
-        self.amendments = snapshot.amendments
-        self.journal = snapshot.journal
-        self.bundles = snapshot.bundles
-        self.issued = issued
-        self.statusList = list
+        self.state = State(
+            amendments: snapshot.amendments, policy: current, journal: snapshot.journal,
+            journalSignatures: snapshot.journalSignatures, bundles: snapshot.bundles,
+            issued: issued, statusList: list)
         self.usedNonces = nonces
     }
 
     /// The state to store. With a `store` the vault hands it over itself.
     public func snapshot() -> OrganizationVaultSnapshot {
+        Self.snapshot(of: state, seal: seal, initialPolicy: initialPolicy, credentialType: credentialType)
+    }
+
+    private static func snapshot(
+        of state: State, seal: OrganizationGenesisSeal, initialPolicy: GovernancePolicy, credentialType: String
+    ) -> OrganizationVaultSnapshot {
         OrganizationVaultSnapshot(
             seal: seal, initialPolicy: initialPolicy, credentialType: credentialType,
-            amendments: amendments, journal: journal, bundles: bundles,
-            issued: issued.values.sorted { $0.id < $1.id },
-            statusList: statusList)
+            amendments: state.amendments, journal: state.journal, journalSignatures: state.journalSignatures,
+            bundles: state.bundles,
+            issued: state.issued.values.map { $0.detached() }.sorted { $0.id < $1.id },
+            statusList: state.statusList)
+    }
+
+    /// What the custodian signs for a journal entry. The tag keeps the
+    /// signature from being taken for one over a status list or a credential.
+    static func journalSigningData(_ entry: OrganizationJournalEntry) throws -> Data {
+        Data("haven.organization.journal-entry.v1\n".utf8) + (try entry.canonicalPayloadData())
     }
 
     public var keyIsExportable: Bool { custodian.keyIsExportable }
@@ -419,7 +482,7 @@ public actor OrganizationVault {
         now: Date = Date(),
         lifetime: TimeInterval = 7 * 86_400
     ) throws -> (proposal: OrganizationActionProposal, list: OrganizationRoleStatusList) {
-        for id in credentialIDs where issued[id] == nil { throw OrganizationVaultError.unknownCredential(id) }
+        for id in credentialIDs where state.issued[id] == nil { throw OrganizationVaultError.unknownCredential(id) }
         let list = try nextStatusList(adding: credentialIDs, now: now)
         let newly = credentialIDs.filter { statusList?.revokedCredentialIDs.contains($0) != true }
         let proposal = OrganizationActionProposal(
@@ -447,7 +510,8 @@ public actor OrganizationVault {
 
     // MARK: Signing
 
-    /// Signs the role credential if the bundle binds the organization.
+    /// Signs the role credential if the bundle binds the organization. The
+    /// credential passed in is left unsigned; the signed one is the result.
     public func issueRole(credential: VCClaim, bundle: ApprovalBundle, now: Date = Date()) async throws -> VCClaim {
         try begin()
         defer { busy = false }
@@ -457,20 +521,29 @@ public actor OrganizationVault {
                                    payloadHash: payloadHash, summary: summary, now: now)
         // A fresh approval of a credential that is already signed would put a
         // second signature behind one id.
-        guard issued[credential.id] == nil else { throw OrganizationVaultError.credentialAlreadyIssued(credential.id) }
-        var signed = credential
+        guard state.issued[credential.id] == nil else { throw OrganizationVaultError.credentialAlreadyIssued(credential.id) }
+        // The summary the owners saw shows neither of these, and a vault that
+        // signed such a credential could not be restored afterwards.
+        guard credential.type.contains(credentialType),
+              case .string(let named)? = credential.credentialSubject[OrganizationRoleCredential.Field.policyHash],
+              named == (try state.policy.policyHash().base64EncodedString()) else {
+            throw OrganizationVaultError.credentialNotForThisVault
+        }
+        var signed = credential.detached()
         try await signed.generateProof(issuerIdentity: try await custodian.signingIdentity())
-        try record(bundle: bundle, evaluation: evaluation, payloadHash: payloadHash, signature: signed.proof.signatureData, now: now)
-        issued[signed.id] = signed
-        try await persist()
-        return signed
+        var next = state
+        try await record(in: &next, bundle: bundle, evaluation: evaluation, payloadHash: payloadHash,
+                         signature: signed.proof.signatureData, now: now)
+        next.issued[signed.id] = signed
+        try await commit(next, nonce: bundle.proposal.nonce)
+        return signed.detached()
     }
 
     /// Signs the next status list if the bundle binds the organization.
     public func revoke(list: OrganizationRoleStatusList, bundle: ApprovalBundle, now: Date = Date()) async throws -> OrganizationRoleStatusList {
         try begin()
         defer { busy = false }
-        let previous = Set(statusList?.revokedCredentialIDs ?? [])
+        let previous = Set(state.statusList?.revokedCredentialIDs ?? [])
         let newly = list.revokedCredentialIDs.filter { previous.contains($0) == false }
         let expected = try nextStatusList(adding: list.revokedCredentialIDs, now: now)
         guard list.sequence == expected.sequence, list.issuerDID == expected.issuerDID,
@@ -483,9 +556,11 @@ public actor OrganizationVault {
                                    summary: list.summary(displayName: displayName, newlyRevoked: newly), now: now)
         var signed = list
         signed.signature = try await custodian.sign(try list.canonicalPayloadData())
-        try record(bundle: bundle, evaluation: evaluation, payloadHash: try list.payloadHash(), signature: signed.signature ?? Data(), now: now)
-        statusList = signed
-        try await persist()
+        var next = state
+        try await record(in: &next, bundle: bundle, evaluation: evaluation, payloadHash: try list.payloadHash(),
+                         signature: signed.signature ?? Data(), now: now)
+        next.statusList = signed
+        try await commit(next, nonce: bundle.proposal.nonce)
         return signed
     }
 
@@ -495,28 +570,32 @@ public actor OrganizationVault {
         defer { busy = false }
         let amendment = GovernancePolicyAmendment(policy: next, bundle: bundle)
         do {
-            try GovernancePolicyChain.verify(step: amendment, replacing: policy, organizationAnchorID: seal.anchorID)
+            try GovernancePolicyChain.verify(step: amendment, replacing: state.policy, organizationAnchorID: seal.anchorID)
         } catch let error as GovernancePolicyChainError {
             throw OrganizationVaultError.amendment(error)
         }
         let evaluation = try admit(bundle, actionClass: OrganizationActionClass.policyAmend,
                                    payloadHash: try next.policyHash(),
-                                   summary: GovernancePolicyAmendment.summary(replacing: policy, with: next), now: now)
-        try record(bundle: bundle, evaluation: evaluation, payloadHash: try next.policyHash(), signature: Data(), now: now)
-        amendments.append(amendment)
-        policy = next
-        try await persist()
+                                   summary: GovernancePolicyAmendment.summary(replacing: state.policy, with: next), now: now)
+        // Nothing but the journal entry is signed here. That signature is what
+        // says the vault accepted the amendment, and when.
+        var adopted = state
+        try await record(in: &adopted, bundle: bundle, evaluation: evaluation, payloadHash: try next.policyHash(),
+                         signature: Data(), now: now)
+        adopted.amendments.append(amendment)
+        adopted.policy = next
+        try await commit(adopted, nonce: bundle.proposal.nonce)
     }
 
     /// The whole chain still verifies from genesis.
     public func verifyChain() throws -> GovernancePolicy {
-        try GovernancePolicyChain.verify(seal: seal, initialPolicy: initialPolicy, amendments: amendments)
+        try GovernancePolicyChain.verify(seal: seal, initialPolicy: initialPolicy, amendments: state.amendments)
     }
 
     /// Every entry points at the hash of the one before it.
     public func journalIsIntact() -> Bool {
         var previous: Data?
-        for (index, entry) in journal.enumerated() {
+        for (index, entry) in state.journal.enumerated() {
             guard entry.sequence == index + 1, entry.previousEntryHash == previous,
                   let hash = try? entry.entryHash() else { return false }
             previous = hash
@@ -527,6 +606,7 @@ public actor OrganizationVault {
     // MARK: Internals
 
     private static let genesisRuleID = "genesis"
+    private static let genesisSummary = "Tom statusliste ved opprettelsen"
     private static let approvedActionClasses: Set<String> = [
         OrganizationActionClass.roleIssue, OrganizationActionClass.roleRevoke, OrganizationActionClass.policyAmend,
     ]
@@ -550,14 +630,20 @@ public actor OrganizationVault {
         busy = true
     }
 
-    private func persist() async throws {
-        guard let store else { return }
-        do {
-            try await store(snapshot())
-        } catch {
-            storeFailed = true
-            throw error
+    /// Has the next state stored and then adopts it. If the store fails the
+    /// vault keeps the state it had, which is the last one stored, and signs
+    /// nothing more: a signature exists that the storage may or may not hold.
+    private func commit(_ next: State, nonce: Data) async throws {
+        if let store {
+            do {
+                try await store(Self.snapshot(of: next, seal: seal, initialPolicy: initialPolicy, credentialType: credentialType))
+            } catch {
+                storeFailed = true
+                throw error
+            }
         }
+        state = next
+        usedNonces.insert(nonce)
     }
 
     private func admit(
@@ -576,38 +662,44 @@ public actor OrganizationVault {
         guard proposal.payloadHash == payloadHash else { throw OrganizationVaultError.payloadDoesNotMatchApprovedHash }
         guard proposal.payloadSummary == summary else { throw OrganizationVaultError.summaryDoesNotMatchPayload }
         do {
-            return try GovernancePolicyEvaluator.evaluate(policy: policy, bundle: bundle, now: now)
+            return try GovernancePolicyEvaluator.evaluate(policy: state.policy, bundle: bundle, now: now)
         } catch let error as GovernanceEvaluationError {
             throw OrganizationVaultError.refused(error)
         }
     }
 
-    private func record(bundle: ApprovalBundle, evaluation: GovernanceEvaluation, payloadHash: Data, signature: Data, now: Date) throws {
+    /// Appends the journal entry for a signature to the next state, signed by
+    /// the custodian together with the hash of the entry before it.
+    private func record(
+        in next: inout State, bundle: ApprovalBundle, evaluation: GovernanceEvaluation,
+        payloadHash: Data, signature: Data, now: Date
+    ) async throws {
         let entry = OrganizationJournalEntry(
-            sequence: journal.count + 1,
-            previousEntryHash: try journal.last?.entryHash(),
+            sequence: next.journal.count + 1,
+            previousEntryHash: try next.journal.last?.entryHash(),
             recordedAt: IdentityLinkProtocolService.iso8601(now),
             actionClass: bundle.proposal.actionClass,
             proposalHash: try bundle.proposal.proposalHash(),
             payloadHash: payloadHash,
             payloadSummary: bundle.proposal.payloadSummary,
-            policyVersion: policy.version,
+            policyVersion: next.policy.version,
             ruleID: evaluation.ruleID,
             approverUUIDs: evaluation.approverUUIDs,
             signatureHash: OrganizationHashing.sha256(signature)
         )
-        usedNonces.insert(bundle.proposal.nonce)
-        journal.append(entry)
-        bundles.append(bundle)
+        let entrySignature = try await custodian.sign(try Self.journalSigningData(entry))
+        next.journal.append(entry)
+        next.journalSignatures.append(entrySignature)
+        next.bundles.append(bundle)
     }
 
     private func nextStatusList(adding ids: [String], now: Date) throws -> OrganizationRoleStatusList {
         OrganizationRoleStatusList(
             organizationAnchorID: seal.anchorID,
             issuerDID: try issuerDID(),
-            sequence: (statusList?.sequence ?? 0) + 1,
+            sequence: (state.statusList?.sequence ?? 0) + 1,
             issuedAt: IdentityLinkProtocolService.iso8601(now),
-            revokedCredentialIDs: (statusList?.revokedCredentialIDs ?? []) + ids
+            revokedCredentialIDs: (state.statusList?.revokedCredentialIDs ?? []) + ids
         )
     }
 }

@@ -254,6 +254,14 @@ public struct VCClaim: Codable {
         )
     }
     
+    /// The same claim with a proof object of its own, so signing or editing
+    /// one copy does not change the other.
+    public func detached() -> VCClaim {
+        var copy = self
+        copy.proof = VCProof(copying: proof)
+        return copy
+    }
+
     public func verify() async throws -> Bool {
         let verificationMaterial = try await getIssuerVerificationMaterial()
         return try await verify(issuer: verificationMaterial.publicKey, curveType: verificationMaterial.curveType)

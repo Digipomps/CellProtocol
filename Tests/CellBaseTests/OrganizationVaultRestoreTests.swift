@@ -139,25 +139,81 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         await assertRefused(.journalBroken, rewritten)
         var noGenesis = good
         noGenesis.journal[0].ruleID = "roles"
-        try relink(&noGenesis)
+        try await relink(&noGenesis)
         await assertRefused(.journalDoesNotStartAtGenesis, noGenesis)
+        for edit: (inout OrganizationJournalEntry) -> Void in [
+            { $0.proposalHash = Data() }, { $0.policyVersion = 99 },
+            { $0.actionClass = OrganizationActionClass.roleIssue }, { $0.recordedAt = "2020-01-01T00:00:00Z" },
+            { $0.payloadSummary = "Noe annet" }, { $0.approverUUIDs = [] }, { $0.payloadHash = Data() },
+        ] {
+            var genesis = good
+            edit(&genesis.journal[0])
+            try await relink(&genesis)
+            await assertRefused(.journalDoesNotStartAtGenesis, genesis)
+        }
 
-        // The chain can be recomputed by whoever holds the storage. The
-        // approvals cannot, so a relinked rewrite is refused all the same.
+        // The chain can be recomputed by whoever holds the storage, but not
+        // the custodian's signature over each entry.
+        var relinkedOnly = good
+        relinkedOnly.journal[2].payloadSummary = "Ufarlig endring"
+        try await relink(&relinkedOnly, resign: false)
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 3), relinkedOnly)
+        var takenOut = good
+        takenOut.journal.remove(at: 1)
+        takenOut.journalSignatures.remove(at: 1)
+        takenOut.bundles.remove(at: 0)
+        takenOut.issued.removeAll { $0.id == first.id }
+        try await relink(&takenOut, resign: false)
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 2), takenOut)
+        var unsigned = good
+        unsigned.journalSignatures.removeLast()
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 4), unsigned)
+        var oneTooMany = good
+        oneTooMany.journalSignatures.append(good.journalSignatures[0])
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 5), oneTooMany)
+
+        // Behind the signature, every entry must still be what the owners
+        // approved: a rewrite signed with the custodian key is refused too.
         var relinkedSummary = good
         relinkedSummary.journal[1].payloadSummary = "Ufarlig endring"
-        try relink(&relinkedSummary)
+        try await relink(&relinkedSummary)
         await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), relinkedSummary)
 
         var otherApprovers = good
         otherApprovers.journal[2].approverUUIDs = [petter.uuid]
-        try relink(&otherApprovers)
+        try await relink(&otherApprovers)
         await assertRefused(.journalEntryNotBackedByApprovals(sequence: 3), otherApprovers)
 
         var otherRule = good
         otherRule.journal[1].ruleID = "anything"
-        try relink(&otherRule)
+        try await relink(&otherRule)
         await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), otherRule)
+
+        // The recorded time must be a real time inside the proposal's
+        // validity, and the action the one the owners approved.
+        var beforeProposal = good
+        beforeProposal.journal[1].recordedAt = IdentityLinkProtocolService.iso8601(t0.addingTimeInterval(-86_400))
+        try await relink(&beforeProposal)
+        await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), beforeProposal)
+        var afterExpiry = good
+        afterExpiry.journal[1].recordedAt = IdentityLinkProtocolService.iso8601(t0.addingTimeInterval(30 * 86_400))
+        try await relink(&afterExpiry)
+        await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), afterExpiry)
+        var notATime = good
+        notATime.journal[1].recordedAt = "not a time"
+        try await relink(&notATime)
+        await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), notATime)
+        var otherClass = good
+        otherClass.journal[1].actionClass = OrganizationActionClass.roleRevoke
+        try await relink(&otherClass)
+        await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), otherClass)
+
+        // The same approved entry recorded twice: its nonce is already used.
+        var replayed = good
+        replayed.journal.insert(good.journal[1], at: 2)
+        replayed.bundles.insert(good.bundles[0], at: 1)
+        try await relink(&replayed)
+        await assertRefused(.journalEntryNotBackedByApprovals(sequence: 3), replayed)
 
         // Bundles swapped, dropped, or used for two entries.
         var swapped = good
@@ -207,8 +263,17 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         var middleRemoved = good
         middleRemoved.journal.remove(at: 3)
         middleRemoved.bundles.remove(at: 2)
-        try relink(&middleRemoved)
+        try await relink(&middleRemoved)
         await assertRefused(.statusListDoesNotMatchJournal, middleRemoved)
+        // Same removal with the list from before the second revocation put
+        // back: the count agrees, but the journal records another list.
+        var middleRemovedOlderList = middleRemoved
+        middleRemovedOlderList.statusList = afterFirstRevocation.statusList
+        await assertRefused(.statusListDoesNotMatchJournal, middleRemovedOlderList)
+        var otherListSignature = good
+        otherListSignature.journal[4].signatureHash = OrganizationHashing.sha256(Data("x".utf8))
+        try await relink(&otherListSignature)
+        await assertRefused(.statusListDoesNotMatchJournal, otherListSignature)
 
         // A role dropped, a role edited after signing, a role added twice.
         var dropped = good
@@ -229,7 +294,7 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         target.proof.signatureData = Data(repeating: 9, count: 64)
         let index = try XCTUnwrap(forged.journal.firstIndex { $0.signatureHash == wasHash })
         forged.journal[index].signatureHash = OrganizationHashing.sha256(target.proof.signatureData)
-        try relink(&forged)
+        try await relink(&forged)
         await assertRefused(.credentialNotSignedByCustodian(target.id), forged)
     }
 
@@ -239,9 +304,23 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         let v2 = try policy([kjetil, petter], version: 2, previous: try current.policyHash())
         let amendment = try await org.proposeAmendment(next: v2, proposer: try d(kjetil), now: t0)
         try await org.amend(to: v2, bundle: try await approve(amendment, by: [kjetil]), now: t0)
+        let afterAmend = try copy(await org.snapshot())
         _ = try await issue(on: org, role: "researcher")
         let good = try copy(await org.snapshot())
         _ = try await restore(good)
+
+        // The amendment kept, its journal entry and bundle cut off.
+        var unjournaled = afterAmend
+        unjournaled.journal.removeLast()
+        unjournaled.journalSignatures.removeLast()
+        unjournaled.bundles.removeLast()
+        await assertRefused(.amendmentsDoNotMatchJournal, unjournaled)
+
+        // An amendment entry claims a signature it never had.
+        var amendSignature = afterAmend
+        amendSignature.journal[1].signatureHash = OrganizationHashing.sha256(Data("x".utf8))
+        try await relink(&amendSignature)
+        await assertRefused(.amendmentsDoNotMatchJournal, amendSignature)
 
         var missing = good
         missing.amendments = []
@@ -253,7 +332,7 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         removed.amendments = []
         removed.journal.remove(at: 1)
         removed.bundles.remove(at: 0)
-        try relink(&removed)
+        try await relink(&removed)
         await assertRefused(.journalEntryNotBackedByApprovals(sequence: 2), removed)
 
         // Another policy put in the amendment's place.
@@ -268,11 +347,88 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         }
     }
 
+    func testAmendmentTheVaultNeverAcceptedIsRefused() async throws {
+        // The owners signed an amendment but never handed it to the vault.
+        // The storage owner appends it with a time of their choosing.
+        let org = try await makeVault()
+        let current = await org.policy
+        let v2 = try policy([petter], version: 2, previous: try current.policyHash())
+        let proposal = try await org.proposeAmendment(next: v2, proposer: try d(kjetil), now: t0)
+        let bundle = try await approve(proposal, by: [kjetil])
+        var snapshot = try copy(await org.snapshot())
+        let evaluation = try GovernancePolicyEvaluator.evaluate(policy: current, bundle: bundle, now: t0)
+        snapshot.amendments.append(GovernancePolicyAmendment(policy: v2, bundle: bundle))
+        snapshot.bundles.append(bundle)
+        snapshot.journal.append(OrganizationJournalEntry(
+            sequence: 2, previousEntryHash: try snapshot.journal[0].entryHash(),
+            recordedAt: IdentityLinkProtocolService.iso8601(t0), actionClass: OrganizationActionClass.policyAmend,
+            proposalHash: try proposal.proposalHash(), payloadHash: try v2.policyHash(),
+            payloadSummary: proposal.payloadSummary, policyVersion: current.version, ruleID: evaluation.ruleID,
+            approverUUIDs: evaluation.approverUUIDs, signatureHash: OrganizationHashing.sha256(Data())))
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 2), snapshot)
+        snapshot.journalSignatures.append(snapshot.journalSignatures[0])
+        await assertRefused(.journalEntryNotSignedByCustodian(sequence: 2), snapshot)
+
+        // The same snapshot is what the vault itself would have stored, so
+        // with the custodian's signature it restores.
+        try await relink(&snapshot)
+        let restored = try await restore(snapshot)
+        let adopted = await restored.policy
+        XCTAssertEqual(adopted, v2)
+    }
+
+    func testSnapshotWithAnotherInitialPolicyIsRefused() async throws {
+        let org = try await makeVault()
+        var snapshot = await org.snapshot()
+        snapshot.initialPolicy = try policy([petter])
+        do {
+            _ = try await restore(snapshot)
+            XCTFail("expected the initial policy to be refused")
+        } catch {}
+    }
+
+    func testVaultSignsOnlyCredentialsItCanRestore() async throws {
+        let org = try await makeVault()
+        let current = await org.policy
+        let (proposal, _) = try await org.proposeRole(subject: try d(student), role: "researcher",
+            cohort: "MasterHAVEN26", validUntil: "2027-06-30", proposer: try d(kjetil), now: t0)
+        let otherType = try OrganizationRoleCredential.unsigned(
+            organizationAnchorID: anchorID, credentialType: "AnotherRoleCredential", custodian: try d(custodianIdentity),
+            subject: try d(student), role: "researcher", cohort: "MasterHAVEN26", validUntil: "2027-06-30",
+            policyHash: try current.policyHash(), issuedAt: t0)
+        let otherPolicy = try OrganizationRoleCredential.unsigned(
+            organizationAnchorID: anchorID, credentialType: credentialType, custodian: try d(custodianIdentity),
+            subject: try d(student), role: "researcher", cohort: "MasterHAVEN26", validUntil: "2027-06-30",
+            policyHash: Data("another policy".utf8), issuedAt: t0)
+        for credential in [otherType, otherPolicy] {
+            // The owners approve exactly this credential; the vault still refuses.
+            var approved = proposal
+            approved.nonce = Data(UUID().uuidString.utf8)
+            approved.payloadHash = try OrganizationRoleCredential.payloadHash(of: credential)
+            approved.payloadSummary = OrganizationRoleCredential.summary(of: credential, displayName: "Informasjonssystemer (Ifi, UiO)")
+            let bundle = try await approve(approved, by: [kjetil])
+            await assertVault(.credentialNotForThisVault) {
+                try await org.issueRole(credential: credential, bundle: bundle, now: self.t0)
+            }
+            XCTAssertTrue(credential.proof.signatureData.isEmpty)
+        }
+        let journal = await org.journal
+        XCTAssertEqual(journal.count, 1)
+    }
+
     func testCredentialIDIsSignedOnlyOnce() async throws {
         let org = try await makeVault()
         let (proposal, credential) = try await org.proposeRole(subject: try d(student), role: "researcher",
             cohort: "MasterHAVEN26", validUntil: "2027-06-30", proposer: try d(kjetil), now: t0)
-        _ = try await org.issueRole(credential: credential, bundle: try await approve(proposal, by: [kjetil]), now: t0)
+        let signed = try await org.issueRole(credential: credential, bundle: try await approve(proposal, by: [kjetil]), now: t0)
+        // The credential handed in stays unsigned, and what the vault hands
+        // out does not share its proof with what the vault keeps.
+        XCTAssertTrue(credential.proof.signatureData.isEmpty)
+        signed.proof.signatureData = Data()
+        let kept = await org.issued
+        XCTAssertFalse(try XCTUnwrap(kept[credential.id]).proof.signatureData.isEmpty)
+        let verified = try await XCTUnwrap(kept[credential.id]).verify()
+        XCTAssertTrue(verified)
         var second = proposal
         second.nonce = Data("another-nonce".utf8)
         let bundle = try await approve(second, by: [kjetil])
@@ -351,6 +507,15 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is StoredSnapshots.Failure)
         }
+        // The signature did not leave the vault: not on the credential handed
+        // in, and not through anything that can be read from the vault.
+        XCTAssertTrue(credential.proof.signatureData.isEmpty)
+        let visible = await org.issued
+        XCTAssertEqual(Array(visible.keys), [first.id])
+        let visibleJournal = await org.journal
+        XCTAssertEqual(visibleJournal.count, 2)
+        let visibleSnapshot = await org.snapshot()
+        XCTAssertEqual(visibleSnapshot.issued.map(\.id), [first.id])
 
         // Also after the storage is back: the vault's memory and the storage
         // disagree, so a new vault must start from what was stored.
@@ -419,15 +584,20 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         try JSONDecoder().decode(OrganizationVaultSnapshot.self, from: try JSONEncoder().encode(snapshot))
     }
 
-    /// What someone who controls the storage can do after editing an entry:
-    /// recompute the hash chain so it is unbroken again.
-    private func relink(_ snapshot: inout OrganizationVaultSnapshot) throws {
+    /// Recomputes the hash chain after an edit. Whoever controls the storage
+    /// can do that much. With `resign` the entries are signed again with the
+    /// custodian key, which only the vault can do: those cases show that the
+    /// checks behind the journal signature hold on their own.
+    private func relink(_ snapshot: inout OrganizationVaultSnapshot, resign: Bool = true) async throws {
         var previous: Data?
+        var signatures: [Data] = []
         for index in snapshot.journal.indices {
             snapshot.journal[index].sequence = index + 1
             snapshot.journal[index].previousEntryHash = previous
             previous = try snapshot.journal[index].entryHash()
+            signatures.append(try await custodian().sign(try OrganizationVault.journalSigningData(snapshot.journal[index])))
         }
+        if resign { snapshot.journalSignatures = signatures }
     }
 
     private func issue(on org: OrganizationVault, role: String) async throws -> (VCClaim, ApprovalBundle) {
