@@ -1,0 +1,58 @@
+{
+  "canonicalBase64" : "eyJkb21haW4iOiJwcml2YXRlIiwiZW52ZWxvcGVWZXJzaW9uIjoxLCJwYXlsb2FkIjp7ImNvbnRlbnQiOnsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IkVuZHJldCBldHRlciBzaWduZXJpbmcifSwiaWQiOiJmZS1pbnRlcm9wLTAwMDEiLCJvcmlnaW4iOiJjZWxsOlwvXC9cL1BvcnRob2xlXC9DaGF0Q2VsbCIsInByb3BlcnRpZXMiOnsiY29udGVudFR5cGUiOiJzdHJpbmciLCJtaW1ldHlwZSI6InRleHRcL3BsYWluOyBjaGFyc2V0PXV0Zi04IiwidHlwZSI6ImNvbnRlbnQifSwidGl0bGUiOiJNZWxkaW5nIFwvIGhpbHNlbiIsInRvcGljIjoiY2hhdC5tZXNzYWdlIn0sInBheWxvYWRIYXNoIjoiNDY3OWQxNjMzYjEwNzE5NDRmMzE0MGQ1OWJiZTNiOGMzN2JlNDBlZDI5YjZlNTJmYTE5YjMyZDkyNjE0NTQ5OSIsInByb2R1Y2VyQ2VsbCI6ImNlbGw6XC9cL1wvQ2hhdENlbGwiLCJwcm9kdWNlcklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwic2VxdWVuY2UiOjEsInNpZ25hdHVyZUtleUlkIjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwic3RyZWFtSWQiOiJzdHJlYW0taW50ZXJvcC0wMDAxIn0=",
+  "canonicalSHA256Hex" : "f90aac51bb480038095920ad28fabc9fa123780ce5f0b41e9939e239e3357450",
+  "description" : "Innholdet er endret etter signering; payloadHash og signatur er de opprinnelige.",
+  "envelope" : {
+    "domain" : "private",
+    "envelopeVersion" : 1,
+    "payload" : {
+      "content" : {
+        "$type" : "string",
+        "value" : "Endret etter signering"
+      },
+      "id" : "fe-interop-0001",
+      "origin" : "cell:\/\/\/Porthole\/ChatCell",
+      "properties" : {
+        "contentType" : "string",
+        "mimetype" : "text\/plain; charset=utf-8",
+        "type" : "content"
+      },
+      "title" : "Melding \/ hilsen",
+      "topic" : "chat.message"
+    },
+    "payloadHash" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+    "producerCell" : "cell:\/\/\/ChatCell",
+    "producerIdentity" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+    "provenance" : {
+      "originCell" : "cell:\/\/\/ChatCell",
+      "originIdentity" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+      "originPayloadHash" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+      "originSignature" : "8oURQlj0bFqW3PPVYAlTfd25qwTua7XWhdwVfPicR76xGVUgzdP50qA91MJK5QXoX\/JxT+UP\/BTpgfGaz\/aQAw=="
+    },
+    "sequence" : 1,
+    "signature" : "hP9VmN3Fh2IM7BaAfLYp5bT3byotNCr79tJd9SiL0JHrzjcldpGrN+seq1VSmBvnb8YBLjAi7O3yydmcbjnUAA==",
+    "signatureKeyId" : "6F1C2B0A-0000-4000-8000-00000000F10E",
+    "streamId" : "stream-interop-0001"
+  },
+  "envelopeCanonicalBase64" : "eyJkb21haW4iOiJwcml2YXRlIiwiZW52ZWxvcGVWZXJzaW9uIjoxLCJwYXlsb2FkIjp7ImNvbnRlbnQiOnsiJHR5cGUiOiJzdHJpbmciLCJ2YWx1ZSI6IkVuZHJldCBldHRlciBzaWduZXJpbmcifSwiaWQiOiJmZS1pbnRlcm9wLTAwMDEiLCJvcmlnaW4iOiJjZWxsOlwvXC9cL1BvcnRob2xlXC9DaGF0Q2VsbCIsInByb3BlcnRpZXMiOnsiY29udGVudFR5cGUiOiJzdHJpbmciLCJtaW1ldHlwZSI6InRleHRcL3BsYWluOyBjaGFyc2V0PXV0Zi04IiwidHlwZSI6ImNvbnRlbnQifSwidGl0bGUiOiJNZWxkaW5nIFwvIGhpbHNlbiIsInRvcGljIjoiY2hhdC5tZXNzYWdlIn0sInBheWxvYWRIYXNoIjoiNDY3OWQxNjMzYjEwNzE5NDRmMzE0MGQ1OWJiZTNiOGMzN2JlNDBlZDI5YjZlNTJmYTE5YjMyZDkyNjE0NTQ5OSIsInByb2R1Y2VyQ2VsbCI6ImNlbGw6XC9cL1wvQ2hhdENlbGwiLCJwcm9kdWNlcklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwicHJvdmVuYW5jZSI6eyJvcmlnaW5DZWxsIjoiY2VsbDpcL1wvXC9DaGF0Q2VsbCIsIm9yaWdpbklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwib3JpZ2luUGF5bG9hZEhhc2giOiI0Njc5ZDE2MzNiMTA3MTk0NGYzMTQwZDU5YmJlM2I4YzM3YmU0MGVkMjliNmU1MmZhMTliMzJkOTI2MTQ1NDk5Iiwib3JpZ2luU2lnbmF0dXJlIjoiOG9VUlFsajBiRnFXM1BQVllBbFRmZDI1cXdUdWE3WFdoZHdWZlBpY1I3NnhHVlVnemRQNTBxQTkxTUpLNVFYb1hcL0p4VCtVUFwvQlRwZ2ZHYXpcL2FRQXc9PSJ9LCJzZXF1ZW5jZSI6MSwic2lnbmF0dXJlIjoiaFA5Vm1OM0ZoMklNN0JhQWZMWXA1YlQzYnlvdE5Dcjc5dEpkOVNpTDBKSHJ6amNsZHBHck4rc2VxMVZTbUJ2bmI4WUJMakFpN08zeXlkbWNiam5VQUE9PSIsInNpZ25hdHVyZUtleUlkIjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwic3RyZWFtSWQiOiJzdHJlYW0taW50ZXJvcC0wMDAxIn0=",
+  "envelopeHashHex" : "0572c077c348b64afb7de71ee8f7ac775f4a11d8eba73213300c67d043bb4872",
+  "expect" : {
+    "signatureValid" : false,
+    "verdict" : "payloadHashMismatch"
+  },
+  "flow" : "flow",
+  "id" : "flow.envelope.string.tampered",
+  "payloadCanonicalBase64" : "eyJjb250ZW50Ijp7IiR0eXBlIjoic3RyaW5nIiwidmFsdWUiOiJFbmRyZXQgZXR0ZXIgc2lnbmVyaW5nIn0sImlkIjoiZmUtaW50ZXJvcC0wMDAxIiwib3JpZ2luIjoiY2VsbDpcL1wvXC9Qb3J0aG9sZVwvQ2hhdENlbGwiLCJwcm9wZXJ0aWVzIjp7ImNvbnRlbnRUeXBlIjoic3RyaW5nIiwibWltZXR5cGUiOiJ0ZXh0XC9wbGFpbjsgY2hhcnNldD11dGYtOCIsInR5cGUiOiJjb250ZW50In0sInRpdGxlIjoiTWVsZGluZyBcLyBoaWxzZW4iLCJ0b3BpYyI6ImNoYXQubWVzc2FnZSJ9",
+  "payloadHashHex" : "4679d1633b1071944f3140d59bbe3b8c37be40ed29b6e52fa19b32d926145499",
+  "provenanceCanonicalBase64" : "eyJvcmlnaW5DZWxsIjoiY2VsbDpcL1wvXC9DaGF0Q2VsbCIsIm9yaWdpbklkZW50aXR5IjoiNkYxQzJCMEEtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDBGMTBFIiwicGF5bG9hZEhhc2giOiI0Njc5ZDE2MzNiMTA3MTk0NGYzMTQwZDU5YmJlM2I4YzM3YmU0MGVkMjliNmU1MmZhMTliMzJkOTI2MTQ1NDk5In0=",
+  "provenanceSignatureBase64" : "8oURQlj0bFqW3PPVYAlTfd25qwTua7XWhdwVfPicR76xGVUgzdP50qA91MJK5QXoX\/JxT+UP\/BTpgfGaz\/aQAw==",
+  "signatureBase64" : "hP9VmN3Fh2IM7BaAfLYp5bT3byotNCr79tJd9SiL0JHrzjcldpGrN+seq1VSmBvnb8YBLjAi7O3yydmcbjnUAA==",
+  "signer" : {
+    "algorithm" : "EdDSA",
+    "curveType" : "Curve25519",
+    "displayName" : "flow-producer",
+    "publicKey" : "vAv1OlCu+Z9gJEgOIL8PpQ4DwbI3UJ38\/1m8PI2nY3w=",
+    "uuid" : "6F1C2B0A-0000-4000-8000-00000000F10E"
+  },
+  "type" : "FlowEnvelope"
+}

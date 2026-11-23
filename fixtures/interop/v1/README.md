@@ -116,6 +116,11 @@ HAVEN_WRITE_INTEROP_FIXTURES=1 swift test --filter InteropFixturesV1Tests
 platform and fails by case id if this platform's Foundation produces other
 bytes than the committed ones.
 
+## Flow envelopes
+
+The signed flow envelope (`FlowEnvelope`) has its own pinned set next to this
+one: `fixtures/interop/flow-v1/`.
+
 ## Not in v1
 
 `ChatMessage` (unsigned, carries a full `Identity`) and the Cell commands after

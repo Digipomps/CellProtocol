@@ -1,0 +1,59 @@
+{
+  "canonicalization" : "foundation-sortedkeys-v1",
+  "canonicalRule" : "FlowCanonicalEncoder: JSONSerialization.data(withJSONObject:options:[.sortedKeys]) over the tagged object tree. Signed bytes exclude signature and provenance; envelopeHash excludes signature only.",
+  "cases" : [
+    {
+      "file" : "flow.envelope.string.valid.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.string.valid",
+      "type" : "FlowEnvelope"
+    },
+    {
+      "file" : "flow.envelope.object.valid.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.object.valid",
+      "type" : "FlowEnvelope"
+    },
+    {
+      "file" : "flow.envelope.data.valid.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.data.valid",
+      "type" : "FlowEnvelope"
+    },
+    {
+      "file" : "flow.envelope.list.valid.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.list.valid",
+      "type" : "FlowEnvelope"
+    },
+    {
+      "file" : "flow.envelope.string.tampered.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.string.tampered",
+      "type" : "FlowEnvelope"
+    },
+    {
+      "file" : "flow.envelope.string.wrong-key.json",
+      "flow" : "flow",
+      "id" : "flow.envelope.string.wrong-key",
+      "type" : "FlowEnvelope"
+    }
+  ],
+  "generator" : "Tests\/CellBaseTests\/FlowEnvelopeFixturesV1Tests.swift",
+  "parties" : [
+    {
+      "name" : "flow-producer",
+      "publicKeyBase64" : "vAv1OlCu+Z9gJEgOIL8PpQ4DwbI3UJ38\/1m8PI2nY3w=",
+      "seedHex" : "cfc675d384c9489b2f75e381bec5d5d91a87a2799ad09d1f9c150d6d366e0e92",
+      "uuid" : "6F1C2B0A-0000-4000-8000-00000000F10E"
+    },
+    {
+      "name" : "flow-impostor",
+      "publicKeyBase64" : "0dXzEDrAuTUuZBOH5cdej0MPEzv1pK0A8nB47Y5YwqI=",
+      "seedHex" : "af7f4f48a4132241d17dc7c193daa0d26b614e81afa9052df94296ede0fd34a6",
+      "uuid" : "6F1C2B0A-0000-4000-8000-00000000F10E"
+    }
+  ],
+  "schema" : "haven.interop.fixtures.flow.v1",
+  "signature" : "Ed25519 (RFC 8032). Keys are derived from SHA-256(\"haven-interop-v1\/<seed>\") and are public test keys."
+}
