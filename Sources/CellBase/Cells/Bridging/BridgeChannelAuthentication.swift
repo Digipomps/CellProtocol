@@ -64,8 +64,9 @@ public enum BridgeChannelAuthentication {
 
         public func makeIdentity() -> Identity {
             let identity = Identity(uuid, displayName: "", identityVault: nil)
+            // Only EdDSA/Curve25519 and ECDSA/P-256 get here: use and size are derived.
             identity.publicSecureKey = SecureKey(date: Date(timeIntervalSince1970: 0), privateKey: false,
-                use: .signature, algorithm: algorithm, size: 256, curveType: curve,
+                algorithm: algorithm, curveType: curve,
                 x: nil, y: nil, compressedKey: publicKey)
             identity.properties = nil
             identity.homeVaultReference = nil

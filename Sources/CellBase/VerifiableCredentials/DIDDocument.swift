@@ -565,14 +565,14 @@ public struct DIDDocument : Codable {
             }
         }
     // check what to do with type
-        let secureKey = SecureKey(date: date, privateKey: false, use: keyUse, algorithm: algorithm, size: 256, curveType: curveType, x: nil, y:nil, compressedKey: publicKeyData) // x and y here is related to the elliptic curve
+        let secureKey = SecureKey(date: date, privateKey: false, use: keyUse, algorithm: algorithm, size: SecureKey.derivedSize(for: curveType), curveType: curveType, x: nil, y:nil, compressedKey: publicKeyData) // x and y here is related to the elliptic curve
         
        
         return secureKey
     }
     
     func getpublickey(verificationMethods: [DIDVerificationMethod]) -> SecureKey {
-        let publicKey = SecureKey(date: Date(), privateKey: false, use: .signature, algorithm: .EdDSA, size: 256, curveType: .Curve25519, x: nil, y:nil, compressedKey: nil)
+        let publicKey = SecureKey(date: Date(), privateKey: false, algorithm: .EdDSA, curveType: .Curve25519, x: nil, y:nil, compressedKey: nil)
         
         
         return publicKey

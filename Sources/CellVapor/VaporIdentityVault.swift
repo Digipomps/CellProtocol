@@ -2124,9 +2124,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             repaired.publicSecureKey = SecureKey(
                 date: Date(),
                 privateKey: false,
-                use: .signature,
                 algorithm: .EdDSA,
-                size: 256,
                 curveType: .Curve25519,
                 x: nil,
                 y: nil,
@@ -2137,9 +2135,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             repaired.privateSecureKey = SecureKey(
                 date: Date(),
                 privateKey: true,
-                use: .signature,
                 algorithm: .EdDSA,
-                size: 256,
                 curveType: .Curve25519,
                 x: nil,
                 y: nil,
@@ -2151,9 +2147,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             repaired.publicKeyAgreementSecureKey = SecureKey(
                 date: Date(),
                 privateKey: false,
-                use: .keyAgreement,
                 algorithm: .X25519,
-                size: 256,
                 curveType: .Curve25519,
                 x: nil,
                 y: nil,
@@ -2165,9 +2159,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             repaired.privateKeyAgreementSecureKey = SecureKey(
                 date: Date(),
                 privateKey: true,
-                use: .keyAgreement,
                 algorithm: .X25519,
-                size: 256,
                 curveType: .Curve25519,
                 x: nil,
                 y: nil,
@@ -2691,9 +2683,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     return SecureKey(
                         date: Date(),
                         privateKey: false,
-                        use: .signature,
                         algorithm: .EdDSA,
-                        size: 256,
                         curveType: .Curve25519,
                         x: nil,
                         y: nil,
@@ -2705,9 +2695,7 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
                     return SecureKey(
                         date: Date(),
                         privateKey: false,
-                        use: .keyAgreement,
                         algorithm: .X25519,
-                        size: 256,
                         curveType: .Curve25519,
                         x: nil,
                         y: nil,
@@ -2778,10 +2766,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             keyAgreementPublicKey = keyAgreementKey.publicKey.rawRepresentation
            
             
-            self.publicSecureKey = SecureKey(date: Date(), privateKey: false, use: .signature, algorithm: .EdDSA, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: publicKey)
-            self.privateSecureKey = SecureKey(date: Date(), privateKey: true, use: .signature, algorithm: .EdDSA, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: privateKey)
-            self.publicKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: false, use: .keyAgreement, algorithm: .X25519, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPublicKey)
-            self.privateKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: true, use: .keyAgreement, algorithm: .X25519, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPrivateKey)
+            self.publicSecureKey = SecureKey(date: Date(), privateKey: false, algorithm: .EdDSA, curveType: .Curve25519, x: nil, y: nil, compressedKey: publicKey)
+            self.privateSecureKey = SecureKey(date: Date(), privateKey: true, algorithm: .EdDSA, curveType: .Curve25519, x: nil, y: nil, compressedKey: privateKey)
+            self.publicKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: false, algorithm: .X25519, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPublicKey)
+            self.privateKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: true, algorithm: .X25519, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPrivateKey)
             
         }
         
@@ -2863,10 +2851,10 @@ public actor VaporIdentityVault: IdentityVaultProtocol, ScopedSecretProviderProt
             keyAgreementPrivateKey = keyAgreementKey.rawRepresentation
             keyAgreementPublicKey = keyAgreementKey.publicKey.rawRepresentation
             
-            self.publicSecureKey = SecureKey(date: Date(), privateKey: false, use: .signature, algorithm: .EdDSA, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: publicKey)
-            self.privateSecureKey = SecureKey(date: Date(), privateKey: true, use: .signature, algorithm: .EdDSA, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: privateKey)
-            self.publicKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: false, use: .keyAgreement, algorithm: .X25519, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPublicKey)
-            self.privateKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: true, use: .keyAgreement, algorithm: .X25519, size: 256, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPrivateKey)
+            self.publicSecureKey = SecureKey(date: Date(), privateKey: false, algorithm: .EdDSA, curveType: .Curve25519, x: nil, y: nil, compressedKey: publicKey)
+            self.privateSecureKey = SecureKey(date: Date(), privateKey: true, algorithm: .EdDSA, curveType: .Curve25519, x: nil, y: nil, compressedKey: privateKey)
+            self.publicKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: false, algorithm: .X25519, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPublicKey)
+            self.privateKeyAgreementSecureKey = SecureKey(date: Date(), privateKey: true, algorithm: .X25519, curveType: .Curve25519, x: nil, y: nil, compressedKey: keyAgreementPrivateKey)
            
 //            } catch {
 //                print("Key generation failed")
