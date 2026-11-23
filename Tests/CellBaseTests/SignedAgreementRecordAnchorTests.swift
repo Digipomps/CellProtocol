@@ -32,6 +32,15 @@ final class SignedAgreementRecordAnchorTests: XCTestCase {
         super.tearDown()
     }
 
+    /// ValueType's `==` is false for any two objects or lists, so compare bytes.
+    private func bytes(_ object: Object) throws -> Data {
+        try SignedAgreementEntitySupport.canonicalData(object)
+    }
+
+    private func bytes(_ value: ValueType?) throws -> Data {
+        try SignedAgreementEntitySupport.canonicalData(try XCTUnwrap(value))
+    }
+
     private func owner(suffix: String) async throws -> Identity {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("cellprotocol-agreement-records-\(suffix)-\(UUID().uuidString)", isDirectory: true)
@@ -100,16 +109,16 @@ final class SignedAgreementRecordAnchorTests: XCTestCase {
         for (id, value) in storedRecords {
             guard case let .object(stored) = value else { return XCTFail("record \(id) is not an object") }
             let record = try XCTUnwrap(model.records[id])
-            XCTAssertEqual(record.asObject(), stored, "\(id): model changed the stored record")
+            XCTAssertEqual(try bytes(record.asObject()), try bytes(stored), "\(id): model changed the stored record")
             XCTAssertEqual(try SignedAgreementEntitySupport.recordHash(record.asObject()), receiptHashes[id])
             XCTAssertTrue(record.committedAt.hasSuffix("Z") && record.committedAt.contains("."), record.committedAt)
             XCTAssertNoThrow(try record.decodedContract())
         }
-        XCTAssertEqual(model.asObject()["records"], .object(storedRecords))
+        XCTAssertEqual(try bytes(model.asObject()["records"]), try bytes(.object(storedRecords)))
 
         // Codable goes through the same stored form.
         let decoded = try JSONDecoder().decode(SignedAgreementEntity.self, from: JSONEncoder().encode(model))
-        XCTAssertEqual(decoded.asObject()["records"], .object(storedRecords))
+        XCTAssertEqual(try bytes(decoded.asObject()["records"]), try bytes(.object(storedRecords)))
 
         let refs = model.agreementRefs()
         XCTAssertEqual(refs.map(\.label), ["Første avtale", "Andre avtale"])

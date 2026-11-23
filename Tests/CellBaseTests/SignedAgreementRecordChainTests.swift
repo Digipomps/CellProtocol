@@ -197,7 +197,7 @@ final class SignedAgreementRecordChainTests: XCTestCase {
         for (id, value) in records {
             guard case let .object(stored) = value else { return XCTFail("record \(id)") }
             let record = try XCTUnwrap(model.records[id])
-            XCTAssertEqual(record.asObject(), stored, id)
+            XCTAssertEqual(try bytes(record.asObject()), try bytes(stored), id)
             XCTAssertEqual(try SignedAgreementEntitySupport.recordHash(record.asObject()),
                            try SignedAgreementEntitySupport.recordHash(stored), id)
         }
@@ -210,10 +210,15 @@ final class SignedAgreementRecordChainTests: XCTestCase {
         XCTAssertEqual(model.orderedRecords.map(\.id), [first.contract.uuid, second.contract.uuid, legacyRequest.contract.uuid])
         XCTAssertEqual(model.agreementRefs().map(\.recordKeypath),
                        [first.contract.uuid, second.contract.uuid, legacyRequest.contract.uuid].map { "signedAgreementEntity.records.\($0)" })
-        XCTAssertEqual(model.asObject(), ["records": .object(records)])
+        XCTAssertEqual(try bytes(model.asObject()), try bytes(["records": .object(records)]))
 
         let decoded = try JSONDecoder().decode(SignedAgreementEntity.self, from: JSONEncoder().encode(model))
-        XCTAssertEqual(decoded.asObject(), ["records": .object(records)])
+        XCTAssertEqual(try bytes(decoded.asObject()), try bytes(["records": .object(records)]))
+    }
+
+    /// ValueType's `==` is false for any two objects or lists, so compare bytes.
+    private func bytes(_ object: Object) throws -> Data {
+        try SignedAgreementEntitySupport.canonicalData(object)
     }
 
     func testModelRefusesARecordWithoutRequiredFields() {
