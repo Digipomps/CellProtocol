@@ -16,9 +16,15 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProvi
     /// (purpose://candidate.invite.acceptance-carries-the-key-to-seal-to).
     private var keyAgreementKeysByUUID: [String: Curve25519.KeyAgreement.PrivateKey] = [:]
     private var idCounter = 1
+    private let randomUUIDs: Bool
     private let vaultReference = "ephemeral:\(UUID().uuidString)"
 
-    public init() {}
+    public init() { randomUUIDs = false }
+
+    /// `randomUUIDs: true` gives each identity a random UUID instead of the
+    /// sequential test UUIDs, so identities from two vaults never coincide
+    /// (used by hosts that run beside other ephemeral vaults).
+    public init(randomUUIDs: Bool) { self.randomUUIDs = randomUUIDs }
 
     public func identityVaultReference() async -> String? {
         vaultReference
@@ -45,7 +51,7 @@ public actor EphemeralIdentityVault: IdentityVaultProtocol, IdentityKeyRoleProvi
         guard makeNewIfNotFound else { return nil }
         let suffix = String(format: "%012d", idCounter)
         idCounter += 1
-        let uuidString = "00000000-0000-0000-0000-\(suffix)"
+        let uuidString = randomUUIDs ? UUID().uuidString : "00000000-0000-0000-0000-\(suffix)"
         let identity = Identity(uuidString, displayName: identityContext, identityVault: self)
         identity.homeVaultReference = vaultReference
         ensureSigningKey(for: identity)

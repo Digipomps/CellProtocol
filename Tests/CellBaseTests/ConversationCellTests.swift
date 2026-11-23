@@ -385,6 +385,18 @@ final class ConversationCellTests: XCTestCase {
         XCTAssertEqual(events.messages.map(\.content), ["ny"], "imported messages are not published")
     }
 
+    /// A host-owned conversation must not share its owner's UUID with a member
+    /// from another ephemeral vault (found in CellScaffold PersonalCopilotV1Tests).
+    func testRandomUUIDEphemeralVaultsNeverCollideWithSequentialOnes() async {
+        let sequential = EphemeralIdentityVault()
+        let host = EphemeralIdentityVault(randomUUIDs: true)
+        let member = await sequential.identity(for: "a", makeNewIfNotFound: true)
+        let owner = await host.identity(for: "a", makeNewIfNotFound: true)
+        XCTAssertEqual(member?.uuid, "00000000-0000-0000-0000-000000000001", "default stays sequential for existing tests")
+        XCTAssertNotEqual(owner?.uuid, member?.uuid)
+        XCTAssertNotNil(UUID(uuidString: owner?.uuid ?? ""))
+    }
+
     // MARK: Fixtures and helpers
 
     private struct Fixture {
