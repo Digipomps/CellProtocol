@@ -179,21 +179,46 @@ final class SignedAgreementRecordChainTests: XCTestCase {
                        "1969-12-31T23:59:59.500Z")
     }
 
-    func testModelIsKeyedAndOrderedByChain() async throws {
-        let owner = await vault.identity(for: "owner", makeNewIfNotFound: true)!
-        let a = SignedAgreementRecord(id: "b-second", agreement: Agreement(owner: owner), sequence: 2, previousRecordHash: "h1")
-        let b = SignedAgreementRecord(id: "a-first", agreement: Agreement(owner: owner), sequence: 1)
-        let legacy = SignedAgreementRecord(id: "0-legacy", agreement: Agreement(owner: owner))
-        let entity = SignedAgreementEntity(records: [a, b, legacy])
+    /// The model reads chained and legacy records exactly as stored and writes them back unchanged.
+    func testModelRoundTripsChainedAndLegacyRecordsWithoutLoss() async throws {
+        let legacyRequest = try await request(vault: vault, metadata: ["counterparty": .string("Eldre")])
+        var legacy = try SignedAgreementEntitySupport.recordObject(
+            request: legacyRequest,
+            contractHash: try SignedAgreementEntitySupport.contractHash(legacyRequest.contract))
+        legacy["committedAt"] = .string("2026-10-27T12:00:00Z")   // whole seconds, as before the chain
+        legacy["futureField"] = .string("kept")                    // a member this model does not know
+        var records: Object = [legacyRequest.contract.uuid: .object(legacy)]
+        let first = try await request(vault: vault)
+        let second = try await request(vault: vault)
+        try commit(first, into: &records)
+        try commit(second, into: &records)
 
-        XCTAssertEqual(Set(entity.records.keys), ["b-second", "a-first", "0-legacy"])
-        XCTAssertEqual(entity.orderedRecords.map(\.id), ["a-first", "b-second", "0-legacy"])
-        XCTAssertEqual(entity.agreementRefs().map(\.recordKeypath),
-                       ["signedAgreementEntity.records.a-first", "signedAgreementEntity.records.b-second",
-                        "signedAgreementEntity.records.0-legacy"])
+        let model = try SignedAgreementEntity(object: ["records": .object(records)])
+        for (id, value) in records {
+            guard case let .object(stored) = value else { return XCTFail("record \(id)") }
+            let record = try XCTUnwrap(model.records[id])
+            XCTAssertEqual(record.asObject(), stored, id)
+            XCTAssertEqual(try SignedAgreementEntitySupport.recordHash(record.asObject()),
+                           try SignedAgreementEntitySupport.recordHash(stored), id)
+        }
+        let legacyRecord = try XCTUnwrap(model.records[legacyRequest.contract.uuid])
+        XCTAssertNil(legacyRecord.sequence)
+        XCTAssertNil(legacyRecord.previousRecordHash)
+        XCTAssertEqual(legacyRecord.additionalFields["futureField"], .string("kept"))
+        XCTAssertEqual(legacyRecord.committedAtEpochSeconds, 1_793_102_400)
 
-        // Encodes as an object keyed by id, like storage.
-        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(entity)) as? [String: Any]
-        XCTAssertNotNil(json?["records"] as? [String: Any])
+        XCTAssertEqual(model.orderedRecords.map(\.id), [first.contract.uuid, second.contract.uuid, legacyRequest.contract.uuid])
+        XCTAssertEqual(model.agreementRefs().map(\.recordKeypath),
+                       [first.contract.uuid, second.contract.uuid, legacyRequest.contract.uuid].map { "signedAgreementEntity.records.\($0)" })
+        XCTAssertEqual(model.asObject(), ["records": .object(records)])
+
+        let decoded = try JSONDecoder().decode(SignedAgreementEntity.self, from: JSONEncoder().encode(model))
+        XCTAssertEqual(decoded.asObject(), ["records": .object(records)])
+    }
+
+    func testModelRefusesARecordWithoutRequiredFields() {
+        XCTAssertThrowsError(try SignedAgreementRecord(object: ["id": .string("x")])) { error in
+            XCTAssertEqual(error as? SignedAgreementRecord.DecodingFailure, .missingField("recordState"))
+        }
     }
 }

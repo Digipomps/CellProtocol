@@ -33,30 +33,47 @@ final class EntityRepresentationAgreementTests: XCTestCase {
         XCTAssertEqual(decoded.agreementRefs.first?.recordKeypath, "signedAgreementEntity.records.agreement-1")
     }
 
-    func testSignedAgreementEntityBuildsCanonicalAgreementRefs() {
-        let owner = TestFixtures.makeIdentity(displayName: "owner")
+    /// Built from a record as the EntityAnchor commit flow stores it.
+    func testSignedAgreementEntityBuildsCanonicalAgreementRefs() async throws {
+        let previousVault = CellBase.defaultIdentityVault
+        let vault = MockIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        defer { CellBase.defaultIdentityVault = previousVault }
+        let ownerCandidate = await vault.identity(for: "owner", makeNewIfNotFound: true)
+        let owner = try XCTUnwrap(ownerCandidate)
         let agreement = Agreement(owner: owner)
         agreement.name = "Tilgang etter bevis - Deltaker"
-
-        let record = SignedAgreementRecord(
+        let contract = try await Contract.ownerSignedSnapshot(
             agreement: agreement,
-            counterparty: "Deltaker",
-            purpose: "slippe inn pa arrangementet",
-            dataPointer: "paymentProofDoor.state",
-            summary: "Denne startmallen lar Deltaker lese paymentProofDoor.state.",
-            savedAt: 1_741_449_600,
-            savedAtText: "8. mars 2026 16:00",
-            recordState: .signed
+            signer: owner,
+            domain: SignedAgreementEntitySupport.ownerEntityDomain(for: owner)
         )
+        let request = SignedAgreementEntityCommitRequest(contract: contract, metadata: [
+            "counterparty": .string("Deltaker"),
+            "purpose": .string("slippe inn pa arrangementet"),
+            "dataPointer": .string("paymentProofDoor.state"),
+        ])
+        let prepared = try SignedAgreementEntitySupport.prepareRecord(
+            request: request,
+            contractHash: try SignedAgreementEntitySupport.contractHash(contract),
+            existingRecords: [:],
+            committedAt: Date(timeIntervalSince1970: 1_741_449_600)
+        )
+        let record = try SignedAgreementRecord(object: prepared.record)
 
         let entity = SignedAgreementEntity(records: [record])
         let refs = entity.agreementRefs()
 
         XCTAssertEqual(refs.count, 1)
-        XCTAssertEqual(refs.first?.id, agreement.uuid)
+        XCTAssertEqual(refs.first?.id, contract.uuid)
         XCTAssertEqual(refs.first?.label, "Tilgang etter bevis - Deltaker")
+        XCTAssertEqual(refs.first?.counterparty, "Deltaker")
+        XCTAssertEqual(refs.first?.purpose, "slippe inn pa arrangementet")
+        XCTAssertEqual(refs.first?.dataPointer, "paymentProofDoor.state")
         XCTAssertEqual(refs.first?.recordState, .signed)
-        XCTAssertEqual(refs.first?.recordKeypath, "signedAgreementEntity.records.\(agreement.uuid)")
+        XCTAssertEqual(refs.first?.savedAt, 1_741_449_600)
+        XCTAssertEqual(refs.first?.savedAtText, "2025-03-08T16:00:00.000Z")
+        XCTAssertEqual(refs.first?.recordKeypath, "signedAgreementEntity.records.\(contract.uuid)")
         XCTAssertEqual(refs.first?.sourceEntityKeypath, "entityRepresentation.agreementRefs")
     }
 }
