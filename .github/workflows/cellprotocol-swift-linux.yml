@@ -103,7 +103,7 @@ jobs:
             EntityRelationAdmissionSecurityTests CellStoragePathPolicyTests VaultCellTests VaultIdeaRetentionTests \
             SkeletonDataBindingTests SkeletonEditingTests SkeletonReachabilityAuditTests SkeletonConfigurationCheckTests InteropFixturesV1Tests InteropFixturesV1OrganizationCases FlowPlacementTests \
             FlowPlacementRunnerTests IdentityLinkClientTests \
-            GovernancePolicyEvaluatorTests OrganizationGenesisTests OrganizationVaultTests; do
+            GovernancePolicyEvaluatorTests OrganizationGenesisTests OrganizationVaultTests OrganizationVaultRestoreTests; do
             cp "Tests/CellBaseTests/${suite}.swift" "${gate_root}/Tests/DeviceIngressLinuxTests/"
           done
           cp Tests/CellBaseTests/TestSupport/TestEmitCell.swift \

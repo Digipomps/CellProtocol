@@ -56,6 +56,69 @@ public enum OrganizationVaultError: Error, Equatable, Sendable {
     case refused(GovernanceEvaluationError)
     case amendment(GovernancePolicyChainError)
     case unknownCredential(String)
+    case snapshotRefused(OrganizationVaultSnapshotError)
+}
+
+/// Why a stored vault state was not adopted. Restoring fails closed: a vault
+/// that cannot account for every signature it has made does not start.
+public enum OrganizationVaultSnapshotError: Error, Equatable, Sendable {
+    case unsupportedSchema(String)
+    case journalBroken
+    case journalDoesNotStartAtGenesis
+    case amendmentsDoNotMatchJournal
+    case statusListMissing
+    case statusListNotSignedByCustodian
+    case statusListDoesNotMatchJournal
+    case credentialNotSignedByCustodian(String)
+    case credentialsDoNotMatchJournal
+    case noncesDoNotMatchJournal
+}
+
+/// Everything a vault must remember across a restart, except the key. The
+/// key stays with the custodian. Store the snapshot after every signing call
+/// and hand the latest one to `OrganizationVault(restoring:custodian:)`.
+///
+/// The snapshot is checked for consistency when it is restored, and the
+/// status list and every credential must carry the custodian's signature. It
+/// is not itself signed, so it does not protect against a storage owner who
+/// replaces it with an older, complete snapshot. Nodes that mirror the status
+/// list refuse a lower sequence, which is what exposes such a rollback.
+public struct OrganizationVaultSnapshot: Codable, @unchecked Sendable {
+    public static let currentSchema = "haven.organization-vault-snapshot.v1"
+
+    public var schema: String
+    public var seal: OrganizationGenesisSeal
+    public var initialPolicy: GovernancePolicy
+    public var credentialType: String
+    public var amendments: [GovernancePolicyAmendment]
+    public var journal: [OrganizationJournalEntry]
+    /// Issued credentials, ordered by id.
+    public var issued: [VCClaim]
+    public var statusList: OrganizationRoleStatusList?
+    /// Nonces of every bundle the vault has acted on, ordered.
+    public var usedNonces: [Data]
+
+    public init(
+        schema: String = OrganizationVaultSnapshot.currentSchema,
+        seal: OrganizationGenesisSeal,
+        initialPolicy: GovernancePolicy,
+        credentialType: String,
+        amendments: [GovernancePolicyAmendment],
+        journal: [OrganizationJournalEntry],
+        issued: [VCClaim],
+        statusList: OrganizationRoleStatusList?,
+        usedNonces: [Data]
+    ) {
+        self.schema = schema
+        self.seal = seal
+        self.initialPolicy = initialPolicy
+        self.credentialType = credentialType
+        self.amendments = amendments
+        self.journal = journal
+        self.issued = issued
+        self.statusList = statusList
+        self.usedNonces = usedNonces
+    }
 }
 
 public struct OrganizationJournalEntry: Codable, Equatable, Sendable, CanonicalPayloadSignable {
@@ -127,6 +190,136 @@ public actor OrganizationVault {
             policyVersion: initialPolicy.version, ruleID: "genesis",
             approverUUIDs: seal.founders.map(\.uuid).sorted(),
             signatureHash: OrganizationHashing.sha256(first.signature ?? Data()))]
+    }
+
+    /// Starts the vault from a stored snapshot instead of from genesis, so
+    /// issued roles, the status list sequence and the used nonces survive a
+    /// restart. Nothing is signed here.
+    public init(restoring snapshot: OrganizationVaultSnapshot, custodian: OrganizationKeyCustodian) async throws {
+        typealias Refusal = OrganizationVaultSnapshotError
+        guard snapshot.schema == OrganizationVaultSnapshot.currentSchema else {
+            throw OrganizationVaultError.snapshotRefused(.unsupportedSchema(snapshot.schema))
+        }
+        let seal = snapshot.seal
+        try seal.verify(initialPolicy: snapshot.initialPolicy)
+        guard try await custodian.publicKey() == seal.custodianKey else {
+            throw OrganizationVaultError.custodianKeyMismatch
+        }
+        let current: GovernancePolicy
+        do {
+            current = try GovernancePolicyChain.verify(
+                seal: seal, initialPolicy: snapshot.initialPolicy, amendments: snapshot.amendments)
+        } catch let error as GovernancePolicyChainError {
+            throw OrganizationVaultError.amendment(error)
+        }
+        let issuerDID = try IdentityLinkProtocolService.did(for: seal.custodianKey)
+
+        // The journal is the account of every signature. It must be an
+        // unbroken chain that starts with the genesis status list.
+        var previous: Data?
+        for (index, entry) in snapshot.journal.enumerated() {
+            guard entry.sequence == index + 1, entry.previousEntryHash == previous else {
+                throw OrganizationVaultError.snapshotRefused(.journalBroken)
+            }
+            previous = try entry.entryHash()
+        }
+        guard let first = snapshot.journal.first, first.ruleID == "genesis",
+              first.actionClass == OrganizationActionClass.roleStatusPublish,
+              first.proposalHash == (try seal.sealHash()) else {
+            throw OrganizationVaultError.snapshotRefused(.journalDoesNotStartAtGenesis)
+        }
+
+        // One journal entry per adopted policy version, in order.
+        let amended = snapshot.journal.filter { $0.actionClass == OrganizationActionClass.policyAmend }
+        guard amended.count == snapshot.amendments.count else {
+            throw OrganizationVaultError.snapshotRefused(.amendmentsDoNotMatchJournal)
+        }
+        for (entry, amendment) in zip(amended, snapshot.amendments) {
+            guard entry.payloadHash == (try amendment.policy.policyHash()),
+                  entry.proposalHash == (try amendment.bundle.proposal.proposalHash()) else {
+                throw OrganizationVaultError.snapshotRefused(.amendmentsDoNotMatchJournal)
+            }
+        }
+
+        // The status list is the latest one the journal knows, signed by the
+        // custodian key. Its sequence counts the lists the vault has signed.
+        guard let list = snapshot.statusList else {
+            throw OrganizationVaultError.snapshotRefused(.statusListMissing)
+        }
+        guard list.organizationAnchorID == seal.anchorID, list.issuerDID == issuerDID, list.signatureIsValid() else {
+            throw OrganizationVaultError.snapshotRefused(.statusListNotSignedByCustodian)
+        }
+        let lists = snapshot.journal.filter {
+            $0.actionClass == OrganizationActionClass.roleStatusPublish || $0.actionClass == OrganizationActionClass.roleRevoke
+        }
+        guard lists.count == list.sequence, let latest = lists.last,
+              latest.payloadHash == (try list.payloadHash()),
+              latest.signatureHash == OrganizationHashing.sha256(list.signature ?? Data()) else {
+            throw OrganizationVaultError.snapshotRefused(.statusListDoesNotMatchJournal)
+        }
+
+        // Every credential is one the journal says was signed, and verifies.
+        let issuedEntries = snapshot.journal.filter { $0.actionClass == OrganizationActionClass.roleIssue }
+        var issued: [String: VCClaim] = [:]
+        var accounted = Set<Int>()
+        for claim in snapshot.issued {
+            let payloadHash = try OrganizationRoleCredential.payloadHash(of: claim)
+            let signatureHash = OrganizationHashing.sha256(claim.proof.signatureData)
+            guard issued[claim.id] == nil,
+                  let entry = issuedEntries.first(where: {
+                      $0.payloadHash == payloadHash && $0.signatureHash == signatureHash && accounted.contains($0.sequence) == false
+                  }) else {
+                throw OrganizationVaultError.snapshotRefused(.credentialsDoNotMatchJournal)
+            }
+            guard Self.issuerDID(of: claim) == issuerDID, (try? await claim.verify()) == true else {
+                throw OrganizationVaultError.snapshotRefused(.credentialNotSignedByCustodian(claim.id))
+            }
+            accounted.insert(entry.sequence)
+            issued[claim.id] = claim
+        }
+        guard issued.count == issuedEntries.count else {
+            throw OrganizationVaultError.snapshotRefused(.credentialsDoNotMatchJournal)
+        }
+
+        // One nonce per bundle acted on. A snapshot that has lost one would
+        // let that bundle be replayed.
+        let nonces = Set(snapshot.usedNonces)
+        guard nonces.count == snapshot.usedNonces.count, nonces.count == snapshot.journal.count - 1,
+              snapshot.amendments.allSatisfy({ nonces.contains($0.bundle.proposal.nonce) }) else {
+            throw OrganizationVaultError.snapshotRefused(.noncesDoNotMatchJournal)
+        }
+
+        self.seal = seal
+        self.displayName = seal.displayName
+        self.initialPolicy = snapshot.initialPolicy
+        self.policy = current
+        self.custodian = custodian
+        self.credentialType = snapshot.credentialType
+        self.amendments = snapshot.amendments
+        self.journal = snapshot.journal
+        self.issued = issued
+        self.statusList = list
+        self.usedNonces = nonces
+    }
+
+    private static func issuerDID(of claim: VCClaim) -> String? {
+        switch claim.issuer {
+        case .reference(let did):
+            return did
+        case .embedded(let object):
+            if case .string(let did)? = object["id"] { return did }
+            return nil
+        }
+    }
+
+    /// The state to store. Take it after every call that signs or amends.
+    public func snapshot() -> OrganizationVaultSnapshot {
+        OrganizationVaultSnapshot(
+            seal: seal, initialPolicy: initialPolicy, credentialType: credentialType,
+            amendments: amendments, journal: journal,
+            issued: issued.values.sorted { $0.id < $1.id },
+            statusList: statusList,
+            usedNonces: usedNonces.sorted { $0.lexicographicallyPrecedes($1) })
     }
 
     public var keyIsExportable: Bool { custodian.keyIsExportable }
