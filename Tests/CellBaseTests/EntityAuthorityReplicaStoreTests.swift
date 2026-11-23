@@ -204,10 +204,10 @@ final class EntityAuthorityReplicaStoreTests: XCTestCase {
     /// compared every object and list as unequal until 2026-11-23.
     func testReplicaPersistsAndRetriesObjectAndListValues() async throws {
         let fixture = try await makeFixture(entryCount: 2, suffix: "object-values") { value in
-            // Only cases that survive a JSON round trip unchanged: `.integer` reads
-            // back as `.number` and `.data` as `.string`, so read-back still fails
-            // for those (see the PR; the byte check before it already passes).
-            .object(["state": .string(value), "tags": .list([.string(value), .bool(true)]), "nested": .object(["v": .list([.string("x")])])])
+            // Only cases that survive a JSON round trip unchanged: `.data` reads back
+            // as `.string` and `.number` as `.integer`, so the structural read-back
+            // still fails for those (see the PR; the byte check before it passes).
+            .object(["state": .string(value), "tags": .list([.string(value), .integer(1), .bool(true)]), "nested": .object(["v": .list([.null])])])
         }
         let request = replayRequest(for: fixture.journal, startRevision: 1, endRevision: 2)
         let response = try fixture.journal.replayRange(for: request)
