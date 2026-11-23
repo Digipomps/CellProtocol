@@ -397,6 +397,7 @@ public actor OrganizationVault {
                 throw refuse(.credentialsDoNotMatchJournal)
             }
             guard Self.issuerDID(of: claim) == issuerDID, claim.type.contains(credentialType),
+                  claim.proof.verificationMethod == seal.custodianKey.uuid,
                   (try? await claim.verify()) == true else {
                 throw refuse(.credentialNotSignedByCustodian(claim.id))
             }

@@ -296,6 +296,11 @@ final class OrganizationVaultRestoreTests: XCTestCase {
         forged.journal[index].signatureHash = OrganizationHashing.sha256(target.proof.signatureData)
         try await relink(&forged)
         await assertRefused(.credentialNotSignedByCustodian(target.id), forged)
+
+        // The proof names another key than the one that signed it.
+        let renamed = try copy(good)
+        renamed.issued[0].proof.verificationMethod = student.uuid
+        await assertRefused(.credentialNotSignedByCustodian(renamed.issued[0].id), renamed)
     }
 
     func testAmendmentsMustBeTheOnesTheJournalRecords() async throws {
