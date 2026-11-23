@@ -194,8 +194,13 @@ public actor EntityAuthorityReplicaStore {
               reloadedData == expectedData else {
             throw EntityAuthorityReplicaStoreError.persistenceVerificationFailed
         }
+        // Compare canonical bytes, not ValueType structure: a JSON round trip
+        // reads `.data` back as `.string` and `.number` as `.integer`, so the
+        // decoded document can differ structurally from `expected` while
+        // encoding to exactly the same bytes. The decode still proves the
+        // stored bytes are a readable document.
         let reloaded = try decodeDocument(reloadedData)
-        guard reloaded == expected else {
+        guard try EntityAuthorityCanonical.data(for: reloaded) == expectedData else {
             throw EntityAuthorityReplicaStoreError.persistenceVerificationFailed
         }
         try validate(document: reloaded)
@@ -222,7 +227,11 @@ public actor EntityAuthorityReplicaStore {
         try journal.validateStructure()
         for entry in incomingEntries {
             if entry.revision <= journal.entries.count {
-                guard journal.entries[entry.revision - 1] == entry else {
+                // Canonical bytes, not ValueType structure: the stored entry has
+                // been through JSON, where `.data`, `.number` and whole-number
+                // `.float` change case without changing the bytes.
+                guard try EntityAuthorityCanonical.data(for: journal.entries[entry.revision - 1])
+                        == EntityAuthorityCanonical.data(for: entry) else {
                     throw EntityAuthorityReplicaStoreError.journalConflict(
                         "divergent_revision_\(entry.revision)"
                     )
