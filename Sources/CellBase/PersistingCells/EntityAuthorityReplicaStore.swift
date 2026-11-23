@@ -194,8 +194,13 @@ public actor EntityAuthorityReplicaStore {
               reloadedData == expectedData else {
             throw EntityAuthorityReplicaStoreError.persistenceVerificationFailed
         }
+        // Compare canonical bytes, not ValueType structure: a JSON round trip
+        // reads `.data` back as `.string` and `.number` as `.integer`, so the
+        // decoded document can differ structurally from `expected` while
+        // encoding to exactly the same bytes. The decode still proves the
+        // stored bytes are a readable document.
         let reloaded = try decodeDocument(reloadedData)
-        guard reloaded == expected else {
+        guard try EntityAuthorityCanonical.data(for: reloaded) == expectedData else {
             throw EntityAuthorityReplicaStoreError.persistenceVerificationFailed
         }
         try validate(document: reloaded)
