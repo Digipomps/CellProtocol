@@ -14,6 +14,19 @@ public struct ConversationIndexRow: Codable, Equatable, Sendable {
     public var lastMessageAt: String
     public var unread: Int
     public var readUptoSeq: Int
+
+    public init(conversationID: String, title: String, people: [String], lastSeq: Int, lastMessagePreview: String,
+                lastMessageAuthorUUID: String, lastMessageAt: String, unread: Int, readUptoSeq: Int) {
+        self.conversationID = conversationID
+        self.title = title
+        self.people = people
+        self.lastSeq = lastSeq
+        self.lastMessagePreview = lastMessagePreview
+        self.lastMessageAuthorUUID = lastMessageAuthorUUID
+        self.lastMessageAt = lastMessageAt
+        self.unread = unread
+        self.readUptoSeq = readUptoSeq
+    }
 }
 
 /// A message's identity as the index knows it.
@@ -21,6 +34,12 @@ public struct ConversationIndexedMessage: Codable, Equatable, Sendable {
     public var seq: Int
     public var messageID: String
     public var authorUUID: String
+
+    public init(seq: Int, messageID: String, authorUUID: String) {
+        self.seq = seq
+        self.messageID = messageID
+        self.authorUUID = authorUUID
+    }
 }
 
 /// The index behind conversation lists, unread counts and idempotent send.

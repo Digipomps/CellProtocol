@@ -130,6 +130,15 @@ public struct ConversationSendResult: Codable, Equatable, Sendable {
     public var message: ConversationMessage?
     public var code: String?
 
+    public init(ok: Bool, status: Status, seq: Int?, messageID: String?, message: ConversationMessage?, code: String?) {
+        self.ok = ok
+        self.status = status
+        self.seq = seq
+        self.messageID = messageID
+        self.message = message
+        self.code = code
+    }
+
     public static func failure(_ reason: ConversationDenialReason) -> ConversationSendResult {
         ConversationSendResult(ok: false, status: .error, seq: nil, messageID: nil, message: nil, code: reason.rawValue)
     }
@@ -151,6 +160,12 @@ public struct ConversationMessagePage: Codable, Equatable, Sendable {
     public var messages: [ConversationMessage]
     public var lastSeq: Int
     public var hasMore: Bool
+
+    public init(messages: [ConversationMessage], lastSeq: Int, hasMore: Bool) {
+        self.messages = messages
+        self.lastSeq = lastSeq
+        self.hasMore = hasMore
+    }
 }
 
 enum ConversationCodec {
