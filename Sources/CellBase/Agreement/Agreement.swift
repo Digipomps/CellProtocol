@@ -138,6 +138,8 @@ public class Agreement: Codable, Grantable {
                     type = .coldStorage
                 } else if condition is LifecycleAlertAccessCondition {
                     type = .lifecycleAlertAccess
+                } else if condition is RecipientCondition {
+                    type = .recipient
                 }
                 
                 

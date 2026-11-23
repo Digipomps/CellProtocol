@@ -2159,6 +2159,66 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         throw CellAuthorizationError.denied(decision)
     }
 
+    /// Avgrenset lenke for spørreren, med samme krav til nøkkelbevis som en hel lenke.
+    private func verifiedScopedLink(for identity: Identity) async -> (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)? {
+        guard let scoped = await IdentityLinkRegistry.shared.scopedLink(
+            ownerUUID: owner.uuid,
+            requesterUUID: identity.uuid,
+            requesterSigningKey: identity.publicSecureKey?.compressedKey,
+            domain: identityDomain
+        ) else { return nil }
+        let trustedIdentity = IdentityLinkProtocolService.identity(from: scoped.record.linkedIdentity)
+        guard await checkIdentityOrigin(identity, against: trustedIdentity) else { return nil }
+        return scoped
+    }
+
+    /// purpose://candidate.egen-agent-mcp.tools-by-agreement: en avgrenset lenke slipper inn
+    /// bare når lenken er aktiv og ikke utløpt, kallet ligger innenfor lenken, og cellens
+    /// Agreement har en RecipientCondition som tillater lenkens mottaker. Cellen tilhører
+    /// entiteten (lenken er slått opp på cellens eier), så entiteten har selv tilgangen.
+    private func scopedLinkDecision(
+        request: CellAuthorizationRequest,
+        record: IdentityLinkRecord,
+        policy: ScopedIdentityLinkPolicy
+    ) -> CellAuthorizationDecision {
+        func deny(_ code: String, _ reason: String, _ message: String) -> CellAuthorizationDecision {
+            CellAuthorizationDecision(
+                allowed: false,
+                path: .deniedScopedIdentityLink,
+                reason: reason + " (link \(record.linkID))",
+                request: request,
+                reasonCode: code,
+                userMessage: message,
+                canAutoResolve: false
+            )
+        }
+        guard record.status == .active else {
+            return deny("extension_revoked", "The scoped link was revoked.", "This agent has been disconnected.")
+        }
+        guard authorizationClock() < policy.expiresAt else {
+            return deny("extension_expired", "The scoped link has expired.", "This agent's access has expired.")
+        }
+        guard let grant = policy.grant(covering: request.requestedAccess, at: request.keypath, inCell: uuid) else {
+            return deny("link_scope_missing", "The scoped link does not cover this keypath and permission in this cell.", "This agent was not given access to this.")
+        }
+        let recipientConditions = agreementTemplate.conditions.compactMap { $0 as? RecipientCondition }
+        guard !recipientConditions.isEmpty,
+              recipientConditions.allSatisfy({ $0.allows(policy.recipient) }) else {
+            return deny("recipient_not_allowed", "The cell's Agreement does not allow recipient '\(policy.recipient)'.", "This cell does not allow its content to be sent to this agent's provider.")
+        }
+        var decision = CellAuthorizationDecision(
+            allowed: true,
+            path: .scopedIdentityLink,
+            reason: "Requester proved control of a key with a scoped link from the owner (link \(record.linkID)); the call is inside the link and the cell's RecipientCondition.",
+            request: request,
+            reasonCode: "scoped_identity_link",
+            userMessage: "Access granted to a connected agent."
+        )
+        decision.grantRef = "scope://\(record.linkID)/\(grant.permission)/\(grant.keypath)"
+        decision.agreementRef = "agreement://\(agreementTemplate.uuid)"
+        return decision
+    }
+
     /// Same registry constraints and cryptographic proof for preflight and
     /// ordinary authorization. A registry record alone never proves key control.
     private func verifiedSameEntityLink(for identity: Identity) async -> IdentityLinkRecord? {
@@ -2322,6 +2382,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var ownerProofValid: Bool
         var contracts: [Contract]
         var linkedIdentityLinkID: String? = nil
+        /// Avgrenset lenke: gir aldri eiermakt, se `scopedLinkDecision`.
+        var scopedLink: (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)? = nil
     }
 
     /// Closed implementation: neither an overridden validateAccess nor a
@@ -2353,6 +2415,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 linkedIdentityLinkID: link.linkID
             )
         }
+        if !ownerReferenceMatches,
+           let scoped = await verifiedScopedLink(for: identity) {
+            // Den lenkede nøkkelen får bare lenken: ingen eiermakt, ingen egne kontrakter.
+            return AuthorizationEvidence(
+                ownerReferenceMatches: false,
+                ownerProofValid: false,
+                contracts: [],
+                scopedLink: scoped
+            )
+        }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
             ownerProofValid: ownerProofValid,
@@ -2373,6 +2445,9 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             requestedAccess: requestedAccess,
             requester: identity
         )
+        if let scoped = evidence.scopedLink {
+            return scopedLinkDecision(request: request, record: scoped.record, policy: scoped.policy)
+        }
         let cellSpecificAllowed = evidence.ownerReferenceMatches
             ? false
             : await validateCellSpecificAccess(requestedAccess, at: keypath, for: identity)
@@ -2519,6 +2594,16 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     /// authorization still evaluates the requested keypath and permission.
     func hasVerifiedAuthorizationContract(for identity: Identity) async -> Bool {
         await contractsForIdentity(identity).isEmpty == false
+    }
+
+    /// Resolver admission for a key with an active, unexpired scoped link that names
+    /// this Cell. Like a Contract, it only lets the concrete Cell be resolved; every
+    /// GET and SET is still decided by `scopedLinkDecision`.
+    func hasScopedLinkAdmission(for identity: Identity) async -> Bool {
+        guard let scoped = await verifiedScopedLink(for: identity) else { return false }
+        return scoped.record.status == .active
+            && authorizationClock() < scoped.policy.expiresAt
+            && scoped.policy.grantsAnything(inCell: uuid)
     }
     
     func determineIdentityState(identity: Identity) async -> IdentityState {
