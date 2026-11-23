@@ -227,7 +227,11 @@ public actor EntityAuthorityReplicaStore {
         try journal.validateStructure()
         for entry in incomingEntries {
             if entry.revision <= journal.entries.count {
-                guard journal.entries[entry.revision - 1] == entry else {
+                // Canonical bytes, not ValueType structure: the stored entry has
+                // been through JSON, where `.data`, `.number` and whole-number
+                // `.float` change case without changing the bytes.
+                guard try EntityAuthorityCanonical.data(for: journal.entries[entry.revision - 1])
+                        == EntityAuthorityCanonical.data(for: entry) else {
                     throw EntityAuthorityReplicaStoreError.journalConflict(
                         "divergent_revision_\(entry.revision)"
                     )
