@@ -13,6 +13,10 @@ public struct SignedAgreementRecord: Codable {
     public var savedAt: Int?
     public var savedAtText: String?
     public var recordState: AgreementState
+    /// Position in the revision chain; nil for records written before the chain.
+    public var sequence: Int?
+    /// `recordHash` of the record with the previous sequence; nil for the first.
+    public var previousRecordHash: String?
 
     public init(
         id: String? = nil,
@@ -23,7 +27,9 @@ public struct SignedAgreementRecord: Codable {
         summary: String? = nil,
         savedAt: Int? = nil,
         savedAtText: String? = nil,
-        recordState: AgreementState = .signed
+        recordState: AgreementState = .signed,
+        sequence: Int? = nil,
+        previousRecordHash: String? = nil
     ) {
         self.id = id ?? agreement.uuid
         self.agreement = agreement
@@ -34,6 +40,8 @@ public struct SignedAgreementRecord: Codable {
         self.savedAt = savedAt
         self.savedAtText = savedAtText
         self.recordState = recordState
+        self.sequence = sequence
+        self.previousRecordHash = previousRecordHash
     }
 
     public func agreementReference(
@@ -55,26 +63,52 @@ public struct SignedAgreementRecord: Codable {
     }
 }
 
+/// Mirrors the stored form: `records` is an object keyed by contract uuid
+/// (`signedAgreementEntity.records.<uuid>`), not a list. Order comes from the
+/// revision chain (`sequence`, `previousRecordHash`), see
+/// `SignedAgreementEntitySupport.verifyChain` (Kjetil 2026-11-23).
 public struct SignedAgreementEntity: Codable {
     public var name: String
     public var description: String?
-    public var records: [SignedAgreementRecord]
+    public var records: [String: SignedAgreementRecord]
 
     public init(
         name: String = "Signed Agreement Entity",
         description: String? = nil,
-        records: [SignedAgreementRecord] = []
+        records: [String: SignedAgreementRecord] = [:]
     ) {
         self.name = name
         self.description = description
         self.records = records
     }
 
+    /// Keys each record by its id.
+    public init(
+        name: String = "Signed Agreement Entity",
+        description: String? = nil,
+        records: [SignedAgreementRecord]
+    ) {
+        self.init(name: name, description: description,
+                  records: Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last }))
+    }
+
+    /// Chained records by sequence, then records from before the chain by id.
+    public var orderedRecords: [SignedAgreementRecord] {
+        records.values.sorted { lhs, rhs in
+            switch (lhs.sequence, rhs.sequence) {
+            case let (l?, r?): return l < r
+            case (.some, nil): return true
+            case (nil, .some): return false
+            case (nil, nil): return lhs.id < rhs.id
+            }
+        }
+    }
+
     public func agreementRefs(
         recordKeypathPrefix: String = "signedAgreementEntity.records",
         sourceEntityKeypath: String = "entityRepresentation.agreementRefs"
     ) -> [AgreementReference] {
-        records.map { record in
+        orderedRecords.map { record in
             record.agreementReference(
                 recordKeypath: "\(recordKeypathPrefix).\(record.id)",
                 sourceEntityKeypath: sourceEntityKeypath

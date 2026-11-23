@@ -645,26 +645,18 @@ public class EntityAnchorCell: GeneralCell {
             }
 
             let contractHash = try SignedAgreementEntitySupport.contractHash(request.contract)
-            let contentHash = try SignedAgreementEntitySupport.immutableContentHash(
-                request: request,
-                contractHash: contractHash
-            )
             let recordKeypath = "signedAgreementEntity.records.\(request.contract.uuid)"
-            let record: Object
-            if let existing = try? storage.get(keypath: recordKeypath),
-               case let .object(existingRecord) = existing {
-                guard case let .string(existingContentHash)? = existingRecord["immutableContentHash"],
-                      existingContentHash == contentHash else {
-                    throw SignedAgreementEntityCommitError.immutableRecordConflict
-                }
-                record = existingRecord
-            } else {
-                let newRecord = try SignedAgreementEntitySupport.recordObject(
-                    request: request,
-                    contractHash: contractHash
-                )
-                try storage.set(keypath: recordKeypath, setValue: .object(newRecord))
-                record = newRecord
+            var existingRecords = Object()
+            if case let .object(records)? = try? storage.get(keypath: SignedAgreementEntitySupport.recordsKeypath) {
+                existingRecords = records
+            }
+            let (record, isNew) = try SignedAgreementEntitySupport.prepareRecord(
+                request: request,
+                contractHash: contractHash,
+                existingRecords: existingRecords
+            )
+            if isNew {
+                try storage.set(keypath: recordKeypath, setValue: .object(record))
             }
 
             let expectedRecordHash = try SignedAgreementEntitySupport.recordHash(record)
