@@ -117,6 +117,86 @@ final class ContactOperationHolderTests: XCTestCase {
         return Fixture(vault: vault, subject: subject, binding: binding, admission: admission, request: request, lease: lease)
     }
 
+    func testContactReferenceSubjectWriteOnlyRoundTrips() async throws {
+        let f = try await fixture()
+        let contract = try ContactReferenceCodec.decode(Contract.self,
+            from: f.binding.contractBytes, maximumBytes: ContactReferenceCodec.maximumContractBytes)
+        XCTAssertEqual(contract.agreement.grants.count, 1)
+        XCTAssertEqual(contract.agreement.grants[0].permission.fullPermissionString, "-w------")
+        let verified = try await ContactReferenceCodec.verify(
+            referenceBytes: f.binding.referenceBytes, contractBytes: f.binding.contractBytes,
+            expectedOwner: f.binding.reference.owner, expectedSubject: .init(f.subject),
+            approvedEndpoint: try XCTUnwrap(URL(string: f.binding.reference.logicalEndpoint)))
+        XCTAssertEqual(verified.referenceBytes, f.binding.referenceBytes)
+    }
+
+    func testContactReferenceRejectsBroaderSignedGroupAndOtherGrants() async throws {
+        let ownerVault = EphemeralIdentityVault()
+        var owner = Identity(UUID().uuidString, displayName: "Synthetic issuer", identityVault: ownerVault)
+        await ownerVault.addIdentity(identity: &owner, for: "private")
+        let subject = await LocalVault().identity()
+        let ownerDescriptor = try BridgeChannelAuthentication.PublicIdentity(owner)
+        let subjectDescriptor = try BridgeChannelAuthentication.PublicIdentity(subject)
+        let issued = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 1)
+        let expiry = issued.addingTimeInterval(300)
+        for permission in ["-w--r---", "-w---w--", "-w----x-", "-w-----s",
+                           "rw------", "-wx-----", "-w-s----", "--------"] {
+            let cellUUID = UUID().uuidString
+            let endpoint = try XCTUnwrap(URL(string: "cell://contact.example:443/Contact-" + cellUUID))
+            let agreement = Agreement(owner: owner)
+            agreement.state = .signed
+            agreement.conditions = []
+            agreement.grants = [Grant(keypath: "contact.request", permission: permission)]
+            agreement.signatories = [owner, subject]
+            agreement.duration = 600
+            let contract = try await Contract.signed(agreement: agreement, issuer: owner, subject: subject,
+                domain: ContactInboxCell.domain, issuedAt: issued, targetCellUUID: cellUUID)
+            let contractBytes = try ContactReferenceCodec.encode(contract)
+            XCTAssertEqual(contract.agreement.grants[0].permission.fullPermissionString, permission)
+            let signatureValid = await contract.verifySignature(now: issued)
+            XCTAssertTrue(signatureValid, "Negative case must have a valid signed contract")
+            do {
+                _ = try await ContactReferenceCodec.issue(contractBytes: contractBytes, endpoint: endpoint,
+                    owner: owner, issuedAt: issued, expiresAt: expiry)
+                XCTFail("Issued an overbroad contact reference: \(permission)")
+            } catch {
+                XCTAssertEqual(error as? ContactOperationFailure, .invalidBinding)
+            }
+
+            // Model an incoming, correctly signed reference from the real owner.
+            // Bypass only the issuer helper so receiver validation is tested too.
+            let unsigned = ContactInboxReferenceV1(profile: ContactInboxReferenceV1.profileName,
+                logicalEndpoint: endpoint.absoluteString, cellUUID: cellUUID,
+                identityDomain: ContactInboxCell.domain, owner: ownerDescriptor, subject: subjectDescriptor,
+                contractDigest: try contract.signedContentDigest(),
+                issuedAtMilliseconds: Int64(issued.timeIntervalSince1970 * 1000),
+                expiresAtMilliseconds: Int64(expiry.timeIntervalSince1970 * 1000), signature: Data())
+            var unsignedObject = try XCTUnwrap(try JSONSerialization.jsonObject(
+                with: ContactReferenceCodec.encode(unsigned)) as? [String: Any])
+            XCTAssertNotNil(unsignedObject.removeValue(forKey: "signature"))
+            var message = Data((ContactInboxReferenceV1.profileName + "\n").utf8)
+            message.append(try JSONSerialization.data(withJSONObject: unsignedObject,
+                options: [.sortedKeys, .withoutEscapingSlashes]))
+            let signedBytes = try await owner.sign(data: message)
+            let signature = try XCTUnwrap(signedBytes)
+            XCTAssertTrue(IdentityPublicKeySignatureVerifier.verify(signature: signature,
+                messageData: message, identity: ownerDescriptor.makeIdentity()))
+            let reference = ContactInboxReferenceV1(profile: unsigned.profile,
+                logicalEndpoint: unsigned.logicalEndpoint, cellUUID: cellUUID,
+                identityDomain: unsigned.identityDomain, owner: ownerDescriptor, subject: subjectDescriptor,
+                contractDigest: unsigned.contractDigest, issuedAtMilliseconds: unsigned.issuedAtMilliseconds,
+                expiresAtMilliseconds: unsigned.expiresAtMilliseconds, signature: signature)
+            do {
+                _ = try await ContactReferenceCodec.verify(referenceBytes: ContactReferenceCodec.encode(reference),
+                    contractBytes: contractBytes, expectedOwner: ownerDescriptor,
+                    expectedSubject: subjectDescriptor, approvedEndpoint: endpoint, now: issued)
+                XCTFail("Accepted an incoming overbroad signed reference: \(permission)")
+            } catch {
+                XCTAssertEqual(error as? ContactOperationFailure, .invalidBinding)
+            }
+        }
+    }
+
     func testLocalHolderUsesExplicitFinalSignerAndPreservesOriginalHome() async throws {
         let f = try await fixture()
         let holder = try await ContactOperationHolder.prepare(lease: f.lease, requester: f.subject)
