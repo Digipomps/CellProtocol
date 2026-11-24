@@ -247,96 +247,57 @@ extension ValueType { // Is thhis ever used any more?
 }
 
 extension ValueType: Equatable {
+    /// Value equality for the value-like cases, consistent with `hash(into:)`.
+    ///
+    /// Until 2026-11-23 every `.object`, `.list`, `.data`, `.keyValue`,
+    /// `.setValueState`, `.setValueResponse`, `.connectState`, `.contractState`,
+    /// `.signData` and `.signature` compared unequal to everything, itself
+    /// included. Those cases now compare by value. Different cases are never
+    /// equal (`.number(1) != .integer(1)`), as before.
+    ///
+    /// Unchanged on purpose: `.cellConfiguration`, `.cellReference`,
+    /// `.verifiableCredential`, `.identity`, `.connectContext`,
+    /// `.agreementPayload`, `.description` and `.cell` still compare unequal.
+    /// They carry reference types or types without a settled notion of
+    /// equality, and changing them needs its own decision.
     public static func == (lhs: ValueType, rhs: ValueType) -> Bool {
         switch (lhs, rhs) {
         case (.null, .null):
             return true
-        case (let .string(lhsString), let .string(rhsString)):
-                    return lhsString == rhsString
-        case (let .flowElement(lhsFlowElement), let .flowElement(rhsFlowElement)):
+        case let (.string(lhsString), .string(rhsString)):
+            return lhsString == rhsString
+        case let (.flowElement(lhsFlowElement), .flowElement(rhsFlowElement)):
             return lhsFlowElement == rhsFlowElement
-        case (let .bool(lhsBool), let .bool(rhsBool)):
+        case let (.bool(lhsBool), .bool(rhsBool)):
             return lhsBool == rhsBool
-        case (let .number(lhsNumber), let .number(rhsNumber)):
+        case let (.number(lhsNumber), .number(rhsNumber)):
             return lhsNumber == rhsNumber
-        case (let .integer(lhsInteger), let .integer(rhsInteger)):
+        case let (.integer(lhsInteger), .integer(rhsInteger)):
             return lhsInteger == rhsInteger
-        case (let .float(lhsFloat), let .float(rhsFloat)):
+        case let (.float(lhsFloat), .float(rhsFloat)):
             return lhsFloat == rhsFloat
-        case (.object(_), _):
-            return false
-        case (.list(_), _):
-            return false
-        case (.data(_), _):
-            return false
-        case (.keyValue(_), _):
-            return false
-        case (.setValueState(_), _):
-            return false
-        case (.cellConfiguration(_), _):
-            return false
-        case (.verifiableCredential(_), _):
-            return false
-        case (.identity(_), _):
-            return false
-        case (.connectState(_), _):
-            return false
-        case (.contractState(_), _):
-            return false
-        case (.signData(_), _):
-            return false
-        case (.signature(_), _):
-            return false
-        case (.agreementPayload(_), _):
-            return false
-        case (.description(_), _):
-            return false
-        case (.cell(_), _):
-            return false
-        case (_, .flowElement(_)):
-            return false
-        case (_, .bool(_)):
-            return false
-        case (_, .number(_)):
-            return false
-        case (_, .object(_)):
-            return false
-        case (_, .list(_)):
-            return false
-        case (_, .data(_)):
-            return false
-        case (_, .keyValue(_)):
-            return false
-        case (_, .setValueState(_)):
-            return false
-        case (_, .cellConfiguration(_)):
-            return false
-        case (_, .verifiableCredential(_)):
-            return false
-        case (_, .identity(_)):
-            return false
-        case (_, .connectState(_)):
-            return false
-        case (_, .contractState(_)):
-            return false
-        case (_, .signData(_)):
-            return false
-        case (_, .signature(_)):
-            return false
-        case (_, .agreementPayload(_)):
-            return false
-        case (_, .description(_)):
-            return false
-        case (_, .cell(_)):
-            return false
-        case (.flowElement(_), .string(_)):
-            return false
-        case (.number(_), _):
-            return false
-        case (_, .null):
-            return false
-        case (.null, _):
-            return false
+        case let (.object(lhsObject), .object(rhsObject)):
+            return lhsObject == rhsObject
+        case let (.list(lhsList), .list(rhsList)):
+            return lhsList == rhsList
+        case let (.data(lhsData), .data(rhsData)):
+            return lhsData == rhsData
+        case let (.keyValue(lhsKeyValue), .keyValue(rhsKeyValue)):
+            return lhsKeyValue == rhsKeyValue
+        case let (.setValueState(lhsState), .setValueState(rhsState)):
+            return lhsState == rhsState
+        case let (.setValueResponse(lhsResponse), .setValueResponse(rhsResponse)):
+            return lhsResponse.state == rhsResponse.state
+                && lhsResponse.value == rhsResponse.value
+                && lhsResponse.retryAfterSeconds == rhsResponse.retryAfterSeconds
+        case let (.connectState(lhsState), .connectState(rhsState)):
+            return lhsState == rhsState
+        case let (.contractState(lhsState), .contractState(rhsState)):
+            return lhsState == rhsState
+        case let (.signData(lhsData), .signData(rhsData)):
+            return lhsData == rhsData
+        case let (.signature(lhsData), .signature(rhsData)):
+            return lhsData == rhsData
         default:
             return false
         }

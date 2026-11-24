@@ -185,7 +185,7 @@ final class EntityAuthorityReplicaStoreTests: XCTestCase {
 
         let alternateJournal = try await makeJournal(
             authority: fixture.authority,
-            values: ["alternate"],
+            values: [.string("alternate")],
             suffix: "conflict-alternate"
         )
         let alternateRequest = replayRequest(for: alternateJournal, startRevision: 1, endRevision: 1)
@@ -200,7 +200,39 @@ final class EntityAuthorityReplicaStoreTests: XCTestCase {
         XCTAssertEqual(storedAfterConflict?.journal.entries.first, fixture.journal.entries.first)
     }
 
-    private func makeFixture(entryCount: Int, suffix: String) async throws -> ReplicaFixture {
+    /// Object and list values used to fail read-back and retry: `ValueType ==`
+    /// compared every object and list as unequal until 2026-11-23.
+    func testReplicaPersistsAndRetriesObjectAndListValues() async throws {
+        let fixture = try await makeFixture(entryCount: 2, suffix: "object-values") { value in
+            // Only cases that survive a JSON round trip unchanged: `.data` reads back
+            // as `.string` and `.number` as `.integer`, so the structural read-back
+            // still fails for those (see the PR; the byte check before it passes).
+            .object(["state": .string(value), "tags": .list([.string(value), .integer(1), .bool(true)]), "nested": .object(["v": .list([.null])])])
+        }
+        let request = replayRequest(for: fixture.journal, startRevision: 1, endRevision: 2)
+        let response = try fixture.journal.replayRange(for: request)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("entity-authority-replica-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = EntityAuthorityReplicaStore(
+            persistence: AtomicFileEntityAuthorityReplicaPersistence(fileURL: directory.appendingPathComponent("replica.json")),
+            admission: fixture.admission,
+            authority: fixture.authority,
+            replica: fixture.replica
+        )
+        let first = try await store.persist(response: response, for: request, persistedAtEpochMilliseconds: 500)
+        XCTAssertEqual(first.count, 2)
+        let retry = try await store.persist(response: response, for: request, persistedAtEpochMilliseconds: 600)
+        XCTAssertEqual(retry.count, 2, "a retry of the same entries must be idempotent, not a conflict")
+        let stored = try await store.storedDocument()
+        XCTAssertEqual(stored?.journal, fixture.journal)
+    }
+
+    private func makeFixture(
+        entryCount: Int,
+        suffix: String,
+        value makeValue: (String) -> ValueType = { .string($0) }
+    ) async throws -> ReplicaFixture {
         let authority = try await makeIdentity("replica-authority-\(suffix)")
         let replica = try await makeIdentity("replica-storage-\(suffix)")
         let admission = try await EntityAuthorityReplicaAdmission.signed(
@@ -219,13 +251,13 @@ final class EntityAuthorityReplicaStoreTests: XCTestCase {
             authority: authority,
             replica: replica,
             admission: admission,
-            journal: try await makeJournal(authority: authority, values: values, suffix: suffix)
+            journal: try await makeJournal(authority: authority, values: values.map(makeValue), suffix: suffix)
         )
     }
 
     private func makeJournal(
         authority: Identity,
-        values: [String],
+        values: [ValueType],
         suffix: String
     ) async throws -> EntityAuthorityJournalDocument {
         var journal = EntityAuthorityJournalDocument()
@@ -234,7 +266,7 @@ final class EntityAuthorityReplicaStoreTests: XCTestCase {
             var envelope = EntityBatchPersistEnvelope(
                 schema: "test.replica.v1",
                 mutations: [
-                    EntityBatchPersistMutation(keypath: "person.state", value: .string(value))
+                    EntityBatchPersistMutation(keypath: "person.state", value: value)
                 ]
             )
             envelope.commitRequest = try await EntityAuthorityCommitRequest.signed(
