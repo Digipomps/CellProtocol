@@ -680,7 +680,7 @@ extension CorrespondenceCellTests {
             keypath: "sendMessage",
             value: try CorrespondenceSendRequest(preparedEnvelope: prepared, purposeRef: "purpose://contact.communication").valueType(),
             requester: owner)
-        guard case .object(let object)? = response, case .string(let messageID)? = object["messageID"] else {
+        guard case .object(let object) = response, case .string(let messageID)? = object["messageID"] else {
             XCTFail("send failed: \(String(describing: response))"); throw CancellationError()
         }
         let readValue = try await cell.set(keypath: "readMessage", value: .object(["messageID": .string(messageID)]), requester: owner)
