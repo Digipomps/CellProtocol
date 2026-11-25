@@ -82,7 +82,9 @@ public class EntityAnchorCell: GeneralCell {
         self.agreementTemplate.ensureGrant("r--s", for: "dataInventory")
         self.agreementTemplate.ensureGrant("rw--", for: "chronicle")
         self.agreementTemplate.ensureGrant("r---", for: "trace")
-        self.agreementTemplate.ensureGrant("rw--", for: "identityLinks")
+        // identityLinks is deliberately not in the template: a record there makes
+        // another key act as the entity. Only the owner and whole same-entity
+        // links reach it (EntityAnchorLinkGuard).
         self.agreementTemplate.ensureGrant("r---", for: "entityAuthority")
         self.agreementTemplate.ensureGrant("r---", for: "entityContactSchema")
         self.agreementTemplate.ensureGrant("r---", for: "entityRelationSchema")
@@ -885,6 +887,7 @@ public class EntityAnchorCell: GeneralCell {
         // Check if it is a change
         try EntityValidatedContactRecordV1.rejectDirectMutation(to: keypath)
         try EntityRelationRecordV1.rejectDirectMutation(to: keypath, value: value)
+        try EntityAnchorLinkGuard.rejectEntityDataMutation(to: keypath)
 
         // write to storage
         var updated = self.storage
@@ -928,6 +931,8 @@ public class EntityAnchorCell: GeneralCell {
                 from: try? await storage.get(keypath: EntityRelationRecordV1.interactionPolicyKeypath)
             )
             try EntityRelationRecordV1.validatePersistenceEnvelope(envelope, interactionPolicy: relationPolicy)
+            // A batch carries entity data. Links have their own ceremony.
+            try EntityAnchorLinkGuard.rejectEntityDataMutations(to: envelope.mutations.map(\.keypath))
             var relationEvents: [String: ValueType] = [:]
             for mutation in envelope.mutations where EntityRelationRecordV1.isRelationChronicleKeypath(mutation.keypath) {
                 let stored: ValueType?
@@ -1059,6 +1064,13 @@ public class EntityAnchorCell: GeneralCell {
                    keypath == EntityGenesisService.recordKeypath(linkID: seal.linkID) {
                     throw EntityGenesisError.genesisKeypathIsImmutable(keypath)
                 }
+                let provesOwnership = await requesterProvesOwnership(requester)
+                let freshAuthenticationRequired = await IdentityLinkRuntimePolicy.shared.requireFreshAuthEvidence
+                try EntityAnchorLinkGuard.rejectRawLinkWrite(
+                    to: keypath,
+                    requesterProvesOwnership: provesOwnership,
+                    freshAuthenticationRequired: freshAuthenticationRequired
+                )
                 try storage.set(keypath: keypath, setValue: value)
                 try await saveKeypathStorage(entity: storage)
                 await restoreIdentityLinkRegistry()
@@ -1076,6 +1088,8 @@ public class EntityAnchorCell: GeneralCell {
 
     private func approveIdentityEnrollment(value: ValueType, requester: Identity) async throws -> ValueType {
         let envelope = try decodeValue(value, as: IdentityLinkApprovalEnvelope.self)
+        try await EntityAnchorLinkGuard.requireApprover(
+            requester, owner: storedOwnerIdentity, identityDomain: identityDomain)
         let package = try await IdentityLinkProtocolService.approveEnrollment(
             envelope,
             issuerIdentity: requester
@@ -1095,7 +1109,13 @@ public class EntityAnchorCell: GeneralCell {
 
     private func completeIdentityEnrollment(value: ValueType, requester: Identity) async throws -> ValueType {
         var envelope = try decodeValue(value, as: IdentityLinkCompletionEnvelope.self)
+        // The approval and the credential are signed by `issuerIdentity`. Unless
+        // that key already is this entity, anyone could approve their own link.
         let policyRequiresEvidence = await IdentityLinkRuntimePolicy.shared.requireFreshAuthEvidence
+        let provesOwnership = await requesterProvesOwnership(requester)
+        try await EntityAnchorLinkGuard.requireIssuer(
+            envelope.issuerIdentity, owner: storedOwnerIdentity, identityDomain: identityDomain,
+            requesterProvesOwnership: provesOwnership, freshAuthenticationRequired: policyRequiresEvidence)
         let policyVerifier = await IdentityLinkRuntimePolicy.shared.freshAuthVerifier
         if policyRequiresEvidence {
             envelope.requireFreshAuthEvidence = true

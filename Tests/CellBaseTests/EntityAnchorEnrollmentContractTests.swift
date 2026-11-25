@@ -183,6 +183,117 @@ final class EntityAnchorEnrollmentContractTests: XCTestCase {
         }
     }
 
+    // MARK: - Sikkerhetsrevisjon 2026-11-25 (E2, E3, E4)
+
+    /// E3: en godkjenning signert av en nøkkel som ikke er entiteten, lenker ingenting
+    /// når en lenket enhet sender den inn, og heller ikke fra eierens sesjon der
+    /// verten krever ferskt bevis (staging).
+    func testE3ForeignIssuerCannotCompleteAnEnrollment() async throws {
+        try await forEachScaffold { scaffold, anchor, entity in
+            let tag = "[\(scaffold.rawValue)] E3"
+            let genesis = try await seal(anchor, owner: entity.owner)
+            let phone = await entity.identity("phone")
+            let enrolled = try await enroll(anchor, issuer: entity.owner, holder: phone)
+            let stranger = await SimulatedEntity.make("B-\(scaffold)")
+            let holder = await stranger.identity("phone")
+
+            func refused(by requester: Identity, _ note: String) async throws {
+                let envelope = try await makeEnvelope(issuer: stranger.owner, holder: holder,
+                    domains: [anchor.identityDomain], scopes: [IdentityLinkScope.sameEntity])
+                let result = try await anchor.set(keypath: "identityLinks.completeEnrollment",
+                    value: try IdentityLinkProtocolService.value(from: envelope), requester: requester)
+                guard case let .object(object)? = result, case let .string(message)? = object["message"] else {
+                    return XCTFail("\(tag) \(note): missing error result")
+                }
+                XCTAssertEqual(object["status"], .string("error"), "\(tag) \(note)")
+                XCTAssertTrue(message.hasPrefix("issuer_is_not_the_entity"), "\(tag) \(note): \(message)")
+            }
+
+            try await refused(by: phone, "linked device")
+            await IdentityLinkRuntimePolicy.shared.install(requireFreshAuthEvidence: true, freshAuthVerifier: { _ in true })
+            try await refused(by: entity.owner, "owner session on a fresh-auth host")
+            await IdentityLinkRuntimePolicy.shared.reset()
+
+            let links = await IdentityLinkRegistry.shared.activeLinks(ownerUUID: entity.owner.uuid)
+            XCTAssertEqual(links, [enrolled], tag)
+            let decision = await anchor.authorizationDecision(requestedAccess: "r---", at: "person", for: holder)
+            XCTAssertFalse(decision.allowed, tag)
+            try await assertGenesisUnchanged(anchor, owner: entity.owner, genesis: genesis, tag: tag)
+            await IdentityLinkRegistry.shared.clear(ownerUUID: entity.owner.uuid)
+        }
+    }
+
+    /// E3: en hel lenket identitet er entiteten og kan utstede neste lenke.
+    func testE3WholeLinkedIdentityCanIssueTheNextLink() async throws {
+        try await forEachScaffold { scaffold, anchor, entity in
+            let tag = "[\(scaffold.rawValue)] E3"
+            _ = try await seal(anchor, owner: entity.owner)
+            let phone = await entity.identity("phone")
+            _ = try await enroll(anchor, issuer: entity.owner, holder: phone)
+            let tablet = await entity.identity("tablet")
+            let record = try await enroll(anchor, issuer: phone, holder: tablet)
+            XCTAssertEqual(record.issuerIdentityUUID, phone.uuid, tag)
+            let decision = await anchor.authorizationDecision(requestedAccess: "r---", at: "person", for: tablet)
+            XCTAssertTrue(decision.allowed, tag)
+            await IdentityLinkRegistry.shared.clear(ownerUUID: entity.owner.uuid)
+        }
+    }
+
+    /// E2: en rå lenkepost krever eierens egen nøkkel, og finnes ikke der verten krever ferskt bevis.
+    func testE2RawLinkRecordNeedsOwnerKeyAndNoFreshAuthenticationDemand() async throws {
+        try await forEachScaffold { scaffold, anchor, entity in
+            let tag = "[\(scaffold.rawValue)] E2"
+            let genesis = try await seal(anchor, owner: entity.owner)
+            let phone = await entity.identity("phone")
+            let enrolled = try await enroll(anchor, issuer: entity.owner, holder: phone)
+            let tablet = await entity.identity("tablet")
+            let raw = IdentityLinkRecord(
+                linkID: "raw-tablet",
+                entityBinding: EntityBindingDescriptor(mode: .localEntityAnchor, entityAnchorReference: anchor.uuid),
+                linkedIdentity: try IdentityLinkProtocolService.descriptor(for: tablet),
+                approvedDomains: [anchor.identityDomain], approvedIdentityContexts: [],
+                approvedScopes: [IdentityLinkScope.sameEntity], issuerIdentityUUID: phone.uuid,
+                issuerType: .existingDevice, status: .active, linkedAt: IdentityLinkProtocolService.iso8601(Date()))
+            let rawValue = try IdentityLinkProtocolService.value(from: raw)
+            let keypath = EntityGenesisService.recordKeypath(linkID: raw.linkID)
+
+            func refused(_ requester: Identity, _ keypath: String, _ value: ValueType, _ code: String, _ note: String) async throws {
+                let result = try await anchor.set(keypath: keypath, value: value, requester: requester)
+                guard case let .object(object)? = result, case let .string(message)? = object["message"] else {
+                    return XCTFail("\(tag) \(note): missing error result")
+                }
+                XCTAssertEqual(object["status"], .string("error"), "\(tag) \(note)")
+                XCTAssertTrue(message.hasPrefix(code), "\(tag) \(note): \(message)")
+            }
+
+            // En lenket enhet er entiteten, men lager ikke nye lenker ved å skrive poster.
+            try await refused(phone, keypath, rawValue, "raw_link_write_requires_owner_proof", "linked device")
+            // Verken hele treet eller gjenbruksloggen kan skrives rått, heller ikke av eieren.
+            try await refused(entity.owner, "identityLinks.usedApprovalJTIs", .object([:]), "raw_link_write_not_allowed", "replay ledger")
+            try await refused(entity.owner, "identityLinks.records", .object([:]), "raw_link_write_not_allowed", "record set")
+            // Der verten krever ferskt bevis (staging), finnes ingen rå vei.
+            await IdentityLinkRuntimePolicy.shared.install(requireFreshAuthEvidence: true, freshAuthVerifier: nil)
+            try await refused(entity.owner, keypath, rawValue, "raw_link_write_requires_fresh_authentication", "fresh auth host")
+            await IdentityLinkRuntimePolicy.shared.reset()
+
+            let links = await IdentityLinkRegistry.shared.activeLinks(ownerUUID: entity.owner.uuid)
+            XCTAssertEqual(links, [enrolled], tag)
+            let decision = await anchor.authorizationDecision(requestedAccess: "r---", at: "person", for: tablet)
+            XCTAssertFalse(decision.allowed, tag)
+            try await assertGenesisUnchanged(anchor, owner: entity.owner, genesis: genesis, tag: tag)
+            await IdentityLinkRegistry.shared.clear(ownerUUID: entity.owner.uuid)
+        }
+    }
+
+    /// E4: malen for avtaler gir aldri identityLinks.
+    func testE4AgreementTemplateDoesNotGrantIdentityLinks() async throws {
+        try await forEachScaffold { scaffold, anchor, _ in
+            let granted = anchor.agreementTemplate.grants.map(\.keypath)
+            XCTAssertFalse(granted.contains { EntityAnchorLinkGuard.isIdentityLinkKeypath($0) },
+                "[\(scaffold.rawValue)] E4 \(granted)")
+        }
+    }
+
     private func seal(_ anchor: GeneralCell, owner: Identity) async throws -> ValueType {
         let result = try await anchor.set(keypath: "identityLinks.genesis", value: .string("onboarding"), requester: owner)
         guard case let .object(object)? = result, object["status"] == .string("sealed") else {
