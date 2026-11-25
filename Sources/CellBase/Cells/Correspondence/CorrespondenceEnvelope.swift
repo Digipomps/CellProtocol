@@ -53,7 +53,8 @@ public struct CorrespondenceOuterEnvelope: Codable, Equatable, Sendable {
 }
 
 /// The encrypted message payload. The sender signature covers every field
-/// except `senderSignature` and is created before this value is encrypted.
+/// except `senderSignature` and `inReplyTo`, and is created before this value
+/// is encrypted.
 public struct CorrespondenceInnerEnvelope: Codable {
     public var subject: String?
     public var contentType: String
@@ -62,6 +63,15 @@ public struct CorrespondenceInnerEnvelope: Codable {
     public var owner: Identity
     public var senderSignature: Data
     public var attachment: CorrespondenceAttachment?
+    /// The `messageID` this message answers, as a routing hint for the
+    /// recipient's private origin register. It sits inside the encrypted
+    /// payload, so the cell never sees it, and it names only a message the
+    /// recipient already holds. It is deliberately **not** in the sender
+    /// signature: clients that predate it rebuild the signing payload without
+    /// it and would otherwise reject every reply. It is authenticated only by
+    /// the sealed envelope (`senderVerified`), so treat it as a hint, never as
+    /// proof or authority.
+    public var inReplyTo: String?
 
     public init(
         subject: String?,
@@ -70,7 +80,8 @@ public struct CorrespondenceInnerEnvelope: Codable {
         clientMessageID: String,
         owner: Identity,
         senderSignature: Data,
-        attachment: CorrespondenceAttachment? = nil
+        attachment: CorrespondenceAttachment? = nil,
+        inReplyTo: String? = nil
     ) {
         self.subject = subject
         self.contentType = contentType
@@ -79,6 +90,7 @@ public struct CorrespondenceInnerEnvelope: Codable {
         self.owner = owner
         self.senderSignature = senderSignature
         self.attachment = attachment
+        self.inReplyTo = inReplyTo
     }
 
     public func chatMessage(
@@ -198,7 +210,8 @@ public enum CorrespondenceEnvelopeUtility {
         membershipFingerprint: String,
         recipients: [Identity],
         provider: IdentityKeyRoleProviderProtocol,
-        attachment: CorrespondenceAttachment? = nil
+        attachment: CorrespondenceAttachment? = nil,
+        inReplyTo: String? = nil
     ) async throws -> CorrespondencePreparedEnvelope {
         guard message.owner.signingPublicKeyFingerprint?.isEmpty == false else {
             throw CorrespondenceEnvelopeError.signingFailed
@@ -224,7 +237,8 @@ public enum CorrespondenceEnvelopeUtility {
             clientMessageID: clientMessageID ?? message.id,
             owner: message.owner.publicIdentitySnapshot(),
             senderSignature: innerSignature,
-            attachment: attachment
+            attachment: attachment,
+            inReplyTo: inReplyTo.flatMap { $0.isEmpty ? nil : $0 }
         )
         let plaintext = try JSONEncoder().encode(inner)
         let envelope = try await ContentCryptoEnvelopeUtility.seal(
