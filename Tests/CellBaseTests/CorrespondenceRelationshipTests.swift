@@ -739,6 +739,11 @@ final class CorrespondenceRelationshipTests: XCTestCase {
             value: .object(["messageID": .string(first)]), requester: f.invitee)
         XCTAssertEqual(field("status", receipt), .string("acknowledged"))
         let second = try await send(f, sender: f.invitee, recipient: f.owner, vault: f.i)
+        // The sender acknowledging its own message leaves it unread for the recipient (2026-11-25).
+        let own = try await f.cell.set(keypath: "ackMessage",
+            value: .object(["messageID": .string(second)]), requester: f.invitee)
+        XCTAssertEqual(field("status", own), .string("ignored-own-message"))
+        XCTAssertEqual(field("receiptState", own), .string("pending"))
         _ = try await read(f, id: second, recipient: f.owner, sender: f.invitee, vault: f.e)
         print("PURPOSE text: owner -> invitee and invitee -> owner opened")
         try await attachment(f, sender: f.owner, recipient: f.invitee, vault: f.e, receivingVault: f.i)
