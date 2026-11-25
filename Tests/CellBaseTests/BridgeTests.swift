@@ -1290,6 +1290,37 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(pathComponents[1].count, 36)
     }
 
+    func testExplicitDefaultPortInRemoteCellReferenceStillBuildsAValidChannelEndpoint() async throws {
+        // A deployment names its guest Cell as cell://host:443/PalazzoGuestShell (an explicit
+        // port is required there). The channel audience must not carry :443, or
+        // BridgeChannelAuthentication.Endpoint rejects it as malformed before any handshake.
+        let resolver = CellResolver.sharedInstance
+        let vault = EphemeralIdentityVault()
+        CellBase.defaultCellResolver = resolver
+        CellBase.defaultIdentityVault = vault
+        RecordingBridgeTransport.reset()
+        try await resolver.registerTransport(RecordingBridgeTransport.self, for: "wss")
+        let host = "default-port-guest.example"
+        resolver.registerRemoteCellHost(host, route: RemoteCellHostRoute(websocketEndpoint: "bridgehead", schemePreference: .automatic))
+        defer { resolver.unregisterRemoteCellHost(host) }
+        let requesterValue = await vault.identity(for: "default-port-requester", makeNewIfNotFound: true)
+        let requester = try XCTUnwrap(requesterValue)
+
+        _ = try await resolver.cellAtEndpoint(endpoint: "cell://\(host):443/PalazzoGuestShell", requester: requester)
+        let setupURL = try XCTUnwrap(RecordingBridgeTransport.recordedSetupURL())
+        let components = try XCTUnwrap(URLComponents(url: setupURL, resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.scheme, "wss")
+        XCTAssertEqual(components.host, host)
+        XCTAssertNil(components.port, "wss:443 is the default and must not be spelled out")
+        XCTAssertNoThrow(try BridgeChannelAuthentication.Endpoint(url: setupURL, domain: "bridge"))
+
+        XCTAssertNil(CellResolver.nonDefaultWebSocketPort(443, scheme: "wss"))
+        XCTAssertNil(CellResolver.nonDefaultWebSocketPort(80, scheme: "ws"))
+        XCTAssertEqual(CellResolver.nonDefaultWebSocketPort(8443, scheme: "wss"), 8443)
+        XCTAssertEqual(CellResolver.nonDefaultWebSocketPort(443, scheme: "ws"), 443)
+        XCTAssertNil(CellResolver.nonDefaultWebSocketPort(nil, scheme: "wss"))
+    }
+
     func testCellResolverAutomaticRemoteRoutesUseCleartextOnlyForLoopback() async throws {
         let previousWebSocketSecurityPolicy = CellBase.webSocketSecurityPolicy
         CellBase.webSocketSecurityPolicy = .developmentOnlyInsecureAllowed

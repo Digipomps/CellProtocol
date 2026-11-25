@@ -1789,6 +1789,16 @@ public class CellResolver: CellResolverProtocol {
         }
     }
 
+    /// A `cell://host:443/…` reference must name the same audience as `cell://host/…`.
+    /// BridgeChannelAuthentication.Endpoint rejects an explicit default port
+    /// (wss:443, ws:80) so every audience has one spelling; drop it here.
+    static func nonDefaultWebSocketPort(_ port: Int?, scheme: String) -> Int? {
+        switch (scheme, port) {
+        case ("wss", 443?), ("ws", 80?): return nil
+        default: return port
+        }
+    }
+
     private func remoteWebSocketEndpoint(from cellEndpointURL: URL) throws -> String {
         guard let host = cellEndpointURL.host else {
             throw CellResolverError.invalidRemoteCellReference(endpoint: cellEndpointURL.absoluteString)
@@ -1823,7 +1833,7 @@ public class CellResolver: CellResolverProtocol {
         var components = URLComponents()
         components.scheme = resolvedScheme
         components.host = host
-        components.port = cellEndpointURL.port
+        components.port = Self.nonDefaultWebSocketPort(cellEndpointURL.port, scheme: resolvedScheme)
         components.path = websocketPath
         if let queryItemsProvider = CellBase.remoteWebSocketQueryItemsProvider {
             let queryItems = queryItemsProvider(cellEndpointURL).filter { item in
@@ -1876,7 +1886,7 @@ public class CellResolver: CellResolverProtocol {
         var components = URLComponents()
         components.scheme = resolvedScheme
         components.host = host
-        components.port = cellEndpointURL.port
+        components.port = Self.nonDefaultWebSocketPort(cellEndpointURL.port, scheme: resolvedScheme)
         components.path = websocketPath
 
         guard let websocketURL = components.url else {
@@ -2564,7 +2574,7 @@ public class CellResolver: CellResolverProtocol {
         var components = URLComponents()
         components.scheme = resolvedScheme
         components.host = host
-        components.port = cellEndpointURL.port
+        components.port = Self.nonDefaultWebSocketPort(cellEndpointURL.port, scheme: resolvedScheme)
         components.path = sessionPath
         if let queryItemsProvider = CellBase.remoteWebSocketQueryItemsProvider {
             let queryItems = queryItemsProvider(cellEndpointURL).filter {
