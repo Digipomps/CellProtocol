@@ -653,3 +653,91 @@ private actor CorrespondenceTestIdentityVault: IdentityVaultProtocol, IdentityKe
         }
     }
 }
+
+/// `inReplyTo` (PDD_korrespondanse-opphavsregister_2026-11-24, AP5): a routing
+/// hint inside the encrypted payload, outside the sender signature so clients
+/// that predate it still verify replies.
+extension CorrespondenceCellTests {
+    private func replyRoundTrip(inReplyTo: String?) async throws -> (CorrespondenceOpenedEnvelope, CorrespondenceStoredEnvelope, String) {
+        let vault = CorrespondenceTestIdentityVault()
+        CellBase.defaultIdentityVault = vault
+        let owner = await vault.identity(for: "reply-owner", makeNewIfNotFound: true)!
+        let recipient = await vault.identity(for: "reply-recipient", makeNewIfNotFound: true)!
+        let cell = await CorrespondenceCell(owner: owner)
+        _ = try await cell.set(
+            keypath: "audience.inviteIdentities",
+            value: .object(["identityUUIDs": .list([.string(recipient.uuid)])]),
+            requester: owner)
+        let prepared = try await CorrespondenceEnvelopeUtility.prepare(
+            message: ChatMessage(owner: owner, content: "svar", contentType: "text/plain"),
+            subject: "Re: spørsmål",
+            cellID: cell.uuid,
+            membershipFingerprint: cell.membershipFingerprintSnapshot,
+            recipients: [recipient],
+            provider: vault,
+            inReplyTo: inReplyTo)
+        let response = try await cell.set(
+            keypath: "sendMessage",
+            value: try CorrespondenceSendRequest(preparedEnvelope: prepared, purposeRef: "purpose://contact.communication").valueType(),
+            requester: owner)
+        guard case .object(let object)? = response, case .string(let messageID)? = object["messageID"] else {
+            XCTFail("send failed: \(String(describing: response))"); throw CancellationError()
+        }
+        let readValue = try await cell.set(keypath: "readMessage", value: .object(["messageID": .string(messageID)]), requester: owner)
+        let stored = try CorrespondenceCellCodec.decode(try XCTUnwrap(readValue), as: CorrespondenceStoredEnvelope.self)
+        let opened = try await CorrespondenceEnvelopeUtility.open(storedEnvelope: stored, recipient: recipient, sender: owner, provider: vault)
+        return (opened, stored, messageID)
+    }
+
+    func testReplyReferenceReachesTheRecipientAndTheSignatureStillVerifies() async throws {
+        let (opened, stored, _) = try await replyRoundTrip(inReplyTo: "msg-the-question")
+        XCTAssertTrue(opened.senderVerified)
+        XCTAssertEqual(opened.inner.inReplyTo, "msg-the-question")
+        XCTAssertEqual(opened.inner.content, "svar")
+        // The cell holds only ciphertext; the hint is not in the stored outer envelope.
+        let outer = String(decoding: try JSONEncoder().encode(stored.outer), as: UTF8.self)
+        XCTAssertFalse(outer.contains("msg-the-question"))
+    }
+
+    func testMessageWithoutReplyReferenceIsUnchanged() async throws {
+        let (opened, _, _) = try await replyRoundTrip(inReplyTo: nil)
+        XCTAssertNil(opened.inner.inReplyTo)
+        let encoded = String(decoding: try JSONEncoder().encode(opened.inner), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("inReplyTo"), "no new key on the wire when the field is unset")
+    }
+
+    /// A client that predates the field decodes the payload without it and
+    /// rebuilds the signing payload from the fields it knows. The signature it
+    /// checks must match, or every reply would be rejected there.
+    func testClientThatPredatesTheFieldStillVerifiesTheReply() async throws {
+        let (opened, _, _) = try await replyRoundTrip(inReplyTo: "msg-the-question")
+        struct LegacyInner: Codable {
+            var subject: String?
+            var contentType: String
+            var content: String
+            var clientMessageID: String
+            var owner: Identity
+            var senderSignature: Data
+            var attachment: CorrespondenceAttachment?
+        }
+        struct LegacySigningPayload: Codable {
+            var subject: String?
+            var contentType: String
+            var content: String
+            var clientMessageID: String
+            var ownerIdentityUUID: String
+            var ownerSigningKeyFingerprint: String
+            var attachment: CorrespondenceAttachment?
+        }
+        let wire = try JSONEncoder().encode(opened.inner)
+        let legacy = try JSONDecoder().decode(LegacyInner.self, from: wire)
+        let payload = LegacySigningPayload(
+            subject: legacy.subject, contentType: legacy.contentType, content: legacy.content,
+            clientMessageID: legacy.clientMessageID, ownerIdentityUUID: legacy.owner.uuid,
+            ownerSigningKeyFingerprint: legacy.owner.signingPublicKeyFingerprint ?? "",
+            attachment: legacy.attachment)
+        let signingData = try CanonicalPayloadEncoder.data(for: payload)
+        let verified = await legacy.owner.verify(signature: legacy.senderSignature, for: signingData)
+        XCTAssertTrue(verified)
+    }
+}
