@@ -323,9 +323,9 @@ public extension CellSecurityEvent {
         switch decision.path {
         case .deniedIdentityReferenceMismatch, .deniedOwnerProofFailed:
             return .high
-        case .deniedNoGrant:
+        case .deniedNoGrant, .deniedScopedIdentityLink:
             return .medium
-        case .debugBypass, .ownerProof, .signedContract, .cellSpecific:
+        case .debugBypass, .ownerProof, .signedContract, .cellSpecific, .scopedIdentityLink:
             return .info
         }
     }

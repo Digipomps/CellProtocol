@@ -3044,7 +3044,10 @@ public class CellResolver: CellResolverProtocol {
         guard let generalCell = emitCell as? GeneralCell else {
             return false
         }
-        return await generalCell.hasVerifiedAuthorizationContract(for: requester)
+        if await generalCell.hasVerifiedAuthorizationContract(for: requester) {
+            return true
+        }
+        return await generalCell.hasScopedLinkAdmission(for: requester)
     }
 
     /// Use the same scoped identity-origin envelope as GeneralCell. Bridge

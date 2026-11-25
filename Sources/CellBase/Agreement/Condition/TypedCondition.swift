@@ -39,6 +39,8 @@ struct TypedCondition: Codable {
             condition = try values.decode(ColdStorageCondition.self, forKey: .condition)
         case .lifecycleAlertAccess:
             condition = try values.decode(LifecycleAlertAccessCondition.self, forKey: .condition)
+        case .recipient:
+            condition = try values.decode(RecipientCondition.self, forKey: .condition)
         }
     }
     
@@ -81,6 +83,10 @@ struct TypedCondition: Codable {
             }
         case .lifecycleAlertAccess:
             if let encodeCondition = condition as? LifecycleAlertAccessCondition {
+                try container.encode(encodeCondition, forKey: .condition)
+            }
+        case .recipient:
+            if let encodeCondition = condition as? RecipientCondition {
                 try container.encode(encodeCondition, forKey: .condition)
             }
         }

@@ -13,6 +13,7 @@ public enum ConditionType: String, Codable {
     case lifecycleFunding
     case coldStorage
     case lifecycleAlertAccess
+    case recipient
 }
 
 extension ConditionType {

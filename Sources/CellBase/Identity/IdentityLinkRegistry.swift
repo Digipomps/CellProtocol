@@ -11,7 +11,9 @@ public enum IdentityLinkScope {
     public static let legacyEntityAuth = "entity-auth"
 
     public static func grantsSameEntity(_ scopes: [String]) -> Bool {
-        scopes.contains(sameEntity) || scopes.contains(legacyEntityAuth)
+        // En lenke med avgrensning er aldri hel, selv om den også nevner same_entity.
+        (scopes.contains(sameEntity) || scopes.contains(legacyEntityAuth))
+            && !ScopedIdentityLinkPolicy.mentionsScope(scopes)
     }
 }
 
@@ -289,4 +291,34 @@ public actor IdentityLinkRegistry {
         }
         return nil
     }
+
+    /// Alle avgrensede lenker for denne nøkkelen, uansett status, så kalleren kan svare
+    /// `extension_revoked` i stedet for et generelt nei. Gir aldri eiermakt.
+    /// Organisasjoner har ingen avgrensede lenker: en persons agent handler ikke for en organisasjon.
+    public func scopedLinks(
+        ownerUUID: String,
+        requesterUUID: String,
+        requesterSigningKey: Data?,
+        domain: String
+    ) -> [ScopedIdentityLink] {
+        guard let links = linksByOwner[ownerUUID], let signingKey = requesterSigningKey, !signingKey.isEmpty,
+              organizationMachineIdentitiesByOwner[ownerUUID] == nil else {
+            return []
+        }
+        return links.values.sorted(by: { $0.linkID < $1.linkID }).compactMap { record in
+            guard record.linkedIdentity.uuid == requesterUUID,
+                  record.linkedIdentity.publicKey == signingKey,
+                  record.approvedDomains.contains(domain),
+                  record.entityBinding.mode == .localEntityAnchor,
+                  let policy = ScopedIdentityLinkPolicy(approvedScopes: record.approvedScopes) else {
+                return nil
+            }
+            return ScopedIdentityLink(record: record, policy: policy)
+        }
+    }
+}
+
+public struct ScopedIdentityLink: Equatable, Sendable {
+    public var record: IdentityLinkRecord
+    public var policy: ScopedIdentityLinkPolicy
 }

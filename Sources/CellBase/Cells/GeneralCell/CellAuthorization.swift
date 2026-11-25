@@ -11,6 +11,10 @@ public enum CellAuthorizationPath: String, Codable, Sendable {
     case deniedOwnerProofFailed
     case deniedIdentityReferenceMismatch
     case deniedNoGrant
+    /// Avgrenset lenke: kallet lå innenfor lenken og cellens RecipientCondition.
+    case scopedIdentityLink
+    /// Avgrenset lenke som ikke slapp inn (se `reasonCode`).
+    case deniedScopedIdentityLink
 }
 
 public struct CellAuthorizationRequest: Codable, Sendable {
