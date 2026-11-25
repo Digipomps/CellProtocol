@@ -40,7 +40,7 @@ final class ScopedIdentityLinkTests: XCTestCase {
         XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: scopes + ["scope.recipient:openai"]), "to mottakere feiler lukket")
         XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: scopes.filter { !$0.hasPrefix("scope.expires:") }), "utløp er påkrevd")
         XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: scopes.filter { !$0.hasPrefix("scope.grant:") }), "minst én tillatelse")
-        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: ["scoped", "scope.grant:rw:cell-a:x", "scope.recipient:local", "scope.expires:2030-01-01T00:00:00Z"]), "tillatelse må være fire tegn")
+        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: ["scoped", "scope.grant:rw:cell-a:x", "scope.recipient:local", "scope.expires:2030-01-01T00:00:00Z"]), "tillatelse må være r---, -w-- eller rw--")
         XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: Array(scopes.dropFirst())), "markøren er påkrevd")
         XCTAssertTrue(IdentityLinkScope.grantsSameEntity([IdentityLinkScope.sameEntity]), "hel lenke er uendret")
     }
@@ -197,6 +197,66 @@ final class ScopedIdentityLinkTests: XCTestCase {
         XCTAssertNotEqual(decision.path, .ownerProof)
     }
 
+    func testOnlyReadAndWriteBitsAndBoundedSize() {
+        let base = ["scoped", "scope.recipient:local", "scope.expires:2030-01-01T00:00:00Z"]
+        XCTAssertNotNil(ScopedIdentityLinkPolicy(approvedScopes: base + ["scope.grant:rw--:cell-a:x"]))
+        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: base + ["scope.grant:r-x-:cell-a:x"]), "kjør kan ikke gis i en lenke")
+        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: base + ["scope.grant:r--s:cell-a:x"]), "del kan ikke gis i en lenke")
+        let many = (0...ScopedIdentityLinkPolicy.maximumGrants).map { "scope.grant:r---:cell-a:k\($0)" }
+        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: base + many), "for mange tillatelser feiler lukket")
+        let long = "scope.grant:r---:cell-a:" + String(repeating: "k", count: ScopedIdentityLinkPolicy.maximumScopeLength)
+        XCTAssertNil(ScopedIdentityLinkPolicy(approvedScopes: base + [long]))
+    }
+
+    func testLinkLongerThanMaximumLifetimeGivesNothing() async throws {
+        let student = await vault.makeIdentity(displayName: "student")
+        let agent = await vault.makeIdentity(displayName: "claude-code-laptop")
+        let documents = await makeCell(owner: student, recipients: ["anthropic"])
+        defer { Task { await IdentityLinkRegistry.shared.clear(ownerUUID: student.uuid) } }
+        _ = try await linkAgent(agent, to: student, domain: documents.identityDomain, grants: [
+            .init(permission: "r---", cellUUID: documents.uuid, keypath: "documents.list"),
+        ], recipient: "anthropic", expiresAt: Date().addingTimeInterval(ScopedIdentityLinkPolicy.maximumLifetime + 3600))
+        let decision = await documents.authorizationDecision(requestedAccess: "r---", at: "documents.list", for: agent)
+        XCTAssertFalse(decision.allowed, "en lenke uten reell utløpstid skal ikke virke")
+        XCTAssertEqual(decision.reasonCode, "extension_expired")
+    }
+
+    func testSecondLinkCoversWhatTheFirstDoesNotAndRevokedOneDoesNotBlock() async throws {
+        let student = await vault.makeIdentity(displayName: "student")
+        let agent = await vault.makeIdentity(displayName: "claude-code-laptop")
+        let documents = await makeCell(owner: student, recipients: ["anthropic"])
+        defer { Task { await IdentityLinkRegistry.shared.clear(ownerUUID: student.uuid) } }
+        let first = try await linkAgent(agent, to: student, domain: documents.identityDomain, grants: [
+            .init(permission: "r---", cellUUID: documents.uuid, keypath: "documents.list"),
+        ], recipient: "anthropic")
+        _ = try await linkAgent(agent, to: student, domain: documents.identityDomain, grants: [
+            .init(permission: "r---", cellUUID: documents.uuid, keypath: "documents.secret"),
+        ], recipient: "anthropic")
+        await IdentityLinkRegistry.shared.revoke(
+            ownerUUID: student.uuid, linkID: first.record.linkID, revokedAt: IdentityLinkProtocolService.iso8601(Date())
+        )
+        let secret = await documents.authorizationDecision(requestedAccess: "r---", at: "documents.secret", for: agent)
+        XCTAssertTrue(secret.allowed, secret.reason)
+        let list = await documents.authorizationDecision(requestedAccess: "r---", at: "documents.list", for: agent)
+        XCTAssertFalse(list.allowed, "den trukne lenken gir ingenting")
+    }
+
+    func testCellThatDoesNotAdmitScopedLinksStaysClosed() async throws {
+        let student = await vault.makeIdentity(displayName: "student")
+        let agent = await vault.makeIdentity(displayName: "claude-code-laptop")
+        let closed = await ScopedLinkClosedTestCell(owner: student)
+        await closed.addInterceptForGet(requester: student, key: "identityLinks") { _, _ in .string("links") }
+        closed.agreementTemplate.conditions.append(RecipientCondition(allowedRecipients: ["anthropic"]))
+        defer { Task { await IdentityLinkRegistry.shared.clear(ownerUUID: student.uuid) } }
+        _ = try await linkAgent(agent, to: student, domain: closed.identityDomain, grants: [
+            .init(permission: "rw--", cellUUID: closed.uuid, keypath: "identityLinks"),
+        ], recipient: "anthropic")
+        let decision = await closed.authorizationDecision(requestedAccess: "-w--", at: "identityLinks", for: agent)
+        XCTAssertFalse(decision.allowed, "en agent skal aldri kunne forvalte lenker")
+        let admitted = await closed.hasScopedLinkAdmission(for: agent)
+        XCTAssertFalse(admitted)
+    }
+
     // MARK: - Hjelpere
 
     private func makeCell(owner: Identity, recipients: [String]?) async -> GeneralCell {
@@ -273,4 +333,9 @@ final class ScopedIdentityLinkTests: XCTestCase {
             expectedPresentationChallenge: challenge, expectedPresentationDomain: "staging.haven.digipomps.org"
         ))
     }
+}
+
+/// En celle som, likt EntityAnchor, aldri slipper inn avgrensede lenker.
+final class ScopedLinkClosedTestCell: GeneralCell {
+    override var admitsScopedIdentityLinks: Bool { false }
 }

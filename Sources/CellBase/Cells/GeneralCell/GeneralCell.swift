@@ -2159,64 +2159,85 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         throw CellAuthorizationError.denied(decision)
     }
 
-    /// Avgrenset lenke for spørreren, med samme krav til nøkkelbevis som en hel lenke.
-    private func verifiedScopedLink(for identity: Identity) async -> (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)? {
-        guard let scoped = await IdentityLinkRegistry.shared.scopedLink(
+    /// Celler som aldri skal nås med en avgrenset lenke (f.eks. EntityAnchor, som forvalter
+    /// lenkene selv) overstyrer denne til `false`. Da hjelper verken lenke eller RecipientCondition.
+    open var admitsScopedIdentityLinks: Bool { true }
+
+    /// Avgrensede lenker for spørreren, med samme krav til nøkkelbevis som en hel lenke.
+    private func verifiedScopedLinks(for identity: Identity) async -> [ScopedIdentityLink] {
+        let links = await IdentityLinkRegistry.shared.scopedLinks(
             ownerUUID: owner.uuid,
             requesterUUID: identity.uuid,
             requesterSigningKey: identity.publicSecureKey?.compressedKey,
             domain: identityDomain
-        ) else { return nil }
-        let trustedIdentity = IdentityLinkProtocolService.identity(from: scoped.record.linkedIdentity)
-        guard await checkIdentityOrigin(identity, against: trustedIdentity) else { return nil }
-        return scoped
+        )
+        guard let first = links.first else { return [] }
+        let trustedIdentity = IdentityLinkProtocolService.identity(from: first.record.linkedIdentity)
+        guard await checkIdentityOrigin(identity, against: trustedIdentity) else { return [] }
+        return links
     }
 
     /// purpose://candidate.egen-agent-mcp.tools-by-agreement: en avgrenset lenke slipper inn
-    /// bare når lenken er aktiv og ikke utløpt, kallet ligger innenfor lenken, og cellens
+    /// bare når lenken er aktiv og innenfor levetiden, kallet ligger innenfor lenken, og cellens
     /// Agreement har en RecipientCondition som tillater lenkens mottaker. Cellen tilhører
     /// entiteten (lenken er slått opp på cellens eier), så entiteten har selv tilgangen.
+    /// Har nøkkelen flere lenker, holder det at én av dem dekker kallet fullt ut.
     private func scopedLinkDecision(
         request: CellAuthorizationRequest,
-        record: IdentityLinkRecord,
-        policy: ScopedIdentityLinkPolicy
+        links: [ScopedIdentityLink]
     ) -> CellAuthorizationDecision {
-        func deny(_ code: String, _ reason: String, _ message: String) -> CellAuthorizationDecision {
-            CellAuthorizationDecision(
-                allowed: false,
-                path: .deniedScopedIdentityLink,
-                reason: reason + " (link \(record.linkID))",
-                request: request,
-                reasonCode: code,
-                userMessage: message,
-                canAutoResolve: false
-            )
+        // Høyere tall = kom lenger før det stoppet; den mest presise avvisningen rapporteres.
+        var best: (rank: Int, code: String, reason: String, message: String, linkID: String)?
+        func note(_ rank: Int, _ code: String, _ reason: String, _ message: String, _ linkID: String) {
+            if best == nil || rank > best!.rank { best = (rank, code, reason, message, linkID) }
         }
-        guard record.status == .active else {
-            return deny("extension_revoked", "The scoped link was revoked.", "This agent has been disconnected.")
-        }
-        guard authorizationClock() < policy.expiresAt else {
-            return deny("extension_expired", "The scoped link has expired.", "This agent's access has expired.")
-        }
-        guard let grant = policy.grant(covering: request.requestedAccess, at: request.keypath, inCell: uuid) else {
-            return deny("link_scope_missing", "The scoped link does not cover this keypath and permission in this cell.", "This agent was not given access to this.")
-        }
+        let now = authorizationClock()
         let recipientConditions = agreementTemplate.conditions.compactMap { $0 as? RecipientCondition }
-        guard !recipientConditions.isEmpty,
-              recipientConditions.allSatisfy({ $0.allows(policy.recipient) }) else {
-            return deny("recipient_not_allowed", "The cell's Agreement does not allow recipient '\(policy.recipient)'.", "This cell does not allow its content to be sent to this agent's provider.")
+        for link in links {
+            let record = link.record, policy = link.policy
+            guard admitsScopedIdentityLinks else {
+                note(0, "link_scope_missing", "This cell does not admit scoped links.", "This agent was not given access to this.", record.linkID)
+                continue
+            }
+            guard record.status == .active else {
+                note(1, "extension_revoked", "The scoped link was revoked.", "This agent has been disconnected.", record.linkID)
+                continue
+            }
+            guard policy.isWithinLifetime(linkedAt: record.linkedAt, now: now) else {
+                note(2, "extension_expired", "The scoped link has expired or exceeds the maximum lifetime.", "This agent's access has expired.", record.linkID)
+                continue
+            }
+            guard let grant = policy.grant(covering: request.requestedAccess, at: request.keypath, inCell: uuid) else {
+                note(3, "link_scope_missing", "The scoped link does not cover this keypath and permission in this cell.", "This agent was not given access to this.", record.linkID)
+                continue
+            }
+            guard !recipientConditions.isEmpty,
+                  recipientConditions.allSatisfy({ $0.allows(policy.recipient) }) else {
+                note(4, "recipient_not_allowed", "The cell's Agreement does not allow recipient '\(policy.recipient)'.", "This cell does not allow its content to be sent to this agent's provider.", record.linkID)
+                continue
+            }
+            var decision = CellAuthorizationDecision(
+                allowed: true,
+                path: .scopedIdentityLink,
+                reason: "Requester proved control of a key with a scoped link from the owner (link \(record.linkID)); the call is inside the link and the cell's RecipientCondition.",
+                request: request,
+                reasonCode: "scoped_identity_link",
+                userMessage: "Access granted to a connected agent."
+            )
+            decision.grantRef = "scope://\(record.linkID)/\(grant.permission)/\(grant.keypath)"
+            decision.agreementRef = "agreement://\(agreementTemplate.uuid)"
+            return decision
         }
-        var decision = CellAuthorizationDecision(
-            allowed: true,
-            path: .scopedIdentityLink,
-            reason: "Requester proved control of a key with a scoped link from the owner (link \(record.linkID)); the call is inside the link and the cell's RecipientCondition.",
+        let denial = best ?? (0, "link_scope_missing", "No scoped link applies.", "This agent was not given access to this.", "-")
+        return CellAuthorizationDecision(
+            allowed: false,
+            path: .deniedScopedIdentityLink,
+            reason: denial.reason + " (link \(denial.linkID))",
             request: request,
-            reasonCode: "scoped_identity_link",
-            userMessage: "Access granted to a connected agent."
+            reasonCode: denial.code,
+            userMessage: denial.message,
+            canAutoResolve: false
         )
-        decision.grantRef = "scope://\(record.linkID)/\(grant.permission)/\(grant.keypath)"
-        decision.agreementRef = "agreement://\(agreementTemplate.uuid)"
-        return decision
     }
 
     /// Same registry constraints and cryptographic proof for preflight and
@@ -2383,7 +2404,7 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
         var contracts: [Contract]
         var linkedIdentityLinkID: String? = nil
         /// Avgrenset lenke: gir aldri eiermakt, se `scopedLinkDecision`.
-        var scopedLink: (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)? = nil
+        var scopedLinks: [ScopedIdentityLink] = []
     }
 
     /// Closed implementation: neither an overridden validateAccess nor a
@@ -2415,15 +2436,17 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
                 linkedIdentityLinkID: link.linkID
             )
         }
-        if !ownerReferenceMatches,
-           let scoped = await verifiedScopedLink(for: identity) {
-            // Den lenkede nøkkelen får bare lenken: ingen eiermakt, ingen egne kontrakter.
-            return AuthorizationEvidence(
-                ownerReferenceMatches: false,
-                ownerProofValid: false,
-                contracts: [],
-                scopedLink: scoped
-            )
+        if !ownerReferenceMatches {
+            let scoped = await verifiedScopedLinks(for: identity)
+            if !scoped.isEmpty {
+                // Den lenkede nøkkelen får bare lenken: ingen eiermakt, ingen egne kontrakter.
+                return AuthorizationEvidence(
+                    ownerReferenceMatches: false,
+                    ownerProofValid: false,
+                    contracts: [],
+                    scopedLinks: scoped
+                )
+            }
         }
         return AuthorizationEvidence(
             ownerReferenceMatches: ownerReferenceMatches,
@@ -2445,8 +2468,8 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
             requestedAccess: requestedAccess,
             requester: identity
         )
-        if let scoped = evidence.scopedLink {
-            return scopedLinkDecision(request: request, record: scoped.record, policy: scoped.policy)
+        if !evidence.scopedLinks.isEmpty {
+            return scopedLinkDecision(request: request, links: evidence.scopedLinks)
         }
         let cellSpecificAllowed = evidence.ownerReferenceMatches
             ? false
@@ -2600,10 +2623,13 @@ open class GeneralCell: CellProtocol, OwnerInstantiable, Codable, CellAuthorizat
     /// this Cell. Like a Contract, it only lets the concrete Cell be resolved; every
     /// GET and SET is still decided by `scopedLinkDecision`.
     func hasScopedLinkAdmission(for identity: Identity) async -> Bool {
-        guard let scoped = await verifiedScopedLink(for: identity) else { return false }
-        return scoped.record.status == .active
-            && authorizationClock() < scoped.policy.expiresAt
-            && scoped.policy.grantsAnything(inCell: uuid)
+        guard admitsScopedIdentityLinks else { return false }
+        let now = authorizationClock()
+        return await verifiedScopedLinks(for: identity).contains {
+            $0.record.status == .active
+                && $0.policy.isWithinLifetime(linkedAt: $0.record.linkedAt, now: now)
+                && $0.policy.grantsAnything(inCell: uuid)
+        }
     }
     
     func determineIdentityState(identity: Identity) async -> IdentityState {

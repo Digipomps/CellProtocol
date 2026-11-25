@@ -38,6 +38,13 @@ public struct ScopedIdentityLinkPolicy: Equatable, Sendable {
     public static let expiresPrefix = "scope.expires:"
     public static let devicePrefix = "scope.device:"
 
+    /// Grenser som holder en avgrenset lenke liten og kortlivet. Over grensen: ingen tilgang.
+    public static let maximumGrants = 64
+    public static let maximumScopeLength = 512
+    public static let maximumLifetime: TimeInterval = 90 * 24 * 60 * 60
+    /// En agent leser eller skriver. Andre tillatelsesbiter (kjør, del) kan ikke gis i en lenke.
+    public static let allowedPermissions: Set<String> = ["r---", "-w--", "rw--"]
+
     /// Sant når lista har noe som helst avgrensning i seg. Brukes for å hindre at
     /// en avgrenset lenke noen gang leses som hel.
     public static func mentionsScope(_ scopes: [String]) -> Bool {
@@ -55,15 +62,14 @@ public struct ScopedIdentityLinkPolicy: Equatable, Sendable {
         var recipients: [String] = []
         var expiries: [Date] = []
         var devices: [String] = []
+        guard scopes.allSatisfy({ $0.count <= Self.maximumScopeLength }) else { return nil }
         for scope in scopes {
             if scope == Self.marker { continue }
             if scope.hasPrefix(Self.grantPrefix) {
                 let parts = scope.dropFirst(Self.grantPrefix.count).split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
                 guard parts.count == 3 else { return nil }
                 let permission = String(parts[0]), cellUUID = String(parts[1]), keypath = String(parts[2])
-                guard permission.count == 4,
-                      Permission(permission).permissionString == permission,
-                      permission != "----",
+                guard Self.allowedPermissions.contains(permission),
                       !cellUUID.isEmpty,
                       !keypath.isEmpty else { return nil }
                 grants.append(ScopeGrant(permission: permission, cellUUID: cellUUID, keypath: keypath))
@@ -81,7 +87,8 @@ public struct ScopedIdentityLinkPolicy: Equatable, Sendable {
                 return nil
             }
         }
-        guard !grants.isEmpty, recipients.count == 1, expiries.count == 1, devices.count <= 1 else {
+        guard !grants.isEmpty, grants.count <= Self.maximumGrants,
+              recipients.count == 1, expiries.count == 1, devices.count <= 1 else {
             return nil
         }
         self.grants = grants
@@ -111,6 +118,12 @@ public struct ScopedIdentityLinkPolicy: Equatable, Sendable {
         return grants.first {
             $0.cellUUID == cellUUID && Grant(keypath: $0.keypath, permission: $0.permission).granted(requested)
         }
+    }
+
+    /// Lenken gjelder fra `linkedAt` til `expiresAt`, og aldri lenger enn `maximumLifetime`.
+    public func isWithinLifetime(linkedAt: String, now: Date) -> Bool {
+        guard let start = Self.parseDate(linkedAt) else { return false }
+        return now < expiresAt && expiresAt.timeIntervalSince(start) <= Self.maximumLifetime
     }
 
     public func grantsAnything(inCell cellUUID: String) -> Bool {

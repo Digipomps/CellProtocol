@@ -292,31 +292,33 @@ public actor IdentityLinkRegistry {
         return nil
     }
 
-    /// Avgrenset lenke for denne nøkkelen, uansett status, så kalleren kan svare
+    /// Alle avgrensede lenker for denne nøkkelen, uansett status, så kalleren kan svare
     /// `extension_revoked` i stedet for et generelt nei. Gir aldri eiermakt.
     /// Organisasjoner har ingen avgrensede lenker: en persons agent handler ikke for en organisasjon.
-    public func scopedLink(
+    public func scopedLinks(
         ownerUUID: String,
         requesterUUID: String,
         requesterSigningKey: Data?,
         domain: String
-    ) -> (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)? {
+    ) -> [ScopedIdentityLink] {
         guard let links = linksByOwner[ownerUUID], let signingKey = requesterSigningKey, !signingKey.isEmpty,
               organizationMachineIdentitiesByOwner[ownerUUID] == nil else {
-            return nil
+            return []
         }
-        var revoked: (record: IdentityLinkRecord, policy: ScopedIdentityLinkPolicy)?
-        for record in links.values.sorted(by: { $0.linkID < $1.linkID }) {
+        return links.values.sorted(by: { $0.linkID < $1.linkID }).compactMap { record in
             guard record.linkedIdentity.uuid == requesterUUID,
                   record.linkedIdentity.publicKey == signingKey,
                   record.approvedDomains.contains(domain),
                   record.entityBinding.mode == .localEntityAnchor,
                   let policy = ScopedIdentityLinkPolicy(approvedScopes: record.approvedScopes) else {
-                continue
+                return nil
             }
-            if record.status == .active { return (record, policy) }
-            revoked = revoked ?? (record, policy)
+            return ScopedIdentityLink(record: record, policy: policy)
         }
-        return revoked
     }
+}
+
+public struct ScopedIdentityLink: Equatable, Sendable {
+    public var record: IdentityLinkRecord
+    public var policy: ScopedIdentityLinkPolicy
 }

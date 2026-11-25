@@ -38,6 +38,10 @@ private actor SignedAgreementCommitGate {
 }
 
 public class EntityAnchorCell: GeneralCell {
+    /// EntityAnchor forvalter entitetens lenker og egne data. En avgrenset lenke (en agent)
+    /// slipper aldri inn her, uansett hva lenken eller Agreement sier.
+    public override var admitsScopedIdentityLinks: Bool { false }
+
     static let storageFilename = "keypathstorage.json"
     static let authorityJournalFilename = "entity-authority-journal.json"
     private var storage: Entity
