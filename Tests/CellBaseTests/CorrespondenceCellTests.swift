@@ -384,8 +384,8 @@ final class CorrespondenceCellTests: XCTestCase {
         )
 
         let flow = try await cell.flow(requester: owner)
-        let flowExpectation = expectation(description: "send, read, and receipt flow events")
-        flowExpectation.expectedFulfillmentCount = 3
+        let flowExpectation = expectation(description: "send and read flow events")
+        flowExpectation.expectedFulfillmentCount = 2
         var observedEvents = [String]()
         let lock = NSLock()
         let cancellable = flow.sink(
@@ -417,15 +417,21 @@ final class CorrespondenceCellTests: XCTestCase {
             value: .object(["messageID": .string(messageID)]),
             requester: owner
         )
-        _ = try await cell.set(
+        // The owner sent this message. A sender cannot acknowledge its own
+        // message: the answer says so, the state is unchanged, and no receipt
+        // event goes out (2026-11-25).
+        let ownAck = try await cell.set(
             keypath: "ackMessage",
             value: .object(["messageID": .string(messageID)]),
             requester: owner
         )
+        XCTAssertEqual(stringField("status", in: ownAck), "ignored-own-message")
+        XCTAssertEqual(stringField("receiptState", in: ownAck), "pending")
 
         await fulfillment(of: [flowExpectation], timeout: 1.0)
+        try await Task.sleep(nanoseconds: 100_000_000)
         let eventSnapshot = lock.withLock { observedEvents }
-        XCTAssertEqual(eventSnapshot, ["message.stored", "message.read", "message.receipt"])
+        XCTAssertEqual(eventSnapshot, ["message.stored", "message.read"])
     }
 
     func testS3ExpiryDeletesOuterAndCiphertextTogether() async throws {

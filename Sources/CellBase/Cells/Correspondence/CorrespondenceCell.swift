@@ -839,6 +839,20 @@ public final class CorrespondenceCell: GeneralCell, MeddleOperationAuthorization
             removeExpiredMessage(messageID, record: stored)
             return denial(.messageExpired)
         }
+        // Kvitteringen er mottakerens: én tilstand per melding, og den betyr at
+        // en annen enn avsenderen har tatt imot den. Avsenderen kan ikke kvittere
+        // for sin egen melding. Målt 2026-11-25: to nye meldinger sto som kvittert
+        // hos mottakeren uten at mottakerens side hadde kvittert dem, og i samme
+        // relasjon var alt begge parter hadde sendt, kvittert. Cellen skilte ikke på
+        // hvem som kvitterte. Svaret er et vanlig svar, så en klient som kvitterer
+        // alt i innboksen, ikke feiler; tilstanden endres ikke.
+        if stored.outer.senderIdentityUUID == requester.uuid {
+            return .object([
+                "status": .string("ignored-own-message"),
+                "messageID": .string(messageID),
+                "receiptState": .string(stored.outer.receiptState)
+            ])
+        }
         stored.outer.receiptState = "acknowledged"
         guard storedEnvelopesByMessageID.update(stored) else { return denial(.messageExpired) }
         emit(event: "message.receipt", fields: [
