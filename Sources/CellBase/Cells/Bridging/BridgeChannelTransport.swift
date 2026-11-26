@@ -279,7 +279,11 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         let task = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) }
             catch { return }
-            await self?.close()
+            // Codex 26.11: en gammel tidtaker som allerede hadde våknet, skal ikke
+            // lukke en forbindelse som er fornyet i mellomtiden.
+            guard !Task.isCancelled, let self else { return }
+            if let expiry = self.session.expiresAt, expiry.timeIntervalSinceNow > 0.5 { return }
+            await self.close()
         }
         lock.withLock {
             guard !stopped else { task.cancel(); return }
@@ -655,12 +659,17 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
         let renewal = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint, renewingGeneration: generation)
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                // Codex 26.11: en avbrytelse før registreringen når ikke onCancel
+                // (den fant ingen fornyelse), så den sjekkes under samme lås.
+                let cancelled = Task.isCancelled
                 let started = lock.withLock { () -> Bool in
-                    guard !stopped, renewalOperation == nil, renewalWaiter == nil else { return false }
+                    guard !cancelled, !stopped, renewalOperation == nil, renewalWaiter == nil else { return false }
                     renewalOperation = renewal; renewalWaiter = continuation
                     return true
                 }
-                guard started else { continuation.resume(throwing: Auth.Failure.unexpectedMessage); return }
+                guard started else {
+                    continuation.resume(throwing: cancelled ? CancellationError() : Auth.Failure.unexpectedMessage); return
+                }
                 Task { [weak self] in
                     try? await Task.sleep(nanoseconds: UInt64(max(1, timeout) * 1_000_000_000))
                     await self?.failRenewal(renewal, Auth.Failure.expired)
