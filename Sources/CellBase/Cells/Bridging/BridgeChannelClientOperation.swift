@@ -18,8 +18,11 @@ public actor BridgeChannelClientOperation {
     private var active = true
     private var signingStarted = false
     private var challengeValue: Auth.Challenge?
+    /// HD-0352: set when this operation renews a live lease in band. The server
+    /// must then use exactly this generation and the renewal direction.
+    private let renewingGeneration: String?
 
-    public init(owner: Identity, endpoint: Auth.Endpoint,
+    public init(owner: Identity, endpoint: Auth.Endpoint, renewingGeneration: String? = nil,
                 wallClock: @escaping @Sendable () -> Date = { Date() },
                 monotonic: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         try endpoint.validate()
@@ -29,6 +32,7 @@ public actor BridgeChannelClientOperation {
         self.endpoint = endpoint
         hello = Auth.Hello(identity: try Auth.PublicIdentity(owner))
         self.wallClock = wallClock; self.monotonic = monotonic
+        self.renewingGeneration = renewingGeneration
         deadline = monotonic() + 10
     }
     public func cancel() { signingContext?.invalidate(); active = false; challengeValue = nil }
@@ -38,7 +42,9 @@ public actor BridgeChannelClientOperation {
         try Task.checkCancellation()
         let t = challenge.transcript
         guard active, monotonic() < deadline,
-              t.profile == Auth.profile, t.direction == "client-to-server", t.endpoint == endpoint,
+              t.profile == Auth.profile, t.endpoint == endpoint,
+              t.direction == (renewingGeneration == nil ? Auth.openingDirection : Auth.renewalDirection),
+              renewingGeneration.map({ $0 == t.generation }) ?? true,
               t.identity == hello.identity, t.clientNonce == hello.clientNonce,
               t.serverNonce.count == 32, UUID(uuidString: t.sessionID) != nil,
               UUID(uuidString: t.generation) != nil,
@@ -91,7 +97,11 @@ public actor BridgeChannelClientOperation {
     }
     func finish(_ acknowledgement: Auth.Authenticated, session: BridgeChannelSession) throws {
         guard active, let challengeValue, monotonic() < deadline else { throw Auth.Failure.unexpectedMessage }
-        try session.acceptAcknowledgement(acknowledgement, challenge: challengeValue)
+        if renewingGeneration != nil {
+            try session.acceptRenewalAcknowledgement(acknowledgement, challenge: challengeValue)
+        } else {
+            try session.acceptAcknowledgement(acknowledgement, challenge: challengeValue)
+        }
         signingContext?.invalidate()
         active = false
         self.challengeValue = nil

@@ -97,6 +97,17 @@ public final class BridgeChannelLimits: @unchecked Sendable {
             entries[id] = entry
         }
     }
+    /// A renewal proves the same key again on a live, active connection. It is
+    /// charged to the same per-key handshake budget as a new connection, so
+    /// renewing can never sign more often than reconnecting could.
+    func renew(_ id: String) throws {
+        try lock.withLock {
+            guard let entry = entries[id], !entry.closed, entry.active, let quotaKey = entry.quotaKey else {
+                throw BridgeChannelAuthentication.Failure.closed
+            }
+            try consumeRate("key:" + quotaKey, maximum: configuration.maximumVerifiedHandshakesPerKeyPerMinute)
+        }
+    }
     func activate(_ id: String) throws {
         try lock.withLock {
             guard var entry = entries[id], !entry.closed, entry.principal != nil, !entry.active else { throw BridgeChannelAuthentication.Failure.closed }
@@ -224,6 +235,10 @@ public final class BridgeChannelSession: @unchecked Sendable {
         let expires: Int64
     }
     private var pending: Pending?
+    // HD-0352 in-band renewal (server side): one outstanding renewal at a time.
+    private var pendingRenewal: Pending?
+    private var verifiedRenewal: (auth: Auth.Authenticated, expiry: Date)?
+    private var renewalVerifying = false
     private var identityValue: Auth.PublicIdentity?
     private var authValue: Auth.Authenticated?
     private var absoluteExpiry: Date?
@@ -402,6 +417,93 @@ public final class BridgeChannelSession: @unchecked Sendable {
         }
     }
 
+    // MARK: In-band renewal (HD-0352)
+
+    /// Server: a live lease asks to be proven again. Same identity, same
+    /// endpoint, same generation; only the transcript, nonce and expiry are new.
+    public func issueRenewalChallenge(_ hello: Auth.Hello) throws -> Auth.Challenge {
+        try lock.withLock {
+            guard peerEndpoint == nil, let endpoint, stateValue == .authenticated,
+                  pendingRenewal == nil, !renewalVerifying else { throw Auth.Failure.unexpectedMessage }
+            guard monotonic() < deadline, let expiry = absoluteExpiry, wallClock() < expiry else { throw Auth.Failure.expired }
+            guard hello.identity == identityValue else { throw Auth.Failure.identityMismatch }
+            let challenge = try Auth.challenge(hello: hello, endpoint: endpoint, generation: generation,
+                                               now: wallClock(), direction: Auth.renewalDirection)
+            pendingRenewal = Pending(sessionID: challenge.transcript.sessionID, identity: challenge.transcript.identity,
+                signingData: challenge.signingData, digest: Auth.digest(try Auth.encode(challenge.transcript)),
+                issued: challenge.transcript.issuedAtMilliseconds, expires: challenge.transcript.channelExpiresAtMilliseconds)
+            return challenge
+        }
+    }
+
+    /// Server: consume the one outstanding renewal before verifying, exactly
+    /// like `reserveOpen`. An invalid signature closes the connection.
+    public func reserveRenewal(_ proof: Auth.Proof) throws {
+        let challenge = try lock.withLock { () throws -> Pending in
+            guard stateValue == .authenticated, let pendingRenewal, !renewalVerifying else { throw Auth.Failure.unexpectedMessage }
+            guard monotonic() < deadline, let expiry = absoluteExpiry, wallClock() < expiry,
+                  wallClock().timeIntervalSince1970 < Double(pendingRenewal.issued) / 1000 + Auth.challengeLifetime else {
+                throw Auth.Failure.expired
+            }
+            guard proof.sessionID == pendingRenewal.sessionID, proof.generation == generation else { throw Auth.Failure.staleGeneration }
+            self.pendingRenewal = nil
+            renewalVerifying = true
+            return pendingRenewal
+        }
+        guard proof.signature.count <= 256, challenge.identity == publicIdentity,
+              IdentityPublicKeySignatureVerifier.verify(signature: proof.signature, messageData: challenge.signingData,
+                identity: challenge.identity.makeIdentity()) else {
+            close(); throw Auth.Failure.invalidProof
+        }
+        try lock.withLock {
+            guard stateValue == .authenticated, renewalVerifying, monotonic() < deadline else { throw Auth.Failure.expired }
+            try limits?.renew(generation)
+            verifiedRenewal = (Auth.Authenticated(sessionID: proof.sessionID, generation: generation,
+                                                  transcriptDigest: challenge.digest),
+                               Date(timeIntervalSince1970: Double(challenge.expires) / 1000))
+        }
+    }
+
+    /// Server: after the awaited policy recheck. Extends this lease in place;
+    /// every logical channel on the connection keeps its principal and streams.
+    public func commitRenewal() throws -> Auth.Authenticated {
+        try lock.withLock {
+            guard stateValue == .authenticated, renewalVerifying, let verified = verifiedRenewal,
+                  monotonic() < deadline, let old = absoluteExpiry, wallClock() < old,
+                  wallClock() < verified.expiry else { throw Auth.Failure.expired }
+            absoluteExpiry = verified.expiry
+            authValue = verified.auth
+            deadline = monotonic() + min(Auth.channelLifetime, verified.expiry.timeIntervalSince(wallClock()))
+            renewalVerifying = false
+            verifiedRenewal = nil
+            return verified.auth
+        }
+    }
+
+    /// Client: the server's generation this lease was accepted under.
+    var acceptedGeneration: String? { lock.withLock { authValue?.generation } }
+
+    /// Client: accept the server's renewal acknowledgement for the exact
+    /// transcript this client signed. Identity, endpoint and generation must
+    /// be the ones already proven; only then is the expiry moved.
+    func acceptRenewalAcknowledgement(_ acknowledgement: Auth.Authenticated, challenge: Auth.Challenge) throws {
+        try lock.withLock {
+            let t = challenge.transcript
+            guard peerEndpoint == nil, stateValue == .authenticated, monotonic() < deadline,
+                  let old = absoluteExpiry, wallClock() < old,
+                  t.direction == Auth.renewalDirection, t.endpoint == endpoint,
+                  t.identity == identityValue, t.generation == authValue?.generation,
+                  acknowledgement.sessionID == t.sessionID,
+                  acknowledgement.generation == t.generation,
+                  acknowledgement.transcriptDigest == Auth.digest(try Auth.encode(t)) else { throw Auth.Failure.invalidProof }
+            let expiry = Date(timeIntervalSince1970: Double(t.channelExpiresAtMilliseconds) / 1000)
+            guard wallClock() < expiry, expiry > old else { throw Auth.Failure.expired }
+            authValue = acknowledgement
+            absoluteExpiry = expiry
+            deadline = monotonic() + min(Auth.channelLifetime, expiry.timeIntervalSince(wallClock()))
+        }
+    }
+
     public func check(identity: Identity? = nil, requiresIdentity: Bool = false) throws {
         try lock.withLock {
             guard stateValue == .authenticated else { throw stateValue == .revoked ? Auth.Failure.revoked : Auth.Failure.closed }
@@ -455,6 +557,7 @@ public final class BridgeChannelSession: @unchecked Sendable {
         let callback: (@Sendable () -> Void)? = lock.withLock {
             guard stateValue != .closed && stateValue != .revoked else { return nil }
             stateValue = state; pending = nil; authValue = nil
+            pendingRenewal = nil; verifiedRenewal = nil; renewalVerifying = false
             let callback = closedCallback; closedCallback = nil
             return callback
         }

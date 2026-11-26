@@ -34,6 +34,10 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
     private let factory: ServerFactory?
     private let recheckPolicy: @Sendable (Auth.PublicIdentity) async throws -> Void
     private var operation: BridgeChannelClientOperation?
+    // HD-0352 in-band renewal (client side): at most one at a time.
+    private var renewalOperation: BridgeChannelClientOperation?
+    private var renewalWaiter: CheckedContinuation<Void, Error>?
+    private var renewalClosing: (BridgeChannelClientOperation?, CheckedContinuation<Void, Error>?) = (nil, nil)
     private var peerOperation: BridgePeerChannelAuthentication.Operation?
     private var peerReady = false
     private var peerRecords: BridgePeerRecordLayer?
@@ -567,6 +571,33 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             let result = try await factory(self, session)
             try await adoptFactoryResult(result, peer: false)
             try await sendAuth("channelAuthAccepted", acknowledgement)
+        case (true, "channelAuthRenewHello"):
+            let challenge = try session.issueRenewalChallenge(Auth.decode(Auth.Hello.self, from: bytes))
+            try await sendAuth("channelAuthRenewChallenge", challenge)
+        case (true, "channelAuthRenewProof"):
+            try session.reserveRenewal(Auth.decode(Auth.Proof.self, from: bytes))
+            guard let identity = session.publicIdentity else { throw Auth.Failure.unavailable }
+            // The key may have been revoked since the connection opened.
+            try await recheckPolicy(identity)
+            let acknowledgement = try session.commitRenewal()
+            scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+            try await sendAuth("channelAuthRenewed", acknowledgement)
+        case (false, "channelAuthRenewChallenge"):
+            guard let operation = lock.withLock({ renewalOperation }) else { throw Auth.Failure.unexpectedMessage }
+            let proof = try await operation.sign(Auth.decode(Auth.Challenge.self, from: bytes))
+            guard !lock.withLock({ stopped }) else { throw Auth.Failure.closed }
+            try await sendAuth("channelAuthRenewProof", proof)
+        case (false, "channelAuthRenewed"):
+            guard let operation = lock.withLock({ renewalOperation }) else { throw Auth.Failure.unexpectedMessage }
+            try await operation.finish(Auth.decode(Auth.Authenticated.self, from: bytes), session: session)
+            scheduleExpiry(seconds: session.expiresAt?.timeIntervalSinceNow ?? 0)
+            let waiter = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+                guard renewalOperation === operation else { return nil }
+                renewalOperation = nil
+                let waiter = renewalWaiter; renewalWaiter = nil
+                return waiter
+            }
+            waiter?.resume()
         case (false, "channelAuthChallenge"):
             guard let operation = lock.withLock({ self.operation }) else { throw Auth.Failure.unexpectedMessage }
             let proof = try await operation.sign(Auth.decode(Auth.Challenge.self, from: bytes))
@@ -609,6 +640,52 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             try session.check()
         } catch { await close(); throw error }
     }
+    /// HD-0352: prove the same identity again on this physical connection and
+    /// move the lease's expiry, without closing anything. Logical channels,
+    /// feeds and pending operations are untouched. On failure the old lease
+    /// keeps running to its own expiry; a protocol error closes the connection
+    /// exactly as before (a server without renewal treats the hello as an
+    /// unexpected message), and the owner reconnects on next use.
+    public func renewInPlace(identity: Identity, timeout: TimeInterval = 15) async throws {
+        guard !isServer, lock.withLock({ peerOperation == nil && operation == nil }),
+              let endpoint = session.endpoint, let generation = session.acceptedGeneration else {
+            throw Auth.Failure.unavailable
+        }
+        try session.check(identity: identity, requiresIdentity: true)
+        let renewal = try BridgeChannelClientOperation(owner: identity, endpoint: endpoint, renewingGeneration: generation)
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let started = lock.withLock { () -> Bool in
+                    guard !stopped, renewalOperation == nil, renewalWaiter == nil else { return false }
+                    renewalOperation = renewal; renewalWaiter = continuation
+                    return true
+                }
+                guard started else { continuation.resume(throwing: Auth.Failure.unexpectedMessage); return }
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(max(1, timeout) * 1_000_000_000))
+                    await self?.failRenewal(renewal, Auth.Failure.expired)
+                }
+                Task { [weak self] in
+                    do { try await self?.sendAuth("channelAuthRenewHello", renewal.hello) }
+                    catch { await self?.failRenewal(renewal, error) }
+                }
+            }
+        }, onCancel: { [weak self] in
+            Task { await self?.failRenewal(renewal, CancellationError()) }
+        })
+    }
+    private func failRenewal(_ renewal: BridgeChannelClientOperation, _ error: Error) async {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            guard renewalOperation === renewal else { return nil }
+            renewalOperation = nil
+            let waiter = renewalWaiter; renewalWaiter = nil
+            return waiter
+        }
+        guard let waiter else { return }
+        await renewal.cancel()
+        waiter.resume(throwing: error)
+    }
+
     func replacementForRenewal(using physical: BridgeTransportProtocol? = nil) async throws -> BridgeChannelTransport {
         guard !isServer else { throw Auth.Failure.unexpectedMessage }
         await close()
@@ -625,9 +702,15 @@ public final class BridgeChannelTransport: BridgeTransportProtocol, BridgeDelega
             let waiters = peerCapacityWaiters.values; peerCapacityWaiters.removeAll()
             for waiter in waiters { waiter.resume(throwing: Auth.Failure.closed) }
             let result = (delegate, operation, underlying, work); delegate = nil; operation = nil; underlying = nil
+            renewalClosing = (renewalOperation, renewalWaiter); renewalOperation = nil; renewalWaiter = nil
             return result
         }
         guard let cleanup else { return }
+        let renewal = lock.withLock { () -> (BridgeChannelClientOperation?, CheckedContinuation<Void, Error>?) in
+            let taken = renewalClosing; renewalClosing = (nil, nil); return taken
+        }
+        await renewal.0?.cancel()
+        renewal.1?.resume(throwing: Auth.Failure.closed)
         // Task cancellation may synchronously invoke a window waiter's handler;
         // do not call it while holding the gate lock.
         cleanup.3.forEach { $0.cancel() }

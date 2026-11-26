@@ -328,6 +328,8 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     private let continuityTracker = BridgeFlowContinuityTracker()
     private var retiredFromPool = false
     private var physicalTransportClosed = false
+    /// HD-0352: renews the physical lease in band shortly before it ends.
+    private var renewalTask: Task<Void, Never>?
     // G3: every direct call on a channel (setup, open send, sends, consumed
     // frames) is owned work of that channel; close joins it and the channel's
     // capacity is held until it has returned. Session control sends are owned
@@ -348,6 +350,26 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
     var isClosed: Bool { stateLock.withLock { physicalTransportClosed } }
     /// True once physical close has actually returned.
     var isFullyClosed: Bool { stateLock.withLock { physicallyClosed } }
+    /// One timer per lease, set from the lease's own expiry: not polling. A
+    /// failed renewal leaves the old lease to end as before.
+    private func scheduleInBandRenewal(identity: Identity) {
+        guard BridgeChannelAuthentication.inPlaceRenewalEnabled,
+              let gate = physicalTransport as? BridgeChannelTransport, let expiry = gate.session.expiresAt else { return }
+        let delay = max(1, expiry.timeIntervalSinceNow - BridgeChannelAuthentication.renewalLeadTime)
+        let task = Task { [weak self, weak gate] in
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
+            guard let gate, self != nil else { return }
+            do {
+                try await gate.renewInPlace(identity: identity)
+                self?.scheduleInBandRenewal(identity: identity)
+            } catch {}
+        }
+        stateLock.withLock {
+            guard physicalTransportClosed == false else { task.cancel(); return }
+            renewalTask?.cancel(); renewalTask = task
+        }
+    }
+
     private func closePhysicalTransport() async {
         await closePhysical().value
     }
@@ -358,6 +380,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         stateLock.withLock {
             if let physicalCloseTask { return physicalCloseTask }
             physicalTransportClosed = true
+            renewalTask?.cancel(); renewalTask = nil
             let pending = Array(openContinuations.values)
             openContinuations.removeAll()
             let timeouts = Array(openTimeouts.values)
@@ -415,6 +438,7 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
         let shouldClose = stateLock.withLock { () -> Bool in
             guard physicalTransportClosed == false else { return false }
             physicalTransportClosed = true
+            renewalTask?.cancel(); renewalTask = nil
             return true
         }
         guard shouldClose else { return }
@@ -495,8 +519,9 @@ public final class BridgeMultiplexSession: BridgeDelegateProtocol, @unchecked Se
             }
             configuredEndpoint = endpointURL
             configuredIdentity = identity
-            let task = Task { [physicalTransport] in
+            let task = Task { [weak self, physicalTransport] in
                 try await physicalTransport.setup(endpointURL, identity: identity)
+                self?.scheduleInBandRenewal(identity: identity)
             }
             setupTask = task
             return task

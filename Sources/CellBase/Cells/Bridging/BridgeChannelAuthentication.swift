@@ -11,6 +11,24 @@ public enum BridgeChannelAuthentication {
     public static let maximumEnvelopeBytes = 16 * 1024
     public static let challengeLifetime: TimeInterval = 30
     public static let channelLifetime: TimeInterval = 300
+    /// HD-0352: in-band renewal on the same physical connection. The transcript
+    /// direction separates a renewal proof from an opening proof, so neither
+    /// can stand in for the other; the generation binds it to one live lease.
+    public static let openingDirection = "client-to-server"
+    public static let renewalDirection = "client-to-server-renewal"
+    /// Renewal starts this long before the lease ends, so a slow vault or a
+    /// round trip still completes inside the old lease.
+    public static let renewalLeadTime: TimeInterval = 45
+    /// Client opt-in. A server without renewal closes the connection on the
+    /// renewal hello (unexpected message), which would end every lease
+    /// `renewalLeadTime` early. Turn this on only against servers known to have
+    /// renewal; servers always accept it.
+    public static var inPlaceRenewalEnabled: Bool {
+        get { renewalSwitch.lock.withLock { renewalSwitch.enabled } }
+        set { renewalSwitch.lock.withLock { renewalSwitch.enabled = newValue } }
+    }
+    private final class RenewalSwitch: @unchecked Sendable { let lock = NSLock(); var enabled = false }
+    private static let renewalSwitch = RenewalSwitch()
 
     public enum Failure: String, Error, Sendable {
         case malformed, unexpectedMessage, identityMismatch, invalidProof, expired
@@ -175,13 +193,14 @@ public enum BridgeChannelAuthentication {
     static func randomNonce() -> Data { SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) } }
     static func milliseconds(_ now: Date) -> Int64 { Int64((now.timeIntervalSince1970 * 1000).rounded(.down)) }
 
-    static func challenge(hello: Hello, endpoint: Endpoint, generation: String, now: Date) throws -> Challenge {
+    static func challenge(hello: Hello, endpoint: Endpoint, generation: String, now: Date,
+                          direction: String = openingDirection) throws -> Challenge {
         guard hello.profile == profile, hello.clientNonce.count == 32 else { throw Failure.malformed }
         try hello.identity.validate()
         let issued = milliseconds(now)
         let transcript = Transcript(profile: profile, endpoint: endpoint, identity: hello.identity,
             clientNonce: hello.clientNonce, serverNonce: randomNonce(), sessionID: UUID().uuidString,
-            generation: generation, direction: "client-to-server", issuedAtMilliseconds: issued,
+            generation: generation, direction: direction, issuedAtMilliseconds: issued,
             channelExpiresAtMilliseconds: issued + Int64(channelLifetime * 1000))
         return Challenge(transcript: transcript, signingData: try signingData(transcript))
     }
